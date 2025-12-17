@@ -32,6 +32,17 @@ LLM_BASE_URL = os.getenv("LLM_BASE_URL", "https://open.bigmodel.cn/api/coding/pa
 # 使用 OpenAI 兼容客户端，建议选择支持 200k 上下文长度的模型
 CLIENT = openai.OpenAI(api_key=LLM_API_KEY, base_url=LLM_BASE_URL)
 
+# 系统提示词：统一约束回答语法为「Markdown + LaTeX」
+SYSTEM_PROMPT = (
+    "你是学术讨论助手，负责围绕论文内容进行深入分析与讨论。"
+    "请严格使用「Markdown + LaTeX」表达答案："
+    "1）结构化内容使用 Markdown（标题、列表、引用、代码块、Markdown 表格等）；"
+    "2）所有数学公式与上下标使用 LaTeX 语法，例如 $W^{Q}$、$x_{t}$、$\\sum_i$；"
+    "3）不要在回答中使用任何 HTML 标签（例如 <sup>、<sub>、<span> 等），即使用户问题里包含这些标签；"
+    "4）如需表格，请使用 Markdown 表格语法（| 列 | 列 | + 对齐行 + 若干数据行）；"
+    "5）回答使用中文，并尽量给出清晰的推导步骤与解释。"
+)
+
 def init_db():
     with sqlite3.connect(DB_FILE) as conn:
         conn.execute("PRAGMA journal_mode=WAL;")
@@ -80,7 +91,7 @@ def chat(req: ChatRequest):
     # 3. 组装 Prompt：PDF 文本 + Markdown + 历史讨论 + 本次问题
     messages = [{
         "role": "system",
-        "content": "你是学术讨论助手。请综合论文 PDF 原文提取的文本、当前 Markdown 文档内容以及历史讨论记录来回答用户问题。回答时尽量引用论文中的关键信息，并清晰说明理由。",
+        "content": SYSTEM_PROMPT,
     }]
 
     if paper_txt_content:
@@ -152,7 +163,7 @@ def chat_stream(req: ChatRequest):
     # 3. 组装 Prompt
     messages = [{
         "role": "system",
-        "content": "你是学术讨论助手。请综合论文 PDF 原文提取的文本、当前 Markdown 文档内容以及历史讨论记录来回答用户问题。回答时尽量引用论文中的关键信息，并清晰说明理由。",
+        "content": SYSTEM_PROMPT,
     }]
 
     if paper_txt_content:
@@ -172,6 +183,7 @@ def chat_stream(req: ChatRequest):
 
     def generate():
         full_answer = ""
+        full_thinking = ""
         try:
             stream = CLIENT.chat.completions.create(
                 model=LLM_MODEL,
@@ -186,6 +198,7 @@ def chat_stream(req: ChatRequest):
                 thinking = getattr(delta, "reasoning_content", None) or getattr(delta, "thinking", None)
                 if thinking:
                     # 以按行 JSON 的方式输出，前端根据 type 字段区分
+                    full_thinking += thinking
                     payload = {"type": "thinking", "content": thinking}
                     yield json.dumps(payload, ensure_ascii=False) + "\n"
 
@@ -202,9 +215,14 @@ def chat_stream(req: ChatRequest):
             yield json.dumps(payload, ensure_ascii=False) + "\n"
             return
 
-        # 流结束后，把完整回答写入数据库
-        if full_answer.strip():
-            with sqlite3.connect(DB_FILE) as conn:
+        # 流结束后，把思考过程与完整回答写入数据库
+        with sqlite3.connect(DB_FILE) as conn:
+            if full_thinking.strip():
+                conn.execute(
+                    "INSERT INTO comments (paper_id, role, content) VALUES (?, ?, ?)",
+                    (req.paper_id, "thinking", full_thinking),
+                )
+            if full_answer.strip():
                 conn.execute(
                     "INSERT INTO comments (paper_id, role, content) VALUES (?, ?, ?)",
                     (req.paper_id, "ai", full_answer),
