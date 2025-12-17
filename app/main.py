@@ -44,7 +44,7 @@ init_db()
 
 class ChatRequest(BaseModel):
     paper_id: str
-    question: str
+    question: str  # 前端会传 paper_content，但后端以本地 md/txt 为准读取
 
 @app.get("/api/history")
 def get_history(paper_id: str):
@@ -54,13 +54,19 @@ def get_history(paper_id: str):
 
 @app.post("/api/chat")
 def chat(req: ChatRequest):
-    # 1. 读取本地 Markdown 文件作为上下文（节省上传带宽）
+    # 1. 读取本地 Markdown 文件和预处理后的 txt 文本作为上下文
     md_path = os.path.join(DOCS_DIR, f"{req.paper_id}.md")
     if not os.path.exists(md_path):
         raise HTTPException(status_code=404, detail="Paper not found")
     
-    with open(md_path, 'r', encoding='utf-8') as f:
-        paper_content = f.read()
+    with open(md_path, "r", encoding="utf-8") as f:
+        paper_md_content = f.read()
+
+    txt_path = os.path.join(DOCS_DIR, f"{req.paper_id}.txt")
+    paper_txt_content = ""
+    if os.path.exists(txt_path):
+        with open(txt_path, "r", encoding="utf-8") as f:
+            paper_txt_content = f.read()
 
     # 2. 存用户问题
     with sqlite3.connect(DB_FILE) as conn:
@@ -69,14 +75,26 @@ def chat(req: ChatRequest):
         cursor = conn.execute("SELECT role, content FROM comments WHERE paper_id=? ORDER BY id ASC", (req.paper_id,))
         history = cursor.fetchall()
 
-    # 3. 组装 Prompt
-    messages = [{"role": "system", "content": "你是学术讨论助手。根据论文内容和历史讨论回答。"}]
-    messages.append({"role": "user", "content": f"### 论文全文 ###\n{paper_content}"})
+    # 3. 组装 Prompt：PDF 文本 + Markdown + 历史讨论 + 本次问题
+    messages = [{
+        "role": "system",
+        "content": "你是学术讨论助手。请综合论文 PDF 原文提取的文本、当前 Markdown 文档内容以及历史讨论记录来回答用户问题。回答时尽量引用论文中的关键信息，并清晰说明理由。",
+    }]
+
+    if paper_txt_content:
+        messages.append({
+            "role": "user",
+            "content": f"### 论文 PDF 提取文本 ###\n{paper_txt_content}",
+        })
+
+    messages.append({
+        "role": "user",
+        "content": f"### 论文 Markdown 内容 ###\n{paper_md_content}",
+    })
     
     # 将历史对话转为 API 格式
     for role, content in history:
         api_role = "assistant" if role == "ai" else "user"
-        # 简单去重：避免把最新的问题重复发两次，或者让 LLM 自己判断
         messages.append({"role": api_role, "content": content})
 
     # 4. 调用 LLM

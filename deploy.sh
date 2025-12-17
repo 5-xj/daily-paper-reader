@@ -7,6 +7,13 @@ echo "🚧 开始重新部署..."
 # 1. 进入项目目录
 cd $PROJECT_DIR
 
+# 1.1 加载环境变量（如果存在 .env 文件）
+if [ -f ".env" ]; then
+  # 忽略注释行，将 KEY=VALUE 导出为环境变量
+  export $(grep -v '^#' .env | xargs)
+  echo "✅ 已从 .env 加载环境变量"
+fi
+
 # 2. 拉取最新代码 (如果你是用 git 管理的，把下面这行的注释取消掉)
 # git pull origin main
 
