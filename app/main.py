@@ -4,6 +4,7 @@ import os
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 import openai
 
 app = FastAPI()
@@ -114,3 +115,95 @@ def chat(req: ChatRequest):
         conn.execute("INSERT INTO comments (paper_id, role, content) VALUES (?, ?, ?)", (req.paper_id, "ai", ai_msg))
 
     return {"status": "ok"}
+
+
+@app.post("/api/chat_stream")
+def chat_stream(req: ChatRequest):
+    """
+    流式返回 AI 回答，用于前端公共研讨区的流式展示。
+    """
+    # 1. 读取本地 Markdown 文件和预处理后的 txt 文本作为上下文
+    md_path = os.path.join(DOCS_DIR, f"{req.paper_id}.md")
+    if not os.path.exists(md_path):
+        raise HTTPException(status_code=404, detail="Paper not found")
+
+    with open(md_path, "r", encoding="utf-8") as f:
+        paper_md_content = f.read()
+
+    txt_path = os.path.join(DOCS_DIR, f"{req.paper_id}.txt")
+    paper_txt_content = ""
+    if os.path.exists(txt_path):
+        with open(txt_path, "r", encoding="utf-8") as f:
+            paper_txt_content = f.read()
+
+    # 2. 存用户问题，并取出历史用于上下文
+    with sqlite3.connect(DB_FILE) as conn:
+        conn.execute(
+            "INSERT INTO comments (paper_id, role, content) VALUES (?, ?, ?)",
+            (req.paper_id, "user", req.question),
+        )
+        cursor = conn.execute(
+            "SELECT role, content FROM comments WHERE paper_id=? ORDER BY id ASC",
+            (req.paper_id,),
+        )
+        history = cursor.fetchall()
+
+    # 3. 组装 Prompt
+    messages = [{
+        "role": "system",
+        "content": "你是学术讨论助手。请综合论文 PDF 原文提取的文本、当前 Markdown 文档内容以及历史讨论记录来回答用户问题。回答时尽量引用论文中的关键信息，并清晰说明理由。",
+    }]
+
+    if paper_txt_content:
+        messages.append({
+            "role": "user",
+            "content": f"### 论文 PDF 提取文本 ###\n{paper_txt_content}",
+        })
+
+    messages.append({
+        "role": "user",
+        "content": f"### 论文 Markdown 内容 ###\n{paper_md_content}",
+    })
+
+    for role, content in history:
+        api_role = "assistant" if role == "ai" else "user"
+        messages.append({"role": api_role, "content": content})
+
+    def generate():
+        full_answer = ""
+        try:
+            stream = CLIENT.chat.completions.create(
+                model=LLM_MODEL,
+                messages=messages,
+                temperature=0.7,
+                stream=True,
+            )
+            for chunk in stream:
+                delta = chunk.choices[0].delta
+
+                # 一些模型会在 delta 中提供 “思考 / 推理” 内容（例如 reasoning_content 或 thinking 字段）
+                thinking = getattr(delta, "reasoning_content", None) or getattr(delta, "thinking", None)
+                if thinking:
+                    # 为了在前端区分思考内容与正式回答，这里加上前缀标记
+                    yield "[THINK]" + thinking
+
+                content_piece = getattr(delta, "content", None) or ""
+                if not content_piece:
+                    continue
+                full_answer += content_piece
+                # 直接将增量文本片段写回前端，并加上前缀标记为答案内容
+                yield "[ANS]" + content_piece
+        except Exception as e:
+            err_msg = f"[ERROR] {str(e)}"
+            yield err_msg
+            return
+
+        # 流结束后，把完整回答写入数据库
+        if full_answer.strip():
+            with sqlite3.connect(DB_FILE) as conn:
+                conn.execute(
+                    "INSERT INTO comments (paper_id, role, content) VALUES (?, ?, ?)",
+                    (req.paper_id, "ai", full_answer),
+                )
+
+    return StreamingResponse(generate(), media_type="text/plain")

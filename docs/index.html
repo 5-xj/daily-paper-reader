@@ -174,8 +174,57 @@
             `;
             historyDiv.scrollTop = historyDiv.scrollHeight;
 
+            // 为 AI 创建一个占位消息，包含“思考过程 + 回答内容”
+            const aiItem = document.createElement('div');
+            aiItem.className = 'msg-item';
+            aiItem.innerHTML = `
+                <div>
+                  <span class="msg-role ai">🤖 AI 助手</span>
+                </div>
+                <div class="thinking-container" style="margin-top:8px; border-left:3px solid #ddd; padding-left:8px; font-size:0.85rem; color:#666; display:none;">
+                  <div style="display:flex; align-items:center; justify-content:space-between;">
+                    <span>思考过程</span>
+                    <button class="thinking-toggle" style="margin-left:8px; font-size:0.75rem; padding:2px 6px;">折叠</button>
+                  </div>
+                  <pre class="thinking-content" style="white-space:pre-wrap; margin-top:4px;"></pre>
+                </div>
+                <div class="msg-content"></div>
+            `;
+            historyDiv.appendChild(aiItem);
+
+            const thinkingContainer = aiItem.querySelector('.thinking-container');
+            const thinkingContent = aiItem.querySelector('.thinking-content');
+            const toggleBtn = aiItem.querySelector('.thinking-toggle');
+            const aiAnswerDiv = aiItem.querySelector('.msg-content');
+
+            let thinkingBuffer = '';
+            let answerBuffer = '';
+            let thinkingCollapsed = false;
+            let hasShownAnswer = false;
+
+            const applyThinkingCollapsedView = () => {
+              if (!thinkingBuffer) return;
+              const lines = thinkingBuffer.split('\n');
+              if (!thinkingCollapsed) {
+                // 展开：显示全部思考内容
+                thinkingContent.textContent = thinkingBuffer;
+                toggleBtn.textContent = '折叠';
+              } else {
+                // 折叠：只显示前若干行
+                const maxLines = 3;
+                const shortText = lines.slice(0, maxLines).join('\n') + (lines.length > maxLines ? '\n...' : '');
+                thinkingContent.textContent = shortText;
+                toggleBtn.textContent = '展开';
+              }
+            };
+
+            toggleBtn.addEventListener('click', () => {
+              thinkingCollapsed = !thinkingCollapsed;
+              applyThinkingCollapsedView();
+            });
+
             try {
-              const res = await fetch('/api/chat', {
+              const res = await fetch('/api/chat_stream', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({
@@ -184,8 +233,49 @@
                     paper_content: paperContent 
                 })
               });
-              const data = await res.json();
-              await loadHistory(paperId);
+              if (!res.body) {
+                throw new Error('当前浏览器不支持流式响应读取');
+              }
+
+              const reader = res.body.getReader();
+              const decoder = new TextDecoder('utf-8');
+
+              while (true) {
+                const { value, done } = await reader.read();
+                if (done) break;
+                const rawChunk = decoder.decode(value, { stream: true });
+
+                // 根据后端的前缀标记区分思考内容和正式回答：
+                // [THINK] 开头 -> 思考过程；[ANS] 开头 -> 答案内容
+                let chunk = rawChunk;
+                if (chunk.startsWith('[THINK]')) {
+                  chunk = chunk.slice('[THINK]'.length);
+                  thinkingBuffer += chunk;
+                  thinkingContainer.style.display = 'block';
+                  // 思考阶段默认展开
+                  thinkingCollapsed = false;
+                  applyThinkingCollapsedView();
+                } else if (chunk.startsWith('[ANS]')) {
+                  chunk = chunk.slice('[ANS]'.length);
+                  answerBuffer += chunk;
+                  aiAnswerDiv.textContent = answerBuffer;
+                  // 一旦进入答案阶段，若存在思考内容则折叠
+                  if (thinkingBuffer && !hasShownAnswer) {
+                    hasShownAnswer = true;
+                    thinkingCollapsed = true;
+                    applyThinkingCollapsedView();
+                  }
+                } else {
+                  // 兜底：当作答案内容
+                  answerBuffer += chunk;
+                  aiAnswerDiv.textContent = answerBuffer;
+                }
+
+                historyDiv.scrollTop = historyDiv.scrollHeight;
+              }
+
+              // 流结束后不再立即重载历史记录，避免覆盖带“思考过程”的当前消息
+              // 历史记录会在页面重新打开时重新从后端加载
               input.value = '';
             } catch (e) {
               alert("发送失败，请重试");
