@@ -78,26 +78,20 @@ window.SubscriptionsManager = (function () {
             </div>
 
             <div id="arxiv-zotero-pane" class="arxiv-pane">
-              <div style="font-weight:500; margin-bottom:4px;">订阅Zotero</div>
+              <div style="font-weight:500; margin-bottom:4px;">智能订阅（LLM Query）</div>
               <div id="zotero-list" style="font-size:12px; height:88px; overflow-y:auto; border:1px solid #eee; padding:6px; border-radius:4px; background:#fff; margin-bottom:4px;"></div>
-              <div style="display:flex; gap:4px; margin-bottom:4px; max-width:100%;">
+              <div style="display:flex; gap:4px; margin-bottom:4px; align-items:center; max-width:100%;">
                 <input id="zotero-id-input" type="text"
-                  placeholder="用户ID"
-                  style="flex:1 1 0; min-width:0; padding:6px; border-radius:4px; border:1px solid #ccc; font-size:12px;"
-                />
-                <input id="zotero-key-input" type="text"
-                  placeholder="API Key"
+                  placeholder="输入偏好描述 / 查询语句，如: small LLM for code"
                   style="flex:3 1 0; min-width:0; padding:6px; border-radius:4px; border:1px solid #ccc; font-size:12px;"
                 />
-              </div>
-              <div style="display:flex; gap:4px; margin-bottom:4px; max-width:100%;">
                 <input id="zotero-alias-input" type="text"
                   placeholder="备注（必填）"
                   required
                   style="flex:1 1 0; min-width:0; padding:6px; border-radius:4px; border:1px solid #ccc; font-size:12px;"
                 />
-                <button id="zotero-test-btn" class="arxiv-tool-btn" style="flex:0 0 auto; padding:6px 8px; font-size:12px; white-space:nowrap;">测试</button>
-                <button id="zotero-add-btn" class="arxiv-tool-btn" style="flex:0 0 auto; padding:6px 8px; font-size:12px; white-space:nowrap;">新增</button>
+                <button id="zotero-add-btn" class="arxiv-tool-btn"
+                  style="flex:1 1 0; min-width:0; white-space:nowrap; padding:6px 4px; font-size:12px;">新增</button>
               </div>
             </div>
           </div>
@@ -194,9 +188,7 @@ window.SubscriptionsManager = (function () {
       window.SubscriptionsZotero.attach({
         zoteroListEl: document.getElementById('zotero-list'),
         zoteroIdInput: document.getElementById('zotero-id-input'),
-        zoteroKeyInput: document.getElementById('zotero-key-input'),
         zoteroAliasInput: document.getElementById('zotero-alias-input'),
-        zoteroTestBtn: document.getElementById('zotero-test-btn'),
         zoteroAddBtn: document.getElementById('zotero-add-btn'),
         msgEl,
         reloadAll,
@@ -505,4 +497,3 @@ window.SubscriptionsManager = (function () {
     loadSubscriptions,
   };
 })();
-
