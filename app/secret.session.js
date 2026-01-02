@@ -450,6 +450,14 @@
 
     const setMode = (mode) => {
       window.DPR_ACCESS_MODE = mode;
+      try {
+        const ev = new CustomEvent('dpr-access-mode-changed', {
+          detail: { mode },
+        });
+        document.dispatchEvent(ev);
+      } catch {
+        // ignore
+      }
     };
 
     const hide = () => {
@@ -617,7 +625,7 @@
           </div>
           <div style="font-size:13px; margin-bottom:6px;">
             <label style="display:flex; align-items:center; gap:6px; margin-bottom:2px;">
-              <input type="radio" name="secret-setup-summarize-model" value="gemini-3-flash-preview-thinking" checked />
+              <input type="radio" name="secret-setup-summarize-model" value="gemini-3-flash-preview" checked />
               <span>Gemini 3 Flash（推荐，性价比最高）</span>
             </label>
             <label style="display:flex; align-items:center; gap:6px; margin-bottom:2px;">
@@ -629,7 +637,7 @@
               <span>GPT-5 Chat · 通用高质量对话</span>
             </label>
             <label style="display:flex; align-items:center; gap:6px;">
-              <input type="radio" name="secret-setup-summarize-model" value="gemini-3-pro-preview-thinking" />
+              <input type="radio" name="secret-setup-summarize-model" value="gemini-3-pro-preview" />
               <span>Gemini 3 Pro（更强思考能力）</span>
             </label>
           </div>
@@ -837,10 +845,10 @@
               apiKey: platoKey,
               baseUrl: summarizedBaseUrl,
               models: [
-                'gemini-3-flash-preview-thinking',
+                'gemini-3-flash-preview',
                 'deepseek-v3-2-exp',
                 'gpt-5-chat',
-                'gemini-3-pro-preview-thinking',
+                'gemini-3-pro-preview',
               ],
             },
           ],
@@ -1075,8 +1083,16 @@
               const payload = await resp2.json();
               const secret = await decryptSecret(savedPwd, payload);
               window.decoded_secret_private = secret;
-              // 这里不在 setupOverlay 作用域内，直接标记全局访问模式为 full
-              window.DPR_ACCESS_MODE = 'full';
+              // 这里不在 setupOverlay 作用域内，直接标记全局访问模式为 full 并广播事件
+              try {
+                window.DPR_ACCESS_MODE = 'full';
+                const ev = new CustomEvent('dpr-access-mode-changed', {
+                  detail: { mode: 'full' },
+                });
+                document.dispatchEvent(ev);
+              } catch {
+                // ignore
+              }
               overlay.classList.add('secret-gate-hidden');
               return;
             } catch (e) {

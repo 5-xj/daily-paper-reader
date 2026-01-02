@@ -586,9 +586,25 @@ window.PrivateDiscussionChat = (function () {
       });
 
       if (!resp.ok) {
-        aiAnswerDiv.textContent = `请求失败: HTTP ${resp.status}`;
+        let errorText = '';
+        try {
+          errorText = await resp.text();
+        } catch {
+          errorText = '';
+        }
+        const preview = (errorText || '').slice(0, 300).replace(/\s+/g, ' ');
+        console.error(
+          '[DPR CHAT] Chat API 调用失败：',
+          `HTTP ${resp.status} ${resp.statusText || ''}`,
+          preview ? `| 响应内容片段: ${preview}` : '',
+        );
+        aiAnswerDiv.textContent = `请求失败: HTTP ${resp.status} ${
+          resp.statusText || ''
+        }${preview ? ` - ${preview}` : ''}`;
         if (statusEl) {
-          statusEl.textContent = `调用 Chat 模型失败: HTTP ${resp.status}`;
+          statusEl.textContent = `调用 Chat 模型失败: HTTP ${resp.status} ${
+            resp.statusText || ''
+          }${preview ? ` - ${preview}` : ''}`;
           statusEl.style.color = '#c00';
         }
         return;
@@ -715,14 +731,62 @@ window.PrivateDiscussionChat = (function () {
     const inGuestMode =
       window.DPR_ACCESS_MODE === 'guest' || window.DPR_ACCESS_MODE === 'locked';
 
+    const enableChatControls = () => {
+      const sendBtn = document.getElementById('send-btn');
+      const input = document.getElementById('user-input');
+      const status = document.getElementById('chat-status');
+      const select = document.getElementById('chat-llm-model-select');
+
+      if (sendBtn && !sendBtn._boundSend) {
+        sendBtn._boundSend = true;
+        sendBtn.disabled = false;
+        sendBtn.title = '';
+        sendBtn.addEventListener('click', () => {
+          sendMessage(paperId);
+        });
+      }
+
+      if (input && !input._boundKey) {
+        input._boundKey = true;
+        input.disabled = false;
+        input.placeholder = '针对这篇论文提问，仅自己可见...';
+        input.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
+            e.preventDefault();
+            sendMessage(paperId);
+          }
+        });
+      }
+
+      if (select) {
+        const chatModels = getChatLLMConfig();
+        select.innerHTML = '';
+        const names = Array.from(
+          new Set(chatModels.map((m) => (m.name || '').trim()).filter(Boolean)),
+        );
+        names.forEach((name) => {
+          const opt = document.createElement('option');
+          opt.value = name;
+          opt.textContent = name;
+          select.appendChild(opt);
+        });
+        if (names.length) {
+          select.value = names[0];
+        }
+        if (!names.length && status) {
+          status.textContent =
+            '未检测到可用 Chat 模型，请在新配置指引中配置 chatLLMs。';
+          status.style.color = '#c00';
+        }
+      }
+    };
+
     if (sendBtnEl) {
       if (inGuestMode) {
         sendBtnEl.disabled = true;
         sendBtnEl.title = '当前为游客模式或未解锁密钥，无法直接提问。';
       } else {
-        sendBtnEl.addEventListener('click', () => {
-          sendMessage(paperId);
-        });
+        enableChatControls();
       }
     }
     if (inputEl) {
@@ -730,13 +794,20 @@ window.PrivateDiscussionChat = (function () {
         inputEl.disabled = true;
         inputEl.placeholder = '当前为游客模式，解锁密钥后才能向大模型提问。';
       } else {
-        inputEl.addEventListener('keydown', (e) => {
-          if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
-            e.preventDefault();
-            sendMessage(paperId);
-          }
-        });
+        // 已在 enableChatControls 中绑定
       }
+    }
+
+    // 如果当前是 locked/guest，则等待密钥解锁事件，再启用聊天控件
+    if (inGuestMode) {
+      const handler = (e) => {
+        const mode = e && e.detail && e.detail.mode;
+        if (mode === 'full') {
+          document.removeEventListener('dpr-access-mode-changed', handler);
+          enableChatControls();
+        }
+      };
+      document.addEventListener('dpr-access-mode-changed', handler);
     }
 
     renderHistory(paperId).catch(() => {});

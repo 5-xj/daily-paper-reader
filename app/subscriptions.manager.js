@@ -225,8 +225,13 @@ window.SubscriptionsManager = (function () {
     if (resultsEl) {
       resultsEl.innerHTML = '';
     }
-    // 打开面板时从远端拉取一次配置，写入本地草稿
-    loadSubscriptions();
+    // 打开面板时，如本地尚无草稿配置，则从远端拉取一次；
+    // 若已存在草稿，则直接渲染草稿，避免每次打开都触发远程请求。
+    if (draftConfig) {
+      renderFromDraft();
+    } else {
+      loadSubscriptions();
+    }
   };
 
   const reallyCloseOverlay = () => {

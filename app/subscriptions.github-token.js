@@ -199,8 +199,8 @@ window.SubscriptionsGithubToken = (function () {
     return { owner, repo, token };
   };
 
-  // 读取 config.yaml 并解析为 JS 对象
-  const loadConfig = async () => {
+  // 通过 GitHub API 读取 config.yaml（用于保存时获取最新 sha）
+  const loadConfigFromGithub = async () => {
     const token = getTokenForConfig();
     if (!token) {
       throw new Error('未配置有效的 GitHub Token，请先完成首页的新配置指引。');
@@ -247,6 +247,26 @@ window.SubscriptionsGithubToken = (function () {
     return { config: cfg, sha: data.sha };
   };
 
+  // 从当前站点根目录直接读取 config.yaml（无需 GitHub Token，仅用于前端展示）
+  const loadConfig = async () => {
+    try {
+      const res = await fetch('/config.yaml', { cache: 'no-store' });
+      if (!res.ok) {
+        throw new Error(`无法读取本地 config.yaml（HTTP ${res.status}）`);
+      }
+      const text = await res.text();
+      const yaml = window.jsyaml || window.jsYaml || window.jsYAML;
+      if (!yaml || typeof yaml.load !== 'function') {
+        throw new Error('前端缺少 YAML 解析库（js-yaml），无法解析 config.yaml。');
+      }
+      const cfg = yaml.load(text || '') || {};
+      return { config: cfg, sha: null };
+    } catch (e) {
+      console.error('从根目录读取 config.yaml 失败：', e);
+      throw e;
+    }
+  };
+
   // 更新 config.yaml：接收一个 updater(config) 回调，返回新的 config 对象
   const updateConfig = async (updater, commitMessage = 'chore: update config.yaml from dashboard') => {
     const token = getTokenForConfig();
@@ -254,7 +274,7 @@ window.SubscriptionsGithubToken = (function () {
       throw new Error('未配置有效的 GitHub Token，请先完成首页的新配置指引。');
     }
     const info = await resolveRepoInfoFromToken(token);
-    const { config: current, sha } = await loadConfig();
+    const { config: current, sha } = await loadConfigFromGithub();
     const next = typeof updater === 'function' ? updater({ ...(current || {}) }) || current : current;
     const yaml = window.jsyaml || window.jsYaml || window.jsYAML;
     if (!yaml || typeof yaml.dump !== 'function') {
@@ -295,7 +315,7 @@ window.SubscriptionsGithubToken = (function () {
     }
     const info = await resolveRepoInfoFromToken(token);
     // 仅用于获取当前文件的 sha
-    const { sha } = await loadConfig();
+    const { sha } = await loadConfigFromGithub();
     const yaml = window.jsyaml || window.jsYaml || window.jsYAML;
     if (!yaml || typeof yaml.dump !== 'function') {
       throw new Error('前端缺少 YAML 序列化库（js-yaml），无法写入 config.yaml。');
