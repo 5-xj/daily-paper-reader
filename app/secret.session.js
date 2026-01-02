@@ -127,7 +127,13 @@
   }
 
   // 将总结大模型 / 重排序模型的配置写入 GitHub Secrets
-  async function saveSummarizeSecretsToGithub(token, summarisedApiKey, summarisedModel) {
+  // 可选 progress 回调用于在 UI 中展示上传进度：progress(currentIndex, total, secretName)
+  async function saveSummarizeSecretsToGithub(
+    token,
+    summarisedApiKey,
+    summarisedModel,
+    progress,
+  ) {
     try {
       // 等待 libsodium-wrappers 就绪（通过 CDN 注入全局 sodium）
       if (!window.sodium || !window.sodium.ready) {
@@ -234,12 +240,26 @@
         }
       };
 
-      await putSecret(secretNameSummKey, encSummKey);
-      await putSecret(secretNameSummUrl, encSummUrl);
-      await putSecret(secretNameSummModel, encSummModel);
-      await putSecret(secretNameRerankKey, encRerankKey);
-      await putSecret(secretNameRerankUrl, encRerankUrl);
-      await putSecret(secretNameRerankModel, encRerankModel);
+      const secrets = [
+        { name: secretNameSummKey, value: encSummKey },
+        { name: secretNameSummUrl, value: encSummUrl },
+        { name: secretNameSummModel, value: encSummModel },
+        { name: secretNameRerankKey, value: encRerankKey },
+        { name: secretNameRerankUrl, value: encRerankUrl },
+        { name: secretNameRerankModel, value: encRerankModel },
+      ];
+
+      for (let i = 0; i < secrets.length; i += 1) {
+        const item = secrets[i];
+        if (typeof progress === 'function') {
+          try {
+            progress(i + 1, secrets.length, item.name);
+          } catch {
+            // 忽略进度回调中的异常
+          }
+        }
+        await putSecret(item.name, item.value);
+      }
 
       return true;
     } catch (e) {
@@ -628,12 +648,12 @@
           </div>
           <div style="font-size:13px; margin-bottom:6px;">
             <label style="display:flex; align-items:center; gap:6px; margin-bottom:2px;">
-              <input type="radio" name="secret-setup-summarize-model" value="gemini-3-flash-preview" checked />
-              <span>Gemini 3 Flash（推荐，性价比最高）</span>
+              <input type="radio" name="secret-setup-summarize-model" value="gemini-3-flash-preview-thinking-1000" checked />
+              <span>Gemini 3 Flash（思考版，推荐）</span>
             </label>
             <label style="display:flex; align-items:center; gap:6px; margin-bottom:2px;">
-              <input type="radio" name="secret-setup-summarize-model" value="deepseek-v3-2-exp" />
-              <span>DeepSeek V3.2 exp · 深度思考</span>
+              <input type="radio" name="secret-setup-summarize-model" value="deepseek-v3.2" />
+              <span>DeepSeek V3.2 · 深度思考</span>
             </label>
             <label style="display:flex; align-items:center; gap:6px; margin-bottom:2px;">
               <input type="radio" name="secret-setup-summarize-model" value="gpt-5-chat" />
@@ -848,10 +868,10 @@
               apiKey: platoKey,
               baseUrl: summarizedBaseUrl,
               models: [
-                'gemini-3-flash-preview',
-                'deepseek-v3-2-exp',
+                'gemini-3-flash-preview-thinking-1000',
+                'deepseek-v3.2',
                 'gpt-5-chat',
-                'gemini-3-pro-preview',
+                'gemini-3-pro-preview-thinking-1000',
               ],
             },
           ],
@@ -859,7 +879,7 @@
 
         try {
           if (errorEl) {
-            errorEl.textContent = '正在生成加密配置，请稍候...';
+            errorEl.textContent = '正在准备写入 GitHub Secrets...';
             errorEl.style.color = '#666';
           }
           genBtn.disabled = true;
@@ -869,6 +889,11 @@
             githubToken,
             platoKey,
             model,
+            (current, total, secretName) => {
+              if (!errorEl) return;
+              errorEl.textContent = `(${current}/${total}) 正在上传 GitHub Secret：${secretName}...`;
+              errorEl.style.color = '#666';
+            },
           );
           if (!secretsOk && errorEl) {
             errorEl.textContent =
@@ -878,6 +903,10 @@
           }
 
           // 2) 生成本地 secret.private 备份
+          if (errorEl) {
+            errorEl.textContent = 'GitHub Secrets 上传完成，正在生成加密配置 secret.private...';
+            errorEl.style.color = '#666';
+          }
           const payload = await createEncryptedSecret(password, plainConfig);
           window.decoded_secret_private = plainConfig;
           setMode('full');
@@ -895,6 +924,10 @@
           }, 0);
 
           // 3) 将 secret.private 提交到 GitHub 仓库根目录（最好由向导自动推送一份）
+          if (errorEl) {
+            errorEl.textContent = '正在将 secret.private 推送到 GitHub 仓库根目录...';
+            errorEl.style.color = '#666';
+          }
           const commitOk = await saveSecretPrivateToGithubRepo(
             githubToken,
             payload,
@@ -1030,6 +1063,25 @@
     };
 
     // 统一渲染两种模式的 UI（仅使用新的两步初始化向导 / 解锁界面）
+    // 同时在此处挂钩后台管理面板的“密钥配置”按钮入口，利用当前闭包中的 renderInitStep1/renderInitStep2
+    try {
+      window.DPRSecretSetup = window.DPRSecretSetup || {};
+      window.DPRSecretSetup.openStep2 = function () {
+        const savedPwd = loadSavedPassword();
+        // 确保浮层可见
+        overlay.classList.remove('secret-gate-hidden');
+        if (!savedPwd) {
+          // 没有保存密码：从第 1 步开始完整向导
+          renderInitStep1();
+        } else {
+          // 已保存密码：直接进入第 2 步配置向导
+          renderInitStep2(savedPwd);
+        }
+      };
+    } catch {
+      // 忽略挂钩失败，后台按钮会走自身的降级提示
+    }
+
     if (hasSecretFile) {
       // 已有 secret.private：展示“解锁 / 游客”界面
       renderUnlockUI();
@@ -1090,6 +1142,13 @@
                   detail: { mode: 'full' },
                 });
                 document.dispatchEvent(ev);
+              } catch {
+                // ignore
+              }
+              // 自动解锁成功时，仍然初始化一次 overlay，以便后台“密钥配置”按钮可以直接打开第二步向导
+              // 注意：此时不移除 hidden 类，浮层保持隐藏，仅注册 DPRSecretSetup.openStep2 等入口
+              try {
+                setupOverlay(true);
               } catch {
                 // ignore
               }

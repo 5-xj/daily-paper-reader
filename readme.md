@@ -35,8 +35,12 @@
 
 
 
-
 #TODO
 [] 会议的纳入
 [] 夜间模式
 [] 期刊的纳入
+
+
+## Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=ziwenhahaha/daily-paper-reader&type=date&legend=top-left)](https://www.star-history.com/#ziwenhahaha/daily-paper-reader&type=date&legend=top-left)

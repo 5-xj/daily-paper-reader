@@ -16,6 +16,8 @@ window.PrivateDiscussionChat = (function () {
       item.models.forEach((m) => {
         const name = (m || '').trim();
         if (!name || !apiKey || !baseUrl) return;
+        // 仅保留 Gemini 系列模型，其他模型不出现在私人研讨区下拉列表中
+        if (!name.toLowerCase().startsWith('gemini-')) return;
         models.push({
           name,
           apiKey,
@@ -582,6 +584,14 @@ window.PrivateDiscussionChat = (function () {
           model,
           messages,
           stream: true,
+          // OpenAI 兼容：请求返回思考过程（reasoning_content / thinking）
+          reasoning: {
+            effort: 'medium',
+          },
+          // DeepSeek / 部分聚合网关要求通过 extra_body.return_reasoning 开启思考输出
+          extra_body: {
+            return_reasoning: true,
+          },
         }),
       });
 

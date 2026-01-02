@@ -30,6 +30,7 @@ window.SubscriptionsManager = (function () {
           <div style="font-weight:600;">后台管理</div>
           <div style="display:flex; gap:8px; align-items:center;">
             <button id="arxiv-config-save-btn" class="arxiv-tool-btn" style="padding:2px 10px; background:#17a2b8; color:white;">保存</button>
+            <button id="arxiv-open-secret-setup-btn" class="arxiv-tool-btn" style="padding:2px 10px;">密钥配置</button>
             <button id="arxiv-search-close-btn" class="arxiv-tool-btn" style="padding:2px 6px;">关闭</button>
           </div>
         </div>
@@ -668,6 +669,21 @@ window.SubscriptionsManager = (function () {
             msgEl.textContent = '保存配置失败，请稍后重试。';
             msgEl.style.color = '#c00';
           }
+        }
+      });
+    }
+    const secretBtn = document.getElementById('arxiv-open-secret-setup-btn');
+    if (secretBtn && !secretBtn._bound) {
+      secretBtn._bound = true;
+      secretBtn.addEventListener('click', () => {
+        try {
+          if (window.DPRSecretSetup && window.DPRSecretSetup.openStep2) {
+            window.DPRSecretSetup.openStep2();
+          } else {
+            alert('当前页面尚未加载密钥配置向导脚本，请刷新后重试。');
+          }
+        } catch (e) {
+          console.error(e);
         }
       });
     }

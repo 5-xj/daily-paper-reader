@@ -80,8 +80,8 @@
     var btn = document.createElement('button');
     btn.id = 'custom-toggle-btn';
     btn.className = 'custom-toggle-btn';
-    btn.innerHTML = '📚';
-    btn.title = '订阅管理';
+    btn.innerHTML = '⚙️';
+    btn.title = '后台管理';
 
     btn.addEventListener('click', function () {
       var event = new CustomEvent('ensure-arxiv-ui');
