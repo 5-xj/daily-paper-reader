@@ -781,6 +781,9 @@ window.PrivateDiscussionChat = (function () {
 
       if (select) {
         const chatModels = getChatLLMConfig();
+        // 解锁后重新启用下拉框
+        select.disabled = false;
+        select.title = '';
         select.innerHTML = '';
         const names = Array.from(
           new Set(chatModels.map((m) => (m.name || '').trim()).filter(Boolean)),
@@ -837,6 +840,12 @@ window.PrivateDiscussionChat = (function () {
         inputEl.placeholder = '当前为游客模式，解锁密钥后才能向大模型提问。';
       } else {
         // 已在 enableChatControls 中绑定
+      }
+    }
+    if (modelSelect) {
+      if (inGuestMode) {
+        modelSelect.disabled = true;
+        modelSelect.title = '当前为游客模式或未解锁密钥，无法选择大模型。';
       }
     }
 
