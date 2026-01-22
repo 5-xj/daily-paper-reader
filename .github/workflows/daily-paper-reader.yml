@@ -26,9 +26,6 @@ jobs:
       BLT_REWRITE_MODEL: gemini-3-flash-preview
       BLT_RERANK_MODEL: qwen3-reranker-4b
       BLT_FILTER_MODEL: gemini-3-flash-preview-nothinking
-      HF_HUB_DISABLE_SYMLINKS: "1"
-      HF_HOME: ~/.cache/huggingface
-      TRANSFORMERS_CACHE: ~/.cache/huggingface
       PYTHONUNBUFFERED: "1"
 
     steps:
@@ -40,24 +37,13 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Cache pip + HF + torch
+      - name: Cache pip + torch
         uses: actions/cache@v4
         with:
           path: |
             ~/.cache/pip
-            ~/.cache/huggingface
             ~/.cache/torch
           key: ${{ runner.os }}-dpr-hf-v2-${{ hashFiles('requirements.txt') }}
-
-      - name: Clear broken HF cache
-        run: |
-          if [ ! -d ~/.cache/huggingface ]; then
-            mkdir -p ~/.cache/huggingface
-          fi
-          if find ~/.cache/huggingface -xtype l | grep -q .; then
-            rm -rf ~/.cache/huggingface
-            mkdir -p ~/.cache/huggingface
-          fi
 
       - name: Install deps (skip sqlite3)
         run: |
@@ -74,24 +60,71 @@ jobs:
       - name: Run Retrieval and Embedding
         env:
           HF_HOME: ${{ github.workspace }}/hf_cache
-          HF_HUB_DISABLE_SYMLINKS: 1
+          HUGGINGFACE_HUB_CACHE: ${{ github.workspace }}/hf_cache
+          HF_HUB_DISABLE_SYMLINKS: "1"
         run: |
           echo "Cleaning any previous local cache..."
           rm -rf ${{ github.workspace }}/hf_cache
 
+          echo "=== Debug: runtime env ==="
+          echo "PWD=$(pwd)"
+          echo "HOME=$HOME"
+          echo "GITHUB_WORKSPACE=$GITHUB_WORKSPACE"
+          echo "HF_HOME=$HF_HOME"
+          echo "HUGGINGFACE_HUB_CACHE=$HUGGINGFACE_HUB_CACHE"
+          echo "HF_HUB_DISABLE_SYMLINKS=$HF_HUB_DISABLE_SYMLINKS"
+          echo "TRANSFORMERS_CACHE=${TRANSFORMERS_CACHE:-<unset>}"
+          echo "XDG_CACHE_HOME=${XDG_CACHE_HOME:-<unset>}"
+          echo "--- env (filtered) ---"
+          env | grep -E '^(HF_|HUGGINGFACE_|TRANSFORMERS_|XDG_|HOME=|GITHUB_WORKSPACE=)' | sort || true
+
+          echo "--- python/hf versions ---"
+          /opt/hostedtoolcache/Python/3.11.14/x64/bin/python - <<'PY'
+          import os
+          def v(mod):
+            try:
+              m = __import__(mod)
+              return getattr(m, "__version__", "<no __version__>")
+            except Exception as e:
+              return f"<import failed: {e}>"
+
+          print("python_exe:", os.environ.get("PYTHON", ""))
+          print("HF_HOME env:", os.environ.get("HF_HOME"))
+          print("HUGGINGFACE_HUB_CACHE env:", os.environ.get("HUGGINGFACE_HUB_CACHE"))
+          print("HF_HUB_DISABLE_SYMLINKS env:", os.environ.get("HF_HUB_DISABLE_SYMLINKS"))
+          print("TRANSFORMERS_CACHE env:", os.environ.get("TRANSFORMERS_CACHE"))
+          print("versions:", {
+            "huggingface_hub": v("huggingface_hub"),
+            "transformers": v("transformers"),
+            "sentence_transformers": v("sentence_transformers"),
+          })
+          try:
+            from huggingface_hub import constants as c
+            print("hub.constants:", {
+              "HF_HOME": getattr(c, "HF_HOME", None),
+              "HUGGINGFACE_HUB_CACHE": getattr(c, "HUGGINGFACE_HUB_CACHE", None),
+              "HF_HUB_DISABLE_SYMLINKS": getattr(c, "HF_HUB_DISABLE_SYMLINKS", None),
+            })
+          except Exception as e:
+            print("hub.constants import failed:", e)
+          PY
+
+          echo "--- cache dir check ---"
+          echo "[legacy] ~/.cache/huggingface:"
+          ls -la ~/.cache/huggingface || true
+          echo "[current] $HF_HOME:"
+          ls -la "$HF_HOME" || true
+
           echo "Running main script..."
-          /opt/hostedtoolcache/Python/3.11.14/x64/bin/python src/main.py
+          RUN_ENRICH="${{ github.event.inputs.run_enrich }}"
+          ARGS=""
+          if [ "$RUN_ENRICH" = "true" ]; then
+            ARGS="--run-enrich"
+          fi
+          /opt/hostedtoolcache/Python/3.11.14/x64/bin/python src/main.py $ARGS --embedding-device cpu --embedding-batch-size 8
 
-      - name: Mark HF cache healthy
-        if: ${{ success() }}
-        run: |
-          mkdir -p ~/.cache/huggingface
-          touch ~/.cache/huggingface/.dpr_cache_ok
-
-      - name: Clear HF cache on failure
-        if: ${{ failure() }}
-        run: |
-          rm -rf ~/.cache/huggingface
+          echo "--- post-run cache symlink check ---"
+          find "$HF_HOME" -xtype l | head -n 50 || true
 
       - name: Cleanup non-recommend archives
         run: |

@@ -21,6 +21,56 @@ def log(message: str) -> None:
   ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
   print(f"[{ts}] {message}", flush=True)
 
+def debug_hf_runtime(prefix: str) -> None:
+  """
+  打印 Hugging Face 相关的运行时信息，用于排查 CI 环境下的缓存路径/符号链接问题。
+  - 默认仅在 GitHub Actions 或 DPR_DEBUG_HF=1 时输出，避免本地运行过于冗长。
+  """
+  enable = (os.getenv("DPR_DEBUG_HF") == "1") or (os.getenv("GITHUB_ACTIONS") == "true")
+  if not enable:
+    return
+
+  log(f"[DEBUG][HF] {prefix}")
+  keys = [
+    "GITHUB_ACTIONS",
+    "GITHUB_WORKSPACE",
+    "HOME",
+    "HF_HOME",
+    "HUGGINGFACE_HUB_CACHE",
+    "HF_HUB_DISABLE_SYMLINKS",
+    "TRANSFORMERS_CACHE",
+    "XDG_CACHE_HOME",
+  ]
+  for k in keys:
+    log(f"[DEBUG][HF] env {k}={os.getenv(k, '<unset>')}")
+
+  try:
+    import huggingface_hub  # type: ignore
+    log(f"[DEBUG][HF] huggingface_hub={getattr(huggingface_hub, '__version__', '<unknown>')}")
+    try:
+      from huggingface_hub import constants as c  # type: ignore
+      log(f"[DEBUG][HF] constants.HF_HOME={getattr(c, 'HF_HOME', None)}")
+      log(f"[DEBUG][HF] constants.HUGGINGFACE_HUB_CACHE={getattr(c, 'HUGGINGFACE_HUB_CACHE', None)}")
+      log(f"[DEBUG][HF] constants.HF_HUB_DISABLE_SYMLINKS={getattr(c, 'HF_HUB_DISABLE_SYMLINKS', None)}")
+    except Exception as e:
+      log(f"[DEBUG][HF] import huggingface_hub.constants failed: {e}")
+  except Exception as e:
+    log(f"[DEBUG][HF] import huggingface_hub failed: {e}")
+
+  # 目录快速探测（不递归，避免刷屏）
+  def ls_dir(path: str) -> None:
+    try:
+      items = os.listdir(path)
+      items = items[:30]
+      log(f"[DEBUG][HF] ls {path} ({len(items)} items shown): {items}")
+    except Exception as e:
+      log(f"[DEBUG][HF] ls {path} failed: {e}")
+
+  ls_dir(os.path.expanduser("~/.cache/huggingface"))
+  hf_home = os.getenv("HF_HOME")
+  if hf_home:
+    ls_dir(hf_home)
+
 
 def _set_max_seq_length(model: SentenceTransformer, max_length: int | None) -> None:
   """尽量通过 SentenceTransformer 的 max_seq_length 控制截断长度。"""
@@ -161,7 +211,9 @@ class EmbeddingCoarseFilter:
       self.device = device
 
     print(f"[INFO] 正在加载向量模型：{self.model_name}，device={self.device}")
+    debug_hf_runtime("before SentenceTransformer()")
     self.model = SentenceTransformer(self.model_name, device=self.device)
+    debug_hf_runtime("after SentenceTransformer()")
     _set_max_seq_length(self.model, self.max_length)
 
   def filter(self, items: List[Any], queries: List[Dict[str, Any]]) -> Dict[str, Any]:
