@@ -171,13 +171,13 @@ def main() -> None:
       "required": ["rewrite"],
       "additionalProperties": False,
     }
-  keyword_rewrite_schema = {
-    "type": "object",
-    "properties": {
-      "rewrite": {"type": "string"}
-    },
-    "required": ["rewrite"],
-    "additionalProperties": False,
+    keyword_rewrite_schema = {
+      "type": "object",
+      "properties": {
+        "rewrite": {"type": "string"}
+      },
+      "required": ["rewrite"],
+      "additionalProperties": False,
     }
 
     # ===== 检查哪些字段需要扩充 =====
