@@ -107,7 +107,7 @@ def build_rewrite_prompt(query: str) -> List[Dict[str, str]]:
 
 
 def call_llm_json(client: BltClient, messages: List[Dict[str, str]], schema_name: str, schema: Dict[str, Any]) -> Dict[str, Any]:
-    response_format = {
+  response_format = {
     "type": "json_schema",
     "json_schema": {
       "name": schema_name,
