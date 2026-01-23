@@ -1,5 +1,34 @@
 * [首页](/)
 * Daily Papers
+  * 2026-01-23
+    * 精读区
+      * [CogToM: A Comprehensive Theory of Mind Benchmark inspired by Human Cognition for Large Language Models](202601/23/2601.15628v1-cogtom-a-comprehensive-theory-of-mind-benchmark-inspired-by-human-cognition-for-large-language-models)
+      * [PAL*M: Property Attestation for Large Generative Models](202601/23/2601.16199v1-palm-property-attestation-for-large-generative-models)
+      * [Robust Tool Use via Fission-GRPO: Learning to Recover from Execution Errors](202601/23/2601.15625v1-robust-tool-use-via-fission-grpo-learning-to-recover-from-execution-errors)
+      * [Improving Methodologies for LLM Evaluations Across Global Languages](202601/23/2601.15706v1-improving-methodologies-for-llm-evaluations-across-global-languages)
+      * [Persona Switch: Mixing Distinct Perspectives in Decoding Time](202601/23/2601.15708v1-persona-switch-mixing-distinct-perspectives-in-decoding-time)
+      * [Off-Policy Actor-Critic with Sigmoid-Bounded Entropy for Real-World Robot Learning](202601/23/2601.15761v1-off-policy-actor-critic-with-sigmoid-bounded-entropy-for-real-world-robot-learning)
+      * [Decoupling Return-to-Go for Efficient Decision Transformer](202601/23/2601.15953v1-decoupling-return-to-go-for-efficient-decision-transformer)
+      * [PhysicsMind: Sim and Real Mechanics Benchmarking for Physical Reasoning and Prediction in Foundational VLMs and World Models](202601/23/2601.16007v1-physicsmind-sim-and-real-mechanics-benchmarking-for-physical-reasoning-and-prediction-in-foundational-vlms-and-world-models)
+      * [Structured Hints for Sample-Efficient Lean Theorem Proving](202601/23/2601.16172v1-structured-hints-for-sample-efficient-lean-theorem-proving)
+      * [LLM-in-Sandbox Elicits General Agentic Intelligence](202601/23/2601.16206v1-llm-in-sandbox-elicits-general-agentic-intelligence)
+    * 速读区
+      * [EmotionThinker: Prosody-Aware Reinforcement Learning for Explainable Speech Emotion Reasoning](202601/23/2601.15668v1-emotionthinker-prosody-aware-reinforcement-learning-for-explainable-speech-emotion-reasoning)
+      * [Explainable Deepfake Detection with RL Enhanced Self-Blended Images](202601/23/2601.15624v1-explainable-deepfake-detection-with-rl-enhanced-self-blended-images)
+      * [From Passive Metric to Active Signal: The Evolving Role of Uncertainty Quantification in Large Language Models](202601/23/2601.15690v1-from-passive-metric-to-active-signal-the-evolving-role-of-uncertainty-quantification-in-large-language-models)
+      * [Towards Automated Kernel Generation in the Era of LLMs](202601/23/2601.15727v1-towards-automated-kernel-generation-in-the-era-of-llms)
+      * [ErrorMap and ErrorAtlas: Charting the Failure Landscape of Large Language Models](202601/23/2601.15812v1-errormap-and-erroratlas-charting-the-failure-landscape-of-large-language-models)
+      * [PhysProver: Advancing Automatic Theorem Proving for Physics](202601/23/2601.15737v1-physprover-advancing-automatic-theorem-proving-for-physics)
+      * [PUMA: Perception-driven Unified Foothold Prior for Mobility Augmented Quadruped Parkour](202601/23/2601.15995v1-puma-perception-driven-unified-foothold-prior-for-mobility-augmented-quadruped-parkour)
+      * [HumanLLM: Towards Personalized Understanding and Simulation of Human Nature](202601/23/2601.15793v1-humanllm-towards-personalized-understanding-and-simulation-of-human-nature)
+      * [Dynamic Tactile Sensing System and Soft Actor Critic Reinforcement Learning for Inclusion Characterization](202601/23/2601.16061v1-dynamic-tactile-sensing-system-and-soft-actor-critic-reinforcement-learning-for-inclusion-characterization)
+      * [Inference-Time Scaling of Verification: Self-Evolving Deep Research Agents via Test-Time Rubric-Guided Verification](202601/23/2601.15808v1-inference-time-scaling-of-verification-self-evolving-deep-research-agents-via-test-time-rubric-guided-verification)
+      * [SAMTok: Representing Any Mask with Two Words](202601/23/2601.16093v1-samtok-representing-any-mask-with-two-words)
+      * [Why Inference in Large Models Becomes Decomposable After Training](202601/23/2601.15871v1-why-inference-in-large-models-becomes-decomposable-after-training)
+      * [Adapter Fusion for Multilingual Text2Cypher with Linear and Learned Gating](202601/23/2601.16097v1-adapter-fusion-for-multilingual-text2cypher-with-linear-and-learned-gating)
+      * [Stable-DiffCoder: Pushing the Frontier of Code Diffusion Large Language Model](202601/23/2601.15892v1-stable-diffcoder-pushing-the-frontier-of-code-diffusion-large-language-model)
+      * [Efficiently Learning Robust Torque-based Locomotion Through Reinforcement with Model-Based Supervision](202601/23/2601.16109v1-efficiently-learning-robust-torque-based-locomotion-through-reinforcement-with-model-based-supervision)
+      * [Collision-Free Humanoid Traversal in Cluttered Indoor Scenes](202601/23/2601.16035v1-collision-free-humanoid-traversal-in-cluttered-indoor-scenes)
   * 2026-01-22
     * 精读区
       * [CorpusQA: A 10 Million Token Benchmark for Corpus-Level Analysis and Reasoning](202601/22/2601.14952v1-corpusqa-a-10-million-token-benchmark-for-corpus-level-analysis-and-reasoning)
