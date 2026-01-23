@@ -107,7 +107,7 @@ def build_rewrite_prompt(query: str) -> List[Dict[str, str]]:
 
 
 def call_llm_json(client: BltClient, messages: List[Dict[str, str]], schema_name: str, schema: Dict[str, Any]) -> Dict[str, Any]:
-  response_format = {
+    response_format = {
     "type": "json_schema",
     "json_schema": {
       "name": schema_name,
@@ -124,53 +124,53 @@ def call_llm_json(client: BltClient, messages: List[Dict[str, str]], schema_name
 
 
 def main() -> None:
-  import argparse
-  parser = argparse.ArgumentParser(description="补全 config.yaml 中的 related / rewrite 字段。")
-  parser.add_argument(
-    "--force",
-    action="store_true",
-    help="强制更新 related / rewrite，即使已存在。",
-  )
-  args = parser.parse_args()
+    import argparse
+    parser = argparse.ArgumentParser(description="补全 config.yaml 中的 related / rewrite 字段。")
+    parser.add_argument(
+      "--force",
+      action="store_true",
+      help="强制更新 related / rewrite，即使已存在。",
+    )
+    args = parser.parse_args()
 
-  if not os.path.exists(CONFIG_FILE):
-    raise FileNotFoundError(f"找不到 config.yaml：{CONFIG_FILE}")
+    if not os.path.exists(CONFIG_FILE):
+        raise FileNotFoundError(f"找不到 config.yaml：{CONFIG_FILE}")
 
-  api_key = os.getenv("BLT_API_KEY")
-  if not api_key:
-    raise RuntimeError("缺少 BLT_API_KEY 环境变量，无法调用 BLT。")
+    api_key = os.getenv("BLT_API_KEY")
+    if not api_key:
+        raise RuntimeError("缺少 BLT_API_KEY 环境变量，无法调用 BLT。")
 
-  group_start("Step 0.0 - load config")
-  with open(CONFIG_FILE, "r", encoding="utf-8") as f:
-    data = yaml.safe_load(f) or {}
-  group_end()
+    group_start("Step 0.0 - load config")
+    with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+        data = yaml.safe_load(f) or {}
+    group_end()
 
-  subs = (data or {}).get("subscriptions") or {}
-  keywords = subs.get("keywords") or []
-  llm_queries = subs.get("llm_queries") or []
+    subs = (data or {}).get("subscriptions") or {}
+    keywords = subs.get("keywords") or []
+    llm_queries = subs.get("llm_queries") or []
 
-  client = BltClient(api_key=api_key, model=MODEL_NAME)
+    client = BltClient(api_key=api_key, model=MODEL_NAME)
 
-  related_schema = {
-    "type": "object",
-    "properties": {
-      "related": {
-        "type": "array",
-        "items": {"type": "string"},
-      }
-    },
-    "required": ["related"],
-    "additionalProperties": False,
-  }
+    related_schema = {
+      "type": "object",
+      "properties": {
+        "related": {
+          "type": "array",
+          "items": {"type": "string"},
+        }
+      },
+      "required": ["related"],
+      "additionalProperties": False,
+    }
 
-  rewrite_schema = {
-    "type": "object",
-    "properties": {
-      "rewrite": {"type": "string"}
-    },
-    "required": ["rewrite"],
-    "additionalProperties": False,
-  }
+    rewrite_schema = {
+      "type": "object",
+      "properties": {
+        "rewrite": {"type": "string"}
+      },
+      "required": ["rewrite"],
+      "additionalProperties": False,
+    }
   keyword_rewrite_schema = {
     "type": "object",
     "properties": {
@@ -178,81 +178,101 @@ def main() -> None:
     },
     "required": ["rewrite"],
     "additionalProperties": False,
-  }
+    }
 
-  # keywords: 补齐 related
-  group_start("Step 0.1 - enrich keywords.related")
-  total_kw = len(keywords)
-  for idx, item in enumerate(keywords, start=1):
-    if not isinstance(item, dict):
-      continue
-    keyword = (item.get("keyword") or "").strip()
-    if not keyword:
-      continue
-    log(f"[0.1] keyword related {idx}/{total_kw}: {keyword}")
-    related = item.get("related")
-    if not args.force and isinstance(related, list) and related:
-      continue
+    # ===== 检查哪些字段需要扩充 =====
+    missing_kw_related = []
+    missing_kw_rewrite = []
+    missing_llm_rewrite = []
 
-    messages = build_related_prompt(keyword)
-    result = call_llm_json(client, messages, "related_terms", related_schema)
-    related_terms = [t.strip() for t in (result.get("related") or []) if str(t).strip()]
-    if related_terms:
-      item["related"] = related_terms
-  group_end()
+    for idx, item in enumerate(keywords, start=1):
+      if not isinstance(item, dict):
+        continue
+      keyword = (item.get("keyword") or "").strip()
+      if not keyword:
+        continue
 
-  # keywords: 补齐 rewrite
-  group_start("Step 0.2 - enrich keywords.rewrite")
-  for idx, item in enumerate(keywords, start=1):
-    if not isinstance(item, dict):
-      continue
-    keyword = (item.get("keyword") or "").strip()
-    if not keyword:
-      continue
-    log(f"[0.2] keyword rewrite {idx}/{total_kw}: {keyword}")
-    rewrite_text = (item.get("rewrite") or "").strip()
-    if not args.force and rewrite_text:
-      continue
+      # 检查 related 字段
+      related = item.get("related")
+      if args.force or not related or (isinstance(related, list) and not related):
+        missing_kw_related.append((idx, keyword, item))
 
-    messages = build_keyword_rewrite_prompt(keyword)
-    result = call_llm_json(client, messages, "keyword_rewrite", keyword_rewrite_schema)
-    new_rewrite = str(result.get("rewrite") or "").strip()
-    if new_rewrite:
-      item["rewrite"] = new_rewrite
-  group_end()
+      # 检查 rewrite 字段
+      rewrite = (item.get("rewrite") or "").strip()
+      if args.force or not rewrite:
+        missing_kw_rewrite.append((idx, keyword, item))
 
-  # llm_queries: 补齐 rewrite
-  group_start("Step 0.3 - enrich llm_queries.rewrite")
-  total_llm = len(llm_queries)
-  for idx, item in enumerate(llm_queries, start=1):
-    if not isinstance(item, dict):
-      continue
-    query = (item.get("query") or "").strip()
-    if not query:
-      continue
-    log(f"[0.3] llm_query rewrite {idx}/{total_llm}")
-    rewrite = (item.get("rewrite") or "").strip()
-    if not args.force and rewrite:
-      continue
+    for idx, item in enumerate(llm_queries, start=1):
+      if not isinstance(item, dict):
+        continue
+      query = (item.get("query") or "").strip()
+      if not query:
+        continue
 
-    messages = build_rewrite_prompt(query)
-    result = call_llm_json(client, messages, "rewrite_query", rewrite_schema)
-    rewrite_text = str(result.get("rewrite") or "").strip()
-    if rewrite_text:
-      item["rewrite"] = rewrite_text
-  group_end()
+      # 检查 rewrite 字段
+      rewrite = (item.get("rewrite") or "").strip()
+      if args.force or not rewrite:
+        missing_llm_rewrite.append((idx, query, item))
 
-  subs["keywords"] = keywords
-  subs["llm_queries"] = llm_queries
-  data["subscriptions"] = subs
+    # ===== 输出检查结果 =====
+    log(f"[CHECK] 需要扩充 keywords.related: {len(missing_kw_related)} 个")
+    log(f"[CHECK] 需要扩充 keywords.rewrite: {len(missing_kw_rewrite)} 个")
+    log(f"[CHECK] 需要扩充 llm_queries.rewrite: {len(missing_llm_rewrite)} 个")
 
-  group_start("Step 0.4 - save config")
-  with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-    yaml.safe_dump(data, f, allow_unicode=True, sort_keys=False)
+    # 如果所有字段都完整且不强制更新，直接返回
+    if not args.force and not missing_kw_related and not missing_kw_rewrite and not missing_llm_rewrite:
+      log("[INFO] config.yaml 所有字段都完整，无需扩充。使用 --force 参数可强制重新生成。")
+      return
 
-  log("[INFO] 已更新 config.yaml 的 related / rewrite 字段。")
-  group_end()
+    # ===== 只扩充缺失的字段 =====
+    # keywords: 补齐 related
+    if missing_kw_related:
+      group_start("Step 0.1 - enrich keywords.related")
+      for idx, keyword, item in missing_kw_related:
+        log(f"[0.1] keyword related {idx}/{len(keywords)}: {keyword}")
+        messages = build_related_prompt(keyword)
+        result = call_llm_json(client, messages, "related_terms", related_schema)
+        related_terms = [t.strip() for t in (result.get("related") or []) if str(t).strip()]
+        if related_terms:
+          item["related"] = related_terms
+      group_end()
+
+    # keywords: 补齐 rewrite
+    if missing_kw_rewrite:
+      group_start("Step 0.2 - enrich keywords.rewrite")
+      for idx, keyword, item in missing_kw_rewrite:
+        log(f"[0.2] keyword rewrite {idx}/{len(keywords)}: {keyword}")
+        messages = build_keyword_rewrite_prompt(keyword)
+        result = call_llm_json(client, messages, "keyword_rewrite", keyword_rewrite_schema)
+        new_rewrite = str(result.get("rewrite") or "").strip()
+        if new_rewrite:
+          item["rewrite"] = new_rewrite
+      group_end()
+
+    # llm_queries: 补齐 rewrite
+    if missing_llm_rewrite:
+      group_start("Step 0.3 - enrich llm_queries.rewrite")
+      for idx, query, item in missing_llm_rewrite:
+        log(f"[0.3] llm_query rewrite {idx}/{len(llm_queries)}")
+        messages = build_rewrite_prompt(query)
+        result = call_llm_json(client, messages, "rewrite_query", rewrite_schema)
+        rewrite_text = str(result.get("rewrite") or "").strip()
+        if rewrite_text:
+          item["rewrite"] = rewrite_text
+      group_end()
+
+    # 保存更新后的配置
+    subs["keywords"] = keywords
+    subs["llm_queries"] = llm_queries
+    data["subscriptions"] = subs
+
+    group_start("Step 0.4 - save config")
+    with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+      yaml.safe_dump(data, f, allow_unicode=True, sort_keys=False)
+
+    log("[INFO] 已更新 config.yaml 的相关字段。")
+    group_end()
 
 
 if __name__ == "__main__":
-  main()
+    main()
