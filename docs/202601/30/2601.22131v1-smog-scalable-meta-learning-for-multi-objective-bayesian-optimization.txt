@@ -1,0 +1,1394 @@
+Title: SMOG: Scalable Meta-Learning for Multi-Objective Bayesian Optimization
+
+URL Source: https://arxiv.org/pdf/2601.22131v1
+
+Published Time: Fri, 30 Jan 2026 02:32:33 GMT
+
+Number of Pages: 20
+
+Markdown Content:
+# SMOG : Scalable Meta-Learning for Multi-Objective Bayesian Optimization 
+
+Leonard Papenmeier 1 Petru Tighineanu 2
+
+Abstract 
+
+Multi-objective optimization aims to solve prob-lems with competing objectives, often with only black-box access to a problem and a limited bud-get of measurements. In many applications, histor-ical data from related optimization tasks is avail-able, creating an opportunity for meta-learning to accelerate the optimization. Bayesian opti-mization, as a promising technique for black-box optimization, has been extended to meta-learning and multi-objective optimization inde-pendently, but methods that simultaneously ad-dress both settings—meta-learned priors for multi-objective Bayesian optimization—remain largely unexplored. We propose SMOG , a scalable and modular meta-learning model based on a multi-output Gaussian process that explicitly learns cor-relations between objectives. SMOG builds a struc-tured joint Gaussian process prior across meta-and target tasks and, after conditioning on meta-data, yields a closed-form target-task prior aug-mented by a flexible residual multi-output ker-nel. This construction propagates metadata un-certainty into the target surrogate in a principled way. SMOG supports hierarchical, parallel train-ing: meta-task Gaussian processes are fit once and then cached, achieving linear scaling with the number of meta-tasks. The resulting surrogate in-tegrates seamlessly with standard multi-objective Bayesian optimization acquisition functions. 
+
+1. Introduction 
+
+Many high-impact optimization problems are intrinsically 
+
+multi-objective : engineers and machine-learning practition-ers rarely optimize a single scalar, but rather trade off com-peting goals such as performance vs. cost, quality vs. speed, or accuracy vs. latency/energy. At the same time, these     
+
+> 1Department of Information Systems, University of M ¨unster, Germany 2Robert Bosch GmbH, Renningen, Germany. Corre-spondence to: Leonard Papenmeier <leonard.papenmeier@uni-muenster.de >.
+> Preprint.
+
+objectives are often expensive and noisy to evaluate, which naturally puts us in the low-data regime where Bayesian optimization ( BO )/multi-objective Bayesian optimization (MOBO ) is particularly effective (Snoek et al., 2012; Zhang et al., 2020; Shahriari et al., 2016; Daulton et al., 2020; 2021). Crucially, such optimizations are rarely one-off: or-ganizations accumulate logs of past runs on related products, machines, datasets, workloads, or environments. This makes 
+
+meta-learning for expensive multi-objective optimization 
+
+a natural setting: rather than starting each new optimiza-tion from scratch, we would like to leverage prior tasks to achieve good Pareto-optimal trade-offs with far fewer evaluations. Examples span industrial process tuning and calibration (where competing quality metrics must be bal-anced), scientific design (e.g., materials discovery and ad-vanced manufacturing with multiple competing properties), and machine-learning system design (e.g., multi-objective hyperparameter and architecture tuning trading off accuracy, latency, and resource use) (Gopakumar et al., 2018; Myung et al., 2025; Pfisterer et al., 2022; Eggensperger et al., 2021; Marco et al., 2017; Herbol et al., 2018). Despite its promise, meta-learning for multi-objective opti-mization is technically subtle in the low-data regime. First, in multi-objective settings, “what to transfer” is not a sin-gle optimum but information about a Pareto set/front , and decision making typically depends on uncertainty-aware criteria (e.g., hypervolume-based utilities) (Knowles, 2006; Daulton et al., 2020; 2021). Second, historical data are of-ten scarce and heterogeneous across tasks; transfer must therefore account for meta-task uncertainty to avoid over-confident bias from weak or mismatched prior tasks (Dai et al., 2022; Volpp et al., 2020; Feurer et al., 2022; Tigh-ineanu et al., 2024). Third, multi-objective problems add another layer: objectives can be correlated, so efficiently using evidence often requires non-trivial probabilistic multi-output surrogates . Treating objectives independently can waste information precisely when evaluations are precious. These challenges leave a key gap: we need meta-learning methods that are (i) Bayesian uncertainty-aware, (ii) scal-able across many meta-tasks, and (iii) able to exploit cross-objective correlations. Fully joint multi-task multi-output GP models are principled but quickly become infeasible at meta-learning scale (Rasmussen & Williams, 2006; ´Alvarez et al., 2012), while most scalable alternatives are developed 1
+
+> arXiv:2601.22131v1 [cs.LG] 29 Jan 2026 Scalable Meta-Learning for Multi-Objective Bayesian Optimization
+
+for single-objective transfer and treat objectives indepen-dently when adapted to MOBO. 
+
+Contribution. We introduce SMOG (Scalable Meta-Learning and Multi-Objective GP), a probabilistic frame-work that closes this gap by meta-learning a correlated multi-objective Gaussian process ( GP ) surrogate while re-taining principled Bayesian uncertainty propagation from historical tasks. Building on the modular GP meta-learning perspective of Tighineanu et al. (2024), SMOG constructs a structured multi-output prior that (i) remains fully Bayesian 
+
+over all task data, (ii) learns correlations between objectives 
+
+through vector-valued GP structure, and (iii) is scalable in the number of meta-tasks via a modular decomposition that enables parallel training and caching of meta-task posteriors. This yields a target-task surrogate that can be dropped into standard MOBO pipelines (e.g., hypervolume-based acqui-sition optimization) (Daulton et al., 2020; 2021; Knowles, 2006), with coherent propagation of meta-data uncertainty to the target task. 
+
+2. Related Work 
+
+Most work on meta-learning for BO focuses on learning a better surrogate for a single-objective target task. Aprincipled approach is to build a joint Bayesian model across tasks (e.g., a multi-task GP ), which yields coherent uncertainty estimates but is computationally prohibitive— scaling cubically in the total number of observations and, at best, quadratically in the task-correlation hyperparame-ters (Bonilla et al., 2007; Cao et al., 2010; ´Alvarez et al., 2012; Swersky et al., 2013; Yogatama & Mann, 2014; Joy et al., 2016; Poloczek et al., 2017; Shilton et al., 2017; Tigh-ineanu et al., 2022). To improve scalability, a number of methods rely either on heuristic combinations of per-task surrogates (e.g., GP ensembles) (Feurer et al., 2022; Wistuba et al., 2018; Dai et al., 2022) or on building a parametric GP prior on the metadata (Perrone et al., 2018a; Salinas et al., 2020; Wistuba & Grabocka, 2021; Wang et al., 2021). These scale better with the number of meta-tasks but sacrifice a joint Bayesian treatment and thus principled uncertainty propagation across tasks. A recent work addresses this tension by introducing assumptions that lead to a modular GP model: conditioning on meta-data exposes a modular decomposition into M independent meta-task GP posteri-ors and a target-task GP prior, enabling scalable and fully Bayesian transfer (Tighineanu et al., 2024). In contrast to the rich single-objective literature, meta-learning methods that directly target multi-objective op-timization remain scarce. A notable exception is the task-similarity extension of MO-TPE by Watanabe et al. (2023), which transfers knowledge by reweighting the acquisition based on task similarity. While effective and scalable, it Meta GP 1  Meta GP 2  ...  Meta GP M   
+
+> Target Multi-Task GP
+> Objective 1 Objective 2 Objective O ...
+
+## SMOG      
+
+> w1,1
+> w2,1
+> wM,1
+> w1,O ...
+> w2,O ...
+> wM,O ...
+> Figure 1. High-level view of SMOG : Meta tasks are modeled in-dependently of the target GP . The target GP models correlations between objectives and uses the weighted means and covariances of the meta GPs to learn an informative target-task prior.
+
+operates at the level of density models/acquisition rather than a unified probabilistic multi-output surrogate. Recent few-shot surrogate-assisted evolutionary methods for expen-sive multi-objective optimization meta-learn surrogates (Yu, 2025). However, both approaches typically do not learn a correlated multi-output posterior and thus cannot exploit cross-objective dependencies or propagate meta-task uncer-tainty to the target surrogate in a principled way. Our work targets this underexplored regime by combining scalable GP meta-learning with a multi-output surrogate that models cross-objective dependencies. 
+
+3. Method 
+
+We aim to find the Pareto set of a target black-box func-tion ft : X → RO , where X ⊂ RD is the search space of dimensionality D and O is the number of objectives. Observations yn = ( yn,o )o∈O of ft may be corrupted by independent zero-mean Gaussian noise, yn = ft(xn) + εn
+
+with εn ∼ N  0, diag( σ21 , . . . , σ 2 
+
+> O
+
+). We use the target data 
+
+Dt = {(xn, yn)}Nt 
+
+> n=1
+
+to build a probabilistic model. Specif-ically, we model ft with a multi-output GP prior with mean 
+
+mo(·) and kernel koo ′ (·, ·) for o, o ′ ∈ O = {1, . . . , O }.Conditioned on Dt, the posterior is again a GP with mean and covariance (Williams & Rasmussen, 2006) 
+
+ˆmt,o (x) = mo(x) + k(( x, o ), Xt)[K(Xt, Xt) + Σε]−1 (Yt − m(Xt)) ,
+
+ˆkt,oo ′ (x, x′) = k(( x, o ), (x′, o ′)) − k(( x, o ), Xt)[K(Xt, Xt) + Σε]−1 k(Xt, (x′, o ′)) ,
+
+(1) 2Scalable Meta-Learning for Multi-Objective Bayesian Optimization 
+
+where Xt =  (xn, o ) 
+
+> n=1 ,...,N t, o ∈O
+
+stacks the objective-augmented inputs and Yt =  yn,o 
+
+ 
+
+> n,o
+
+the corresponding observations. We assume per-objective Gaussian noise 
+
+Σε = diag( σ21 INt , . . . , σ 2 
+
+> O
+
+INt ).To leverage related tasks, we assume access to M ≥ 1
+
+meta-tasks with datasets D1: M = S 
+
+> m∈M
+
+Dm, where 
+
+M = [M ]. Each meta-task m provides Dm =
+
+{(xm,n , ym,n )}Nm 
+
+> n=1
+
+with ym,n ∈ RO and per-objective Gaussian noise ym,n = fm(xm,n ) + εm,n , εm,n ∼N 0, diag( σ2
+
+> m, 1
+
+, . . . , σ 2 
+
+> m,O
+
+). For notational convenience, we collect all observations of meta-task m by stacking the objective-augmented inputs and corresponding out-puts as Xm =  (xm,n , o ) 
+
+> n=1 ,...,N m, o ∈O
+
+and Ym =
+
+ ym,n,o 
+
+ 
+
+> n=1 ,...,N m, o ∈O
+
+.
+
+3.1. Method Description 
+
+SMOG combines meta-learning and multi-objective opti-mizations. Our derivation starts by assuming that the meta-data and target data are described jointly by a multi-task kernel over all tasks and objectives 
+
+k [( x, ν, o ), (x′, ν ′, o ′)] = X
+
+> v∈M ∗
+
+X
+
+> θ∈O
+
+[cvθ ]νo,ν ′o′ kvθ (x, x′),
+
+(2) where M∗ = M ∪ { t} is the set of all tasks, t denotes the target index, ν, ν ′ ∈ M ∗ are task indices, o, o ′ ∈ O are indices of the objective, kvθ are arbitrary kernel functions, and Cvθ positive semi-definite ( PSD ) matrices called core-gionalization matrices , since their entries [cvθ ]νo,ν ′o′ model the covariances between two objectives (ν, o ) and (ν′, o ′)
+
+( ´Alvarez et al., 2012). We derive SMOG by imposing two assumptions on the multi-task GP in Equation (2) that focus learning on the most informative covariance terms, yielding a scalable, modular posterior with efficient evaluation. 
+
+Assumption 1. We neglect correlations between meta-task models and model each meta-task with its own ker-nel: Cov ( fmo , f m′o′ ) = δm=m′ km [( x, o ), (x′, o ′)] for all 
+
+m, m ′ ∈ M and o, o ′ ∈ O (Tighineanu et al., 2024). Assumption 1 is motivated by the fact that meta-tasks typi-cally come from complete optimizations and thus contain far more data than the target task. Thus, modeling corre-lations between different meta-tasks is usually of limited value: the metadata is typically sufficient to learn each meta-task in isolation. Importantly, this independence is only assumed in the prior—conditioning on meta- and target data induces posterior correlations between meta-task functions via an explaining-away effect. This prior independence al-lows SMOG to scale to large numbers of meta tasks. With the second assumption, we model the target objectives ft,o 
+
+as an additive combination of functions that are perfectly (anti-)correlated with the meta-task priors. 
+
+Assumption 2. The target-task model is given by a sum of scaled meta-task functions, P 
+
+> m∈M
+
+˜fmo , and a resid-ual function, ˜fto . Explicitly, fto = ˜fto + P 
+
+> m∈M
+
+˜fmo ,with Corr( ˜fmo , f mo ) = 1, Cov( ˜fto , f mo ′ ) = 0, and 
+
+Cov( ˜fto , ˜fto ′ ) = kt [( x, o ), (x′, o ′)] , m ∈ M , o, o ′ ∈ O .Together, these two assumptions make SMOG learn effi-ciently for a large number of meta-tasks, M . By constrain-ing the target-task components ˜fmo to be perfectly corre-lated with the corresponding meta-task models fmo , we capture the idea that transferable structure from the meta-tasks should re-appear in the target task. This transfer is en-coded by one free parameter wmo ∈ R that must be learned. The residual function ˜fto captures aspects of the target task that the meta-task models cannot explain. Meta-learning is therefore effective if this residual can be learned faster than the target function from scratch. Assumptions 1 and 2 im-pose sparse structure on the coregionalization matrices Cmθ 
+
+in Equation (2), which are parametrized by unconstrained scalar parameters wm ∈ RO for each meta-task m ∈ M .
+
+Lemma 1. Applying Assumptions 1 and 2 to Equation (2) 
+
+yields a sparse structure with the following non-zero entries of the coregionalization matrices 
+
+[ctθ ]to,to ′ = [ ctθ ]to ′,to ≡ [htθ ]oo ′ ,
+
+[cmθ ]mo,mo ′ = [ cmθ ]mo ′,mo = [ hmθ ]oo ′ ,
+
+[cmθ ]mo,to ′ = [ cmo ]to ′,mo = wmo ′ [hmθ ]oo ′ ,
+
+[cmθ ]to,to ′ = [ cmθ ]to ′,to = wmo wmo ′ [hmθ ]oo ′ ,
+
+(3) 
+
+where [hvθ ]oo ′ are PSD in the basis (o, o ′).
+
+See Section A.1 for a proof. This sparse structure decreases the number of parameters in the kernel from O M 3O3 in Equation (2) to O M O 3 in Equation (3), which is linear in M . In other words, the coregionalization matrices are now populated by O × O blocks of [hvθ ]oo ′ .
+
+Example for two meta-tasks and objectives. In the case of two meta-tasks and two objectives, we have the follow-ing coregionalization matrices in the basis (m = 1 , o =1) , (m = 1, o = 2) , (m = 2, o = 1) , (m = 2, o =2) , (t, o = 1) , (t, o = 2) :
+
+C1θ =
+
+
+
+H1θ 02×2 W1 ⊙ H1θ
+
+02×2 02×2 02×2
+
+W ⊤ 
+
+> 1
+
+⊙ H1θ 02×2 W × 
+
+> 1
+
+⊙ H1θ
+
+
+
+C2θ =
+
+
+
+02×2 02×2 02×2
+
+02×2 H2θ W2 ⊙ H2θ
+
+02×2 W ⊤ 
+
+> i
+
+⊙ H2θ W × 
+
+> 2
+
+⊙ H2θ
+
+
+
+Ctθ =
+
+
+
+02×2 02×2 02×2
+
+02×2 02×2 02×2
+
+02×2 02×2 Htθ 
+
+ ,Wi =
+
+wi1 wi2
+
+wi1 wi2
+
+
+
+, W × 
+
+> i
+
+=
+
+ w2 
+
+> i1
+
+wi1wi2
+
+wi1wi2 w2
+
+> i2
+
+
+
+,
+
+(4) 3Scalable Meta-Learning for Multi-Objective Bayesian Optimization 2 0 2              
+
+> 2
+> 0
+> 2
+> Meta task 0
+> Objective 0
+> 202
+> Objective 1
+> 202
+> 2
+> 0
+> 2
+> Meta task 1
+> 202
+> 202
+> 2
+> 0
+> 2
+> Meta task 2
+> 202
+> 202
+> 2
+> 0
+> 2
+> Target task
+> 202
+
+Figure 2. Example of a Sinusoidal function with two outputs (columns), three source tasks (rows 1–3), and one target task (row 4). SMOG learns a strong target-task posterior by leveraging meta tasks to learn an informative target-task prior, which is further refined by conditioning on the target data. See Section 4.2 for details on the benchmark. 
+
+where ⊙ is the elementwise (Hadamard) product. Here, 
+
+Hvθ is matrix notation for [hvθ ]oo ′ and describes cross-objective correlations. 
+
+Lemma 2. Assumptions 1 and 2 with wmo ∈ R for m ∈ R
+
+and o ∈ O yield a valid multi-task kernel given by 
+
+kSMOG [( x, ν, o ), (x′, ν ′, o ′)] = 
+
+X
+
+> v∈M ∗
+
+gv (ν, o )gv (ν′, o ′)kv [( x, o ), (x′, o ′)] , (5) 
+
+where gv (ν, o ) is one if v = ν, wmo if (v = m) ∧ (ν = t),and zero otherwise. 
+
+See Section A.2 for a proof. According to Lemma 2, we have a valid joint kernel that defines the prior distribution over all meta- and target functions before observing data. The parameters of our kernel are successfully constrained to only scale linearly in M . The modular and computation-ally scalable nature of SMOG is revealed when conditioning Equation (5) on the metadata, yielding a valid GP as we show next. 
+
+Theorem 1. Under a zero-mean GP prior with the multi-task kernel given by Equation (5) , the distribution of the target-task objectives conditioned on the metadata is 
+
+fto | D 1: M , x ∼ GP (mt, SMOG (x, o ),kt, SMOG [( x, o ), (x′, o ′)]) (6) 
+
+with 
+
+mt, SMOG (x, o ) = X
+
+> m∈M
+
+wmo ˆmmo (x)
+
+kt, SMOG [( x, o ), (x′, o ′)] = kt[( x, o ), (x′, o ′)] + X
+
+> m∈M
+
+wmo wmo ′ ˆkmoo ′ (x, x′),
+
+(7) 
+
+where ˆmmo (x) and ˆkmoo ′ (x, x′) are the posterior mean and covariance functions of the individual meta-task GPs conditioned only on their corresponding data, Dm.
+
+See Section B for a proof. According to Theorem 1, we can model each meta-task with an individual GP with a zero-mean prior and a multi-objective kernel kmoo ′ . The prior distribution of the target-task is also a GP , given by the weighted sum of the meta-task posteriors, as in Equation (7). This prior has striking similarity with the single-objective 
+
+ScaML-GP , with an identical weighting of the meta-task posterior mean functions, while the posterior covariances differ: ScaML-GP scales them by a scalar w2
+
+> m
+
+, whereas 
+
+SMOG uses products wmo wmo ′ that weight and couple the full objective–objective covariance blocks. If the objectives are independent, SMOG reduces to describing each objective with a ScaML-GP model. Equation (7) captures the key mechanism by which SMOG 
+
+enables meta-learning. SMOG learns how to combine the predictions of meta-task models by tuning the weights wmo 
+
+during marginal likelihood optimization. Meta-tasks that align with the target receive large weights, while unrelated ones are effectively downweighted to zero. SMOG can there-fore quickly meta-learn in the presence of even a few similar meta-tasks. At the core of SMOG ’s meta-learning process lies a principled flow of uncertainty from the meta-task mod-els to the target-task. This flow is fully Bayesian and is mod-ulated by how well the posterior distribution of meta-task model m explains the target-task data. Figure 1 sketches the core ideas of SMOG . The linear sum in Equation (7) implies that SMOG reduces the complexity of the multi-task Gaus-sian process ( MTGP ) in Equation (2) from cubic in the num-ber of points to linear in the number of tasks. We achieve this only via Assumptions 1 and 2 and without numerical approximations. The prior in Equation (7) is conditioned on 
+
+Dt via Equation (1) to obtain the target posterior 
+
+p(fto | x, Dm, Dt) = N (μto (x), Σtoo ′ (x, x′)) . (8) 4Scalable Meta-Learning for Multi-Objective Bayesian Optimization 
+
+Figure 2 shows how SMOG learns a strong target-task poste-rior with only four observations of the target task by lever-aging observations on related meta-tasks. 
+
+Likelihood optimization In the following, we present an efficient implementation of SMOG , following the strategy by Tighineanu et al. (2024). We assume that the parameters of each meta-task model, θm, depend only on that meta-task’s data and are independent of the target data. 
+
+Assumption 3. For all meta-tasks m ∈ M , we have p(θm |Dm, Dt) = p(θm | D m).The justification for this assumption is that meta-tasks typ-ically have significantly more data than the target task, so we expect the meta-task model parameters to depend only weakly on the target data. Since the full marginal likelihood can be decomposed into a target-task and a meta-task term 
+
+p (Yt, Y1: M | Xt, X1: M , θt, θ1: M ) = (9) 
+
+p (Yt | D 1: M , Xt, θt, θ1: M ) Y
+
+> m∈M
+
+p (Ym | Xm, θm) ,
+
+this allows for modularizing the training procedure and in-ferring the meta-task hyperparameters ( HP s) θm, containing the HP s of the meta-task GPs, independently of θt, contain-ing the HP s of the target-task kernel kt and the weights 
+
+wmo . In light of Assumption 1, we can train the meta-task GPs in parallel based only on their individual data, 
+
+θ⋆m = arg max θm log( Ym | Xm, θm)) . Afterwards we compute the meta-task GP ’s posterior mean, ˆmmo (Xt), and covariance matrix, ˆKmoo ′ (Xt, Xt), and cache them. This allows us to evaluate the target-task prior in Equation (7) and optimize the target-task log-likelihood via 
+
+θ⋆t = arg max 
+
+> θt
+
+log p (Yt | D 1: M , Xt, θt, θ⋆m) , (10) which is cheap to evaluate. Since the meta-task GPs are independent of the target task, they can be computed once and reused during the entire optimization of the target task. We summarize SMOG in Algorithm 1. 
+
+Complexity Analysis A key feature of SMOG is that its computational complexity scales linearly in M . To see this, consider the cost incurred by the different steps of Algo-rithm 1. Step 2 involves the inversion of the data of each meta-task with an overhead O(O3 P 
+
+> m∈M
+
+N 3
+
+> m
+
+). This hap-pens only once during pre-training—those inverted matrices are cached. To construct the prior in step 3, we evaluate each meta-task posterior mean and covariance at Xt with an overhead O(O3N 2
+
+> t
+
+P 
+
+> m∈M
+
+Nm + O3Nt
+
+P 
+
+> m∈M
+
+N 2
+
+> m
+
+).Finally, step 4 involves inverting the target-task kernel ma-trix, which takes O(O3N 3 
+
+> t
+
+). All these terms scale linearly in M and are cheap to evaluate in the practically relevant regime of small Nt and O, and moderate data per meta-task, given our assumption to be in the low-data regime. 
+
+Algorithm 1 SMOG  
+
+> 1:
+
+Input: metadata D1: M = ∪m∈M Dm 
+
+> 2:
+
+Train individual GPs per meta-task and optimize θm 
+
+> 3:
+
+Construct the target-task prior as in Equation (7), and cache ˆmmo (Xt) and ˆKmoo ′ (Xt, Xt) 
+
+> 4:
+
+Optimize the target-task HPs θt as in Equation (10)  
+
+> 5:
+
+Condition the prior on Dt to obtain the posterior distri-bution for ft as in Equation (1) 
+
+4. Experimental Setup 
+
+We study the performance of SMOG relative to a wide range of competing optimization algorithms on benchmarks that reflect synthetic and real-world scenarios. We initialize each optimizer with only one uniformly randomly selected configuration, reflecting the data scarcity prevalent in meta-learning scenarios, and run each optimizer 50 times with different random seeds. For each run and at each iteration, we observe the difference of a configuration’s hypervolume to the best-observed hypervolume across models, repetitions, and iterations. We plot the mean difference (averaged across repetitions) and its standard error. For every iteration following the initial random sam-ple, each optimizer chooses the point of maximum 
+
+LogNoisyExpectedHypervolumeImprovement 
+
+(Ament et al., 2023), which depends on a reference point. We set this reference point using BoTorch’s 
+
+infer reference point 1 applied to normalized Pareto-optimal objective values. The reference point is chosen slightly worse than the Pareto nadir point by moving it back by a fixed fraction (we use BoTorch’s default 
+
+0.1, proposed by Ishibuchi et al. (2011)) of the observed objective range in each dimension. To improve numerical stability, we standardize the objective values to have zero mean and unit variance before computing reference point and expected hypervolume. 
+
+4.1. Equicorrelated Multitask Kernel 
+
+For SMOG , we propose a lightweight parameterization of the task covariance in multi-output Gaussian processes. As-suming a separable (Kronecker) structure 
+
+Cov fi(x), f j (x′) = kX (x, x ′) KT [i, j ],
+
+we restrict the task kernel KT ∈ Rm×m to have equicorre-lation : all pairs of distinct tasks share a single correlation parameter ρ, while each task retains its own marginal scale 
+
+> 1https://botorch.readthedocs.io/en/v0.16. 1/_modules/botorch/utils/multi_objective/ hypervolume.html , accessed on 01/26/2026
+
+5Scalable Meta-Learning for Multi-Objective Bayesian Optimization 
+
+σi > 0:
+
+KT [i, j ] = 
+
+(
+
+σ2 
+
+> i
+
+, i = j, ρ σ iσj , i̸ = j, ρ ∈ (0 , 1) .
+
+This can be written as a diagonal plus rank-1 decomposition, 
+
+KT = (1 − ρ) diag( σ2) + ρ σσ ⊤,
+
+which is positive semidefinite by construction and computa-tionally convenient. The decomposition also shows that our kernel is a constrained rank-1 multitask model: compared to the generic form KT = BB ⊤ + diag( v), our method ties B = √ρ σ and v = (1 − ρ)σ2, reducing the number of free parameters from O(m) per component to m + 1 total. 
+
+Corr( i, j ) = ρ for all i̸ = j.We impose at Beta(2 , 2) hyperprior on ρ, i.e., we only model positive correlations, which is motivated by the fact that SMOG only models the difference between the output of the objective function and the target-task prior. 
+
+4.2. Benchmarks 
+
+We evaluate the performance of SMOG in controlled syn-thetic and real-world settings. 
+
+Sinusoidal Benchmark. To test whether SMOG behaves as expected, we define a simple one-dimensional benchmark function 
+
+f1,1(x) = sin( x − δ), f 2,1(x) = sin( x)
+
+f3,1(x) = sin( x + δ), f m, 2(x) = fm, 1(x + ϕ)
+
+where δ = π 
+
+> 12
+
+and ϕ = π 
+
+> 6
+
+. The target task is a weighted sum of the source tasks ft,o (x) = fo(x)⊺wo, where fo(x) = (f1,o (x), . . . , f 3,o (x)) , w1 = (0 .5, 0.35 , 0.15) , and w2 =(0 .4, 0.4, 0.2) . We do not run extensive experiments on this problem, but it is instructive to visualize the intermediate posterior of SMOG (see Figure 2). 
+
+Adapted Hartmann6 Benchmark. We define an adapted variant of the popular Hartmann6 2 benchmark problem. The Hartmann6 problem is defined as 
+
+f (x) = −
+
+> 4
+
+X
+
+> i=1
+
+αi exp 
+
+−
+
+> 6
+
+X
+
+> j=1
+
+Aij (xj − Pij )2
+
+ ,
+
+where α is a vector of length 4 and A and P are known 4×6
+
+matrices. We adapt this benchmark as follows to allow for meaningful multi-task, multi-objective optimization. First, we sample a separate coefficient vector, αm, for each task. Second, we define an offset vector εo per objective and, for 
+
+> 2https://www.sfu.ca/˜ssurjano/hart6.html ,accessed on: 10/23/2025
+
+each combination of task and objective (m, o ) ∈ M ∗ × O ,aim to minimize 
+
+fm,o (x) = −
+
+> 4
+
+X
+
+> i=1
+
+αm,i exp 
+
+−
+
+> 6
+
+X
+
+> j=1
+
+Aij (xj − Pij − εo,k 
+
+ .
+
+See Appendix C.2 for additional details. The 6-dimensional Hartmann benchmark can be configured to have varying numbers of objectives and meta-tasks. We set the number of meta tasks to 8 and observe 64 points per meta task, sampled uniformly at random. We additionally study the behavior of SMOG for different numbers of meta tasks and observations per meta task in Appendix D. 
+
+Tabular HPO Benchmarks To evaluate how SMOG per-forms in real-world settings, we investigate its performance on HPOBench benchmarks (Klein & Hutter, 2019). The goal in HPOBench is to jointly optimize a neural network architecture and its hyperparameters. The performance of a configuration can be observed on four different datasets: 
+
+Slice Localization , Protein Structure , Naval Propulsion , and 
+
+Parkinson’s Telemonitoring . The benchmark has two objec-tives: validation MSE and runtime. HPOBench can be run in a multi-fidelity setting by reducing the number of epochs. We always run for the maximum (100 epochs) and use one dataset as the target task and the remaining datasets as meta tasks. 
+
+Terrain Benchmark In this benchmark, we study unmanned aerical vehicle ( UAV ) trajectory optimization problems (Shehadeh & K ˚udela, 2025). The goal is to find a trajectory of 20 three-dimensional waypoints through one of 56 predefined landscapes that minimizes four target met-rics: path length cost, obstacle avoidance cost, altitude cost, and smoothness cost. The performance in other landscapes is used as metadata for SMOG . We use the first three land-scapes as target tasks and sample meta tasks uniformly at random from the remaining landscapes. See Appendix C.2 for additional details. 
+
+4.3. Models 
+
+We compare SMOG to the following set of optimization algorithms: • MO-GP : A multi-task GP with Kronecker struc-ture (Bonilla et al., 2007) • Ind.-GP : A GP model without meta-learning and inde-pendent outputs • Ind.-ScaML-GP : A ScaML-GP model with indepen-dent outputs (Tighineanu et al., 2024) • MO-TPE : A tree-structured Parzen estimator ( TPE )-based model that naturally handles multiple objectives and meta-learning (Watanabe et al., 2023) 6Scalable Meta-Learning for Multi-Objective Bayesian Optimization 0 5 10 15 20 25 30 
+
+BO iteration 
+
+> 10 −1
+> 10 0
+> 1 - Normalized Hypervolume
+
+Hartmann ( d = 6) — 2 objectives 
+
+> SMOG (n=50) Ind. GP (n=50) Ind-ScaML-GP (n=50) MO-GP (n=50) Ind.-RGPE (n=50) Ind.-SGPT (n=50) Ind.-ABLR (n=50) MO-TPE (n=50)
+
+Figure 3. Performance of SMOG and competitors on the 6-dimensional two-objective Hartmann benchmark with 8 meta tasks and 64 observations per meta task. 0 5 10 15 20 25 30 
+
+BO iteration 
+
+> 10 −2
+> 10 −1
+> 1 - Normalized Hypervolume
+
+Protein Structure — 2 objectives 
+
+> SMOG (n=50) Ind. GP (n=50) Ind-ScaML-GP (n=50) MO-GP (n=50) Ind.-RGPE (n=50) Ind.-SGPT (n=50) Ind.-ABLR (n=50) MO-TPE (n=50)
+
+Figure 4. Performance of SMOG and competitors on the Protein Structure Problem. SMOG and Ind.-ABLR show the best per-formance, with SMOG having a slight advantage at the end of the optimization loop. 0 5 10 15 20 25 30 
+
+BO iteration       
+
+> 2×10 −1
+> 3×10 −1
+> 4×10 −1
+> 1 - Normalized Hypervolume
+
+Terrain — Avg. over target tasks — 2 objectives 
+
+> SMOG (n=150) Ind. GP (n=135) Ind-ScaML-GP (n=150) MO-GP (n=150) Ind.-RGPE (n=150) Ind.-SGPT (n=150) Ind.-ABLR (n=150) MO-TPE (n=150)
+
+Figure 5. Performance of SMOG and competitors on the two-objective Terrain benchmark. The results are averaged over differ-ent target tasks. SMOG shows competitive aggregated performance. 
+
+• Ind.-RGPE : The RGPE model by Feurer et al. (2018) with independent outputs • Ind.-ABLR : Adaptive Bayesian linear regression with independently-modeled outputs (Perrone et al., 2018b) • Ind.-SGPT : The Scalable Gaussian Process Transfer framework by Wistuba et al. (2018) with independently-modeled outputs 
+
+5. Experimental Results 
+
+We empirically study the performance of SMOG and the methods defined in Section 4.3 on the synthetic and real-world benchmarks. We either plot the hypervolume ( HV ) of the Pareto front built from all solutions found up to a given BO iteration, or the gap to the best-observed HV across all optimization runs in a single plot. 
+
+5.1. Hartmann Benchmark 
+
+We first study the 6-dimensional Hartmann benchmark. Fig-ure 3 shows the performance of SMOG and competitors on the variant with two objectives. As expected, the methods that do not leverage metadata ( Ind.-GP and MO-GP ) ini-tially struggle to find good observations. MO-GP , which can model correlations across tasks, has an edge over Ind.-GP ,arguably due to the more sample-efficient surrogate model. Next, we turn our attention to Ind.-ScaML-GP . Com-pared to Ind.-GP and MO-GP , this method achieves a considerable initial speedup by leveraging metadata. Sim-ilarly, Ind.-RGPE and Ind.-SGPT find good solutions early on, while Ind.-ABLR initially outperforms both 
+
+Ind.-GP and MO-GP but later loses its ability to find sig-7Scalable Meta-Learning for Multi-Objective Bayesian Optimization 0 5 10 15 20 25 30          
+
+> BO iteration
+> 4×10 −1
+> 6×10 −1
+> 1 - Normalized Hypervolume
+> Terrain — Avg. over target tasks — 4 objectives
+> SMOG (n=150) Ind. GP (n=150) Ind-ScaML-GP (n=150) MO-GP (n=150) Ind.-RGPE (n=150) Ind.-SGPT (n=150) Ind.-ABLR (n=150) MO-TPE (n=150)
+> Figure 6. Performance of SMOG and competitors on the four-objective Terrain benchmark. The results are averaged over differ-ent target tasks. SMOG shows competitive aggregated performance.
+
+nificantly better solutions. Since SMOG not only leverages metadata but also models task correlations, it achieves a significant initial speedup and outperforms Ind.-ScaML-GP , which is most similar to SMOG but lacks the ability to model task correlations. In Section E.2, we study the solutions found by the different optimizers on these benchmarks in more detail. The 4-objective Hartmann benchmark shows a similar pic-ture as the 2-objective variant. For space reasons, we defer it to Figure 10 in the Appendix. Again, the methods lever-aging metadata are mostly outperforming the metadata-free 
+
+Ind.-GP and MO-GP . Interestingly, MO-TPE —the only other method naturally combining meta-learning and multi-objective optimization—outperforms the meta-learning-free 
+
+Ind.-GP and MO-GP at early stages, but is otherwise not competitive with the other methods we studied. 
+
+5.2. HPOBench Benchmarks 
+
+Figure 4 shows the performance of SMOG and competitors on Protein Structure task of HPOBench. For space reasons, we defer the results on the datasets to Figure 13 in the Ap-pendix. As observed in Figure 3, MO-GP initially finds bet-ter solutions than Ind.-GP . Later on, however, Ind.-GP 
+
+outperforms MO-GP , which could be due to the simpler model. All other methods leverage metadata and outper-form Ind.-GP and MO-GP by a wide margin. Notably, 
+
+SMOG and also Ind.-ABLR , which is not competitive on the Hartmann benchmark, show the strongest performance on this benchmark. 
+
+5.3. Terrain Benchmark 
+
+Next, we study the optimizers’ performances on the Terrain benchmark. Figure 5 shows the HV s of the different optimiz-ers for the two-objective variant of the Terrain benchmark, averaged over three target tasks and 50 random restarts per target task. Figure 6 studies the four-objective variant. Interestingly, Ind.-ABLR , which achieves the best perfor-mance on the two-objective variants, fails to find a com-petitive solution on the four-objective problem. Again, the two methods that do not leverage metadata ( MO-GP and 
+
+Ind.-GP ) are not competitive, indicating that observations from other terrains can help find a good solution for the target task. SMOG shows robust performance and is compet-itive with the best-performing methods on both problems. 
+
+6. Discussion 
+
+Many impactful applications require optimizing compet-ing objectives: In aerospace engineering, one seeks a lightweight structure with the highest possible strength, while in machine learning, one aims to find accurate yet small models. In many cases, practitioners have access to data from related tasks or earlier experiments that they can use to quickly find a good solution for a new task. In this paper, we introduce SMOG —a scalable meta-learning algorithm for multi-objective black-box optimization prob-lems. SMOG leverages observations from related tasks and models inter-task correlations to construct an informative target-task posterior, improving sample efficiency in the initial BO iterations. SMOG is principled, with a clear theo-retical motivation, and performs robustly when studied in practice: even though not the incumbent on every bench-mark, it is competitive on every benchmark while every other method struggles on at least one problem. With its ro-bust performance and principled approach, SMOG fills a gap for a ready-to-use algorithm that combines meta-learning and multi-objective optimization. 
+
+Impact. This paper presents work whose goal is to ad-vance the field of machine learning. There are many poten-tial societal consequences of our work, none of which we feel must be specifically highlighted here. 
+
+Acknowledgments. Calculations (or parts of them) for this publication were performed on the HPC cluster PALMA II of the University of M ¨unster, subsidised by the DFG (INST 211/667-1). The authors gratefully acknowledge the computing time granted by the Resource Allocation Board and provided on the supercomputer Emmy/Grete at NHR-Nord@G ¨ottingen as part of the NHR infrastructure. The cal-culations for this research were conducted with computing resources under the project nhr nw test. The authors grate-8Scalable Meta-Learning for Multi-Objective Bayesian Optimization 
+
+fully acknowledge the computing time provided to them at the NHR Center NHR4CES at RWTH Aachen University (project number p0026398). This is funded by the Federal Ministry of Education and Research, and the state govern-ments participating on the basis of the resolutions of the GWK for national high performance computing at universi-ties ( www.nhr-verein.de/unsere-partner ). 
+
+References 
+
+Ament, S., Daulton, S., Eriksson, D., Balandat, M., and Bakshy, E. Unexpected improvements to expected im-provement for bayesian optimization. Advances in Neural Information Processing Systems , 36:20577–20612, 2023. Bonilla, E. V., Chai, K., and Williams, C. Multi-task gaus-sian process prediction. Advances in neural information processing systems , 20, 2007. Cao, B., Pan, S. J., Zhang, Y., Yeung, D.-Y., and Yang, Q. Adaptive transfer learning. In proceedings of the AAAI Conference on Artificial Intelligence , volume 24, 2010. Dai, Z., Chen, Y., Yu, H., Low, B. K. H., and Jaillet, P. On provably robust meta-bayesian optimization. In Un-certainty in Artificial Intelligence , pp. 475–485. PMLR, 2022. Daulton, S., Balandat, M., and Bakshy, E. Differentiable expected hypervolume improvement for parallel multi-objective bayesian optimization. Advances in Neural Information Processing Systems , 33:9851–9864, 2020. Daulton, S., Balandat, M., and Bakshy, E. Parallel bayesian optimization of multiple noisy objectives with expected hypervolume improvement. Advances in Neural Informa-tion Processing Systems , 34:2187–2200, 2021. Eggensperger, K., M ¨uller, P., Mallik, N., Feurer, M., Sass, R., Klein, A., Awad, N., Lindauer, M., and Hut-ter, F. Hpobench: A collection of reproducible multi-fidelity benchmark problems for hpo. arXiv preprint arXiv:2109.06716 , 2021. Feurer, M., Letham, B., and Bakshy, E. Scalable meta-learning for bayesian optimization using ranking-weighted gaussian process ensembles. In AutoML Work-shop at ICML , volume 7, pp. 5, 2018. Feurer, M., Letham, B., Hutter, F., and Bakshy, E. Prac-tical transfer learning for bayesian optimization. arXiv preprint arXiv:1802.02219v3 , 2022. Gopakumar, A. M., Balachandran, P. V., Xue, D., Guber-natis, J. E., and Lookman, T. Multi-objective optimization for materials discovery via adaptive design. Scientific re-ports , 8(1):3738, 2018. Herbol, H. C., Hu, W., Frazier, P., Clancy, P., and Poloczek, M. Efficient search of compositional space for hybrid organic–inorganic perovskites via bayesian optimization. 
+
+npj Computational Materials , 4(1):51, 2018. Ishibuchi, H., Akedo, N., and Nojima, Y. A many-objective test problem for visually examining diversity maintenance behavior in a decision space. In Proceedings of the 13th annual conference on Genetic and evolutionary computa-tion , pp. 649–656, 2011. Joy, T. T., Rana, S., Gupta, S. K., and Venkatesh, S. Flexible Transfer Learning Framework for Bayesian Optimisa-tion. In Bailey, J., Khan, L., Washio, T., Dobbie, G., Huang, J. Z., and Wang, R. (eds.), Advances in Knowl-edge Discovery and Data Mining . Springer International Publishing, 2016. Klein, A. and Hutter, F. Tabular benchmarks for joint archi-tecture and hyperparameter optimization. arXiv preprint arXiv:1905.04970 , 2019. Knowles, J. Parego: A hybrid algorithm with on-line land-scape approximation for expensive multiobjective opti-mization problems. IEEE transactions on evolutionary computation , 10(1):50–66, 2006. Ma, Z., Gong, Y.-J., Guo, H., Qiu, W., Ma, S., Lian, H., Zhan, J., Chen, K., Wang, C., Huang, Z., et al. Metabox-v2: A unified benchmark platform for meta-black-box optimization. arXiv preprint arXiv:2505.17745 , 2025. Marco, A., Berkenkamp, F., Hennig, P., Schoellig, A. P., Krause, A., Schaal, S., and Trimpe, S. Virtual vs. real: Trading off simulations and physical experiments in rein-forcement learning with bayesian optimization. In 2017 IEEE International Conference on Robotics and Automa-tion (ICRA) , pp. 1557–1563. IEEE, 2017. Myung, J. I., Deneault, J. R., Chang, J., Kang, I., Maruyama, B., and Pitt, M. A. Multi-objective bayesian optimization: a case study in material extrusion. Digital Discovery , 4 (2):464–476, 2025. Papenmeier, L., Nardi, L., and Poloczek, M. Bounce: Reli-able high-dimensional bayesian optimization for combi-natorial and mixed spaces. Advances in Neural Informa-tion Processing Systems , 36:1764–1793, 2023. Perrone, V., Jenatton, R., Seeger, M. W., and Archambeau, C. Scalable hyperparameter transfer learning. In Ben-gio, S., Wallach, H., Larochelle, H., Grauman, K., Cesa-Bianchi, N., and Garnett, R. (eds.), Advances in Neural Information Processing Systems , volume 31. Curran As-sociates, Inc., 2018a. Perrone, V., Jenatton, R., Seeger, M. W., and Archambeau, C. Scalable hyperparameter transfer learning. Advances in neural information processing systems , 31, 2018b. 9Scalable Meta-Learning for Multi-Objective Bayesian Optimization 
+
+Pfisterer, F., Schneider, L., Moosbauer, J., Binder, M., and Bischl, B. Yahpo gym-an efficient multi-objective multi-fidelity benchmark for hyperparameter optimization. In 
+
+International Conference on Automated Machine Learn-ing , pp. 3–1. PMLR, 2022. Poloczek, M., Wang, J., and Frazier, P. Multi-information source optimization. In Guyon, I., Luxburg, U. V., Bengio, S., Wallach, H., Fergus, R., Vishwanathan, S., and Gar-nett, R. (eds.), Advances in Neural Information Process-ing Systems , volume 30. Curran Associates, Inc., 2017. Rasmussen, C. E. and Williams, C. K. I. Gaussian Pro-cesses for Machine Learning . Adaptive Computation and Machine Learning. MIT Press, Cambridge, MA, USA, January 2006. Salinas, D., Shen, H., and Perrone, V. A quantile-based approach for hyperparameter transfer learning. In III, H. D. and Singh, A. (eds.), Proceedings of the 37th In-ternational Conference on Machine Learning , volume 119 of Proceedings of Machine Learning Research , pp. 8438–8448. PMLR, 13–18 Jul 2020. Shahriari, B., Swersky, K., Wang, Z., Adams, R. P., and de Freitas, N. Taking the human out of the loop: A review of bayesian optimization. Proceedings of the IEEE , 104 (1):148–175, 2016. Shehadeh, M. A. and K ˚udela, J. Benchmarking global optimization techniques for unmanned aerial vehicle path planning. Expert Systems with Applications , pp. 128645, 2025. Shilton, A., Gupta, S., Rana, S., and Venkatesh, S. Regret Bounds for Transfer Learning in Bayesian Optimisation. In Singh, A. and Zhu, J. (eds.), Proceedings of the 20th International Conference on Artificial Intelligence and Statistics , volume 54 of Proceedings of Machine Learning Research , pp. 307–315, Fort Lauderdale, FL, USA, 20–22 Apr 2017. PMLR. Snoek, J., Larochelle, H., and Adams, R. P. Practical bayesian optimization of machine learning algorithms. 
+
+Advances in neural information processing systems , 25, 2012. Swersky, K., Snoek, J., and Adams, R. P. Multi-Task Bayesian Optimization. In Burges, C. J. C., Bottou, L., Welling, M., Ghahramani, Z., and Weinberger, K. Q. (eds.), Advances in Neural Information Processing Sys-tems , volume 26. Curran Associates, Inc., 2013. Tighineanu, P., Skubch, K., Baireuther, P., Reiss, A., Berkenkamp, F., and Vinogradska, J. Transfer learn-ing with gaussian processes for bayesian optimization. In International conference on artificial intelligence and statistics , pp. 6152–6181. PMLR, 2022. Tighineanu, P., Grossberger, L., Baireuther, P., Skubch, K., Falkner, S., Vinogradska, J., and Berkenkamp, F. Scalable meta-learning with gaussian processes. In International Conference on Artificial Intelligence and Statistics , pp. 1981–1989. PMLR, 2024. Volpp, M., Fr ¨ohlich, L. P., Fischer, K., Doerr, A., Falkner, S., Hutter, F., and Daniel, C. Meta-Learning Acquisition Functions for Transfer Learning in Bayesian Optimiza-tion. In International Conference on Learning Represen-tations , 2020. Wan, X., Nguyen, V., Ha, H., Ru, B., Lu, C., and Osborne, M. A. Think global and act local: Bayesian optimisa-tion over high-dimensional categorical and mixed search spaces. In International Conference on Machine Learn-ing , pp. 10663–10674. PMLR, 2021. Wang, Z., Dahl, G. E., Swersky, K., Lee, C., Mariet, Z., Nado, Z., Gilmer, J., Snoek, J., and Ghahramani, Z. Pre-trained gaussian processes for bayesian optimization. 
+
+arXiv preprint arXiv:2109.08215 , 2021. Watanabe, S., Awad, N. H., Onishi, M., and Hutter, F. Speed-ing up multi-objective hyperparameter optimization by task similarity-based meta-learning for the tree-structured parzen estimator. In IJCAI , 2023. Williams, C. K. and Rasmussen, C. E. Gaussian processes for machine learning , volume 2. MIT press Cambridge, MA, 2006. Wistuba, M. and Grabocka, J. Few-shot bayesian optimiza-tion with deep kernel surrogates. In International Confer-ence on Learning Representations , 2021. URL https: //openreview.net/forum?id=bJxgv5C3sYc .Wistuba, M., Schilling, N., and Schmidt-Thieme, L. Scal-able Gaussian process-based transfer surrogates for hy-perparameter optimization. Machine Learning , 107(1): 43–78, 2018. Yogatama, D. and Mann, G. Efficient Transfer Learning Method for Automatic Hyperparameter Tuning. In Kaski, S. and Corander, J. (eds.), Proceedings of the Seventeenth International Conference on Artificial Intelligence and Statistics , volume 33 of Proceedings of Machine Learning Research , pp. 1077–1085, Reykjavik, Iceland, 22–25 Apr 2014. PMLR. Yu, X. Fseo: Few-shot evolutionary optimization via meta-learning for expensive multi-objective optimization. In 
+
+The Thirty-ninth Annual Conference on Neural Informa-tion Processing Systems , 2025. Zhang, Y., Apley, D. W., and Chen, W. Bayesian opti-mization for materials design with mixed quantitative and qualitative variables. Scientific reports , 10(1):1–13, 2020. 10 Scalable Meta-Learning for Multi-Objective Bayesian Optimization 
+
+´Alvarez, M. A., Rosasco, L., and Lawrence, N. D. Kernels for vector-valued functions: A review. Foundations and Trends in Machine Learning , 4(3):195–266, 2012. 11 Scalable Meta-Learning for Multi-Objective Bayesian Optimization 
+
+A. Kernel Properties 
+
+Here we prove the key properties of SMOG ’s kernel encoded in Lemmas 1 and 2. 
+
+A.1. Coregionalization Matrices 
+
+Here we prove Lemma 1, which we restate below. 
+
+Lemma 1. Applying Assumptions 1 and 2 to Equation (2) yields a sparse structure with the following non-zero entries of the coregionalization matrices 
+
+[ctθ ]to,to ′ = [ ctθ ]to ′,to ≡ [htθ ]oo ′ ,
+
+[cmθ ]mo,mo ′ = [ cmθ ]mo ′,mo = [ hmθ ]oo ′ ,
+
+[cmθ ]mo,to ′ = [ cmo ]to ′,mo = wmo ′ [hmθ ]oo ′ ,
+
+[cmθ ]to,to ′ = [ cmθ ]to ′,to = wmo wmo ′ [hmθ ]oo ′ ,
+
+(3) 
+
+where [hvθ ]oo ′ are PSD in the basis (o, o ′).Proof. We begin by showing that the coregionalization matrices in Equation (3) are uniquely defined by Assumptions 1 and 2. We collect all terms in Equation (2): 
+
+k[( x, m, o ), (x′, m, o ′)] = Cov [ fmo (x), f mo ′ (x′)] = km[( x, o ), (x′, o ′)] (Assumption 1) (11) 
+
+k[( x, m, o ), (x′, m ′̸ = m, o ′] = 0 (Assumption 1) (12) 
+
+k[( x, t, o ), (x′, m, o ′)] = Cov [ fto (x), f mo ′ (x′)] = Cov 
+
+"
+
+˜fto + X
+
+> m′∈M
+
+˜fm′o, f mo ′
+
+#
+
+(Assumption 2) 
+
+= X
+
+> m′∈M
+
+wm′oCov [ fm′o, f mo ′ ] (Assumption 2) 
+
+= wmo km[( x, o ), (x′, o ′)] (Assumption 1) , (13) where we have made use of the fact that the covariance is a bilinear function, and that the perfect (anti-)correlation 
+
+Corr 
+
+h
+
+fmo (x), ˜fmo (x′)
+
+i
+
+= ±1 in Assumption 2 implies that ˜fmo (x) = wmo fmo + c with wmo , c ∈ R. Finally, we have 
+
+k[( x, t, o ), (x′, t, o ′)] = Cov [ fto (x), f to ′ (x′)] = Cov 
+
+h ˜fto (x), ˜fto ′ (x′)
+
+i
+
++ X
+
+> m,m ′∈M
+
+wmo wm′o′ Cov [ fmo (x), f m′o′ (x′)] (Assumption 2) 
+
+= kt[( x, o ), (x′, o ′)] + X
+
+> m∈M
+
+wmo wmo ′ km[( x, o ), (x′, o ′)] (Assumptions 1 and 2) (14) By collecting the coefficients corresponding to km and kt, we obtain the coregionalization matrices of SMOG in Equations (3) and (4). These coregionalization matrices are elements of the original MTGP , implying that they are PSD by definition. To see this, consider the expression for the meta-task block of the MTGP kernel in Equation (2) (excluding the target task and all meta-task-to-target-task couplings): 
+
+k [( x, m, o ), (x′, m ′, o ′)] = δm=m′
+
+X
+
+> θ∈O
+
+[hmθ ]oo ′ kmθ (x, x′) ≡ δm=m′ km [( x, o ), (x′, o ′)] , (15) where [hmθ ]oo ′ = [ cmθ ]mo,mo ′ . This formulation does not make any additional assumptions about the kernel across objectives, km [( x, o ), (x′, o ′)] = P 
+
+> θ∈O
+
+[hmθ ]oo ′ kmθ (x, x′). The elements [hmθ ]oo ′ appear directly in Equation (3) and are by definition PSD . Similar reasoning can be applied to the other elements, implying that all entries of SMOG ’s coregionalization matrices in Equation (3) are PSD. 12 Scalable Meta-Learning for Multi-Objective Bayesian Optimization 
+
+A.2. SMOG Kernel 
+
+Next, we prove Lemma 2, which we restate below. 
+
+Lemma 2. Assumptions 1 and 2 with wmo ∈ R for m ∈ R and o ∈ O yield a valid multi-task kernel given by 
+
+kSMOG [( x, ν, o ), (x′, ν ′, o ′)] = 
+
+X
+
+> v∈M ∗
+
+gv (ν, o )gv (ν′, o ′)kv [( x, o ), (x′, o ′)] , (5) 
+
+where gv (ν, o ) is one if v = ν, wmo if (v = m) ∧ (ν = t), and zero otherwise. Proof. We start off by using the results of Lemma 1, Equation (4). The first notational simplification for the coregionalization matrices can be done by pulling the common Hvθ term outside the big matrix. To do this, we introduce a custom matrix product ⊠ between matrices A of size (α + β) × (α + β) and B of size β × β. Each β × β block of matrix A is Hadamard-multiplied with matrix B:
+
+(A ⊠ B)β×β = Aβ×β ⊙ B (16) Applying this to Equation (4) yields coregionalization matrices that are described by a ⊠-product between a (M + 1) O ×
+
+(M + 1) O matrix containing only weights, Wv , and a O × O matrix Hvθ describing task-specific correlations across its objectives: 
+
+Cvθ = Wv ⊠ Hvθ (17) Careful inspection of Wv reveals that it can be written as an outer product, wv wTv , where wv = ( wTm, wTt )T and 
+
+wm = ( . . . , 01×O , 11×O
+
+| {z } 
+
+> m-th entry
+
+, 01×O , . . . , 01×O , w m1, w m2, . . . , w mO )T
+
+wt = ( . . . , 01×O , 11×O )T ,
+
+(18) implying that Wv is PSD for all wmo ∈ R. Inserting this into Equation (2) yields the final expression for our kernel, which we write in matrix form of size (M + 1) O × (M + 1) O for convenience: 
+
+KSMOG (x, x′) = X
+
+> v∈M∪{ t}
+
+wv wTv ⊠ Kv (x, x′),
+
+Kv (x, x′) = X
+
+> θ∈O
+
+Hvθ kvθ (x, x′),
+
+(19) where Kv (x, x′) is a kernel of size O × O that acts on the objectives of task v. Since Kv (x, x′) and Wv are both PSD , the kernel in Equation (19) is also PSD and is therefore a valid kernel. Expressing the kernel in Equation (19) in index notation concludes the proof of Lemma 2. 
+
+B. SMOG Target-Task Prior 
+
+In the following we prove Theorem 1, which we restate below. 
+
+Theorem 1. Under a zero-mean GP prior with the multi-task kernel given by Equation (5) , the distribution of the target-task objectives conditioned on the metadata is 
+
+fto | D 1: M , x ∼ GP (mt, SMOG (x, o ),kt, SMOG [( x, o ), (x′, o ′)]) (6) 
+
+with 
+
+mt, SMOG (x, o ) = X
+
+> m∈M
+
+wmo ˆmmo (x)
+
+kt, SMOG [( x, o ), (x′, o ′)] = kt[( x, o ), (x′, o ′)] + X
+
+> m∈M
+
+wmo wmo ′ ˆkmoo ′ (x, x′),
+
+(7) 13 Scalable Meta-Learning for Multi-Objective Bayesian Optimization 
+
+where ˆmmo (x) and ˆkmoo ′ (x, x′) are the posterior mean and covariance functions of the individual meta-task GPs conditioned only on their corresponding data, Dm.Proof. According to Equation (5), the joint prior model for the meta-observations Ymeta = ( Y1, . . . , YM ) and the test-task function value at a query point (x, o ) given by 
+
+Ymeta 
+
+fto (x)
+
+
+
+∼ N 
+
+
+
+0,
+
+ Kmeta kmeta ,o 
+
+kTmeta ,o kt,oo 
+
+ 
+
+(20) where Kmeta is of size Nmeta × Nmeta , kmeta of size Nmeta × 1, and kt a scalar, and are given by 
+
+Kmeta = diag  k1[( X1, o1), (X1, o1)] + diag( σ211 , . . . , σ 21O ) ⊗ IX1 , . . .  ,
+
+kmeta ,o =  w1ok1[( X1, o1), (x, o )] , . . . , w M o kM [( XM , oM ), (x, o )] ,kt,oo = kt[( x, o ), (x, o ′)] + X
+
+> m∈M
+
+wmo wmo ′ km[( x, o ), (x, o ′)] 
+
+!
+
+δoo ′ ≡ kt,oo ′ δoo ′
+
+Conditioning on the metadata D1: M yields 
+
+p(fto | D 1: M , x) = N (mt, SMOG (x, o ), k t, SMOG [( x, o ), (x, o ′)]) , (21) where the test-task prior mean mt, SMOG and covariance kt, SMOG are given by the standard Gaussian conditioning rules 
+
+mt, SMOG (x, o ) = kTmeta ,o K−1meta ymeta ,kt, SMOG [( x, o ), (x, o ′)] = k t,oo ′ − kTmeta ,o K−1meta kmeta ,o ′ .
+
+Now since Kmeta is block-diagonal in m, we have 
+
+K−1meta = diag  (k1[( X1, o1), (X1, o1)] + diag( σ21 , . . . , σ 2 
+
+> O
+
+) ⊗ IX1 )−1, . . .  ,
+
+so that 
+
+mt, SMOG (x, o ) = X
+
+> m
+
+wmo km[( x, o ), (Xm, om)] ( km[( Xm, om), (Xm, om)] + diag( σ2
+
+> m1
+
+, . . . , σ 2 
+
+> mO
+
+) ⊗ IXm )−1ym,
+
+= X
+
+> m
+
+wmo ˆmmo (x),
+
+where ˆmm(x, o ) is the per meta-task posterior mean after conditioning on the corresponding data Dm. Similarly, for the covariance we have 
+
+kt, SMOG [( x, o ), (x′, o ′)] = kt,oo ′ − kTmeta ,o K−1meta kmeta ,o ′ ,
+
+= kt[( x, o ), (x′, o ′)] + X
+
+> m
+
+wmo wmo ′ km[( x, o ), (x′, o ′)] − X
+
+> m
+
+wmo km[( x, o ), (Xm, om)] 
+
+× (km[( Xm, om), (Xm, om)] + diag( σ2
+
+> m1
+
+, . . . , σ 2 
+
+> mO
+
+) ⊗ IXm )−1wmo ′ km[( Xm, om), (x′, o ′)] ,
+
+= kt[( x, o ), (x′, o ′)] + X
+
+> m
+
+wmo wmo ′
+
+ km[( x, o ), (x′, o ′)] − km[( x, o ), (Xm, om)] 
+
+× (km[( Xm, om), (Xm, om)] + diag( σ2
+
+> m1
+
+, . . . , σ 2 
+
+> mO
+
+) ⊗ IXm )−1km[( Xm, om), (x′, o ′)] ,
+
+= kt[( x, o ), (x′, o ′)] + X
+
+> m
+
+wmo wmo ′ ˆkm[( x, o ), (x′, o ′)] ,
+
+where ˆkm is the corresponding per meta-task posterior covariance. 14 Scalable Meta-Learning for Multi-Objective Bayesian Optimization 
+
+C. Implementation Details 
+
+C.1. Mixed Space Acquisition Function Optimization 
+
+We employ an interleaving scheme to optimize the acquisition function, similar to that used by Wan et al. (2021) or Papenmeier et al. (2023). In particular, we optimize over the discrete variables by selecting the point with the maximum acquisition value from 214 candidates uniformly sampled from the set of all possible discrete combinations. We then fix the discrete variables and optimize over the remaining variables using gradient-based acquisition function maximization with two random restarts and 512 initial samples to select the two starting points. We repeat this interleaving scheme 5 times, starting with the discrete optimization and a uniformly random initialization of the continuous variables. For categorical variables, we use one-hot encoding, representing n categories as n distinct problem dimensions. We exclude invalid configurations (e.g., two categories being set to “1”) from the set of candidates of the acquisition function ( AF )maximizer. 
+
+C.2. Benchmark Details The Adapted Hartmann6 Benchmark. The A and P matrices are defined as follows: 
+
+A =
+
+
+
+10 3 17 3.5 1.7 80.05 10 17 0.1 8 14 3 3.5 1.7 10 17 817 8 0.05 10 0.1 14 
+
+ (22) 
+
+P = 11000 
+
+
+
+1312 1696 5569 124 8283 5886 2329 4135 8307 3736 1004 9991 2348 1451 3522 2883 3047 6650 4047 8828 8732 5743 1091 381 
+
+ (23) We sample αm and εo as follows: 
+
+αm, 1 ∼ U (1 .0, 1.02) (24) 
+
+αm, 2 ∼ U (1 .18 , 1.2) (25) 
+
+αm, 3 ∼ U (2 .0, 3.0) (26) 
+
+αm, 4 ∼ U (3 .2, 3.4) (27) 
+
+εo,j ∼ U (0 , 0.15) (28) (29) The distribution for εo,j is chosen such that the Gaussian blobs still overlap. The minimum full width at half maximum of any Gaussian blob is given by 2
+
+q ln 2 17 ≈ 0.4, where 17 is the smallest element in A. Hence, a maximum offset of 0.15 is sufficient to ensure correlation and a non-trivial Pareto front between the objectives. 
+
+The Terrain Benchmark. We rely on the MetaBox implementation by Ma et al. (2025), which implements the Terrain benchmark defined in Shehadeh & K ˚udela (2025). While MetaBox provides an additional path-clearance cost, we use only the four defined in Shehadeh & K ˚udela (2025) (path-length cost, obstacle-avoidance cost, altitude cost, and smoothness cost). Furthermore, we define a variant with two objectives, optimizing both path length cost and obstacle avoidance cost. We choose target and “meta” terrains uniformly at random with a fixed seed 
+
+C.3. Model Details 
+
+In this section, we detail the implementations of the different models used in our experiments. For GP -based methods, we use a Mat ´ern- 52 kernel with automated relevance determination ( ARD ) and a Gamma (1 .5, 1) lengthscale hyperprior, a Gaussian likelihood with a LogNormal(-4, 1) prior with a lower bound of 10 −6 on the noise term. For SMOG and 
+
+Ind.-ScaML-GP , which train meta-GPs and only model the difference between the intermediate prior and the function output, we use Mat ´ern- 52 kernels with a LogNormal (0 .5, 1.5) kernel. The models using multi-task kernels ( SMOG and 15 Scalable Meta-Learning for Multi-Objective Bayesian Optimization 
+
+MO-GP ) learn a global noise term, again with a LogNormal (−4, 1) hyperprior and can model the function variance as part of their multi-task kernel. To allow for the same level of flexibility, Ind.-ScaML-GP and Ind.-GP feature a function variance term with a LogNormal (−2, 3) kernel. Models starting with “ Ind. ” (Ind.-GP , Ind.-ABLR , Ind.-RGPE , Ind.-ScaML-GP , Ind.-SGPT ) are imple-mented as independent models, i.e., the parameters of the model of output 1 are independent of the parameters of the model of output 2. 
+
+D. Ablation Studies 
+
+We conduct ablation studies to study the sensitivity of SMOG and the other optimizers to different benchmark properties. We set the default to 2 objectives, 8 meta tasks, and 64 observations per task, and vary one of these parameters per experiment. In Figure 7, we vary the number of meta tasks and study how this affects the behavior of the different optimizers. Generally, increasing the number meta tasks improves performance, particularly in early iterations. The only exception to this is 
+
+Ind.-SGPT , which is only minimally sensitive to the number of meta tasks. Comparing the different optimizers, SMOG 
+
+shows the best performance regardless of the number meta tasks. 0 10 20 30              
+
+> BO iteration
+> 10 1
+> 10 0
+> 1 - Normalized Hypervolume  SMOG
+> 8 tasks (n=50)
+> 16 tasks (n=50)
+> 32 tasks (n=50)
+> 010 20 30
+> BO iteration
+> Ind-ScaML-GP
+> 8 tasks (n=50)
+> 16 tasks (n=50)
+> 32 tasks (n=50)
+> 010 20 30
+> BO iteration
+> Ind.-RGPE
+> 8 tasks (n=50)
+> 16 tasks (n=50)
+> 32 tasks (n=50)
+> 010 20 30
+> BO iteration
+> Ind.-SGPT
+> 8 tasks (n=50)
+> 16 tasks (n=50)
+> 32 tasks (n=50)
+> 010 20 30
+> BO iteration
+> MO-TPE
+> 8 tasks (n=50)
+> 16 tasks (n=50)
+> 32 tasks (n=50)
+
+Figure 7. Ablation over the number of meta tasks. 
+
+Next, we study how varying the number of objectives affects optimization performance (see Figure 8). Interestingly, varying the number of objectives has only a small impact on relative performance: relative to the other optimizers, MO-TPE seems to perform worse with more objectives. 0 10 20 30        
+
+> BO iteration
+> 10 1
+> 10 0
+> 1 - Normalized Hypervolume
+> Hartmann ( d= 6 ) | 2 objs.
+> 010 20 30
+> BO iteration
+> 10 1
+> 10 0
+> Hartmann ( d= 6 ) | 4 objs.
+> SMOG (n=50)
+> Ind-ScaML-GP (n=50)
+> Ind.-RGPE (n=50)
+> Ind.-SGPT (n=50)
+> MO-TPE (n=50)
+
+Figure 8. Ablation over the number of objectives. 
+
+Finally, we study how varying the number of observations per meta task affects the optimizer’s performance in Figure 9. As expected, a higher number of observations per task improves optimization performance for all optimizers. Ind.-SGPT 
+
+shows little difference between 64 and 128 observations per task, but gains a significant improvement from 64 vs 16 observations per meta task. All other methods show a clear benefit from 128 vs 64 observations, with SMOG being the top-performing method. 16 Scalable Meta-Learning for Multi-Objective Bayesian Optimization 0 10 20 30              
+
+> BO iteration
+> 10 1
+> 10 0
+> 1 - Normalized Hypervolume  SMOG
+> 16 (n=50)
+> 64 (n=50)
+> 128 (n=50)
+> 010 20 30
+> BO iteration
+> Ind-ScaML-GP
+> 16 (n=50)
+> 64 (n=50)
+> 128 (n=50)
+> 010 20 30
+> BO iteration
+> Ind.-RGPE
+> 16 (n=50)
+> 64 (n=50)
+> 128 (n=50)
+> 010 20 30
+> BO iteration
+> Ind.-SGPT
+> 16 (n=50)
+> 64 (n=50)
+> 128 (n=50)
+> 010 20 30
+> BO iteration
+> MO-TPE
+> 16 (n=50)
+> 64 (n=50)
+> 128 (n=50)
+
+Figure 9. Ablation over the number of observations per meta task. 
+
+E. Additional Plots 
+
+E.1. Hartmann Benchmark 
+
+In this section, we present the result on the 4-objective variant of the Hartmann benchmark (see Figure 10). Again, SMOG 
+
+shows strong optimization performance whereas the metadata-free methods ( MO-GP and Ind.-GP ) only slowly find good solutions. 0 5 10 15 20 25 30 
+
+BO iteration 
+
+> 10 −1
+> 10 0
+> 1 - Normalized Hypervolume
+
+Hartmann ( d = 6) — 4 objectives 
+
+> SMOG (n=50) Ind. GP (n=50) Ind-ScaML-GP (n=50) MO-GP (n=50) Ind.-RGPE (n=50) Ind.-SGPT (n=50) Ind.-ABLR (n=50) MO-TPE (n=50)
+
+Figure 10. Performance of SMOG and competitors on the 6-dimensional four-objective Hartmann benchmark with 8 meta tasks and 64 observations per meta task. 
+
+E.2. Exemplary Hartmann Pareto front 
+
+In this section, we highlight how SMOG learns well-behaved Pareto fronts on the two-dimensional Hartmann6 benchmark. For each optimizer, we study the first 15 observations of the run of median HV at iteration 15. Based on these 15 observations, we plot the Pareto front and show the results in Figure 11. Additionally, we estimate a “true” Pareto front by observing 
+
+10 7 points sampled uniformly at random from the search space X . Even though Ind.-SGPT and Ind.-RGPE can find well-performing solutions, SMOG finds more Pareto-optimal solutions, with a larger spread. Furthermore, the solutions found by SMOG are close to the “true” Pareto front with only 15 observations on the target task. The metadata-free optimizers 
+
+MO-GP and Ind.-GP perform considerably but still outperform MO-TPE by a wide margin. 17 Scalable Meta-Learning for Multi-Objective Bayesian Optimization 0 1 2 3
+
+Objective 1 
+
+> 0.0
+> 0.5
+> 1.0
+> 1.5
+> 2.0
+> 2.5
+> 3.0
+> Objective 2
+
+Hartmann6 median fronts @ iter 15 
+
+> True Pareto (MC) SMOG Ind. GP Ind-ScaML-GP MO-GP Ind.-RGPE Ind.-SGPT Ind.-ABLR MO-TPE
+
+Figure 11. Pareto fronts of the first 15 observations of SMOG and competitors on the 6-dimensional four-objective Hartmann benchmark for the run of median HV at iteration 15. SMOG learns a Pareto front close to the true Pareto front within 15 iterations. 
+
+E.3. HPOBench Pareto Fronts 
+
+To assess the quality of solutions produced by the different optimizers, we plot the Pareto fronts based on observations across 50 repetitions (see Figure 12). Since HPOBench is a tabular benchmark, one can enumerate all possible solutions and compute a “true” Pareto front. However, since the HPOBench dataset provides four observations per configuration and we observe only once, we plot an estimated true Pareto front, which explains why some observations are better than the “true” Pareto front. Importantly, the solutions found by the optimizers are close to the “true” Pareto front, showing that the solutions actually are of good quality – a fact that is not evident from only studying the normalized HV. Furthermore, methods that do not leverage metadata ( Ind.-GP and MO-GP ) tend to perform worse, confirming the intuition that metadata access improves solution quality. 18 Scalable Meta-Learning for Multi-Objective Bayesian Optimization 0.00000 0.00025 0.00050 0.00075 0.00100 0.00125 0.00150 0.00175 0.00200 
+
+Validation MSE (lower is better) 
+
+12 
+
+14 
+
+16 
+
+18 
+
+20 
+
+22 
+
+24 
+
+> Runtime (s, lower is better)
+
+Naval Propulsion Pareto fronts 
+
+True Pareto front SMOG Ind. GP Ind-ScaML-GP MO-GP Ind.-RGPE Ind.-SGPT Ind.-ABLR MO-TPE 0.0000 0.0025 0.0050 0.0075 0.0100 0.0125 0.0150 0.0175 0.0200 
+
+Validation MSE (lower is better) 
+
+0.0
+
+2.5
+
+5.0
+
+7.5
+
+10 .0
+
+12 .5
+
+15 .0
+
+17 .5
+
+20 .0
+
+> Runtime (s, lower is better)
+
+Parkinsons Telemonitoring Pareto fronts 
+
+True Pareto front SMOG Ind. GP Ind-ScaML-GP MO-GP Ind.-RGPE Ind.-SGPT Ind.-ABLR MO-TPE 0.20 0.22 0.24 0.26 0.28 0.30 
+
+Validation MSE (lower is better) 
+
+25 
+
+50 
+
+75 
+
+100 
+
+125 
+
+150 
+
+175 
+
+200 
+
+> Runtime (s, lower is better)
+
+Protein Structure Pareto fronts 
+
+True Pareto front SMOG Ind. GP Ind-ScaML-GP MO-GP Ind.-RGPE Ind.-SGPT Ind.-ABLR MO-TPE 0.0000 0.0002 0.0004 0.0006 0.0008 0.0010 
+
+Validation MSE (lower is better) 
+
+0
+
+50 
+
+100 
+
+150 
+
+200 
+
+250 
+
+300 
+
+350 
+
+400 
+
+> Runtime (s, lower is better)
+
+Slice Localization Pareto fronts 
+
+True Pareto front SMOG Ind. GP Ind-ScaML-GP MO-GP Ind.-RGPE Ind.-SGPT Ind.-ABLR MO-TPE 
+
+Figure 12. Pareto fronts of the HPOBench benchmark, pooled across the 50 repetitions. The black line shows an estimated true Pareto front. 
+
+E.4. HPOBench Benchmarks 
+
+In this section, we show the performances on the other datasets of the HPOBench benchmark. 0 5 10 15 20 25 30 
+
+BO iteration 
+
+> 10 −2
+> 10 −1
+> 1 - Normalized Hypervolume
+
+Protein Structure — 2 objectives       
+
+> SMOG (n=50) Ind. GP (n=50) Ind-ScaML-GP (n=50) MO-GP (n=50) Ind.-RGPE (n=50) Ind.-SGPT (n=50) Ind.-ABLR (n=50) MO-TPE (n=50) 0510 15 20 25 30
+
+BO iteration 
+
+> 10 −2
+> 10 −1
+> 1 - Normalized Hypervolume
+
+Naval Propulsion — 2 objectives       
+
+> SMOG (n=50) Ind. GP (n=50) Ind-ScaML-GP (n=50) MO-GP (n=50) Ind.-RGPE (n=50) Ind.-SGPT (n=50) Ind.-ABLR (n=50) MO-TPE (n=50) 0510 15 20 25 30
+
+BO iteration 
+
+> 10 −2
+> 10 −1
+> 1 - Normalized Hypervolume
+
+Parkinsons Telemonitoring — 2 objectives 
+
+> SMOG (n=50) Ind. GP (n=50) Ind-ScaML-GP (n=50) MO-GP (n=50) Ind.-RGPE (n=50) Ind.-SGPT (n=50) Ind.-ABLR (n=50) MO-TPE (n=50)
+
+Figure 13. Additional Results on the HPOBench Benchmark 
+
+19 Scalable Meta-Learning for Multi-Objective Bayesian Optimization 
+
+E.5. Terrain Benchmarks 
+
+In this section, we show the per-target-task performances on the Terrain benchmarks. 0 5 10 15 20 25 30 
+
+BO iteration 
+
+2 × 10 −1
+
+3 × 10 −1
+
+4 × 10 −1
+
+6 × 10 −1
+
+> 1 - Normalized Hypervolume
+
+Terrain — 2 objectives 
+
+SMOG (n=50) Ind. GP (n=35) Ind-ScaML-GP (n=50) MO-GP (n=50) Ind.-RGPE (n=50) Ind.-SGPT (n=50) Ind.-ABLR (n=50) MO-TPE (n=50) 
+
+(a) Target task 0 0 5 10 15 20 25 30 
+
+BO iteration 
+
+2 × 10 −1
+
+3 × 10 −1
+
+4 × 10 −1
+
+6 × 10 −1
+
+> 1 - Normalized Hypervolume
+
+Terrain — 2 objectives 
+
+SMOG (n=50) Ind. GP (n=50) Ind-ScaML-GP (n=50) MO-GP (n=50) Ind.-RGPE (n=50) Ind.-SGPT (n=50) Ind.-ABLR (n=50) MO-TPE (n=50) (b) Target task 1 0 5 10 15 20 25 30 
+
+BO iteration 
+
+10 −1
+
+> 1 - Normalized Hypervolume
+
+Terrain — 2 objectives 
+
+SMOG (n=50) Ind. GP (n=50) Ind-ScaML-GP (n=50) MO-GP (n=50) Ind.-RGPE (n=50) Ind.-SGPT (n=50) Ind.-ABLR (n=50) MO-TPE (n=50) (c) Target task 2 
+
+Figure 14. Terrain Benchmark (2 objectives) 0 5 10 15 20 25 30 
+
+BO iteration 
+
+3 × 10 −1
+
+4 × 10 −1
+
+6 × 10 −1
+
+> 1 - Normalized Hypervolume
+
+Terrain — 4 objectives 
+
+SMOG (n=50) Ind. GP (n=50) Ind-ScaML-GP (n=50) MO-GP (n=50) Ind.-RGPE (n=50) Ind.-SGPT (n=50) Ind.-ABLR (n=50) MO-TPE (n=50) 
+
+(a) Target task 0 0 5 10 15 20 25 30 
+
+BO iteration 
+
+3 × 10 −1
+
+4 × 10 −1
+
+6 × 10 −1
+
+> 1 - Normalized Hypervolume
+
+Terrain — 4 objectives 
+
+SMOG (n=50) Ind. GP (n=50) Ind-ScaML-GP (n=50) MO-GP (n=50) Ind.-RGPE (n=50) Ind.-SGPT (n=50) Ind.-ABLR (n=50) MO-TPE (n=50) (b) Target task 1 0 5 10 15 20 25 30 
+
+BO iteration 
+
+10 0
+
+2 × 10 −1
+
+3 × 10 −1
+
+4 × 10 −1
+
+6 × 10 −1
+
+> 1 - Normalized Hypervolume
+
+Terrain — 4 objectives 
+
+SMOG (n=50) Ind. GP (n=50) Ind-ScaML-GP (n=50) MO-GP (n=50) Ind.-RGPE (n=50) Ind.-SGPT (n=50) Ind.-ABLR (n=50) MO-TPE (n=50) (c) Target task 2 
+
+Figure 15. Terrain Benchmark (4 objectives) 
+
+20
