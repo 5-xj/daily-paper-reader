@@ -1,0 +1,1093 @@
+Title: Aligning Tree-Search Policies with Fixed Token Budgets in Test-Time Scaling of LLMs
+
+URL Source: https://arxiv.org/pdf/2602.09574v1
+
+Published Time: Wed, 11 Feb 2026 01:42:42 GMT
+
+Number of Pages: 22
+
+Markdown Content:
+## Aligning Tree-Search Policies with Fixed Token Budgets in Test-Time Scaling of LLMs 
+
+Sora Miyamoto 1 Daisuke Oba 1 Naoaki Okazaki 1 2 
+
+Abstract 
+
+Tree-search decoding is an effective form of test-time scaling for large language models (LLMs), but real-world deployment imposes a fixed per-query token budget that varies across settings. Existing tree-search policies are largely budget-agnostic, treating the budget as a termination condition, which can lead to late-stage over-branching or premature termination. We pro-pose Budget-Guided MCTS (BG-MCTS), a tree-search decoding algorithm that aligns its search policy with the remaining token budget: it starts with broad exploration, then prioritizes refinement and answer completion as the budget depletes while reducing late-stage branching from shal-low nodes. BG-MCTS consistently outperforms budget-agnostic tree-search baselines across dif-ferent budgets on MATH500 and AIME24/25 with open-weight LLMs. 
+
+1. Introduction 
+
+Response quality for Large Language Models (LLMs) can be improved either by optimizing parameters (Vaswani et al., 2017; Brown et al., 2020; Ouyang et al., 2022) or inference even with the parameters kept fixed. The latter is known as 
+
+test-time scaling (Zhang et al., 2025). Test-time scaling methods are often grouped into parallel 
+
+sampling-and-aggregation (Wang et al., 2023; Brown et al., 2024; Snell et al., 2024; Lightman et al., 2024), sequential 
+
+refinement conditioned on the previous sampling (Madaan et al., 2023; Yao et al., 2023b; Muennighoff et al., 2025), and hybrid approaches that combine both (Yao et al., 2023a; Wang et al., 2024b; Besta et al., 2024; Tian et al., 2024; Zhou et al., 2024; Xie et al., 2024; Zhang et al., 2024; Wan et al., 2024; Chen et al., 2024; Chang et al., 2025; Inoue 
+
+> 1
+
+Department of Computer Science, School of Computing, Insti-tute of Science Tokyo, Japan 2Research and Development Center for Large Language Models, NII, Japan. Correspondence to: Sora Miyamoto <sora.miyamoto at nlp.comp.isct.ac.jp >.
+
+Preprint. 0.73  0.20  0.94                       
+
+> S1
+> Root
+> 0.75 0.54 Expand Expand 0.84 0.23 0.13
+> 0.87 0.43
+> Gen Gen
+> Gen
+> Gen
+> 0.73 0.20
+> S2
+> 0.94
+> S1
+> Root
+> 0.75 0.54
+> S3
+> 0.84 0.23 0.13
+> 0.87 0.43
+> Gen Gen
+> Gen
+> Gen
+> Expand
+> Left
+> 0% 25% 50% 75% 100%
+> Left
+> 0% 25% 50% 75% 100%
+> Budget
+> Budget
+> Expand
+> Shallow node is chosen
+> Deep node is chosen
+
+Figure 1. Conceptual diagram of node selection in BG-MCTS. (Top ) When the budget is ample, the strategy prioritizes selecting nodes at shallower depths to encourage exploration. ( Bottom ) As the budget nears exhaustion, the strategy prioritizes deeper nodes to facilitate reaching a final solution. 
+
+et al., 2025; Zheng et al., 2025). Hybrid methods often de-code by branching into multiple candidate continuations and expanding the most promising ones ( tree-search decoding ). Spending more on test-time computation lets the search consider more alternatives, which often improves the final responses. Still, deployment imposes a fixed per-query inference bud-get, which can vary widely across products and settings. The objective is therefore to make the most of the available budget to maximize answer quality .Yet most existing tree-search decoding policies are largely budget-agnostic: they rely on fixed search hyperparameters, e.g., iterations, branching factor, and width/depth (Yao et al., 2023a; Tian et al., 2024; Inoue et al., 2025), or simply terminate search when the token budget is exhausted. This mismatch yields two common failure modes: i) it may keep branching late and run out of budget without refining or verifying promising candidates, or ii) it may stop early and leave the budget unused. Early-stopping variants (Wang 1
+
+> arXiv:2602.09574v1 [cs.CL] 10 Feb 2026 Aligning Tree-Search Policies with Fixed Token Budgets in Test-Time Scaling of LLMs
+
+et al., 2024a) focus on the stopping decision for saving tokens. They do not define a budget-conditioned policy for shifting the search from branching to refinement as the budget runs down. We propose Budget-Guided MCTS (BG-MCTS) , a tree-search decoding algorithm that aligns its search policy with a fixed token budget —the total number of output tokens gen-erated across the entire search. Built on Monte Carlo tree search algorithm (MCTS) (Silver et al., 2017), BG-MCTS realizes budget-dependent decisions for node selection and expansion, i.e., conditioning them on the remaining bud-get. As a result, BG-MCTS starts with broad exploration to avoid premature commitment, and then, as the budget depletes, shifts toward refining and completing the most promising candidates while suppressing new branches. This budget-aligned wide-to-deep behavior lets the search first 
+
+think broadly and then finish strong , turning the same token budget into more reliable solutions. We evaluate BG-MCTS on two mathematical reason-ing benchmarks, MATH500 (Lightman et al., 2024) and AIME24/25 (Maxwell-Jia, 2024; OpenCompass, 2025), us-ing two widely available open-weight instruction-tuned LLMs with fewer than 10B parameters: Llama-3.1-8B-Instruct (Grattafiori et al., 2024) and Qwen-2.5-7B-Instruct (Qwen et al., 2025). This setting targets resource-constrained scenarios where scaling model size is often impractical and test-time scaling is the more realistic lever. Across per-instance token budgets B ∈ { 10 k, 20 k, 30 k},BG-MCTS consistently outperforms budget-agnostic tree-search baselines. 
+
+Outline. The remainder is organized as follows: § 2 pro-vides preliminaries, § 3 introduces BG-MCTS, § 4 reports experimental results, § 5 presents our analysis, § 6 discusses implications and limitations, and §7 discusses related work. 
+
+2. Preliminaries 
+
+Tree-search decoding. We study tree-search decoding for large language models (LLMs), which builds a search tree over partial generations and returns the best completed an-swer found. Each node represents a partial output (prefix) and optionally its intermediate reasoning state; expanding a node generates one or more continuations. We denote a parent node by p and a child by s ∈ S (p), where S(p) is the current set of children of p. Search iterates selection, ex-pansion, and evaluation to return the best completed answer found. 
+
+Token budget. We focus on the fixed-budget setting where each problem instance is run under a fixed token budget 
+
+B. Let Cused be the cumulative number of output tokens generated by the LLM across all expansions so far; the search must satisfy Cused ≤ B and terminates when the budget is exhausted. We should take a fixed budget into consideration when deciding where to deepen and when to keep branching. 
+
+Node evaluation and statistics. When a node x is ex-panded, it receives a scalar evaluation Q(x) ∈ R (e.g., from a verifier/reward model). We maintain an accumulated value 
+
+W (x) = X 
+
+> y∈T (x)
+
+Q(y),
+
+and a subtree size 
+
+mx = |T (x)|,
+
+where T (x) is the expanded subtree rooted at x.1 We keep 
+
+W (·) explicit since our proposed method later modifies how value is accumulated. 
+
+Child priors. Tree-search decoding often uses a prior dis-tribution P (s | p) to guide exploration, e.g., from a learned policy network (Silver et al., 2017). A practical alterna-tive is to construct priors from available scoring signals for candidate children (Inoue et al., 2025), e.g., 
+
+P (s | p) = softmax( { Q(s′) | s′ ∈ S (p)})s .
+
+We use this instantiation in our experiments, while our method is compatible with other constructions of P .
+
+Monte Carlo Tree Search (MCTS) with PUCT. Standard MCTS repeats selection , expansion , evaluation , and back-propagation (Silver et al., 2017; Inoue et al., 2025; Chen et al., 2024). During selection, starting from the root, the search repeatedly chooses the child s ∈ S (p) that maxi-mizes the PUCT score: 
+
+PUCT( p, s ) = W (s)
+
+ms
+
+| {z } 
+
+> Exploitation
+
++ c P (s | p)
+
+s
+
+ln( mp)
+
+ms
+
+| {z }
+
+> Exploration
+
+, (1) where c > 0 controls the exploration intensity. After ex-panding and evaluating new nodes, backpropagation updates 
+
+W (·) and m(·) along the selected path. 
+
+Budget-agnostic vs. Budget-aware policies. Note that Eq. 1 depends only on tree statistics and priors: the token budget B does not influence the selection rule and is typ-ically used only to stop search when Cused reaches B. In contrast, we aim to align tree-search decisions with the re-maining budget, with the goal of using a fixed budget more effectively throughout the search.     
+
+> 1In some implementations, mxis defined as a visit count. In our setting, mxcan be measured by subtree size, and we use this definition for simplicity.
+
+2Aligning Tree-Search Policies with Fixed Token Budgets in Test-Time Scaling of LLMs 
+
+3. Budget-Guided MCTS 
+
+We propose Budget-Guided MCTS (BG-MCTS) , a tree-search decoding algorithm for fixed-budget test-time scaling. BG-MCTS aligns MCTS decisions with a pre-specified 
+
+token budget by conditioning the search policy on the re-maining budget . Concretely, starting from standard PUCT-style MCTS (Sec. 2), BG-MCTS introduces two budget-conditioned control mechanisms that adapt the search be-havior : (i) it adjusts the selection dynamics via a budget-conditioned PUCT score, and (ii) it regulates tree widening 
+
+through a budget-guided mechanism that decides when to introduce new children. Together, these mechanisms induce a budget-aligned wide-to-deep schedule: the search stays exploratory early and increasingly concentrates on refining and completing promising candidates as the budget runs down. 
+
+3.1. Budget and Cost Tracking 
+
+Let B be the total token budget for a problem instance. Let 
+
+Cused be the cumulative number of output tokens generated by the LLM across the entire search so far (Sec. 2). We use the budget sufficiency ratio ρ ∈ [0 , 1] ,
+
+ρ = 1 − Cused 
+
+B , (2) as the conditioning variable of the search policy. Intuitively, 
+
+ρ ≃ 1 corresponds to the early stage (budget ample) and ρ ≃
+
+0 corresponds to the late stage (budget nearly exhausted). 
+
+3.2. Budget-Guided Selection 
+
+In standard PUCT (Eq. 1), the selection score is independent of B and ρ, and the budget typically affects the search only through termination. BG-MCTS makes selection budget-conditioned by annealing the exploration bonus with ρ while simultaneously adding a late-stage completion bias to the value term; as ρ decreases, the influence of the exploration term diminishes, biasing selection toward nodes with higher mean values. 
+
+BG-PUCT score. Given the budget sufficiency ratio ρ, BG-MCTS selects the child for a parent p and a standard child 
+
+s ∈ S std (p) that maximizes, 
+
+BG -PUCT( p, s, ρ ) = ˜W (s, ρ )
+
+ms
+
+| {z }
+
+> Exploitation
+
++ ρc P (s | p)
+
+s
+
+ln( mp)
+
+ms
+
+| {z }
+
+> Exploration
+
+,
+
+(3) where c > 0 is the exploration weight, P (s | p) is the child prior, and ms is the subtree size (Sec. 2). The key differ-ences from Eq. 1 are: the accumulated value is also depen-dent of the budget sufficiency ratio ( W (s) → ˜W (s, ρ )); and the multiplicative factor ρ is incorporated in the exploration term (exploration is gradually suppressed as ρ decreases). 
+
+Budget-conditioned depth-biased value correction. We define the corrected accumulated value ˜W (s, ρ ) as 
+
+˜W (s, ρ ) = X 
+
+> x∈T (s)
+
+˜Q(x, ρ ), (4) 
+
+˜Q(x, ρ ) = Q(x) + κ(1 − ρ) d(x)ˆdans 
+
+| {z }
+
+> completion bias
+
+, (5) where T (s) is the expanded subtree rooted at s, d(x) is the depth of node x, and κ ≥ 0 is a constant. The term 
+
+ˆdans denotes an estimate of the depth at which an answer is typically completed; in practice, we use the running average depth of nodes that contain a completed answer (or the current maximum expanded depth if no answer has been found yet). The correction is scaled by (1 − ρ), so it is negligible early and becomes more influential as the budget runs out. 
+
+Implication. When ρ ≃ 1, BG-PUCT is close to stan-dard PUCT: it does not artificially boost exploration, but it also does not prematurely damp it. As ρ decreases, the exploration bonus is annealed and the completion shaping in Eq. 5 becomes stronger, shifting selection away from opening new alternatives and toward deepening/refining a few promising branches. Combined with the budget-guided widening mechanism (Sec. 3.3), this yields a wide-to-deep search schedule over the course of the budget. 
+
+3.3. Budget-Guided Widening of Tree 
+
+Selection alone cannot prevent a common fixed-budget fail-ure mode: introducing new alternatives too late to mean-ingfully refine them. To control search breadth, BG-MCTS introduces an explicit widening option at each non-terminal node, implemented as a virtual generative child . This turns “generate a new child from p” into a first-class option that competes with selecting existing children. Many tree-search decoders benefit from dynamic widen-ing (Inoue et al., 2025): rather than expanding the fixed numbers of new child only at the leaf nodes, they allow generating additional children from intermediate nodes as the search proceeds. This flexibility can be useful since the search can adapt where and how much it expands. However, under a fixed token budget, unconstrained widening can be wasteful near the end of search—new alternatives intro-duced late often cannot be refined or completed before the budget is exhausted. BG-MCTS therefore supports dynamic widening while aligning it with the remaining budget. 
+
+Node types. For each non-terminal node p, let Sstd (p) be its current set of standard (actual) children. We associate p with 3Aligning Tree-Search Policies with Fixed Token Budgets in Test-Time Scaling of LLMs 
+
+a virtual generative child sgen (p) and define the selectable set 
+
+S(p) = Sstd (p) ∪ { sgen (p)}.
+
+If sgen (p) is selected, BG-MCTS generates one additional standard child from p and adds it to Sstd (p) (thereby widen-ing the tree at p). 
+
+Generative score. To enable a unified selection decision be-tween deepening and widening at p, we score the generative option sgen (p) as 
+
+Egen (p, ρ ) = μ(p)
+
+|{z} 
+
+> value level
+
++ λ ρ σ2(p)
+
+| {z } 
+
+> uncertainty
+
+, (6) where μ(p) and σ2(p) denote the mean and variance of 
+
+Q(s) over s ∈ S std (p), respectively, and λ ≥ 0 controls the exploration–exploitation trade-off. The variance term promotes widening when the current children disagree (high uncertainty), while the factor ρ ensures that this incentive is strong early and fades as the budget runs down. As a result, late-stage widening from shallow nodes is naturally suppressed, helping the search convert earlier exploration into completed solutions or refinement. 
+
+3.4. Unified Selection with Widening Trigger 
+
+BG-MCTS follows the standard MCTS loop (selection– expansion–evaluation–backpropagation; Sec. 2), but aligns 
+
+deepening and widening decisions with the remaining token budget. We do so by augmenting selection with a gener-ative option that, when chosen, triggers widening at the current node. At each internal node p, selection chooses 
+
+s⋆ ∈ arg max s∈S (p) Score( p, s, ρ ), where 
+
+Score( p, s, ρ ) = 
+
+(
+
+BG -PUCT( p, s, ρ ), s ∈ S std (p),Egen (p, ρ ), s = sgen (p). (7) 
+
+Summary. Conditioning both BG-PUCT and the widen-ing trigger on ρ anneals exploration and widening as the budget depletes, shifting the search from breadth to comple-tion under the same budget. 
+
+3.5. Algorithm 
+
+Algorithm 1 summarizes the overall BG-MCTS procedure. We briefly explain the subroutines for completeness. 
+
+SELECT (T, ρ ). Starting from the root, repeatedly apply Eq. 7 and descend while the maximizer is a standard child. Return the reached leaf, or the first internal node p where 
+
+s⋆ = sgen (p) (to trigger widening at p). 
+
+EXPAND (T, p, k ). If p is a leaf, generate k children from p;otherwise generate one new child from p (widening). Return the newly added children ∆S(p) and the generated-token cost ∆C.
+
+Algorithm 1 BG-MCTS                                                  
+
+> Notation: ∆S(p)is newly expanded children from pin E XPAND ;
+> ∆Cis the number of output tokens generated to produce ∆S(p).
+> Require: root node p0, token budget B, leaf expansion width k
+> 1: Initialize tree Twith p0;Cused ←0
+> 2: while Cused < B do
+> 3: ρ←1−Cused /B
+> 4: p←SELECT (T, ρ )
+> 5: (∆ S(p),∆C)←EXPAND (T, p, k )
+> 6: Q(s)←EVALUATE (s)for all s∈∆S(p)
+> 7: BACKPROP (T, ∆S(p))
+> 8: Cused ←Cused + ∆ C
+> 9: end while
+> 10: return best completed answer found in T
+
+EVALUATE (s). Assign a scalar value Q(s) (e.g., via a veri-fier/reward model or a heuristic); if s contains a completed answer, update ˆdans in Eq. 5. 
+
+BACKPROP (T, ∆S(p)) . For each s ∈ ∆S(p), update sub-tree statistics along the path from s to the root (standard MCTS): ma ← ma + 1 and W (a) ← W (a) + Q(s) for each ancestor a.
+
+4. Experiments 
+
+4.1. Experimental Setup Fixed-budget protocol. We measure inference cost by the total number of output tokens generated across the en-tire search, Cused , and run each instance under a fixed to-ken budget B ∈ { 10 k, 20 k, 30 k}. Search terminates when 
+
+Cused ≥ B. Among all nodes that contain a valid final answer, we return the one with the highest evaluation score 
+
+Q(·).2 We evaluate correctness using LightEval (Habib et al., 2023). 
+
+Node construction (generation units). We construct nodes using either: (i) Full generation , where the model generates until a stop token or a maximum context length, or (ii) Sequential generation , where generation is truncated at predefined step boundaries. For Sequential generation, we use the delimiter \nStep to mark step boundaries. To allow continued search even after reaching an answered node, we optionally append the prompt ‘‘But wait, let me think about the problem again.’’ and con-tinue generation from that node (Muennighoff et al., 2025). 
+
+Node evaluation. Each newly expanded node x receives a scalar value Q(x) from a reward model that evaluates the reasoning process. The input to the reward model consists of the problem statement (root) followed by all intermediate reasoning steps from ancestor nodes (step1, step2, etc.) up 
+
+> 2We extract candidate answers with dataset-specific regular expressions; details are provided in Appendix A.
+
+4Aligning Tree-Search Policies with Fixed Token Budgets in Test-Time Scaling of LLMs 
+
+to the step generated at node x, formatted as alternating user-assistant turns in a conversation history (Appendix D). The reward model processes this input and outputs a reward. 
+
+Models and datasets. We use two widely available open-weight instruction-tuned LLMs with fewer than 10B pa-rameters, Llama-3.1-8B-Instruct (Grattafiori et al., 2024) and Qwen2.5-7B-Instruct (Qwen et al., 2025). This regime reflects resource-constrained settings where scal-ing model size is often infeasible and test-time scaling is the more realistic lever. As the reward model, we use GenPRM-7B (Zhao et al., 2025; Liu et al., 2025a). We evaluate on MATH500 (Lightman et al., 2024) and AIME24/25 (Maxwell-Jia, 2024; OpenCompass, 2025). 
+
+Baselines. We evaluate the following baselines: Repeated Sampling (a representative parallel-scaling baseline) and Sequential Refinement (a representative sequential-scaling baseline), along with hybrid tree-search baselines (MCTS, AB-MCTS-M (Inoue et al., 2025), and LiteSearch (Wang et al., 2024a), which reduces cost via early stopping). Un-less otherwise specified, tree-search methods use Sequential generation as the node unit; we use Full generation for the simplest width/depth baselines (Repeated Sampling and Se-quential Refinement), and for AB-MCTS-M to match the setting evaluated in the original paper. We disable greedy pre-generation in LiteSearch to align token counting, and otherwise follow method-specific hyperparameters from the original papers. See more details in Appendix B. 
+
+BG-MCTS hyperparameters. We expand k=2 new nodes at each leaf and set the exploration constant to 
+
+c = √2. We set κ = λ = 1 for the completion bias (Eq. 5) and the widening score (Eq. 6). 
+
+4.2. Experimental Results Main results. Table 1 reports accuracy under fixed token budgets. Across 12 settings (2 models × 2 benchmarks 
+
+× 3 budgets), BG-MCTS achieves the best accuracy in 11 and the second-best in the remaining one, outperforming budget-agnostic tree-search baselines and remaining com-petitive with strong sampling-based baselines. Figure 2 further shows that BG-MCTS peaks its performance near budget exhaustion—consistent with the intended “think first, finish strong” behavior (§ 3). Overall, these results support the core premise: under a fixed budget, conditioning tree-search behavior on the remaining budget is more effective than treating the budget as a mere stopping condition. 
+
+Interpreting baseline trends. AB-MCTS-M underper-forms simple sampling/refinement baselines (e.g., Repeated Sampling) in several settings. This trend may be due to our evaluation setting differing from the one in which AB-                                                                                                                          
+
+> Table 1. Accuracy (Acc.; averaged over three trials). Greedy: no search; subscript ”Full”: full-generation nodes. Bold /underline :best/second-best per budget B. BG-MCTS consistently outper-forms baselines under fixed budgets. See Appendix C.
+> Math500 (Lv.5) AIME24/25 Methods \Budget B10K 20K 30K 10K 20K 30K
+> Llama-3.1-8B-Instruct - Greedy .224 .224 .224 .033 .033 .033 - Refinement Full .249 .246 .241 .033 .028 .028 - Repeated Full .393 .438 .450 .039 .050 .056 - AB-MCTS-M Full .311 .323 .343 .050 .050 .050 - AB-MCTS-M .124 .179 .209 .000 .011 .011 - MCTS .333 .406 .430 .039 .072 .089 - LiteSearch-Incre. †.249 .291 .304 .033 .039 .056 - LiteSearch-Batch. †.236 .271 .281 .033 .044 .039 - BG-MCTS (ours) .393 .465 .443 .072 .083 .106
+> Qwen-2.5-7B-Instruct - Greedy .493 .493 .493 .100 .100 .100 - Refinement Full .498 .493 .490 .094 .083 .089 - Repeated Full .632 .664 .702 .156 .161 .183
+> - AB-MCTS-M Full .629 .657 .659 .144 .150 .156 - AB-MCTS-M .433 .542 .600 .072 .128 .139 - MCTS .619 .657 .659 .156 .167 .167 - LiteSearch-Incre. †.488 .505 .510 .089 .083 .083 - LiteSearch-Batch †.527 .550 .557 .078 .083 .083 - BG-MCTS (ours) .662 .699 .711 .156 .189 .183
+
+MCTS-M was reported to be most effective (Inoue et al., 2025); in particular, we rely solely on scalar reward-model values without explicit corrective feedback. It may also be better matched to a frontier-model, higher-compute regime than our fixed-budget sub-10B setting, and could become competitive given substantially larger budgets. LiteSearch reliably reduces token usage but often converges too early, leaving budget underutilized and resulting in relatively lower final accuracy (Table 1 and Fig. 2). 
+
+Ablation. Table 2 shows that all three components con-tribute: budget-annealed exploration (Eq. 3), the completion bias (Eq. 5), and budget-guided widening (Eq. 6). Disabling any single component typically degrades performance, and no isolated component reliably matches full BG-MCTS across budgets. The strongest performance is achieved when these are combined, indicating that they are complementary: annealing stabilizes late-stage search, shaping completion, and widening control prevents wasteful late branching. 
+
+5. Analysis 
+
+5.1. Answer-Reach Rate over Budget Tree level. Figure 3 plots the tree-level answer reach rate— the fraction of instances whose search tree contains at least one answered node—as the budget depletes. Baselines tend to reach an answer early. In contrast, BG-MCTS shows 5Aligning Tree-Search Policies with Fixed Token Budgets in Test-Time Scaling of LLMs 0 5000 10000 15000 20000 25000 30000 
+
+Total Output Tokens / Tree 
+
+0.00 
+
+0.02 
+
+0.04 
+
+0.06 
+
+0.08 
+
+0.10 
+
+> Accuracy
+> 10K
+> 20K
+> 30K
+> Greedy
+> Refinement (Full)
+> Repeated (Full)
+> AB-MCTS (Full)
+> AB-MCTS
+> MCTS
+> LiteSearch-Incre.
+> LiteSearch-Batch
+> BG-MCTS (10K)
+> BG-MCTS (20K)
+> BG-MCTS (30K)
+
+(a) Llama-3.1-8B-Instruct 0 5000 10000 15000 20000 25000 30000 
+
+Total Output Tokens / Tree 
+
+0.000 
+
+0.025 
+
+0.050 
+
+0.075 
+
+0.100 
+
+0.125 
+
+0.150 
+
+0.175  
+
+> Accuracy
+> 10K
+> 20K
+> 30K
+> Greedy
+> Refinement (Full)
+> Repeated (Full)
+> AB-MCTS (Full)
+> AB-MCTS
+> MCTS
+> LiteSearch-Incre.
+> LiteSearch-Batch
+> BG-MCTS (10K)
+> BG-MCTS (20K)
+> BG-MCTS (30K)
+
+(b) Qwen2.5-7B-Instruct 
+
+Figure 2. Change in solution accuracy relative to the consumed budget (i.e., output tokens used in search) on AIME24/25. Details of the aggregation methods for LiteSearch are provided in the Appendix C. BG-MCTS improves accuracy in alignment with remaining budget, outperforming budget-agnostic baselines at exhaustion points ( B = {10 K, 20 K, 30 K}). Results for other models and benchmarks are provided in Appendix E 0 5000 10000 15000 20000 25000 30000 
+
+Total Output Tokens / Tree 
+
+0.0 
+
+0.2 
+
+0.4 
+
+0.6 
+
+0.8 
+
+1.0 
+
+> Answered Tree Ratio
+> 10K
+> 20K
+> 30K
+> Refinement (Full)
+> Repeated (Full)
+> AB-MCTS (Full)
+> AB-MCTS
+> MCTS
+> LiteSearch-Incre.
+> LiteSearch-Batch
+> BG-MCTS (10K)
+> BG-MCTS (20K)
+> BG-MCTS (30K)
+
+(a) Llama-3.1-8B-Instruct 0 5000 10000 15000 20000 25000 30000 
+
+Total Output Tokens / Tree 
+
+0.0 
+
+0.2 
+
+0.4 
+
+0.6 
+
+0.8 
+
+1.0  
+
+> Answered Tree Ratio
+> 10K
+> 20K
+> 30K
+> Refinement (Full)
+> Repeated (Full)
+> AB-MCTS (Full)
+> AB-MCTS
+> MCTS
+> LiteSearch-Incre.
+> LiteSearch-Batch
+> BG-MCTS (10K)
+> BG-MCTS (20K)
+> BG-MCTS (30K)
+
+(b) Qwen2.5-7B-Instruct 
+
+Figure 3. Percentage of search trees containing at least one solved node relative to the consumed budget (i.e., output tokens used in search) on AIME24/25. Details of the aggregation methods for LiteSearch are provided in the Appendix C. BG-MCTS does not rush to find solutions early; instead, it consolidates solutions toward budget exhaustion points ( B = {10 K, 20 K, 30 K}), highlighting its budget-aware behavior. Results for other models and benchmarks are provided in Appendix E 
+
+a pronounced late-stage rise as the budget runs down, in-dicating delayed answer commitment early and increasing completion pressure near exhaustion. Notably, BG-MCTS attains higher final accuracy despite a lower reach rate at exhaustion (Table 1, Fig. 2). 
+
+Node level. Tree-level reach only indicates whether a tree produces any answer, so we also analyze node-level outputs. Table 3 summarizes the total number of answered nodes (solution candidates), the number of correct answered nodes, and precision (correct-to-answered ratio), allowing multiple answers per tree. BG-MCTS achieves higher precision and yields more correct answered nodes even when its reach rate is lower, indicating a fewer-trees-but-better-answers regime. 
+
+Takeaway. Under fixed budgets, BG-MCTS does not aim to produce an answer as early as possible; instead, it converts late-stage budget into higher-quality completed answers, reaching answers on fewer instances but producing multiple accurate candidates for those it reaches. 
+
+5.2. Depth-Width Trade-off Analysis 
+
+Figures 4a and 4b illustrate the average maximum depth and maximum width of the full search tree for each algorithm, respectively. From Figure 4a, it is evident that BG-MCTS tends to prioritize depth-oriented exploration as the budget 
+
+B is depleted. Furthermore, Figure 4b confirms that while breadth-wise exploration is sufficiently performed when the budget is abundant, it becomes constrained as the budget consumption progresses. 6Aligning Tree-Search Policies with Fixed Token Budgets in Test-Time Scaling of LLMs 0 5000 10000 15000 20000 25000 30000 
+
+Total Output Tokens / Tree 
+
+> 0
+> 5
+> 10
+> 15
+> 20
+> 25
+> 30
+> 35
+> Tree Depth
+> 10K
+> 20K
+> 30K
+> Refinement (Full)
+> Repeated (Full)
+> AB-MCTS (Full)
+> AB-MCTS
+> MCTS
+> LiteSearch-Incre.
+> LiteSearch-Batch
+> BG-MCTS10K
+> BG-MCTS20K
+> BG-MCTS30K
+
+(a) Average maximum depth of search tree 0 5000 10000 15000 20000 25000 30000 
+
+Total Output Tokens / Tree  
+
+> 0
+> 20
+> 40
+> 60
+> 80
+> 100
+> 120
+> 140
+> 160
+> Tree Width
+> 10K
+> 20K
+> 30K
+> Refinement (Full)
+> Repeated (Full)
+> AB-MCTS (Full)
+> AB-MCTS
+> MCTS
+> LiteSearch-Incre.
+> LiteSearch-Batch
+> BG-MCTS10K
+> BG-MCTS20K
+> BG-MCTS30K
+
+(b) Average maximum width of search tree 
+
+Figure 4. Average maximum depth and width of search tree using Llama-3.1-8B-Instruct on AIME24/25. Details of the aggregation methods for LiteSearch are provided in the Appendix C. In the early stages of exploration, BG-MCTS prioritizes breadth-oriented search rather than depth-oriented search. As the computational budget is depleted, the focus gradually shifts toward deeper exploration. Results for other models and benchmarks are provided in Appendix F 
+
+Table 2. Ablation study (accuracy averaged over two runs). Each column disables one component: Explore annealing (Eq. 3), Ex-ploit shaping (Eq. 5), or Widen annealing (Eq. 6). Red cells : drop from full BG-MCTS; bold red : below MCTS baseline. The com-bination of all components is crucial for budget-efficient search. 
+
+Eq . 3 Eq . 5 Eq . 6 Llama-3.1 Qwen-2.5 Explore Exploit Widen 10K 20K 30K 10K 20K 30K annealing shaping annealing 
+
+- - - .333 .406 .430 .619 .657 .659 
+
+✓ - - .377 .478 .418 .649 .653 .679 - ✓ - .340 .418 .425 .646 .664 .660 - - ✓ .310 .392 .433 .642 .526 .664 
+
+✓ ✓ - .407 .470 .433 .642 .675 .657 
+
+✓ - ✓ .433 .425 .485 .631 .690 .720 - ✓ ✓ .373 .403 .429 .605 .660 .679 
+
+✓ ✓ ✓ .393 .465 .443 .662 .699 .711 
+
+5.3. Qualitative analysis 
+
+Figure 5 visualizes the search trees produced by MCTS and BG-MCTS under the same fixed budget ( B=20 K) on a pre-blem for MATH500 (Level 5) using Llama-3.1-8B-Instruct. Star- ( ⋆) and triangle-marked ( △) nodes denote correct and incorrect answers, respectively, and all other nodes are pro-cess nodes; Darker blue indicates nodes expanded later i.e., when the remaining budget was depleted. Standard MCTS (Fig. 5a) uses the budget mainly as a stop-ping condition, so its expansion pattern remains largely unchanged as the budget depletes. Consequently, it keeps widening at shallow depths even late in the run, leav-ing insufficient budget to deepen and complete promising branches; in this example, the search broadens but never reaches a correct answered node. In contrast, BG-MCTS (Fig. 5b) shows the intended budget-aligned wide-to-deep behavior: broad early exploration followed by increasingly focused refinement within a few high-value subtrees as the 
+
+Table 3. Statistics of answered and correct nodes on AIME24/25 using Llama-3.1-8B-Instruct. Columns show total answered nodes, correct nodes (cor.), and their ratio per budget B. Bold / underline :best/second-best. BG-MCTS yields fewer but higher-quality nodes. See Appendices C, F for more details. 
+
+Budget B 10K 20K 30K Methods total cor. ratio total cor. ratio total cor. ratio 
+
+Refinement Full 277.0 12.0 .043 390.3 14.3 .037 480.3 16.3 .034 Repeated Full 365.3 14.3 .039 704.3 32.3 .046 1038.7 48.0 .046 AB-MCTS-M Full 317.0 13.7 .043 543.0 20.3 .037 739.0 25.7 .035 AB-MCTS-M 0.7 0.0 .000 5.0 1.0 .200 8.7 1.3 .154 MCTS 188.3 21.3 .113 492.3 60.0 .122 916.3 143.7 .157 LiteSearch-Incre. † 503.7 16.0 .032 838.0 43.0 .051 976.3 51.3 .053 LiteSearch-Batch † 416.0 15.3 .037 645.0 17.3 .027 849.0 18.0 .021 BG-MCTS (ours) 198.7 103.0 .518 636.0 293.7 .462 899.0 413.7 .460 
+
+budget runs down. This late-stage focus pushes a promis-ing trajectory to completion and reaches a correct answered node within the same budget, highlighting the practical value of budget-conditioned selection and widening. 
+
+6. Discussion 
+
+Reward model. GenPRM-7B (Zhao et al., 2025; Liu et al., 2025a) often outputs near-binary scores, resulting in a sparse reward landscape that fails to distinguish among strong can-didates. In this regime, tree search becomes less about selecting the best node and more about filtering out clearly bad ones. When early-stage nodes receive uniformly high scores, the search signal is further weakened, reducing dis-criminability and encouraging broad expansion. Improving reward calibration is therefore a key lever for strengthening budget-constrained tree-search decoding. 
+
+Budget-aligned test-time scaling. BG-MCTS treats fixed-budget inference by conditioning search behavior on the 7Aligning Tree-Search Policies with Fixed Token Budgets in Test-Time Scaling of LLMs Root    
+
+> (a) MCTS Root
+> (b) BG-MCTS (ours)
+> Figure 5. Representative tree examples of MCTS vs. BG-MCTS (Llama-3.1-8B-Instruct, MATH500 Level 5, budget 20K). Stars and triangles denote correct and incorrect nodes; color intensity reflects expansion order (darker = later). BG-MCTS adaptively shifts to depth-first as budget depletes. Details in Appendix G.
+
+remaining budget, rather than using the budget only as a stopping criterion. This is particularly relevant for costly, API-served frontier models where per-query spending is explicitly capped or variable (e.g., GPT-5.2 costs $14.0 per 1M tokens 3). More broadly, budget-conditioned decoding enables a predictable accuracy–cost trade-off and motivates interfaces in which specifying a budget alone elicits effective “think first, finish strong” search within that cost. 
+
+Implications for data synthesis. Our analysis (§ 5) sug-gests a “fewer-instances, better-answers” regime: BG-MCTS may reach answers on fewer problems, yet yields higher-precision answer candidates and more correct an-swered nodes when multiple candidates are allowed. This aligns with data synthesis goals where quality matters more than coverage; prior work (e.g., (Gunasekar et al., 2023; Chunting et al., 2023; Muennighoff et al., 2025)) similarly finds that smaller, higher-quality traces can drive efficient learning. Beyond SFT, diverse candidates for the same prompt also provide offline data for policy or preference optimization (e.g., pairwise comparisons). Finally, budget-conditioning offers operational reliability: a prescribed per-
+
+> 3https://platform.openai.com/docs/models/ gpt-5.2
+
+instance budget yields a stable cost profile while steering synthesis toward higher-quality outputs, simplifying large-scale generation and iteration. 
+
+7. Related Work 
+
+Test-time scaling. Test-time scaling improves LLM out-puts by spending additional inference compute without changing model parameters. Prior work broadly falls into (i) parallel scaling, which samples multiple candidates and aggregates them (Wang et al., 2023; Brown et al., 2024; Snell et al., 2024; Lightman et al., 2024), (ii) sequential 
+
+scaling, which iteratively refines a trajectory conditioned on intermediate states (Madaan et al., 2023; Yao et al., 2023b; Muennighoff et al., 2025), and (iii) hybrid scaling, which combines both by maintaining multiple trajectories and se-lecting among them via tree search (Tian et al., 2024; Zhou et al., 2024; Inoue et al., 2025; Zheng et al., 2025). Hybrid approaches often use MCTS/PUCT-style selection (Silver et al., 2017), but are typically budget-agnostic: the search policy is fixed and the budget is used mainly for termination. 
+
+Reducing search costs. LiteSearch (Wang et al., 2024a) reduces token usage through pruning and early stopping. Unlike our goal of optimizing behavior under a given fixed budget, it primarily targets cost reduction and may converge prematurely when the budget still allows further refinement. 
+
+Budget-aware prompting for agents (BATS). Liu et al. (2025b) propose Budget Tracker/BATS for tool-augmented search agents under explicit per-tool call budgets: remain-ing budgets are surfaced in the prompt and used to adapt planning and verification in a sequential ReAct-style loop (e.g., “dig deeper” vs. “pivot”) (Yao et al., 2023b). In con-trast, BG-MCTS targets tree-search decoding under a fixed 
+
+output-token budget and makes the remaining budget ratio 
+
+ρ an explicit input to MCTS decision rules (selection and widening), inducing an automatic exploration-to-completion shift without relying on prompt-level self-regulation. 
+
+8. Conclusion 
+
+We presented Budget-Guided MCTS (BG-MCTS), a budget-aware tree-search decoding method for LLMs that condi-tions both selection and widening on the remaining token budget. Across mathematical reasoning benchmarks, BG-MCTS consistently improves accuracy under fixed budgets by inducing a budget-aligned search that explores early and prioritizes refinement and completion as the budget depletes. Future work includes extending the budget to account for input tokens and reward computation, and exploring budget allocation across multiple reward models and accuracy–cost trade-offs. 8Aligning Tree-Search Policies with Fixed Token Budgets in Test-Time Scaling of LLMs 
+
+Acknowledgment 
+
+This work was supported by the “R&D Hub Aimed at Ensur-ing Transparency and Reliability of Generative AI Models” project of the Ministry of Education, Culture, Sports, Sci-ence and Technology. This study was carried out using the TSUBAME4.0 supercomputer at Institute of Science Tokyo. 
+
+Impact Statement 
+
+This paper presents work whose goal is to advance the field of machine learning. There are many potential societal consequences of our work, none of which we feel must be specifically highlighted here. 
+
+References 
+
+Besta, M., Blach, N., Kubicek, A., Gerstenberger, R., Pod-stawski, M., Gianinazzi, L., Gajda, J., Lehmann, T., Niewiadomski, H., Nyczyk, P., et al. Graph of Thoughts: Solving elaborate problems with Large Language Models. 
+
+Proceedings of the AAAI Conference on Artificial Intelli-gence , 38(16):17682–17690, Mar. 2024. doi: 10.1609/aa ai.v38i16.29720. URL https://ojs.aaai.org/i ndex.php/AAAI/article/view/29720 .Brown, B., Juravsky, J., Ehrlich, R., Clark, R., Le, Q. V., R ´e, C., and Mirhoseini, A. Large Language Mon-keys: Scaling inference compute with repeated sampling. arXiv:2407.21787, 2024. URL https://arxiv.or g/abs/2407.21787 .Brown, T., Mann, B., Ryder, N., Subbiah, M., Kaplan, J. D., Dhariwal, P., Neelakantan, A., Shyam, P., Sas-try, G., Askell, A., et al. Language Models are few-shot learners. In Larochelle, H., Ranzato, M., Hadsell, R., Balcan, M., and Lin, H. (eds.), Advances in Neural Information Processing Systems , volume 33, pp. 1877– 1901. Curran Associates, Inc., 2020. URL https: //proceedings.neurips.cc/paper_files /paper/2020/file/1457c0d6bfcb4967418 bfb8ac142f64a-Paper.pdf .Chang, K., Shi, Y., Wang, C., Zhou, H., Hu, C., Liu, X., Luo, Y., Ge, Y., Xiao, T., and Zhu, J. Step-level verifier-guided hybrid test-time scaling for large language models. In Christodoulopoulos, C., Chakraborty, T., Rose, C., and Peng, V. (eds.), Proceedings of the 2025 Conference on Empirical Methods in Natural Language Processing , pp. 18462–18477, Suzhou, China, November 2025. Associa-tion for Computational Linguistics. ISBN 979-8-89176-332-6. doi: 10.18653/v1/2025.emnlp-main.931. URL 
+
+https://aclanthology.org/2025.emnlp-m ain.931/ .Chen, G., Liao, M., Li, C., and Fan, K. Alphamath al-most zero: Process supervision without process. In Globerson, A., Mackey, L., Belgrave, D., Fan, A., Pa-quet, U., Tomczak, J., and Zhang, C. (eds.), Advances in Neural Information Processing Systems , volume 37, pp. 27689–27724. Curran Associates, Inc., 2024. doi: 10.52202/079017-0870. URL https://proceedi ngs.neurips.cc/paper_files/paper/202 4/file/30dfe47a3ccbee68cffa0c19ccb1b c00-Paper-Conference.pdf .Chunting, Z., Liu, P., Xu, P., Iyer, S., Sun, J., Mao, Y., Ma, X., Efrat, A., Yu, P., YU, L., et al. LIMA: Less Is More for Alignment. In Oh, A., Naumann, T., Globerson, A., Saenko, K., Hardt, M., and Levine, S. (eds.), Advances in Neural Information Processing Systems , volume 36, pp. 55006–55021. Curran Associates, Inc., 2023. URL 
+
+https://proceedings.neurips.cc/paper _files/paper/2023/file/ac662d74829e4 407ce1d126477f4a03a-Paper-Conference. pdf .Grattafiori, A., Dubey, A., Jauhri, A., Pandey, A., Kadian, A., Al-Dahle, A., Letman, A., Mathur, A., Schelten, A., Vaughan, A., Yang, A., Fan, A., Goyal, A., Hartshorn, A., Yang, A., Mitra, A., Sravankumar, A., Korenev, A., Hinsvark, A., Rao, A., Zhang, A., Rodriguez, A., Gregerson, A., Spataru, A., Roziere, B., Biron, B., Tang, B., Chern, B., Caucheteux, C., Nayak, C., Bi, C., Marra, C., McConnell, C., Keller, C., Touret, C., Wu, C., Wong, C., Ferrer, C. C., Nikolaidis, C., Allonsius, D., Song, D., Pintz, D., Livshits, D., Wyatt, D., Esiobu, D., Choudhary, D., Mahajan, D., Garcia-Olano, D., Perino, D., Hupkes, D., Lakomkin, E., AlBadawy, E., Lobanova, E., Dinan, E., Smith, E. M., Radenovic, F., Guzm ´an, F., Zhang, F., Synnaeve, G., Lee, G., Anderson, G. L., Thattai, G., Nail, G., Mialon, G., Pang, G., Cucurell, G., Nguyen, H., Ko-revaar, H., Xu, H., Touvron, H., Zarov, I., Ibarra, I. A., Kloumann, I., Misra, I., Evtimov, I., Zhang, J., Copet, J., Lee, J., Geffert, J., Vranes, J., Park, J., Mahadeokar, J., Shah, J., van der Linde, J., Billock, J., Hong, J., Lee, J., Fu, J., Chi, J., Huang, J., Liu, J., Wang, J., Yu, J., Bitton, J., Spisak, J., Park, J., Rocca, J., Johnstun, J., Saxe, J., Jia, J., Alwala, K. V., Prasad, K., Upasani, K., Plawiak, K., Li, K., Heafield, K., Stone, K., El-Arini, K., Iyer, K., Malik, K., Chiu, K., Bhalla, K., Lakhotia, K., Rantala-Yeary, L., van der Maaten, L., Chen, L., Tan, L., Jenkins, L., Martin, L., Madaan, L., Malo, L., Blecher, L., Landzaat, L., de Oliveira, L., Muzzi, M., Pasupuleti, M., Singh, M., Paluri, M., Kardas, M., Tsimpoukelli, M., Oldham, M., Rita, M., Pavlova, M., Kambadur, M., Lewis, M., Si, M., Singh, M. K., Hassan, M., Goyal, N., Torabi, N., Bashlykov, N., Bogoychev, N., Chatterji, N., Zhang, N., Duchenne, O., C¸ elebi, O., Alrassy, P., Zhang, P., Li, P., Vasic, P., Weng, P., Bhargava, P., Dubal, P., Krishnan, P., Koura, P. S., Xu, P., He, Q., Dong, Q., Srinivasan, 9Aligning Tree-Search Policies with Fixed Token Budgets in Test-Time Scaling of LLMs 
+
+R., Ganapathy, R., Calderer, R., Cabral, R. S., Stojnic, R., Raileanu, R., Maheswari, R., Girdhar, R., Patel, R., Sauvestre, R., Polidoro, R., Sumbaly, R., Taylor, R., Silva, R., Hou, R., Wang, R., Hosseini, S., Chennabasappa, S., Singh, S., Bell, S., Kim, S. S., Edunov, S., Nie, S., Narang, S., Raparthy, S., Shen, S., Wan, S., Bhosale, S., Zhang, S., Vandenhende, S., Batra, S., Whitman, S., Sootla, S., Collot, S., Gururangan, S., Borodinsky, S., Herman, T., Fowler, T., Sheasha, T., Georgiou, T., Scialom, T., Speck-bacher, T., Mihaylov, T., Xiao, T., Karn, U., Goswami, V., Gupta, V., Ramanathan, V., Kerkez, V., Gonguet, V., Do, V., Vogeti, V., Albiero, V., Petrovic, V., Chu, W., Xiong, W., Fu, W., Meers, W., Martinet, X., Wang, X., Wang, X., Tan, X. E., Xia, X., Xie, X., Jia, X., Wang, X., Gold-schlag, Y., Gaur, Y., Babaei, Y., Wen, Y., Song, Y., Zhang, Y., Li, Y., Mao, Y., Coudert, Z. D., Yan, Z., Chen, Z., Papakipos, Z., Singh, A., Srivastava, A., Jain, A., Kelsey, A., Shajnfeld, A., Gangidi, A., Victoria, A., Goldstand, A., Menon, A., Sharma, A., Boesenberg, A., Baevski, A., Feinstein, A., Kallet, A., Sangani, A., Teo, A., Yunus, A., Lupu, A., Alvarado, A., Caples, A., Gu, A., Ho, A., Poul-ton, A., Ryan, A., Ramchandani, A., Dong, A., Franco, A., Goyal, A., Saraf, A., Chowdhury, A., Gabriel, A., Bharambe, A., Eisenman, A., Yazdan, A., James, B., Maurer, B., Leonhardi, B., Huang, B., Loyd, B., Paola, B. D., Paranjape, B., Liu, B., Wu, B., Ni, B., Hancock, B., Wasti, B., Spence, B., Stojkovic, B., Gamido, B., Montalvo, B., Parker, C., Burton, C., Mejia, C., Liu, C., Wang, C., Kim, C., Zhou, C., Hu, C., Chu, C.-H., Cai, C., Tindal, C., Feichtenhofer, C., Gao, C., Civin, D., Beaty, D., Kreymer, D., Li, D., Adkins, D., Xu, D., Testuggine, D., David, D., Parikh, D., Liskovich, D., Foss, D., Wang, D., Le, D., Holland, D., Dowling, E., Jamil, E., Mont-gomery, E., Presani, E., Hahn, E., Wood, E., Le, E.-T., Brinkman, E., Arcaute, E., Dunbar, E., Smothers, E., Sun, F., Kreuk, F., Tian, F., Kokkinos, F., Ozgenel, F., Cag-gioni, F., Kanayet, F., Seide, F., Florez, G. M., Schwarz, G., Badeer, G., Swee, G., Halpern, G., Herman, G., Sizov, G., Guangyi, Zhang, Lakshminarayanan, G., Inan, H., Shojanazeri, H., Zou, H., Wang, H., Zha, H., Habeeb, H., Rudolph, H., Suk, H., Aspegren, H., Goldman, H., Zhan, H., Damlaj, I., Molybog, I., Tufanov, I., Leontiadis, I., Veliche, I.-E., Gat, I., Weissman, J., Geboski, J., Kohli, J., Lam, J., Asher, J., Gaya, J.-B., Marcus, J., Tang, J., Chan, J., Zhen, J., Reizenstein, J., Teboul, J., Zhong, J., Jin, J., Yang, J., Cummings, J., Carvill, J., Shepard, J., McPhie, J., Torres, J., Ginsburg, J., Wang, J., Wu, K., U, K. H., Saxena, K., Khandelwal, K., Zand, K., Matosich, K., Veeraraghavan, K., Michelena, K., Li, K., Jagadeesh, K., Huang, K., Chawla, K., Huang, K., Chen, L., Garg, L., A, L., Silva, L., Bell, L., Zhang, L., Guo, L., Yu, L., Moshkovich, L., Wehrstedt, L., Khabsa, M., Avalani, M., Bhatt, M., Mankus, M., Hasson, M., Lennie, M., Reso, M., Groshev, M., Naumov, M., Lathi, M., Keneally, M., Liu, M., Seltzer, M. L., Valko, M., Restrepo, M., Patel, M., Vyatskov, M., Samvelyan, M., Clark, M., Macey, M., Wang, M., Hermoso, M. J., Metanat, M., Rastegari, M., Bansal, M., Santhanam, N., Parks, N., White, N., Bawa, N., Singhal, N., Egebo, N., Usunier, N., Mehta, N., Laptev, N. P., Dong, N., Cheng, N., Chernoguz, O., Hart, O., Salpekar, O., Kalinli, O., Kent, P., Parekh, P., Saab, P., Balaji, P., Rittner, P., Bontrager, P., Roux, P., Dollar, P., Zvyagina, P., Ratanchandani, P., Yuvraj, P., Liang, Q., Alao, R., Rodriguez, R., Ayub, R., Murthy, R., Nayani, R., Mitra, R., Parthasarathy, R., Li, R., Hogan, R., Battey, R., Wang, R., Howes, R., Rinott, R., Mehta, S., Siby, S., Bondu, S. J., Datta, S., Chugh, S., Hunt, S., Dhillon, S., Sidorov, S., Pan, S., Mahajan, S., Verma, S., Yamamoto, S., Ramaswamy, S., Lindsay, S., Lindsay, S., Feng, S., Lin, S., Zha, S. C., Patil, S., Shankar, S., Zhang, S., Zhang, S., Wang, S., Agarwal, S., Sajuyigbe, S., Chintala, S., Max, S., Chen, S., Kehoe, S., Satter-field, S., Govindaprasad, S., Gupta, S., Deng, S., Cho, S., Virk, S., Subramanian, S., Choudhury, S., Goldman, S., Remez, T., Glaser, T., Best, T., Koehler, T., Robinson, T., Li, T., Zhang, T., Matthews, T., Chou, T., Shaked, T., Vontimitta, V., Ajayi, V., Montanez, V., Mohan, V., Kumar, V. S., Mangla, V., Ionescu, V., Poenaru, V., Mi-hailescu, V. T., Ivanov, V., Li, W., Wang, W., Jiang, W., Bouaziz, W., Constable, W., Tang, X., Wu, X., Wang, X., Wu, X., Gao, X., Kleinman, Y., Chen, Y., Hu, Y., Jia, Y., Qi, Y., Li, Y., Zhang, Y., Zhang, Y., Adi, Y., Nam, Y., Yu, Wang, Zhao, Y., Hao, Y., Qian, Y., Li, Y., He, Y., Rait, Z., DeVito, Z., Rosnbrick, Z., Wen, Z., Yang, Z., Zhao, Z., and Ma, Z. The llama 3 herd of models, 2024. URL 
+
+https://arxiv.org/abs/2407.21783 .Gunasekar, S., Zhang, Y., Aneja, J., Mendes, C. C. T., Giorno, A. D., Gopi, S., Javaheripi, M., Kauffmann, P., de Rosa, G., Saarikivi, O., et al. Textbooks are all you need, 2023. URL https://arxiv.org/abs/23 06.11644 .Habib, N., Fourrier, C., Kydl ´ı ˇcek, H., Wolf, T., and Tunstall, L. LightEval: A lightweight framework for LLM evaluation, 2023. URL h t t p s : // g i t h u b . c o m / h u g g i n g f a c e / l i g h t e v al .https://github.com/huggingface/lighteval. Inoue, Y., Misaki, K., Imajuku, Y., Kuroki, S., Nakamura, T., and Akiba, T. Wider or deeper? scaling LLM inference-time compute with adaptive branching tree search. In The Thirty-ninth Annual Conference on Neural Information Processing Systems , 2025. URL https://openrevi ew.net/forum?id=jAsr5GHt3P .Lightman, H., Kosaraju, V., Burda, Y., Edwards, H., Baker, B., Lee, T., Leike, J., Schulman, J., Sutskever, I., and Cobbe, K. Let’s verify step by step. In The Twelfth International Conference on Learning Representations ,10 Aligning Tree-Search Policies with Fixed Token Budgets in Test-Time Scaling of LLMs 
+
+2024. URL https://openreview.net/forum ?id=v8L0pN6EOi .Liu, R., Zhao, J., Zhang, K., Zhou, Z., Gao, J., Li, D., Lyu, J., Qian, Z., Qi, B., Li, X., and Zhou, B. Awesome process reward models. https://github.com/RyanL iu112/Awesome-Process-Reward-Models ,2025a. GitHub repository. Liu, T., Wang, Z., Miao, J., Hsu, I.-H., Yan, J., Chen, J., Han, R., Xu, F., Chen, Y., Jiang, K., Daruki, S., Liang, Y., Wang, W. Y., Pfister, T., and Lee, C.-Y. Budget-aware tool-use enables effective agent scaling, 2025b. URL 
+
+https://arxiv.org/abs/2511.17006 .Madaan, A., Tandon, N., Gupta, P., Hallinan, S., Gao, L., Wiegreffe, S., Alon, U., Dziri, N., Prabhumoye, S., Yang, Y., Gupta, S., Majumder, B. P., Hermann, K., Welleck, S., Yazdanbakhsh, A., and Clark, P. Self-refine: Iterative refinement with self-feedback. In Oh, A., Naumann, T., Globerson, A., Saenko, K., Hardt, M., and Levine, S. (eds.), Advances in Neural Information Processing Sys-tems , volume 36, pp. 46534–46594. Curran Associates, Inc., 2023. URL https://proceedings.neurip s.cc/paper_files/paper/2023/file/91e dff07232fb1b55a505a9e9f6c0ff3-Paper-C onference.pdf .Maxwell-Jia. Aime 2024 dataset. https://huggingf ace.co/datasets/Maxwell-Jia/AIME_2024 ,2024. Accessed: 2026-01-02. Muennighoff, N., Yang, Z., Shi, W., Li, X. L., Fei-Fei, L., Hajishirzi, H., Zettlemoyer, L., Liang, P., Candes, E., and Hashimoto, T. s1: Simple test-time scaling. In Proceed-ings of the 2025 Conference on Empirical Methods in Natural Language Processing , pp. 20275–20321, 2025. URL https://aclanthology.org/2025.em nlp-main.1025/ .OpenCompass. Aime 2025 dataset. https://huggin gface.co/datasets/opencompass/AIME20 25 , 2025. Accessed: 2026-01-02. Ouyang, L., Wu, J., Jiang, X., Almeida, D., Wainwright, C., Mishkin, P., Zhang, C., Agarwal, S., Slama, K., Ray, A., et al. Training language models to follow instruc-tions with human feedback. In Koyejo, S., Mohamed, S., Agarwal, A., Belgrave, D., Cho, K., and Oh, A. (eds.), 
+
+Advances in Neural Information Processing Systems , vol-ume 35, pp. 27730–27744. Curran Associates, Inc., 2022. URL https://proceedings.neurips.cc/p aper_files/paper/2022/file/b1efde53b e364a73914f58805a001731-Paper-Confere nce.pdf .Qwen, :, Yang, A., Yang, B., Zhang, B., Hui, B., Zheng, B., Yu, B., Li, C., Liu, D., Huang, F., Wei, H., Lin, H., Yang, J., Tu, J., Zhang, J., Yang, J., Yang, J., Zhou, J., Lin, J., Dang, K., Lu, K., Bao, K., Yang, K., Yu, L., Li, M., Xue, M., Zhang, P., Zhu, Q., Men, R., Lin, R., Li, T., Tang, T., Xia, T., Ren, X., Ren, X., Fan, Y., Su, Y., Zhang, Y., Wan, Y., Liu, Y., Cui, Z., Zhang, Z., and Qiu, Z. Qwen2.5 technical report, 2025. URL https: //arxiv.org/abs/2412.15115 .Silver, D., Schrittwieser, J., Simonyan, K., Antonoglou, I., Huang, A., Guez, A., Hubert, T., baker, L., Lai, M., Bolton, A., Chen, Y., Lillicrap, T. P., Hui, F., Sifre, L., van den Driessche, G., Graepel, T., and Hassabis, D. Mastering the game of go without human knowledge. 
+
+Nature , 550:354–359, 2017. URL https://api.se manticscholar.org/CorpusID:205261034 .Snell, C., Lee, J., Xu, K., and Kumar, A. Scaling llm test-time compute optimally can be more effective than scaling model parameters, 2024. URL https://arxi v.org/abs/2408.03314 .Tian, Y., Peng, B., Song, L., Jin, L., Yu, D., Han, L., Mi, H., and Yu, D. Toward self-improvement of llms via imagination, searching, and criticizing. In Globerson, A., Mackey, L., Belgrave, D., Fan, A., Paquet, U., Tomczak, J., and Zhang, C. (eds.), Advances in Neural Information Processing Systems , volume 37, pp. 52723–52748. Cur-ran Associates, Inc., 2024. doi: 10.52202/079017-1670. URL https://proceedings.neurips.cc/p aper_files/paper/2024/file/5e5853f35 164e434015716a8c2a66543-Paper-Confere nce.pdf .Vaswani, A., Shazeer, N., Parmar, N., Uszkoreit, J., Jones, L., Gomez, A. N., Kaiser, L. u., and Polosukhin, I. Atten-tion is all you need. In Guyon, I., Luxburg, U. V., Bengio, S., Wallach, H., Fergus, R., Vishwanathan, S., and Gar-nett, R. (eds.), Advances in Neural Information Process-ing Systems , volume 30. Curran Associates, Inc., 2017. URL https://proceedings.neurips.cc/p aper_files/paper/2017/file/3f5ee2435 47dee91fbd053c1c4a845aa-Paper.pdf .Wan, Z., Feng, X., Wen, M., McAleer, S. M., Wen, Y., Zhang, W., and Wang, J. Alphazero-like tree-search can guide large language model decoding and training. In 
+
+Forty-first International Conference on Machine Learn-ing , 2024. URL https://openreview.net/for um?id=C4OpREezgj .Wang, A., Song, L., Tian, Y., Peng, B., Yu, D., Mi, H., Su, J., and Yu, D. Litesearch: Efficacious tree search for llm, 2024a. URL https://arxiv.org/abs/2407.0 0320 .11 Aligning Tree-Search Policies with Fixed Token Budgets in Test-Time Scaling of LLMs 
+
+Wang, C., Deng, Y., Lyu, Z., Zeng, L., He, J., Yan, S., and An, B. Q*: Improving multi-step reasoning for LLMs with deliberative planning. arXiv:2406.14283, 2024b. URL https://arxiv.org/abs/2406.14283 .Wang, X., Wei, J., Schuurmans, D., Le, Q. V., Chi, E. H., Narang, S., Chowdhery, A., and Zhou, D. Self-consistency improves chain of thought reasoning in lan-guage models. In The Eleventh International Confer-ence on Learning Representations , 2023. URL https: //openreview.net/forum?id=1PL1NIMMrw .Xie, Y., Goyal, A., Zheng, W., Kan, M.-Y., Lillicrap, T. P., Kawaguchi, K., and Shieh, M. Monte carlo tree search boosts reasoning via iterative preference learning. In 
+
+The First Workshop on System-2 Reasoning at Scale, NeurIPS’24 , 2024. URL https://openreview .net/forum?id=s004OmYP2P .Yao, S., Yu, D., Zhao, J., Shafran, I., Griffiths, T., Cao, Y., and Narasimhan, K. Tree of Thoughts: Deliberate problem solving with large language models. In Oh, A., Naumann, T., Globerson, A., Saenko, K., Hardt, M., and Levine, S. (eds.), Advances in Neural Information Pro-cessing Systems , volume 36, pp. 11809–11822. Curran Associates, Inc., 2023a. URL https://proceedi ngs.neurips.cc/paper_files/paper/202 3/file/271db9922b8d1f4dd7aaef84ed5ac 703-Paper-Conference.pdf .Yao, S., Zhao, J., Yu, D., Du, N., Shafran, I., Narasimhan, K. R., and Cao, Y. React: Synergizing reasoning and acting in language models. In The Eleventh International Conference on Learning Representations , 2023b. URL 
+
+https://openreview.net/forum?id=WE_v luYUL-X .Zhang, D., Huang, X., Zhou, D., Li, Y., and Ouyang, W. Accessing gpt-4 level mathematical olympiad solutions via monte carlo tree self-refine with llama-3 8b, 2024. URL https://arxiv.org/abs/2406.07394 .Zhang, Q., Lyu, F., Sun, Z., Wang, L., Zhang, W., Hua, W., Wu, H., Guo, Z., Wang, Y., Muennighoff, N., King, I., Liu, X., and Ma, C. A survey on test-time scaling in large language models: What, how, where, and how well?, 2025. URL https://arxiv.org/abs/25 03.24235 .Zhao, J., Liu, R., Zhang, K., Zhou, Z., Gao, J., Li, D., Lyu, J., Qian, Z., Qi, B., Li, X., and Zhou, B. Genprm: Scaling test-time compute of process reward models via generative reasoning, 2025. URL https://arxiv. org/abs/2504.00891 .Zheng, Z., Xie, Z., Wang, Z., and Hooi, B. Monte carlo tree search for comprehensive exploration in LLM-based automatic heuristic design. In Forty-second International Conference on Machine Learning , 2025. URL https: //openreview.net/forum?id=Do1OdZzYHr .Zhou, A., Yan, K., Shlapentokh-Rothman, M., Wang, H., and Wang, Y.-X. Language agent tree search unifies reasoning, acting, and planning in language models. In 
+
+Forty-first International Conference on Machine Learn-ing , 2024. URL https://openreview.net/for um?id=njwv9BsGHF .12 Aligning Tree-Search Policies with Fixed Token Budgets in Test-Time Scaling of LLMs 
+
+A. Methodology for Answer Extraction 
+
+A node is identified as an answer node if it satisfies either of the following two conditions. First, the generated text must match the regular expression pattern: r’answer is(.*) \\ boxed {.*? }’. Second, the generation process terminate naturally by the model itself, rather than being forcibly truncated by a maximum token limit or the stop token \nStep. This latter condition signifies that the model has determined the reasoning to be complete and has concluded the generation autonomously. 
+
+B. Hyperparameter Search for Tree Search Algorithms 
+
+Since the settings for the baseline Monte Carlo Tree Search (MCTS) vary across prior studies, we conducted a hyperparameter search. Specifically, we optimized the exploration weight c ∈ { √0.1, √1.0, √2.0} in the PUCT formula (Eq. 1) and the fixed number of expansion nodes ∈ { 2, 3, 5} using Llama-3.1-8B-Instruct. The search was performed on Level 5 problems from the Math500 benchmark within a computational budget of B = 15 K. Based on the results, we adopted c = √2 and a fixed expansion node count of 2, which yielded the best performance. 
+
+C. Definition of Budget Consumption in Evaluation 
+
+LiteSearch employs an early stopping mechanism that terminates the search process when the Reward Model (RM) score of a node containing a final answer exceeds a predefined threshold ( ϵ ≥ 0.9). Due to this property, the actual budget consumed, 
+
+Bactual , satisfies Bactual ≤ B for a given budget B. To ensure a fair performance comparison within a fixed budget, we utilize the following two aggregation methods for our tables and figures. 
+
+Independent Evaluation per Instance (Applied to Tables) The results for each budget B ∈ { 10 K, 20 K, 30 K} in the tables represent the performance when each instance is independently allocated a maximum budget of B tokens. If the search for a specific instance terminates early at B′ (B′ < B ), the tree state at the time of termination is adopted as the result for budget B. This method evaluates performance in a manner consistent with real-world applications, where unnecessary token consumption is suppressed once a solution meeting the threshold is obtained. 
+
+Dynamic Budget Aggregation (Applied to Graphs) To accurately evaluate the computational efficiency of LiteSearch, we adopt a dynamic budget aggregation method for graphical visualization. In this approach, the surplus budget generated by early stopping is redistributed to the remaining active tasks. Suppose that among n tree structures T1, . . . , T n, m
+
+instances have terminated early. The total surplus budget is defined as R = Pmi=1 (B − Bactual ,i ). For the remaining tasks 
+
+j ∈ { m + 1 , . . . , n }, we plot the accuracy achieved at the point where a modified budget Badj = B + Rn−m is allocated.Note that in this evaluation, the maximum budget per task is capped at Bmax = 30 K. That is, even if Badj increases through redistribution, the search depth for each tree structure consistently remains limited to 30 K tokens. The evaluation concludes when all tasks reach this upper limit. This approach visualizes the reduction in the average budget (number of tokens) required by LiteSearch to solve the entire problem set. 13 Aligning Tree-Search Policies with Fixed Token Budgets in Test-Time Scaling of LLMs 
+
+D. Prompt 
+
+Input to the LLM Figure 6 shows the chat template to LLMs (Llama-3.1-8B-Instruct and Qwen-2.5-7B-Instruct). We integrated few-shot examples to encourage the model to process the task step-by-step. To facilitate step-by-step generation, the beginning of the model’s output (assistant) is fixed to ”Step 1:”. This prompt template is utilized consistently across both the Sequential generation and Full generation methods. Prompt Structure for LLM                                                                                                                                                            
+
+> {role: "user", content: """
+> Solve the following math problem efficiently and clearly. The last line of your response should be of the following format: ’Therefore, the final answer is: $\\{{ boxed {{ ANSWER }} $. Ihope it is correct’ (without quotes) where ANSWER is the final number or expression in LaTeX format. Think step by step before answering. Example: Example Problem: Natalia sold clips to 48 of her friends in April, and then she sold half as many clips in May. How many clips did Natalia sell altogether in April and May? Example Solution: Step 1: Natalia sold 48 clips in April. Step 2: In May, she sold half as many clips as in April. Half of 48 is 48 /2= 24 clips. Step 3: To find the total number of clips sold in April and May, add the number of clips sold in each month: 48 +24 =72. Step 4: Therefore the final answer is: $\\ boxed {{ 72 }} $. Ihope it is correct. Now, solve the following question: {problem }
+> """ },
+> {role: "assistant", content: "Step 1: "}
+> Figure 6. Prompt template in a chat format for LLMs (Llama-3.1-8B-Instruct and Qwen2.5-7B-Instruct)
+
+Input to the PRM Figure 6 shows the chat template to GenPRM-7B. This chat template is employed for our full generation methods. We repeatedly assessed the full generated reasoning steps individually, assigning the reward value of the final step as the definitive score for each corresponding node. 
+
+E. Additional Results 
+
+Changes in solution accuracy Figure 8 shows the change in solution accuracy relative to the consumed budget (i.e., output tokens used in search) on Math500 (Level 5). BG-MCTS peaks its performance near budget exhausion. 
+
+Percentage of Answered search trees Figure 9 shows Percentage of search trees containing at least one solved node relative to the consumed budget (i.e., output tokens used in search). As shown in Figure 8, the ratio of reaching answered nodes increases as the computational budget is depleted. This behavior is consistent with the exploration policy of BG-MCTS, which prioritizes depth oriented search as budget consumption progresses. 14 Aligning Tree-Search Policies with Fixed Token Budgets in Test-Time Scaling of LLMs 
+
+Prompt Structure for GenPRM-7B 
+
+{role: "system", content: "You are a math teacher. Your task is to review and critique the paragraphs in solution step by step. "},
+
+{role: "user", content: "Question: {problem }\ n\nStep 1: ... "},
+
+{role: "assistant", content: "<analyze> \nLet’s analyze the Paragraph 1 step by step: ..... </analyze> \n<output> \n**Judgement**: $\\ boxed {Yes }$ \n</output> \n"}{role: "user", content: "Step 2: ... "}{role: "assistant", content: "<analyze> \nLet’s analyze the Paragraph 1 step by step: ..... </analyze> \n<output> \n**Judgement**: $\\ boxed {Yes }$ \n</output> \n"}{role: "user", content: "Step 3: ... "}{role: "assistant", content: "<analyze> \nLet’s analyze the Paragraph 1 step by step: ..... </analyze> \n<output> \n**Judgement**: $\\ boxed {No }$ \n</output> \n"}{role: "user", content: "Step 4: ... "}
+
+Figure 7. Prompt template in a chat format for GenPRM-7B 0 5000 10000 15000 20000 25000 30000 
+
+Total Output Tokens / Tree 
+
+0.0 
+
+0.1 
+
+0.2 
+
+0.3 
+
+0.4 
+
+> Accuracy
+> 10K
+> 20K
+> 30K
+> Greedy
+> Refinement (Full)
+> Repeated (Full)
+> AB-MCTS (Full)
+> AB-MCTS
+> MCTS
+> LiteSearch-Incre.
+> LiteSearch-Batch
+> BG-MCTS (10K)
+> BG-MCTS (20K)
+> BG-MCTS (30K)
+
+(a) Llama-3.1-8B-Instruct 0 5000 10000 15000 20000 25000 30000 
+
+Total Output Tokens / Tree 
+
+0.0 
+
+0.1 
+
+0.2 
+
+0.3 
+
+0.4 
+
+0.5 
+
+0.6 
+
+0.7  
+
+> Accuracy
+> 10K
+> 20K
+> 30K
+> Greedy
+> Refinement (Full)
+> Repeated (Full)
+> AB-MCTS (Full)
+> AB-MCTS
+> MCTS
+> LiteSearch-Incre.
+> LiteSearch-Batch
+> BG-MCTS (10K)
+> BG-MCTS (20K)
+> BG-MCTS (30K)
+
+(b) Qwen2.5-7B-Instruct 
+
+Figure 8. Change in solution accuracy relative to the consumed budget (i.e., output tokens used in search) on Math500 (Level 5). Resuluts of AIME24/25 are provided in Section 4 (Fig 2). Details of the aggregation methods for LiteSearch are provided in the Appendix C. BG-MCTS does not rush to find solutions early; instead, it consolidates solutions toward budget exhaustion points (B = {10 K, 20 K, 30 K}), highlighting its budget-aware behavior. 
+
+15 Aligning Tree-Search Policies with Fixed Token Budgets in Test-Time Scaling of LLMs 0 5000 10000 15000 20000 25000 30000 
+
+Total Output Tokens / Tree 
+
+0.0 
+
+0.2 
+
+0.4 
+
+0.6 
+
+0.8 
+
+1.0 
+
+> Answered Tree Ratio
+
+10K 
+
+20K 
+
+30K 
+
+> Refinement (Full)
+> Repeated (Full)
+> AB-MCTS (Full)
+> AB-MCTS
+> MCTS
+> LiteSearch-Incre.
+> LiteSearch-Batch
+> BG-MCTS (10K)
+> BG-MCTS (20K)
+> BG-MCTS (30K)
+
+(a) Llama-3.1-8B-Instruct 0 5000 10000 15000 20000 25000 30000 
+
+Total Output Tokens / Tree 
+
+0.0 
+
+0.2 
+
+0.4 
+
+0.6 
+
+0.8 
+
+1.0 
+
+> Answered Tree Ratio
+
+10K 
+
+20K 
+
+30K  
+
+> Refinement (Full)
+> Repeated (Full)
+> AB-MCTS (Full)
+> AB-MCTS
+> MCTS
+> LiteSearch-Incre.
+> LiteSearch-Batch
+> BG-MCTS (10K)
+> BG-MCTS (20K)
+> BG-MCTS (30K)
+
+(b) Qwen2.5-7B-Instruct 
+
+Figure 9. Percentage of search trees containing at least one solved node relative to the consumed budget (i.e., output tokens used in search) on Math500(Level 5). Resuluts of AIME24/25 are provided in Section 5 (Fig 3). Details of the aggregation methods for LiteSearch are provided in the Appendix C. BG-MCTS does not rush to find solutions early; instead, it consolidates solutions toward budget exhaustion points ( B = {10 K, 20 K, 30 K}), highlighting its budget-aware behavior. 
+
+16 Aligning Tree-Search Policies with Fixed Token Budgets in Test-Time Scaling of LLMs 
+
+The depth and width Figure 10 shows average maximum depth of search tree relative to the consumed budget (i.e., output tokens used in search). Figure 11 shows average maximum depth of search tree relative to the consumed budget (i.e., output tokens used in search). From Figures 10 and 11, observing the changes in the depth and width of the BG-MCTS search tree reveals several key characteristics. First, the tree depth maintains a stable value during the middle stages of exploration but increases sharply as the budget nears exhaustion. Second, the width of the search tree shows a high growth rate in the early stages, which then tends to decrease as budget consumption progresses. These behaviors empirically demonstrate the design philosophy of BG-MCTS: initiating with a breadth-first search and adaptively transitioning to a depth-first search in response to the remaining budget. 0 5000 10000 15000 20000 25000 30000 
+
+Total Output Tokens / Tree 
+
+0
+
+5
+
+10 
+
+15 
+
+20 
+
+25 
+
+30 
+
+35 
+
+> Tree Depth
+> 10K
+> 20K
+> 30K
+> Refinement (Full)
+> Repeated (Full)
+> AB-MCTS (Full)
+> AB-MCTS
+> MCTS
+> LiteSearch-Incre.
+> LiteSearch-Batch
+> BG-MCTS10K
+> BG-MCTS20K
+> BG-MCTS30K
+
+(a) Llama-3.1-8B-Instruct / Math500 Lv.5 0 5000 10000 15000 20000 25000 30000 
+
+Total Output Tokens / Tree 
+
+0
+
+10 
+
+20 
+
+30 
+
+40 
+
+50  
+
+> Tree Depth
+> 10K
+> 20K
+> 30K
+> Refinement (Full)
+> Repeated (Full)
+> AB-MCTS (Full)
+> AB-MCTS
+> MCTS
+> LiteSearch-Incre.
+> LiteSearch-Batch
+> BG-MCTS10K
+> BG-MCTS20K
+> BG-MCTS30K
+
+(b) Qwen2.5-7B-Instruct / Math500 Lv.5 0 5000 10000 15000 20000 25000 30000 
+
+Total Output Tokens / Tree 
+
+0
+
+10 
+
+20 
+
+30 
+
+40 
+
+50  
+
+> Tree Depth
+> 10K
+> 20K
+> 30K
+> Refinement (Full)
+> Repeated (Full)
+> AB-MCTS (Full)
+> AB-MCTS
+> MCTS
+> LiteSearch-Incre.
+> LiteSearch-Batch
+> BG-MCTS10K
+> BG-MCTS20K
+> BG-MCTS30K
+
+(c) Qwen2.5-7B-Instruct / AIME24/25 
+
+Figure 10. Average maximum depth of search tree using Llama-3.1-8B-Instruct and Qwen2.5-7B-Instruct on Math500 (Level 5) and AIME24/25. Details of the aggregation methods for LiteSearch are provided in the Appendix C 0 5000 10000 15000 20000 25000 30000 
+
+Total Output Tokens / Tree 
+
+0
+
+20 
+
+40 
+
+60 
+
+80 
+
+100 
+
+120 
+
+140 
+
+160 
+
+> Tree Width  10K
+> 20K
+> 30K
+> Refinement (Full)
+> Repeated (Full)
+> AB-MCTS (Full)
+> AB-MCTS
+> MCTS
+> LiteSearch-Incre.
+> LiteSearch-Batch
+> BG-MCTS10K
+> BG-MCTS20K
+> BG-MCTS30K
+
+(a) Llama-3.1-8B-Instruct / Math500 Lv.5 0 5000 10000 15000 20000 25000 30000 
+
+Total Output Tokens / Tree 
+
+0
+
+20 
+
+40 
+
+60 
+
+80 
+
+100  
+
+> Tree Width
+> 10K
+> 20K
+> 30K
+> Refinement (Full)
+> Repeated (Full)
+> AB-MCTS (Full)
+> AB-MCTS
+> MCTS
+> LiteSearch-Incre.
+> LiteSearch-Batch
+> BG-MCTS10K
+> BG-MCTS20K
+> BG-MCTS30K
+
+(b) Qwen2.5-7B-Instruct / Math500 Lv.5 0 5000 10000 15000 20000 25000 30000 
+
+Total Output Tokens / Tree 
+
+0
+
+20 
+
+40 
+
+60 
+
+80  
+
+> Tree Width  10K
+> 20K
+> 30K
+> Refinement (Full)
+> Repeated (Full)
+> AB-MCTS (Full)
+> AB-MCTS
+> MCTS
+> LiteSearch-Incre.
+> LiteSearch-Batch
+> BG-MCTS10K
+> BG-MCTS20K
+> BG-MCTS30K
+
+(c) Qwen2.5-7B-Instruct / AIME24/25 
+
+Figure 11. Average maximum width of search tree using Llama-3.1-8B-Instruct and Qwen2.5-7B-Instruct on Math500 (Level 5) and AIME24/25. Details of the aggregation methods for LiteSearch are provided in the Appendix C. 
+
+17 Aligning Tree-Search Policies with Fixed Token Budgets in Test-Time Scaling of LLMs 
+
+F. Discussion about Data Synthesis 
+
+First, we examine a data synthesis setting that allows only a single solution for each problem under a fixed budget. As shown in Figure 2, 9, BG-MCTS fails to reach the final answer for a certain number of mathematical problems compared to baseline methods. This implies that when synthesizing training data consisting of a problem and its corresponding single solution, BG-MCTS fails to generate data for a certain proportion of problems. In contrast, Full generation methods can always generate a solution for every given problem, making them more advantageous in terms of the total number of problems covered. However, as noted in previous studies (Gunasekar et al., 2023; Chunting et al., 2023; Muennighoff et al., 2025), when using training data, a larger quantity of data does not necessarily lead to improved model performance; rather, data quality is the critical factor. Indeed, as shown in the Table 1, the accuracy of solutions generated by BG-MCTS is consistently higher than that of other methods. While BG-MCTS generates a relatively smaller number of data points in the single-solution setting, it achieves high-quality data synthesis with an extremely high proportion of correct solutions. Next, we consider a data synthesis approach that allows multiple solutions per problem. Table 4 shows the total number of answered nodes (solution candidates), the number of correct answered nodes, and precision (correct-to-answered ratio), allowing multiple answers per tree. As seen in Table 4, BG-MCTS tends to generate a larger volume of data compared to baseline methods. Furthermore, BG-MCTS achieves the highest proportion of correct-nodes across all models, benchmarks, and budget conditions. This suggests that the data synthesized by BG-MCTS is of extremely high quality, particularly on the AIME24/25 dataset. We also observe that search methods involving Sequential generation tend to yield a higher proportion of correct nodes compared to Full generation methods, highlighting the effectiveness of incremental search in data synthesis. The phenomenon where BG-MCTS exhibits a lower answered nodes arrival rate but a higher proportion of correct nodes can be attributed to its algorithmic design. BG-MCTS prioritizes breadth-wise exploration when the budget is ample and shifts to deep exploration of subtrees with high latent value as the budget nears exhaustion. This concentration of node expansion at deeper levels (near the answered nodes) for promising subtrees leads to the high count and ratio of correct nodes. Consequently, BG-MCTS is capable of generating a large volume of diverse data where the initial thought processes may overlap, but the final derivation steps and intermediate calculations vary for a single mathematical problem. In conclusion, in a single-solution assignment setting under a fixed budget, BG-MCTS generates a smaller quantity of data, but the quality is exceptionally high. Moreover, in settings that allow multiple solutions per problem, BG-MCTS proves to be an effective algorithm for creating a diverse and high-quality dataset within fixed computational constraints. 
+
+Table 4. Summary of Llama-3.1-8B-Instruct and Qwen-2.5-7B-Instruct on Math500 (Level.5) and AIME24/25. For each budget B, the table shows the number of answered-nodes (total), correct-nodes (correct), and their ratio. Bold indicates the best, and underlines denote the second-best. Details of the aggregation methods for LiteSearch are provided in the Appendix C                                                                                                                                                                                                                                                                                                      
+
+> Bench Mark Math500 (Lv.5) AIME24/25 Budget B10K 20K 30K 10K 20K 30K Methods total correct ratio total correct ratio total correct ratio total correct ratio total correct ratio total correct ratio
+> Llama-3.1-8B-Instruct - Refinement Full 866.7 203.0 .234 1222.7 269.7 .221 1480.3 317.3 .214 277.0 12.0 .043 390.3 14.3 .037 480.3 16.3 .034 - Repeated Full 1527.7 570.3 .373 3038.3 1144.0 .377 4493.0 1709.7 .381 365.3 14.3 .039 704.3 32.3 .046 1038.7 48.0 .046 - AB-MCTS-M Full 1021.0 295.3 289 1748.0 501.7 .287 2459.7 711.0 .289 317.0 13.7 .043 543.0 20.3 .037 739.0 25.7 .035 - AB-MCTS-M 121.3 77.0 .635 344.3 211.0 .613 597.7 366.7 .613 0.7 0.0 .000 5.0 1.0 .200 8.7 1.3 .154 - MCTS 1310.0 860.0 .656 2821.0 1855.7 .658 4129.7 2747.3 .665 188.3 21.3 .113 492.3 60.0 .122 916.3 143.7 .157 - LiteSearch-Incre. †1609.3 306.0 .190 2566.3 462.7 .180 2990.3 544.7 .182 503.7 16.0 .032 838.0 43.0 .051 976.3 51.3 .053 - LiteSearch-Batch †1773.3 412.0 232 2799.7 539.7 .193 3197.0 590.0 .185 416.0 15.3 .037 645.0 17.3 .027 849.0 18.0 .021 - BG-MCTS (ours) 2261.0 1736.0 .768 5810.7 4732.3 .814 8143.3 6426.7 .789 198.7 103.0 .518 636.0 293.7 .462 899.0 413.7 .460
+> Qwen-2.5-7B-Instruct - Refinement Full 2947.7 1429.7 .485 4892.7 2288.0 .468 6400.3 2918.0 .456 1324.3 129.3 .098 2334.7 236.3 .101 3145.0 324.0 .103 - Repeated Full 2194.7 1249.0 .569 4425.3 2523.7 .570 6664.7 3795.7 .570 748.7 64.0 .085 1472.0 128.7 .087 2191.7 191.7 .087 - AB-MCTS-M Full 2965.0 1759.3 593 6211.3 3702.0 .596 9438.3 5686.7 .603 1018.7 106.3 .104 2128.7 243.3 .114 3234.3 380.0 .117 - AB-MCTS-M 545.7 349.7 .641 1422.3 914.3 .643 2523.7 1656.0 .656 84.3 9.0 .107 249.7 35.7 .143 412.3 57.3 .139 - MCTS 2410.0 1700.7 .706 5730.7 4002.0 .698 9520.0 6706.7 .704 770.7 125.3 .163 2071.3 354.3 .171 3545.3 601.7 .170 - LiteSearch-Incre. †3268.0 454.7 .139 4709.7 535.7 .114 5174.0 573.0 .111 2492.7 71.3 .029 3912.3 73.3 .019 4314.3 74.7 .017 - LiteSearch-Batch †2849.7 456.7 160 4431.0 540.3 .122 4750.3 591.7 .125 1672.0 25.7 .015 3050.0 55.3 .018 3486.7 72.3 .021 - BG-MCTS (ours) 3338.3 2838.3 .850 7901.7 6613.0 .837 12591.3 10570.3 .839 467.3 153.3 .328 1134.7 434.3 .383 2015.3 705.3 .350
+
+18 Aligning Tree-Search Policies with Fixed Token Budgets in Test-Time Scaling of LLMs 
+
+G. Tree Figure 
+
+G.1. Qualitative Analysis of MCTS and BG-MCTS 
+
+Figures 12 and 13 show examples of search tree structures comparing MCTS and BG-MCTS, with a budget of 20K using Llama-3.1-8B-Instruct on a specific MATH500 Level 5 task. Within each figure, both methods are applied to the same task. Note that Figure 13 corresponds to the detailed tree figure presented in Section 5 (Fig. 5). As shown in Figures 12 and 13, conventional MCTS performs exploration without considering the remaining budget; consequently, it continues to expand new nodes at shallow levels of the search tree even when the budget is near exhaustion. This behavior often results in insufficient depth-oriented exploration, failing to reach the final answer. In contrast, BG-MCTS prioritizes breadth-wise exploration in the early stages and transitions to expanding deeper nodes by selectively searching subtrees with high latent value as the budget is consumed. This adaptive exploration strategy confirms that BG-MCTS can efficiently reach the answer nodes. Root 1 25 6 3 451 52 7 89 10 53 54 13 14 17 18 11 12 15 16 27 28 19 20 21 22 29 30 33 34 23 24 25 26 31 32 57 58 37 38 55 56 35 36 61 62 41 42 59 60 39 40 45 46 65 66 43 44 63 64 47 48 67 68 49 50 69 70 107 108 71 72 73 74 109 110 131 132 75 76 113 114 77 78 79 80 115 116 81 82 117 118 119 120 83 84 85 86 121 122 87 88 127 128 125 126 89 90 91 92 123 124 93 94 129 130 111 112 95 96 133 134 97 98 135 136 99 100 101 102 137 138 139 140 103 104 141 142 105 106 215 216 143 144 181 182 217 218 167 168 239 240 241 242 149 150 223 224 151 152 225 226 153 154 227 228 155 156 229 230 157 158 235 236 163 164 237 238 165 166 159 160 231 232 233 234 197 198 147 148 219 220 221 222 169 170 243 244 171 172 173 174 245 246 211 212 177 178 249 250 251 252 179 180 253 254 145 146 183 184 255 256 205 206 187 188 259 260 189 190 191 192 193 194 195 196 201 202 199 200 161 162 203 204 257 258 185 186 207 208 209 210 247 248 175 176 213 214 
+
+(a) MCTS Root 1 2 9 10 13 18 21 24 31 36 39 46 51 54 65 74 79 82 87 96 99 100 105 108 113 3 4 5 67 811 12 14 15 16 17 19 20 22 23 25 26 27 28 29 30 44 45 42 43 77 78 32 33 34 35 37 38 40 41 72 73 70 71 111 112 47 48 49 50 52 53 55 56 57 58 59 60 61 62 63 64 66 67 68 69 92 93 90 91 124 125 75 76 80 81 83 84 85 86 88 89 94 95 122 123 116 117 97 98 101 102 103 104 106 107 109 110 114 115 120 121 118 119 128 129 126 127 130 131 134 135 132 133 136 137 140 141 154 155 138 139 148 149 186 187 144 145 142 143 164 165 162 163 146 147 196 197 150 151 152 153 180 181 178 179 158 159 156 157 192 193 160 161 166 167 168 169 172 173 170 171 174 175 176 177 182 183 184 185 190 191 198 199 188 189 228 229 194 195 202 203 200 201 230 231 204 205 206 207 212 213 208 209 220 221 210 211 214 215 216 217 232 233 218 219 222 223 224 225 226 227 234 235 236 237 242 243 238 239 240 241 246 247 244 245 250 251 248 249 252 253 258 259 254 255 256 257 262 263 266 267 260 261 268 269 264 265 280 281 272 273 278 279 286 287 270 271 276 277 274 275 282 283 292 293 290 291 288 289 284 285 296 297 298 299 294 295 300 301 304 305 306 307 302 303 308 309 314 315 312 313 316 317 310 311 328 329 330 331 322 323 318 319 320 321 324 325 326 327 332 333 334 335 336 337 338 339 340 341 374 375 386 387 344 345 342 343 370 371 368 369 348 349 346 347 352 353 350 351 356 357 354 355 358 359 360 361 362 363 364 365 366 367 372 373 376 377 378 379 382 383 380 381 384 385 388 389 390 391 392 393 394 395 396 397 
+
+(b) BG-MCTS 
+
+Figure 12. Examples of search tree structures comparing MCTS and BG-MCTS. Budget is set to 20K using Llama-3.1-8B-Instruct on a specific MATH500 Level 5 task. Stars and triangles represent correct and incorrect nodes, respectively. Node color intensity increases as expansion occurs with less remaining budget. The number in each node represents its expansion order. 
+
+19 Aligning Tree-Search Policies with Fixed Token Budgets in Test-Time Scaling of LLMs Root 1 25 6 3 47 8 11 12 9 10 15 16 23 24 13 14 27 28 21 22 19 20 39 40 17 18 35 36 95 96 63 64 51 52 25 26 41 42 33 34 75 76 103 104 31 32 29 30 43 44 49 50 107 108 45 46 47 48 37 38 125 126 81 82 57 58 93 94 69 70 129 130 67 68 89 90 71 72 73 74 101 102 77 78 55 56 53 54 59 60 61 62 121 122 87 88 65 66 85 86 83 84 117 118 115 116 99 100 79 80 91 92 109 110 111 112 145 146 123 124 157 158 133 134 105 106 135 136 119 120 161 162 113 114 149 150 97 98 141 142 137 138 151 152 163 127 128 147 148 153 154 131 132 139 140 159 160 155 156 143 144 
+
+(a) MCTS Root 1 2 31 40 59 66 93 98 11 12 3 45 6 7 89 10 21 22 19 20 17 18 29 30 13 14 15 16 27 28 38 39 23 24 36 37 25 26 51 52 55 56 47 48 53 54 32 33 34 35 91 92 49 50 41 42 43 44 45 46 85 86 87 88 57 58 60 61 64 65 62 63 67 68 69 70 71 72 73 74 77 78 75 76 79 80 81 82 83 84 109 110 111 112 113 114 89 90 187 188 94 95 96 97 99 100 103 104 101 102 105 106 107 108 143 144 117 118 115 116 125 126 121 122 119 120 123 124 133 134 137 138 127 128 139 140 147 148 129 130 131 132 135 136 141 142 193 194 145 146 165 166 167 168 179 180 175 176 149 150 151 152 153 154 157 158 155 156 163 164 161 162 159 160 173 174 185 186 171 172 169 170 189 190 177 178 181 182 183 184 191 192 197 198 195 196 207 208 199 200 201 202 203 204 247 248 261 262 205 206 229 230 227 228 211 212 209 210 213 214 219 220 217 218 215 216 223 224 259 260 251 252 221 222 237 238 225 226 241 242 295 296 269 270 235 236 279 280 233 234 231 232 249 250 239 240 243 244 289 290 291 292 245 246 253 254 273 274 255 256 257 258 285 286 281 282 287 288 263 264 265 266 293 294 267 268 283 284 271 272 275 276 277 278 
+
+(b) BG-MCTS 
+
+Figure 13. Examples of search tree structures comparing MCTS and BG-MCTS. Budget is set to 20K using Llama-3.1-8B-Instruct on a specific MATH500 Level 5 task. Stars and triangles represent correct and incorrect nodes, respectively. Node color intensity increases as expansion occurs with less remaining budget. The number in each node represents its expansion order. 
+
+20 Aligning Tree-Search Policies with Fixed Token Budgets in Test-Time Scaling of LLMs 
+
+G.2. Qualitative Analysis of Other Algorithms 
+
+Figures 14 and 15 show examples of search tree structures comparing Repeated Sampling, AB-MCTS-M and LiteSearch, with a budget of 20K using Llama-3.1-8B-Instruct on a specific MATH500 Level 5 task. Within each figure, both methods are applied to the same task. Figures 12 and 14 are based on the same problem instance, whereas Figures 13 and 15 are based on another identical problem instance. As illustrated in Figures 14 and 15, AB-MCTS-M exhibits a pronounced tendency to prioritize breadth-wise exploration, with an observed lack of sufficient depth-oriented search. This characteristic of its exploration strategy is consistent with the low answer-reach rate shown in Figures 3 and 9. Furthermore, it is confirmed that even under budget exhaustion, the algorithm continues to expand new nodes at shallow levels of the search tree. In contrast, LiteSearch executes a depth-first search in the early stages of exploration and transitions its strategy to breadth-wise search only after reaching a certain depth. While this design emphasizes reducing exploration costs and enabling early termination, it consequently limits the exploration of diverse reasoning paths, making the model prone to falling into local optima. This depth-oriented behavior of LiteSearch is consistent with the answer-reach rate trends observed in Figures 3 and 9. Root 1 2 3 4 5 6 7 8 9
+
+(a) Repeated Sampling Root 1 2 6 93 5 7 4 10 8 14 12 11 13 (b) AB-MCTS-M (Full) Root 1 5 6 10 19 29 33 35 42 61 71 84 101 103 138 140 149 182 186 193 220 221 225 228 243 23 48 711 14 912 13 20 26 28 34 76 109 110 118 15 17 94 175 16 99 18 87 162 23 21 27 32 38 22 59 31 24 25 75 81 55 65 60 127 216 271 30 39 67 58 37 43 56 62 63 124 166 238 49 36 40 44 51 53 218 68 46 41 45 48 47 52 57 54 206 50 95 111 88 90 119 176 142 73 96 66 255 69 72 93 64 116 152 155 242 74 114 137 80 70 79 82 100 91 77 121 85 78 83 98 136 89 169 86 97 92 115 105 113 102 117 197 213 219 251 104 128 106 108 112 107 131 126 211 257 130 122 135 143 244 120 172 123 125 129 146 270 132 133 134 148 170 203 139 151 156 165 167 173 174 195 224 141 194 144 145 171 147 153 150 154 189 278 201 160 187 157 159 177 158 164 161 163 222 168 269 178 180 188 210 198 181 199 179 184 185 196 183 190 214 248 276 192 205 191 204 212 263 202 207 209 200 230 236 223 254 217 208 234 277 215 253 247 226 275 227 266 272 231 237 239 232 235 256 273 233 246 229 241 240 265 249 280 252 268 245 250 267 261 262 258 264 274 259 260 279 
+
+(c) AB-MCTS-M Root 1234 5 16 17 28 29 30 31 32 43 6 7 8 9 10 11 12 13 14 15 74 75 76 77 78 79 80 81 82 83 18 19 20 21 22 23 24 25 26 27 64 65 66 67 68 69 70 71 72 73 33 34 35 36 37 38 39 40 41 42 44 45 56 57 58 59 60 61 62 63 84 85 46 47 48 49 50 51 52 53 54 55 86 87 88 89 90 91 92 148 149 150 151 152 153 174 195 196 207 93 94 95 106 107 108 114 125 126 127 96 97 98 99 100 101 102 103 104 105 109 110 111 112 113 115 116 117 118 119 120 121 122 123 124 128 129 130 131 132 133 144 145 146 147 134 135 136 137 138 139 140 141 142 143 154 155 156 157 158 159 160 161 162 163 164 165 166 167 168 169 170 171 172 173 175 176 177 178 179 180 181 182 183 184 185 186 187 188 189 190 191 192 193 194 197 198 199 200 201 202 203 204 205 206 208 209 220 221 222 223 224 225 226 227 210 211 212 213 214 215 216 217 218 219 238 239 240 241 242 243 244 245 246 228 229 230 231 232 233 234 235 236 237 
+
+(d) LiteSearch Incremental Root 12345 6 7 8 9 10 11 12 13 14 25 26 27 28 29 30 31 32 33 34 15 16 17 18 19 20 21 22 23 24 65 66 67 68 69 70 71 72 73 74 85 86 87 88 89 90 91 92 93 94 35 36 37 38 39 40 41 42 43 44 55 56 57 58 59 60 61 62 63 64 45 46 47 48 49 50 51 52 53 54 75 76 77 78 79 80 81 82 83 84 125 126 127 128 129 130 131 132 133 134 95 96 97 98 99 100 101 102 103 104 135 136 137 138 139 140 141 142 143 144 105 106 107 108 109 110 111 112 113 114 145 146 147 148 149 150 151 152 153 154 175 176 177 178 179 180 181 182 183 184 185 186 187 188 189 190 191 192 193 194 115 116 117 118 119 120 121 122 123 124 165 166 167 168 169 170 171 172 173 174 195 196 197 198 199 200 201 202 203 204 215 155 156 157 158 159 160 161 162 163 164 205 206 207 208 209 210 211 212 213 214 
+
+(e) LiteSearch Batch 
+
+Figure 14. Examples of search tree structures for Repeated Sampling, AB-MCTS-M and LiteSearch. Budget is set to 20K using Llama-3.1-8B-Instruct on specific a MATH500 Level 5 task. Stars and triangles represent correct and incorrect nodes, respectively. Node color intensity increases as expansion occurs with less remaining budget. The number in each node represents its expansion order. 
+
+21 Aligning Tree-Search Policies with Fixed Token Budgets in Test-Time Scaling of LLMs Root 1 2 3 4 5 6 7 8 9 10 11 12 13 
+
+(a) Repeated Sampling Root 1 3 42 5 (b) AB-MCTS-M (Full) Root 1 2 5 7 11 12 21 26 44 45 52 64 78 79 95 128 167 170 3 32 47 57 70 130 151 157 4 23 49 123 127 10 38 6 27 87 91 161 8 15 9 106 18 36 37 80 94 13 22 67 20 35 132 29 40 14 16 17 19 62 105 139 168 24 31 25 28 33 59 60 68 30 41 42 98 149 34 48 63 46 39 163 43 54 55 66 53 76 101 141 144 61 50 51 129 81 158 56 69 86 58 65 77 90 71 160 75 74 93 108 119 194 72 73 124 84 85 82 120 133 89 83 92 96 121 173 102 192 125 116 122 88 111 148 107 118 113 99 117 155 147 166 97 104 131 103 100 110 109 126 165 186 183 112 114 115 136 179 171 145 191 134 150 184 187 137 142 146 135 172 140 143 177 138 154 152 164 185 159 156 169 153 175 162 189 181 174 180 176 182 178 190 188 193 
+
+(c) AB-MCTS-M Root 12345678910 11 12 17 21 22 26 31 36 41 45 50 13 14 15 16 18 19 20 23 24 25 27 28 29 30 185 32 33 34 35 37 38 39 40 42 43 44 55 86 87 98 119 120 121 122 123 124 46 47 48 49 51 52 53 54 56 57 58 59 70 71 72 73 74 75 60 61 62 63 64 65 66 67 68 69 76 77 78 79 80 81 82 83 84 85 88 89 90 91 92 93 94 95 96 97 99 100 101 112 113 114 115 116 117 118 102 103 104 105 106 107 108 109 110 111 175 176 177 178 179 180 181 182 183 184 125 136 147 148 159 160 161 162 163 164 126 127 128 129 130 131 132 133 134 135 137 138 139 140 141 142 143 144 145 146 149 150 151 152 153 154 155 156 157 158 165 166 167 168 169 170 171 172 173 174 186 187 188 189 190 191 192 193 194 195 196 197 198 199 200 201 202 203 204 205 206 237 238 239 240 241 207 208 209 210 211 212 223 224 225 226 227 228 229 230 231 232 233 234 235 236 213 214 215 216 217 218 219 220 221 222 242 243 244 245 246 247 248 
+
+(d) LiteSearch Incremental Root 1234567 8 9 10 11 12 13 14 15 16 27 28 29 30 31 32 33 34 35 36 17 18 19 20 21 22 23 24 25 26 37 38 39 40 41 55 56 54 47 42 43 44 45 46 48 49 50 51 52 53 57 58 59 60 61 62 63 64 65 66 110 111 112 113 114 115 116 117 118 119 69 70 71 72 73 74 75 76 77 78 79 90 91 92 93 94 95 96 97 98 99 80 81 82 83 84 85 86 87 88 89 67 68 100 101 102 103 104 105 106 107 108 109 200 201 202 203 204 205 206 207 208 209 170 171 172 173 174 175 176 177 178 179 180 181 182 183 184 185 186 187 188 189 130 131 132 133 134 135 136 137 138 139 120 121 122 123 124 125 126 127 128 129 140 141 142 143 144 145 146 147 148 149 160 161 162 163 164 165 166 167 168 169 190 191 192 193 194 195 196 197 198 199 150 151 152 153 154 155 156 157 158 159 210 226 227 228 229 230 231 232 233 234 235 215 216 217 218 219 220 221 222 223 224 211 212 213 214 245 246 225 236 237 238 239 240 241 242 243 244 
+
+(e) LiteSearch Batch 
+
+Figure 15. Examples of search tree structures for Repeated Sampling, AB-MCTS-M and LiteSearch. Budget is set to 20K using Llama-3.1-8B-Instruct on a specific MATH500 Level 5 task. Stars and triangles represent correct and incorrect nodes, respectively. Node color intensity increases as expansion occurs with less remaining budget. The number in each node represents its expansion order. 
+
+22
