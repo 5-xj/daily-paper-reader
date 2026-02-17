@@ -1,0 +1,450 @@
+Title: Learning Structural Hardness for Combinatorial Auctions: Instance-Dependent Algorithm Selection via Graph Neural Networks
+
+URL Source: https://arxiv.org/pdf/2602.14772v1
+
+Published Time: Tue, 17 Feb 2026 02:59:45 GMT
+
+Number of Pages: 14
+
+Markdown Content:
+# Learning Structural Hardness for Combinatorial Auctions: Instance-Dependent Algorithm Selection via Graph Neural Networks 
+
+Sungwoo Kang Department of Electrical and Computer Engineering Korea University Seoul 02841, Republic of Korea 
+
+krml919@korea.ac.kr 
+
+February 17, 2026 
+
+Abstract 
+
+The Winner Determination Problem (WDP) in combinatorial auctions is NP-hard, and no existing method reliably predicts which instances will defeat fast greedy heuristics. The ML-for-combinatorial-optimization community has focused on learning to replace solvers, yet recent evidence shows that graph neural networks (GNNs) rarely outperform well-tuned classical methods on standard benchmarks. We pursue a different objective: learning to predict when a given instance is hard for greedy allocation, en-abling instance-dependent algorithm selection. We design a 20-dimensional structural feature vector and train a lightweight MLP hardness classifier that predicts the greedy optimality gap with mean absolute error 0.033, Pearson correlation 0.937, and binary classification accuracy 94.7% across three random seeds. For instances identified as hard—those exhibiting “whale-fish” trap structure where greedy prov-ably fails—we deploy a heterogeneous GNN specialist that achieves ≈0% optimality gap on all six adversarial configurations tested (vs. 3.75–59.24% for greedy). A hybrid allocator combining the hard-ness classifier with GNN and greedy solvers achieves 0.51% overall gap on mixed distributions. Our honest evaluation on CATS benchmarks confirms that GNNs do not outperform Gurobi (0.45–0.71 vs. 0.20 gap), motivating the algorithm selection framing. Learning when to deploy expensive solvers is more tractable than learning to replace them. 
+
+# 1 Introduction 
+
+Combinatorial auctions enable efficient allocation of bundles of goods, but require solving the NP-hard Winner Determination Problem (WDP): selecting a subset of bids that maximizes total welfare subject to resource constraints [7, 22]. In domains ranging from spectrum allocation to cloud computing and logistics, the speed-quality tradeoff is paramount: exact integer linear programming (ILP) solvers like Gurobi guar-antee optimality but may require seconds to minutes, while greedy heuristics run in milliseconds but can produce arbitrarily poor solutions on adversarial instances [17]. 
+
+The ML-for-CO debate. Recent work has applied graph neural networks (GNNs) to combinatorial optimization problems including TSP [13], vehicle routing [20], and the WDP itself [1, 16]. However, a growing body of evidence questions whether GNNs genuinely outperform classical methods. Boettcher et al. [4] demonstrate that GNN heuristics fail to surpass greedy on maximum independent set, and Angelini and Ricci-Tersenghi [2] argue that modern GNNs essentially solve linear systems. Our own experiments confirm this concern: on CATS arbitrary benchmarks, the best GNN achieves 0.453 optimality gap compared to Gurobi’s 0.200 at a 10ms time limit (Table 4). 1            
+
+> arXiv:2602.14772v1 [cs.LG] 16 Feb 2026 0.0 0.1 0.2 0.3
+> True Greedy Gap
+> 0.00
+> 0.05
+> 0.10
+> 0.15
+> 0.20
+> 0.25
+> 0.30
+> 0.35
+> Predicted Gap
+> (a) Hardness Classifier
+> r=0.937, MAE=0.033
+> vW= 100
+> vf= 40 each, total = 120
+> (b) Whale-Fish Trap
+> Greedy: 100, Optimal: 120
+> e1e2e3
+> W
+> f1f2f3
+> 20 features
+> Yes No
+> (c) Algorithm Selection
+> WDP Instance
+> Hard?
+> GNN Specialist Greedy / Gurobi
+> Allocation (0.51% gap)
+
+Figure 1: Overview. (a) The hardness classifier predicts greedy optimality gaps with 0.937 correlation. (b) Whale-fish trap: greedy selects the whale (value 100), missing the collectively superior fish (total 120). (c) Algorithm selection workflow routes hard instances to the GNN and easy instances to greedy, achieving 0.51% overall gap. 
+
+A different question. Rather than asking “can ML solve CO?” we ask: can ML predict which instances are hard? If a lightweight classifier can identify instances where greedy will fail badly, we can selectively route those instances to more expensive solvers—achieving near-optimal quality with minimal computa-tional overhead. This reframing shifts the ML contribution from replacement to triage, a role where even imperfect predictions create value. 
+
+Our approach. We develop a three-component system for the WDP: (1) a hardness classifier that ex-tracts 20 structural features from each instance and predicts the greedy optimality gap; (2) a GNN specialist 
+
+trained on adversarial “whale-fish” traps where greedy provably fails; and (3) a hybrid allocator that routes instances to the appropriate solver based on predicted hardness. The classifier achieves 0.937 correlation with true greedy gaps and 94.7% binary accuracy, enabling algorithm selection that yields 0.51% overall gap on mixed distributions. 
+
+Contributions. 
+
+1. A learned hardness classifier using 20 structural features that predicts greedy optimality gaps with MAE =0.033, r=0.937, and 94.7% accuracy (§3). 2. A formal whale-fish trap family with provable greedy failure ratios, parameterized for systematic study (§4). 3. A heterogeneous GNN specialist (HeteroGAT, 1.04M parameters) achieving ≈0% gap on all six adver-sarial configurations (§4.2). 4. A hybrid allocator achieving 0.51% gap on mixed distributions with 99% routing accuracy (§4.4). 5. An honest evaluation on CATS and MIS benchmarks with five architectures and Gurobi baselines, confirming that GNNs do not beat ILP solvers and motivating the algorithm selection framing (§5). 6. Open-source code and data for reproducibility, including the HeteroGAT implementation and whale-fish trap generators, available at https://github.com/hpicsk/wdp-hardness-classification .
+
+# 2 Problem Formulation 
+
+2.1 Winner Determination Problem 
+
+We consider a combinatorial auction over a set of m items (edges/resources) E = {e1, . . . , e m} with ca-pacities Ce > 0. A set of n bids B = {b1, . . . , b n} compete for shared capacity. Each bid bi has value 
+
+vi > 0, a set of required items Ei ⊆ E, and capacity demand ci > 0. The WDP seeks a feasible allocation 2x ∈ { 0, 1}n maximizing social welfare: 
+
+max 
+
+> x
+> n
+
+X
+
+> i=1
+
+vixi s.t. X
+
+> i:e∈Ei
+
+cixi ≤ Ce, ∀e ∈ E, xi ∈ { 0, 1}. (1) This is NP-hard even for single-minded bidders [17] and is equivalent to Maximum Weight Independent Set on the bid conflict graph (Theorem 2). 
+
+2.2 Greedy Heuristic and Failure Modes 
+
+The standard greedy-by-value heuristic sorts bids by decreasing value and accepts each if sufficient capacity remains. It runs in O(n log n + n · | Emax |) time and achieves near-optimal results on random instances. However, Lehmann et al. [17] show that greedy can achieve an approximation ratio as low as 1/k on k-star instances—a gap that grows without bound. 
+
+2.3 The Algorithm Selection Problem 
+
+Given a WDP instance I, we seek to choose a solver from S = {greedy , GNN , ILP } that minimizes expected optimality gap subject to a time budget. This requires a hardness predictor h : I → [0 , 1] that estimates the greedy gap. If h(I) > θ for threshold θ, we route to a more expensive solver; otherwise, greedy suffices. 
+
+# 3 Learning Structural Hardness 
+
+3.1 Feature Design 
+
+We design a 20-dimensional feature vector f ∈ R20 extracted from each WDP instance, capturing structural properties correlated with greedy failure. The features fall into six groups: 
+
+Bid density (4 features): For each item e, the bid density d(e) = |{ b ∈ B : e ∈ Eb}| counts competing bids. We compute the coefficient of variation (CV), mean, maximum, and standard deviation of d(·) over all items. High CV indicates heterogeneous demand; low CV with high density signals potential trap structure. 
+
+Bottleneck tightness (1 feature): The average utilization ratio P 
+
+> b:e∈Eb
+
+cb/C e over the top-25% most congested items, measuring how close demand is to capacity on critical resources. 
+
+Value-congestion correlation (1 feature): Pearson correlation between bid values and average con-gestion on their requested items. Positive correlation indicates that high-value bids compete for scarce resources—a hallmark of whale-fish structure. 
+
+Bid value statistics (4 features): Mean, standard deviation, skewness, and kurtosis of the bid value distribution. Heavy right tails (high kurtosis, positive skew) suggest whale bids. 
+
+Capacity and utilization statistics (5 features): Mean and standard deviation of bid capacity demands; mean, standard deviation, and maximum of per-item utilization ratios. 
+
+Conflict structure (5 features): Conflict density (average bids per used item), graph density ( n· ¯|Ei|/m ), average pairwise Jaccard overlap between bid item sets, and mean and standard deviation of value-to-capacity ratios. 
+
+Design rationale. These 20 features were chosen to capture the structural signatures of whale-fish traps that cause greedy failure. Specifically, trap instances exhibit low bid density CV (uniform demand across shared resources), high bottleneck congestion (multiple bids saturating the same items), positive value-congestion correlation (the high-value “whale” bid targets the most congested resources), and heavy-tailed value distributions (high skewness and kurtosis from extreme whale values). The capacity and conflict fea-tures capture the resource contention that makes greedy’s local decisions globally suboptimal. We validate this design via the ablation study in Appendix H. 3Table 1: Hardness classifier performance across three random seeds. The classifier predicts greedy optimality gaps from 20 structural features. All metrics computed on held-out test instances.                          
+
+> Seed MAE Correlation Accuracy Precision Recall
+> 42 0.033 0.938 94.7% 0.947 0.982 123 0.032 0.938 94.7% 0.947 0.982 456 0.035 0.937 94.7% 0.947 0.982
+> Mean 0.033 0.937 94.7% 0.947 0.982
+
+3.2 Classifier Architecture 
+
+We train a FeatureMLPClassifier: a 3-layer MLP with BatchNorm and 64 hidden units in regression mode, predicting the continuous greedy gap g ∈ [0 , 1] . Binary hardness labels are obtained by thresholding: an instance is “hard” if the greedy gap exceeds threshold θ. The classifier takes < 1 ms per instance (feature extraction included), adding negligible overhead to the allocation pipeline. 
+
+3.3 Results 
+
+Table 1 reports the classifier’s performance. Across three seeds, it achieves MAE =0.033, Pearson correla-tion 0.937, and 94.7% binary accuracy at the optimal threshold. The classifier correctly identifies 98.2% of hard instances (recall) with 94.7% precision, meaning few hard instances are missed and few easy instances are unnecessarily routed to expensive solvers. Figure 2 shows the predicted-vs-true gap scatter and threshold sensitivity analysis. The classifier main-tains 94.7% accuracy across a wide range of thresholds (0.006–0.086), indicating robust separation between hard and easy instances. 
+
+Feature importance. A leave-one-group-out ablation (Table 9 in Appendix H) shows the classifier is robust: no single group’s removal degrades MAE by more than 0.001, indicating redundancy across groups. Permutation importance analysis on individual features identifies bid_value_mean , bid_value_std ,and value_cap_ratio_std as the top predictors, confirming that the classifier primarily relies on value distribution features that distinguish whale bids (extreme values, high value-to-capacity ratios) from the surrounding fish population. 
+
+# 4 Adversarial Hardness and GNN Specialist 
+
+4.1 Whale-Fish Trap Formalization 
+
+Theorem 1 (Greedy Competitive Ratio on k-Star Instances) . Consider a WDP instance Ik with m items and bids {bW , b F1 , . . . , b Fk } where the whale bid bW has value vW = 1 + ϵ and requests all m items, and each fish bid bFi has value vFi = 1 and requests a disjoint subset of items with Ski=1 items( bFi ) = E. Then greedy selects bW with value 1 + ϵ, while the optimal selects all fish with value k, giving: 
+
+ρgreedy (Ik) = 1 + ϵk
+
+> ϵ→0
+
+−−→ 1
+
+k .
+
+We parameterize this structure with fish count k, whale value vw, and per-fish value vf (with kv f >vw > v f ). Each training instance embeds multiple independent traps into a heterogeneous supply chain graph with five node types (factory, warehouse, retailer, bid, edge) and six edge types, plus filler bids on non-trap edges. During training, k ∼ Uniform {2, . . . , 6} per instance to promote generalization. 40.00 0.05 0.10 0.15 0.20 0.25 0.30 
+
+True Greedy Gap 
+
+> 0.00
+> 0.05
+> 0.10
+> 0.15
+> 0.20
+> 0.25
+> 0.30
+> Predicted Gap
+
+(a) Gap Prediction (MAE=0.033)         
+
+> Perfect
+> Fit ( r=0.938)
+> 0.000 0.025 0.050 0.075 0.100 0.125 0.150 0.175 0.200
+
+Classification Threshold 
+
+> 0.5
+> 0.6
+> 0.7
+> 0.8
+> 0.9
+> 1.0
+> Accuracy
+> 94.7%
+
+(b) Threshold Sensitivity (3 seeds) 
+
+> Seed 42
+> Seed 123
+> Seed 456
+
+Figure 2: Hardness classifier analysis. (a) Predicted vs. true greedy gap with regression line ( r=0.937). (b) Classifi-cation accuracy vs. threshold for three seeds; the classifier maintains >94% accuracy across a wide threshold range. 
+
+4.2 GNN Specialist Architecture 
+
+Our HeteroGAT architecture consists of four stages: 
+
+Node encoding. Type-specific 2-layer MLP encoders project raw features into a shared hidden dimen-sion d = 128 : h(0)  
+
+> i
+
+= MLP τ (i)(xi).
+
+Heterogeneous message passing. L = 4 layers of GATv2 [6] with H = 8 attention heads per layer and independent parameters per edge type: 
+
+h(ℓ+1)  
+
+> i
+
+= h(ℓ) 
+
+> i
+
++ LayerNorm 
+
+ X
+
+> r∈R (i)
+
+GATv2 (ℓ)
+
+> r
+
+
+
+h(ℓ) 
+
+> i
+
+, {h(ℓ) 
+
+> j
+
+: ( j, i ) ∈ r}
+
+ . (2) 
+
+Capacity-aware modulation. A gating network modulates edge representations based on expected utilization ˆue = P 
+
+> i:e∈Ei
+
+pici/C e, penalizing over-utilized edges. 
+
+Bid classification. Multi-head attention pools edge representations into bid representations; a 3-layer classifier maps to acceptance probability pi ∈ [0 , 1] . At inference, a greedy repair step converts probabilities to a feasible allocation. 
+
+4.3 Trap Variation Results 
+
+Table 2 confirms that the GNN achieves ≈0% gap on every configuration, while greedy suffers gaps from 3.75% to 59.24%. The GNN outperforms greedy on 100% of instances across all configurations. The TwoWhales configuration is most severe: two whale bids collectively block five fish, and greedy captures only 40.8% of optimal value. 
+
+4.4 Hybrid Allocator 
+
+Since the GNN underperforms greedy on easy (unstructured) instances (19.2% vs. 1.0% gap), we combine both via a CV-based selector. The coefficient of variation of per-item bid density separates hard from easy instances with a gap of 0.09 units (hard CV ≈ 0.34, easy CV > 0.43), enabling perfect routing at threshold 
+
+θ = 0 .35 .5Table 2: GNN vs. greedy on six whale-fish trap configurations (50 instances each). The GNN achieves near-zero gap on all configurations where greedy fails systematically. The model was trained with diverse fish counts k ∈ { 2, . . . , 6}.                                                                         
+
+> Configuration GNN Gap (%) Greedy Gap (%) GNN Wins Improvement
+> Standard ( k=3 ,vf=40 )≈0.00 13.47 ±0.19 100% +13.47 pp MoreFish ( k=4 ,vf=30 )≈0.00 14.74 ±0.19 100% +14.74 pp TwoWhales ( k=5 ,vf=30 )≈0.00 59.24 ±0.24 100% +59.24 pp FewerFish ( k=2 ,vf=55 )≈0.00 6.65 ±0.13 100% +6.65 pp HighStakes ( k=4 ,vf=45 )≈0.00 15.33 ±0.13 100% +15.33 pp TightMargin ( k=3 ,vf=35 )≈0.00 3.75 ±0.06 100% +3.75 pp
+> Table 3: Hybrid allocator on mixed distribution (50 hard + 50 easy instances). The selector routes with 99% accuracy, achieving near-oracle performance.
+> Method Hard Gap (%) Easy Gap (%) Overall Gap (%) Accuracy
+> GNN-only 0.00 19.17 9.59 —Greedy-only 16.38 1.01 8.69 —Hybrid (Selector) 0.00 1.01 0.51 99% Hybrid (Oracle) 0.00 0.90 0.45 100%
+
+Table 3 shows the hybrid achieves 0.51% overall gap—a 17 × improvement over GNN-only and a 17 ×
+
+improvement over greedy-only. The selector correctly routes 100% of hard instances to GNN and 98% of easy instances to greedy. 
+
+# 5 Experiments and Analysis 
+
+5.1 Setup 
+
+Datasets. We evaluate on seven benchmark distributions: supply chain standard and mixed (our synthetic generator), CATS arbitrary, matching, and scheduling [18], and MIS Erd˝ os-Rényi and star trap (converted via Theorem 2). CATS instances use 100 items and 500 bids; MIS instances use 50 nodes. 
+
+Models. We compare five architectures: HeteroGAT (1.04M params), HeteroGCN (891K), GAT (77K), GCN (76K), and MLP (52K). All use hidden dimension 128, 4 message-passing layers (where applicable), 8 attention heads, dropout 0.1, and capacity-aware modulation. Training uses AdamW [19] (lr = 10 −3,weight decay 10 −5), ReduceLROnPlateau scheduling, gradient clipping at norm 1.0, and early stopping (patience 10). Each configuration is run with 3 random seeds (42, 123, 456). 
+
+Baselines. Gurobi 9.5 ILP solver at five time limits: 10ms, 100ms, 1s, 10s, and 60s. All experiments run on a single NVIDIA A100 GPU. 
+
+5.2 Speed-Quality Tradeoff on CATS 
+
+Table 4 presents an honest comparison on CATS arbitrary. The best GNN (GAT, 77K params) achieves 0.453 gap in 2.4ms, while Gurobi at 10ms already achieves 0.200 gap. At 1s, Gurobi reaches effectively zero gap ( 8.3 × 10 −5). GNNs do not beat Gurobi on standard CATS benchmarks. This negative result is consistent with the GNN critique literature [2, 4] and motivates our hardness prediction contribution : rather than trying to replace solvers, we learn when to deploy them. Notably, the simpler GAT (77K params) outperforms the larger HeteroGAT (1.04M params) on CATS, 6Table 4: Speed-quality tradeoff on CATS arbitrary benchmark. GNN models run in 0.5–9.4ms but achieve higher gaps than Gurobi, which reaches near-zero gap at 1s. Gap is optimality gap (lower is better).                                                      
+
+> Method Params Time (ms) Gap Notes
+> MLP 52K 0.5 0.662 No graph structure GCN 76K 2.0 0.552 Homogeneous conv. GAT 77K 2.4 0.453 Best GNN HeteroGCN 891K 4.4 0.666 Heterogeneous conv. HeteroGAT 1.04M 9.4 0.708 Full architecture Gurobi (10ms) —31.8 0.200 ILP solver Gurobi (100ms) —142.3 0.020 Near-optimal Gurobi (1s) —687.4 0.000 Optimal
+> Table 5: Gurobi scaling across instance sizes on CATS arbitrary. Larger instances require substantially more time for optimality. The hardness classifier can identify which instances need extended time budgets.
+> Scale Items Bids Time for 0% gap Gap at 10ms
+> Small 100 500 0.1s 13.8% Medium 256 1,000 1.0s 20.4% Large 512 2,000 4.5s 19.2%
+
+suggesting that the heterogeneous architecture’s advantage is specific to structured instances where type-aware message passing can distinguish whale from fish bids. 
+
+5.3 Gurobi Scaling Analysis 
+
+Table 5 shows that Gurobi’s time-to-optimality grows significantly with instance size. For large instances (512 items, 2,000 bids), Gurobi needs 4.5 seconds to reach 0% gap. Our hardness classifier can identify which instances truly need this budget vs. those where 10ms suffices, enabling intelligent time allocation. 
+
+5.4 What Did the GNN Learn? 
+
+Figure 3 reveals the GNN’s learned behavior. On trap instances, it assigns near-zero probability ( ≈0.01 ) to whale bids and high probability ( ≈0.71 ) to fish bids, achieving complete separation. Through heterogeneous message passing, information flows from fish bids through shared edges to the whale, enabling the network to detect that rejecting the whale unlocks more total value. The capacity-aware modulation layer reinforces this by penalizing bids on over-utilized bottleneck edges. Figure 4 shows the CV-based separation between hard and easy instances. Hard instances cluster tightly at CV ≈ 0.336 (uniform demand from trap structure), while easy instances have CV > 0.43 (heterogeneous demand). Any threshold in [0 .34 , 0.43] achieves perfect separation on our validation set. 
+
+# 6 Related Work 
+
+Algorithm selection. The idea of routing instances to different solvers based on structural features has a long history. SATzilla [26] builds per-instance algorithm portfolios for SAT using runtime prediction. Kotthoff [15] surveys algorithm selection for combinatorial search. Our approach is simpler—a single MLP on 20 features—but achieves strong results because the hard/easy separation in WDP is structurally pronounced. 70.0 0.2 0.4 0.6 0.8      
+
+> GNN-Assigned Probability
+> 0
+> 20
+> 40
+> 60
+> 80
+> 100
+> 120
+> 140
+> 160
+> Density
+> (a) Bid Probability Distributions
+> Whale bids
+> Fish bids
+> 0.0 0.2 0.4 0.6 0.8
+> P(fish) P(whale)
+> 0
+> 1
+> 2
+> 3
+> 4
+> 5
+> 6
+> Count
+> 100% fish preferred
+> (b) Fish-Whale Probability Difference
+> Mean diff = 0.70
+
+Figure 3: GNN bid-level analysis on trap instances. (a) Probability distributions: the GNN assigns near-zero prob-ability to whale bids and ≈0.71 to fish bids. (b) Fish-whale probability difference is positive in 100% of instances, confirming systematic fish preference. 
+
+GNNs for combinatorial optimization. GNNs have been applied to TSP [13, 14], maximum cut [24], and satisfiability [25]. For the WDP specifically, Lee et al. [16] use half-convolution GNNs on bipartite bid-item graphs for cloud computing, and Ahmed et al. [1] propose heterogeneous GNNs for energy mar-kets. Our work takes a complementary perspective: rather than seeking uniform improvement, we identify 
+
+where GNNs excel (adversarial structure) and route accordingly. We position our negative CATS results as consistent with the critique literature [2, 4]. 
+
+Winner determination. The WDP has been studied extensively [7, 22]. Exact methods include ILP [23] and CABOB [21]. Lehmann et al. [17] prove approximation bounds for greedy mechanisms; Borodin and Lucier [5] show no truthful greedy mechanism achieves a sublinear ratio. Heuristic approaches include simulated annealing [12] and stochastic local search [10]. 
+
+Learning to branch. A complementary line of work uses ML to improve within-solver decisions in branch-and-bound algorithms. Gasse et al. [9] train a GNN to imitate strong branching variable selection in MILP, achieving significant speedups on heterogeneous instance sets. Etheve et al. [8] extend this with reinforcement learning for dynamic branching policies, and Gupta et al. [11] propose hybrid models com-bining GNN branching with classical heuristics. These “learning to branch” (L2B) methods optimize how 
+
+a branch-and-bound solver searches the tree for a single instance, whereas our approach optimizes which solver to invoke across a portfolio. The two perspectives are complementary: L2B accelerates exact solvers on individual instances, while our hardness classifier decides whether an exact solver is needed at all. Com-bining both—routing hard instances to branching-enhanced solvers—is a promising direction we discuss in Section 7. 
+
+# 7 Conclusion 
+
+We have demonstrated that learning when to deploy expensive solvers is more tractable than learning to re-place them. Our hardness classifier predicts greedy optimality gaps with 0.937 correlation from 20 structural features, enabling algorithm selection that achieves 0.51% overall gap on mixed distributions. On adversar-ial whale-fish traps, a heterogeneous GNN specialist achieves ≈0% gap where greedy fails at 3.75–59.24%. Our honest evaluation on CATS benchmarks confirms that GNNs do not outperform Gurobi, motivating the 80.35 0.40 0.45 0.50 0.55 0.60 0.65 0.70  
+
+> Coefficient of Variation (CV) of Bid Density
+> 0
+> 1
+> 2
+> 3
+> 4
+> 5
+> 6
+> 7
+> 8
+> Count
+> Gap
+> Selector accuracy: 99%
+> Instance Hardness Separation by CV
+> Hard (trap) instances
+> Easy (random) instances
+> Threshold = 0.35
+
+Figure 4: Distribution of bid density CV for hard (trap) and easy (random) instances. The threshold θ = 0 .35 cleanly separates the two populations, enabling 99% routing accuracy. 
+
+shift from “ML as solver replacement” to “ML as instance triage.” 
+
+Limitations. Our GNN does not beat Gurobi on standard CATS benchmarks (0.45–0.71 vs. 0.20 gap at matched time). Training requires ground-truth optimal solutions from Gurobi, limiting scalability. The adversarial family tested is one specific structure (whale-fish traps); other hard WDP families may require different specialists. All experiments use synthetic data; real auction instances may exhibit different hard-ness patterns. 
+
+Future work. Extending to other CO problems (scheduling, routing), developing self-supervised hard-ness estimation that does not require optimal solutions, and evaluating on real auction data from spectrum and logistics platforms are promising directions. In particular, routing hard instances to branch-and-bound solvers enhanced with learned branching policies [9] could combine our across-solver selection with within-solver acceleration. The hybrid paradigm—specialist ML for structured hardness, classical methods for the bulk—may generalize to settings beyond WDP where GNNs have struggled to outperform heuristics. 
+
+# References 
+
+[1] A. M. A. Ahmed, F. Eliassen, and Y. Zhang. Combinatorial auctions and graph neural networks for local energy flexibility markets. In IEEE PES Innovative Smart Grid Technologies Europe , 2023. [2] M. C. Angelini and F. Ricci-Tersenghi. Modern graph neural networks do no more than solve linear systems. In ICLR , 2023. [3] L. Blumrosen and N. Nisan. Combinatorial auctions. In N. Nisan et al., editors, Algorithmic Game Theory , chapter 11. Cambridge University Press, 2007. [4] S. Boettcher, S. Paczuski, and A. Percus. Inability of a graph neural network heuristic to outper-form greedy algorithms in solving combinatorial optimization problems. Nature Machine Intelligence ,5(1):24–25, 2023. [5] A. Borodin and B. Lucier. On the limitations of greedy mechanism design for truthful combinatorial auctions. ACM Transactions on Economics and Computation , 5(1):1–25, 2016. [6] S. Brody, U. Alon, and E. Yahav. How attentive are graph attention networks? In ICLR , 2022. 9[7] P. Cramton, Y. Shoham, and R. Steinberg. Combinatorial Auctions . MIT Press, 2006. [8] M. Etheve, Z. Alés, C. Bissuel, O. Juan, and S. Kanber. Reinforcement learning for variable selection in a branch and bound algorithm. In CPAIOR , 2020. [9] M. Gasse, D. Chételat, N. Ferroni, L. Charlin, and A. Lodi. Exact combinatorial optimization with graph convolutional neural networks. In NeurIPS , 2019. [10] Y. Guo, A. Lim, B. Rodrigues, and Y. Zhu. Winner determination in combinatorial auctions with stochastic local search. In AAMAS , 2006. [11] P. Gupta, M. Gasse, E. Khalil, P. Mudigonda, A. Lodi, and Y. Bengio. Hybrid models for learning to branch. In NeurIPS , 2020. [12] H. H. Hoos and C. Boutilier. Solving combinatorial auctions using stochastic local search. In AAAI ,2000. [13] C. K. Joshi, T. Laurent, and X. Bresson. An efficient graph convolutional network technique for the travelling salesman problem. arXiv:1906.01227 , 2019. [14] W. Kool, H. van Hoof, and M. Welling. Attention, learn to solve routing problems! In ICLR , 2019. [15] L. Kotthoff. Algorithm selection for combinatorial search problems: A survey. AI Magazine , 35(3):48– 60, 2016. [16] M. Lee, S. Hosseinalipour, C. G. Brinton, G. Yu, and H. Dai. A fast graph neural network-based method for winner determination in multi-unit combinatorial auctions. IEEE Transactions on Cloud Computing , 10(4):2264–2280, 2022. [17] D. Lehmann, L. I. O’Callaghan, and Y. Shoham. Truth revelation in approximately efficient combina-torial auctions. JACM , 49(5):577–602, 2002. [18] K. Leyton-Brown, M. Pearson, and Y. Shoham. Towards a universal test suite for combinatorial auction algorithms. In ACM EC , 2000. [19] I. Loshchilov and F. Hutter. Decoupled weight decay regularization. In ICLR , 2019. [20] M. Nazari, A. Oroojlooy, L. V. Snyder, and M. Takáˇ c. Reinforcement learning for solving the vehicle routing problem. In NeurIPS , 2018. [21] T. Sandholm. An algorithm for optimal winner determination in combinatorial auctions. In IJCAI ,1999. [22] T. Sandholm. Algorithm for optimal winner determination in combinatorial auctions. Artificial Intel-ligence , 135(1–2):1–54, 2002. [23] T. Sandholm, S. Suri, A. Gilpin, and D. Levine. CABOB: A fast optimal algorithm for winner deter-mination in combinatorial auctions. Management Science , 51(3):374–390, 2006. [24] M. J. A. Schuetz, J. K. Brubaker, and H. G. Katzgraber. Combinatorial optimization with physics-inspired graph neural networks. Nature Machine Intelligence , 4(4):367–377, 2022. [25] D. Selsam, M. Lamm, B. Bünz, P. Liang, L. de Moura, and D. L. Dill. Learning a SAT solver from single-bit supervision. In ICLR , 2019. [26] L. Xu, F. Hutter, H. H. Hoos, and K. Leyton-Brown. SATzilla: Portfolio-based algorithm selection for SAT. JAIR , 32:565–606, 2008. 10 A Architecture Specification 
+
+Table 6 provides the full architecture specification for all five model variants.                                      
+
+> Table 6: Model architectures compared in experiments.
+> Model Params Hidden Layers Heads Hetero Cap.-Aware
+> MLP 52K 128 3—No Yes GCN 76K 128 4—No Yes GAT 77K 128 48No Yes HeteroGCN 891K 128 4—Yes Yes HeteroGAT 1.04M 128 48Yes Yes
+
+HeteroGAT detailed specification. 
+
+• Node encoders: Linear( din , 128) → LayerNorm → ReLU → Dropout(0.1) → Linear(128, 128) → Lay-erNorm → ReLU. • Input dims: Factory: 4, Warehouse: 4, Retailer: 4, Bid: 3, Edge: 3. • Conv: GATv2Conv, 128 hidden, 8 heads (16 per head), 6 edge types. Residual with pre-LayerNorm. • Capacity layer: Utilization encoder Linear(1, 64) → ReLU → Linear(64, 128) → Sigmoid. Gate: Lin-ear(256, 128) → ReLU → Linear(128, 128) → Sigmoid. • Bid aggregator: Multi-head attention (4 heads) with residual and LayerNorm. • Classifier: Linear(128, 128) → ReLU → Drop → Linear(128, 64) → ReLU → Drop → Linear(64, 1) →
+
+σ.• Training: AdamW ( β1=0 .9, β2=0 .999 , wd = 10 −5), lr = 10 −3 with ReduceLROnPlateau (factor 0.5, pa-tience 5), batch size 32, gradient clip norm 1.0, early stopping patience 10. 
+
+# B Complete Results Grid 
+
+Table 7 reports validation loss across all 5 models × 7 datasets with 3 seeds.    
+
+> Table 7: Best validation loss across all configurations (mean ±std over 3 seeds). Lower is better.
+
+Dataset HeteroGAT HeteroGCN GAT GCN MLP 
+
+SC Standard 1.49 ±0.04 1.51 ±0.00 1.51 ±0.00 1.50 ±0.00 1.60 ±0.00 SC Mixed 0.43 ±0.00 0.43 ±0.00 0.43 ±0.00 0.45 ±0.00 0.56 ±0.00 CATS Arbitrary 0.42 ±0.00 0.42 ±0.00 0.41 ±0.01 0.40 ±0.01 0.42 ±0.00 CATS Matching 0.07 ±0.00 0.07 ±0.00 0.07 ±0.00 0.07 ±0.00 0.07 ±0.00 CATS Scheduling 0.43 ±0.00 0.37 ±0.01 0.29 ±0.00 0.28 ±0.00 0.38 ±0.00 MIS Erd˝ os-Rényi 0.96 ±0.01 0.94 ±0.00 0.92 ±0.01 0.91 ±0.00 0.97 ±0.00 MIS Star Trap 1.24 ±0.06 1.22 ±0.00 1.19 ±0.00 1.19 ±0.00 1.27 ±0.00 
+
+# C Hardness Feature Definitions 
+
+Table 8 lists all 20 features used by the hardness classifier. 11 Table 8: The 20 structural features for hardness prediction. All are computed in O(n · | Emax |) time.                                            
+
+> #Feature Definition
+> 1cv_bid_density CV of per-item bid counts (among used items) 2mean_bid_density Mean bids per item 3max_bid_density Max bids on any single item 4std_bid_density Std dev of bids per item 5bottleneck_tightness Mean utilization of top-25% congested items 6value_congestion_corr Correlation between bid value and avg congestion 7bid_value_mean Mean bid value 8bid_value_std Std dev of bid values 9bid_value_skew Skewness of bid value distribution 10 bid_value_kurtosis Kurtosis of bid value distribution 11 bid_cap_mean Mean bid capacity demand 12 bid_cap_std Std dev of bid capacity demands 13 edge_util_mean Mean item utilization ratio 14 edge_util_std Std dev of item utilization 15 edge_util_max Maximum item utilization 16 conflict_density Mean bids per used item 17 graph_density n· | Ei|/m
+> 18 bid_overlap_jaccard Avg pairwise Jaccard overlap (sampled) 19 value_cap_ratio_mean Mean value-to-capacity ratio 20 value_cap_ratio_std Std dev of value-to-capacity ratio
+
+# D Theorem Proofs 
+
+Theorem 2 (WDP-MWIS Equivalence) . Given a WDP instance I = ( E, B, v, c ) with unit item capacities, define the conflict graph GI = ( B, E c) where (bi, b j ) ∈ Ec ⇐⇒ items( bi) ∩ items( bj )̸ = ∅. Then: 
+
+OPT WDP (I) = OPT MWIS (GI , v ).
+
+Proof. A feasible WDP allocation S ⊆ B satisfies P 
+
+> b∈S:e∈Eb
+
+cb ≤ Ce for all items. With unit capacities, this means at most one bid per item, so no two bids in S share an item—i.e., S is an independent set in GI .Conversely, any independent set in GI is a feasible allocation. Since the objective P 
+
+> b∈S
+
+vb is identical in both formulations, the optima coincide. 
+
+Corollary 3 (Domain Invariance) . A GNN trained on WDP instances can solve MWIS instances without retraining by converting each MWIS node i to a bid bi with vi = wi, and each edge (i, j ) to a shared virtual item eij with unit capacity. 
+
+Proof of Theorem 1. Greedy-by-value selects the whale bW first since vW = 1 + ϵ > 1 = vFi .Accepting bW consumes all items, making every fish infeasible. Greedy value: 1 + ϵ. Optimal: accept all fish for P vFi = k. Ratio: (1 + ϵ)/k → 1/k . For any δ > 0, choose k > 1/δ .
+
+# E Training Details 
+
+Compute. All experiments were run on a single NVIDIA A100 GPU. The full benchmark suite (105 model-dataset-seed combinations) required 9,106 seconds ( ≈2.5 hours). The XL experiments (30 runs on CATS matching and matching_xl) required 30,788 seconds ( ≈8.6 hours). 
+
+Hyperparameters. Optimizer: AdamW ( β1=0 .9, β2=0 .999 , weight decay 10 −5). Learning rate: 10 −3
+
+with ReduceLROnPlateau (factor 0.5, patience 5, min lr 10 −6). Batch size: 32 (standard) or 4 with 8 12 accumulation steps (XL). Gradient clipping: norm 1.0. Early stopping: patience 10 epochs. Loss: BCE + capacity penalty ( λcap = 1 .0) + regret penalty ( λregret = 0 .1). 
+
+Hardness classifier training. The FeatureMLPClassifier trains on the same instances as the GNN models. Architecture: Linear(20, 64) → BatchNorm → ReLU → Linear(64, 64) → BatchNorm → ReLU 
+
+→ Linear(64, 1). Training uses MSE loss on continuous gap values. Best validation loss achieved at epochs 15, 80, and 88 for seeds 42, 123, and 456 respectively. 
+
+# F Scale Validation 
+
+The GNN specialist trained on small supply chain graphs ( ∼35 nodes) generalizes to medium ( ∼170 ) and large ( ∼750 ) graphs, maintaining ≈0% gap while greedy consistently fails at ∼16 .4% . This scale invariance is consistent with the GNN learning a local pattern (whale-fish structure) that does not depend on global graph size. GNN inference time grows sublinearly: 821ms (small), 933ms (medium), 1,152ms (large). 
+
+# G MIS Extension 
+
+Via the WDP-MWIS equivalence (Theorem 2), we evaluate on MIS benchmarks without retraining. On Erd˝ os-Rényi random graphs (50 nodes, edge probability 0.3), all models achieve similar validation accuracy (≈72 .2% ), suggesting that random MIS instances do not exhibit the structured hardness that differentiates architectures. On star trap MIS instances (analogous to whale-fish traps), GCN and GAT show slight ad-vantages ( ≈53 .6% accuracy) over MLP ( ≈53 .0% ), but the gap is modest. These results further support our finding that GNNs’ advantage is concentrated on structured adversarial instances. 
+
+# H Feature Ablation Study 
+
+We evaluate the importance of each feature group via leave-one-group-out (LOGO) ablation: for each of the six groups, we zero out those columns, retrain the MLP from scratch (3 seeds), and measure MAE degradation relative to the full-feature baseline. We additionally compute permutation importance for each of the 20 individual features by shuffling its column on the validation set (10 repeats, 3 seeds) and measuring MSE increase. 
+
+Table 9: Feature group ablation (Leave-One-Group-Out). Each row zeros out one group and retrains from scratch (3 seeds). ∆MAE is the change relative to the baseline (0.034). The rightmost column shows the most permutation-important feature per group.                                         
+
+> Feature Group Size MAE w/o ∆MAE ∆Corr. Top Feature (Perm.)
+> Value-congestion corr. 10.0337 +0.0002 −0.000 value_congestion_corr Bid density 40.0328 −0.0007 +0.000 mean_bid_density Bottleneck tightness 10.0331 −0.0005 +0.001 bottleneck_tightness Capacity & utilization 50.0331 −0.0005 +0.001 edge_util_max Bid value statistics 40.0325 −0.0011 +0.002 bid_value_mean Conflict structure 50.0322 −0.0013 +0.002 value_cap_ratio_std Full model (baseline) 20 0.0336 ———
+
+The LOGO results reveal that the classifier is highly robust to group removal: no single group’s ab-sence degrades MAE, and some removals even improve it slightly, suggesting inter-group redundancy. Permutation importance (which measures feature reliance without retraining) tells a complementary story: 
+
+bid_value_mean (+0.013 MSE), bid_value_std (+0.009), and value_cap_ratio_std (+0.008) 13 are the top individual predictors. These features capture the value distribution signatures of whale-fish traps—extreme bid values and high value-to-capacity dispersion—confirming that the classifier detects trap structure through the statistical footprint of whale bids rather than any single structural metric. 14
