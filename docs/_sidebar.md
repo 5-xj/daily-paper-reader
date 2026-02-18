@@ -1,5 +1,12 @@
 * [首页](/)
 * Daily Papers
+  * 2026-02-18
+    * 精读区
+    * 速读区
+      * <a class="dpr-sidebar-item-link" href="#/202602/18/2602.15473v1-pop-prior-fitted-optimizer-policies"><div class="dpr-sidebar-title">POP: Prior-fitted Optimizer Policies</div><div class="dpr-sidebar-tags"><span class="dpr-sidebar-tag dpr-sidebar-tag-keyword">EOH</span> <span class="dpr-sidebar-tag dpr-sidebar-tag-keyword">EAA</span> <span class="dpr-sidebar-tag dpr-sidebar-tag-keyword">LNS</span></div></a>
+      * <a class="dpr-sidebar-item-link" href="#/202602/18/2602.15459v1-a-quantum-genetic-algorithm-with-application-to-cosmological-parameters-estimation"><div class="dpr-sidebar-title">A Quantum Genetic Algorithm with application to Cosmological Parameters Estimation</div><div class="dpr-sidebar-tags"><span class="dpr-sidebar-tag dpr-sidebar-tag-keyword">EOH</span> <span class="dpr-sidebar-tag dpr-sidebar-tag-keyword">EAA</span></div></a>
+      * <a class="dpr-sidebar-item-link" href="#/202602/18/2602.15564v1-beyond-static-pipelines-learning-dynamic-workflows-for-text-to-sql"><div class="dpr-sidebar-title">Beyond Static Pipelines: Learning Dynamic Workflows for Text-to-SQL</div><div class="dpr-sidebar-tags"><span class="dpr-sidebar-tag dpr-sidebar-tag-keyword">EAA</span> <span class="dpr-sidebar-tag dpr-sidebar-tag-keyword">EOH</span> <span class="dpr-sidebar-tag dpr-sidebar-tag-keyword">LNS</span></div></a>
+      * <a class="dpr-sidebar-item-link" href="#/202602/18/2602.15635v1-on-inferring-cumulative-constraints"><div class="dpr-sidebar-title">On inferring cumulative constraints</div><div class="dpr-sidebar-tags"><span class="dpr-sidebar-tag dpr-sidebar-tag-keyword">LNS</span> <span class="dpr-sidebar-tag dpr-sidebar-tag-keyword">EAA</span> <span class="dpr-sidebar-tag dpr-sidebar-tag-keyword">EOH</span></div></a>
   * 2026-02-17
     * 精读区
       * <a class="dpr-sidebar-item-link" href="#/202602/17/2602.14670v1-factorminer-a-self-evolving-agent-with-skills-and-experience-memory-for-financial-alpha-discovery"><div class="dpr-sidebar-title">FactorMiner: A Self-Evolving Agent with Skills and Experience Memory for Financial Alpha Discovery</div><div class="dpr-sidebar-tags"><span class="dpr-sidebar-tag dpr-sidebar-tag-keyword">EOH</span> <span class="dpr-sidebar-tag dpr-sidebar-tag-keyword">EAA</span> <span class="dpr-sidebar-tag dpr-sidebar-tag-keyword">LNS</span></div></a>
