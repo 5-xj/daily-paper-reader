@@ -28,6 +28,12 @@ window.DPRWorkflowRunner = (function () {
       name: '同步上游代码',
       desc: '触发 Upstream Sync 工作流（合并上游 main 到当前仓库）。',
     },
+    {
+      key: 'reset-content',
+      id: 'reset-content.yml',
+      name: '重置 content（docs + archive）',
+      desc: '将 docs 恢复为 docs_init 基线，并清空 archive。该操作为危险操作。',
+    },
   ];
 
   const QUICK_FETCH_PRESETS = {
@@ -177,6 +183,7 @@ window.DPRWorkflowRunner = (function () {
         <div id="dpr-workflow-header">
           <div style="font-weight:600;">工作流触发</div>
           <div style="display:flex; gap:8px; align-items:center;">
+            <button id="dpr-workflow-reset-btn" class="arxiv-tool-btn" style="padding:2px 10px; background:#c62828; color:#fff; border-color:#b71c1c;">删除所有</button>
             <button id="dpr-workflow-refresh-btn" class="arxiv-tool-btn" style="padding:2px 10px;">刷新</button>
             <button id="dpr-workflow-close-btn" class="arxiv-tool-btn" style="padding:2px 6px;">关闭</button>
           </div>
@@ -217,6 +224,28 @@ window.DPRWorkflowRunner = (function () {
           refreshRun(r.owner, r.repo, r.runId);
         } else {
           setStatus('暂无可刷新的运行记录。', '#666');
+        }
+      });
+    }
+
+    const resetAllBtn = document.getElementById('dpr-workflow-reset-btn');
+    if (resetAllBtn) {
+      resetAllBtn.addEventListener('click', async () => {
+        if (String(window.DPR_ACCESS_MODE || '') !== 'full') {
+          setStatus('未检测到完整登录权限，危险操作未开启。', '#c00');
+          return;
+        }
+        const confirmText = window.prompt(
+          '危险操作：该操作会将 docs 备份为 docs_backup_xxx 后恢复为 docs_init，并清空 archive。输入「RESET_ALL」确认。',
+        );
+        if (confirmText !== 'RESET_ALL') {
+          setStatus('已取消危险操作。', '#666');
+          return;
+        }
+        try {
+          await runWorkflowByKey('reset-content');
+        } catch (err) {
+          setStatus(`触发失败：${err && err.message ? err.message : err}`, '#c00');
         }
       });
     }

@@ -1113,9 +1113,6 @@ window.$docsify = {
           return String(bp || '');
         };
 
-        const canDeleteWithLogin = () =>
-          String(window.DPR_ACCESS_MODE || '') === 'full';
-
         const normalizeHashHref = (href) => {
           const raw = String(href || '').trim();
           if (!raw) return '';
@@ -1309,31 +1306,6 @@ window.$docsify = {
             if (!target.closest('.sidebar-day-toggle-actions')) {
               closeAllDayMenus();
             }
-          });
-        }
-
-        const applyDeleteAuth = () => {
-          const canDelete = canDeleteWithLogin();
-          const title = canDelete
-            ? '删除该日期分组'
-            : '未登录：请先登录后再删除';
-          nav
-            .querySelectorAll('.sidebar-day-menu-item-delete')
-            .forEach((btn) => {
-              btn.disabled = !canDelete;
-              btn.title = title;
-              if (canDelete) {
-                btn.classList.remove('sidebar-day-menu-item-locked');
-              } else {
-                btn.classList.add('sidebar-day-menu-item-locked');
-              }
-            });
-        };
-
-        if (!nav.dataset.dprDayAccessBound) {
-          nav.dataset.dprDayAccessBound = '1';
-          document.addEventListener('dpr-access-mode-changed', () => {
-            applyDeleteAuth();
           });
         }
 
@@ -1651,12 +1623,6 @@ window.$docsify = {
             downloadBtn.textContent = '下载 JSON';
             downloadBtn.setAttribute('aria-label', '下载论文元数据 JSON');
 
-            const deleteBtn = document.createElement('button');
-            deleteBtn.type = 'button';
-            deleteBtn.className = 'sidebar-day-menu-item sidebar-day-menu-item-delete';
-            deleteBtn.textContent = '删除这一栏';
-            deleteBtn.setAttribute('aria-label', '删除该日期分组');
-
             const arrowSpan = document.createElement('span');
             arrowSpan.className = 'sidebar-day-toggle-arrow';
             arrowSpan.textContent = '▾';
@@ -1665,7 +1631,6 @@ window.$docsify = {
             actions.className = 'sidebar-day-toggle-actions';
             actions.appendChild(menuTrigger);
             menu.appendChild(downloadBtn);
-            menu.appendChild(deleteBtn);
             actions.appendChild(menu);
             actions.appendChild(arrowSpan);
 
@@ -1684,7 +1649,6 @@ window.$docsify = {
           const menuTrigger = wrapper.querySelector('.sidebar-day-menu-trigger');
           const menu = wrapper.querySelector('.sidebar-day-menu');
           const downloadBtn = wrapper.querySelector('.sidebar-day-menu-item-download');
-          const deleteBtn = wrapper.querySelector('.sidebar-day-menu-item-delete');
 
           if (menuTrigger && !menuTrigger.dataset.dprDayMenuTriggerBound) {
             menuTrigger.dataset.dprDayMenuTriggerBound = '1';
@@ -1724,26 +1688,6 @@ window.$docsify = {
               }
             });
           }
-
-          if (deleteBtn && !deleteBtn.dataset.dprDeleteBound) {
-            deleteBtn.dataset.dprDeleteBound = '1';
-            deleteBtn.addEventListener('click', (e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              if (e.stopImmediatePropagation) e.stopImmediatePropagation();
-              if (!canDeleteWithLogin() || deleteBtn.disabled) {
-                applyDeleteAuth();
-                return;
-              }
-              deleteDaySection({
-                rowLi: li,
-                rowText: rawText,
-                dayKey,
-              });
-            });
-          }
-
-          applyDeleteAuth();
 
           // 决定默认展开 / 收起：
           // - 如果本次是“出现了新的一天”：清空历史，只展开最新一天；
