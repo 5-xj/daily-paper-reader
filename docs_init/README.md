@@ -1,10 +1,10 @@
 <div class="dpr-home-notice-card">
-  <h3 class="dpr-home-notice-title">Zotero 工具入口</h3>
+  <h3 class="dpr-home-notice-title">新手教程面板</h3>
   <ul class="dpr-home-notice-list">
-    <li>Zotero Connector（浏览器插件下载）：<a href="https://www.zotero.org/download/connectors" target="_blank" rel="noopener">官方下载</a></li>
-    <li>Zotero 笔记插件（Better Notes）：<a href="https://github.com/windingwind/zotero-better-notes" target="_blank" rel="noopener">GitHub</a></li>
-    <li>Zotero Action 插件安装：先安装插件，再导入配置链接：<a href="others/actions-zotero.yml" download="actions-zotero.yml">actions-zotero.yml</a></li>
-    <li>使用说明（占位，待补充）：<a href="/zotero-usage">查看页面</a></li>
+    <li>新手入口总览：<a href="/newbie/">查看导航页</a></li>
+    <li>从零开始配置：<a href="/newbie/quick-start">查看页面</a></li>
+    <li>订阅与查询怎么配：<a href="/newbie/configuration">查看页面</a></li>
+    <li>推荐链路怎么理解：<a href="/newbie/workflow">查看页面</a></li>
   </ul>
 </div>
 
