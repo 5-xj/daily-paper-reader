@@ -6,50 +6,55 @@
 </div>
 
 ## 每次日报
-- 最新运行日期：2026-02-10 ~ 2026-03-11
-- 运行时间：2026-03-11 09:35:31 UTC
+- 最新运行日期：2026-03-02 ~ 2026-03-11
+- 运行时间：2026-03-11 09:41:21 UTC
 - 运行状态：成功
-- 本次总论文数：9
-- 精读区：0
-- 速读区：9
+- 本次总论文数：11
+- 精读区：3
+- 速读区：8
 
 ### 今日简报（AI）
-今日聚焦 LLM 驱动的算法自动设计与自进化系统，深度探索从元进化框架到推荐系统全流程自动化的前沿突破。
-重点关注 EvoX 元进化及 LLM 分阶段算法设计，揭示了利用大模型 Agent 实现端到端模型自主优化的巨大潜力。
-建议关注 LLM 与进化算法结合的自动化趋势，尝试将 Agent 调优思路引入现有的模型优化工作流。
-- 详情：[/20260210-20260311/README](/20260210-20260311/README)
+本期日报聚焦 AI 基础设施前沿，深入探讨了 Agent 驱动的算网协同设计与专家级 CUDA 算子自动优化。
+重点推荐 CUCo 框架与 LLM 驱动的 CUDA 优化方案，展示了智能体在解决复杂系统协同与高性能计算调优中的突破性潜力。
+建议关注 Agent 技术如何从应用层深入到底层架构，利用大模型工具显著提升异构计算与大规模工作负载的系统效率。
+- 详情：[/20260302-20260311/README](/20260302-20260311/README)
 
 ### 精读区论文标签
-- 本次无精读推荐。
+1. [CUCo: An Agentic Framework for Compute and Communication Co-design](/20260302-20260311/2603.02376v1-cuco-an-agentic-framework-for-compute-and-communication-co-design)  
+   标签：评分：9.0/10、query:ahd
+   evidence：自动生成高性能 CUDA 内核以进行优化
+2. [Making LLMs Optimize Multi-Scenario CUDA Kernels Like Experts](/20260302-20260311/2603.07169v1-making-llms-optimize-multi-scenario-cuda-kernels-like-experts)  
+   标签：评分：9.0/10、query:ahd
+   evidence：利用大模型自动优化 CUDA 内核
+3. [Efficient Query Rewrite Rule Discovery via Standardized Enumeration and Learning-to-Rank](/20260302-20260311/2603.04169v1-efficient-query-rewrite-rule-discovery-via-standardized-enumeration-and-learning-to-rank)  
+   标签：评分：8.0/10、query:ahd
+   evidence：自动发现用于优化的查询重写规则
 
 ### 速读区论文标签
-1. [EvoX: Meta-Evolution for Automated Discovery](/20260210-20260311/2602.23413v1-evox-meta-evolution-for-automated-discovery)  
-   标签：评分：10.0/10、query:ahd
-   evidence：结合大模型驱动优化与进化搜索的自动发现
-2. [Advancing Automated Algorithm Design via Evolutionary Stagewise Design with LLMs](/20260210-20260311/2603.07970v1-advancing-automated-algorithm-design-via-evolutionary-stagewise-design-with-llms)  
-   标签：评分：10.0/10、query:ahd
-   evidence：利用大语言模型进行工业级算法设计的演化阶段式框架
-3. [Self-Evolving Recommendation System: End-To-End Autonomous Model Optimization With LLM Agents](/20260210-20260311/2602.10226v1-self-evolving-recommendation-system-end-to-end-autonomous-model-optimization-with-llm-agents)  
-   标签：评分：9.0/10、query:ahd
-   evidence：利用大模型智能体自主优化优化器和架构
-4. [RankEvolve: Automating the Discovery of Retrieval Algorithms via LLM-Driven Evolution](/20260210-20260311/2602.16932v1-rankevolve-automating-the-discovery-of-retrieval-algorithms-via-llm-driven-evolution)  
-   标签：评分：9.0/10、query:ahd
-   evidence：通过LLM驱动的进化自动发现算法
-5. [K-Search: LLM Kernel Generation via Co-Evolving Intrinsic World Model](/20260210-20260311/2602.19128v2-k-search-llm-kernel-generation-via-co-evolving-intrinsic-world-model)  
-   标签：评分：9.0/10、query:ahd
-   evidence：通过协同演化世界模型自动生成GPU内核算法
-6. [Reasoning as Gradient: Scaling MLE Agents Beyond Tree Search](/20260210-20260311/2603.01692v1-reasoning-as-gradient-scaling-mle-agents-beyond-tree-search)  
-   标签：评分：9.0/10、query:ahd
-   evidence：为机器学习工程代理实现基于梯度的优化
-7. [SEA-TS: Self-Evolving Agent for Autonomous Code Generation of Time Series Forecasting Algorithms](/20260210-20260311/2603.04873v1-sea-ts-self-evolving-agent-for-autonomous-code-generation-of-time-series-forecasting-algorithms)  
-   标签：评分：9.0/10、query:ahd
-   evidence：通过自我演化循环自主生成和优化预测代码
-8. [Explaining AutoClustering: Uncovering Meta-Feature Contribution in AutoML for Clustering](/20260210-20260311/2602.18348v1-explaining-autoclustering-uncovering-meta-feature-contribution-in-automl-for-clustering)  
-   标签：评分：8.0/10、query:ahd
-   evidence：聚类中的自动算法选择与流水线合成
-9. [SoberDSE: Sample-Efficient Design Space Exploration via Learning-Based Algorithm Selection](/20260210-20260311/2603.00986v1-soberdse-sample-efficient-design-space-exploration-via-learning-based-algorithm-selection)  
-   标签：评分：8.0/10、query:ahd
-   evidence：设计空间探索中的自动算法选择
+1. [Test-Time Meta-Adaptation with Self-Synthesis](/20260302-20260311/2603.03524v1-test-time-meta-adaptation-with-self-synthesis)  
+   标签：评分：7.0/10、query:ahd
+   evidence：用于自我适应和优化的元学习框架
+2. [stratum: A System Infrastructure for Massive Agent-Centric ML Workloads](/20260302-20260311/2603.03589v1-stratum-a-system-infrastructure-for-massive-agent-centric-ml-workloads)  
+   标签：评分：7.0/10、query:ahd
+   evidence：用于代理管道搜索和优化的系统基础设施
+3. [stratum: A System Infrastructure for Massive Agent-Centric ML Workloads](/20260302-20260311/2603.03589v2-stratum-a-system-infrastructure-for-massive-agent-centric-ml-workloads)  
+   标签：评分：7.0/10、query:ahd
+   evidence：用于代理化流水线搜索与优化的系统基础设施
+4. [SciDER: Scientific Data-centric End-to-end Researcher](/20260302-20260311/2603.01421v1-scider-scientific-data-centric-end-to-end-researcher)  
+   标签：评分：6.0/10、query:ahd
+   evidence：自动化研究生命周期，包括代码执行和假设生成
+5. [Performance Optimization in Stream Processing Systems: Experiment-Driven Configuration Tuning for Kafka Streams](/20260302-20260311/2603.04027v1-performance-optimization-in-stream-processing-systems-experiment-driven-configuration-tuning-for-kafka-streams)  
+   标签：评分：6.0/10、query:ahd
+   evidence：使用模拟退火和爬山算法的自动配置优化
+6. [$\nabla$-Reasoner: LLM Reasoning via Test-Time Gradient Descent in Latent Space](/20260302-20260311/2603.04948v1-nabla-reasoner-llm-reasoning-via-test-time-gradient-descent-in-latent-space)  
+   标签：评分：6.0/10、query:ahd
+   evidence：用于改进大模型推理策略的可微优化方法
+7. [Learning to Rank the Initial Branching Order of SAT Solvers](/20260302-20260311/2603.07176v1-learning-to-rank-the-initial-branching-order-of-sat-solvers)  
+   标签：评分：6.0/10、query:ahd
+   evidence：学习预测SAT求解器的分支顺序
+8. [Uncovering a Winning Lottery Ticket with Continuously Relaxed Bernoulli Gates](/20260302-20260311/2603.08914v1-uncovering-a-winning-lottery-ticket-with-continuously-relaxed-bernoulli-gates)  
+   标签：评分：6.0/10、query:ahd
+   evidence：通过可微优化发现稀疏子网络
 
 
 <div class="dpr-home-promo-card">
