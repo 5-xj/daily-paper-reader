@@ -482,14 +482,43 @@ window.DPRWorkflowRunner = (function () {
       return;
     }
 
-    setStatus(`正在触发工作流：${wf.name || workflowFile} ...`, '#666', { waiting: true });
-    runsEl.innerHTML = '<div style="color:#999;">正在触发，请稍候...</div>';
+    setStatus(`正在检查工作流状态：${wf.name || workflowFile} ...`, '#666', { waiting: true });
+    runsEl.innerHTML = '<div style="color:#999;">正在检查是否有运行中的工作流...</div>';
     stopPolling();
     activeRun = null;
 
-    const createdAt = new Date();
-
     try {
+      // 检查是否有正在运行中的同名工作流（防止误触重复触发）
+      const activeStatuses = new Set(['queued', 'in_progress', 'waiting']);
+      const statusZhMap = { queued: '排队中', in_progress: '运行中', waiting: '等待中' };
+      const checkUrl = `https://api.github.com/repos/${owner}/${repo}/actions/workflows/${encodeURIComponent(
+        workflowFile,
+      )}/runs?per_page=5`;
+      const checkRes = await ghFetch(token, checkUrl);
+      if (checkRes.ok) {
+        const checkData = await checkRes.json();
+        const runs = Array.isArray(checkData.workflow_runs) ? checkData.workflow_runs : [];
+        const activeRuns = runs.filter((r) => activeStatuses.has(r.status));
+        if (activeRuns.length > 0) {
+          const r = activeRuns[0];
+          const runUrl = `https://github.com/${owner}/${repo}/actions/runs/${r.id}`;
+          const statusText = statusZhMap[r.status] || r.status;
+          setStatus(
+            `已有正在运行的工作流（#${r.run_number || r.id}，状态：${statusText}），请等待完成后再触发。`,
+            '#c00',
+          );
+          runsEl.innerHTML =
+            `<div style="color:#c00;">同一时间只允许运行一个该工作流实例，请等待当前运行结束。</div>` +
+            `<div style="margin-top:8px;"><a class="arxiv-tool-btn" style="padding:6px 10px; text-decoration:none;" target="_blank" href="${runUrl}">查看当前运行</a></div>`;
+          return;
+        }
+      }
+
+      setStatus(`正在触发工作流：${wf.name || workflowFile} ...`, '#666', { waiting: true });
+      runsEl.innerHTML = '<div style="color:#999;">正在触发，请稍候...</div>';
+
+      const createdAt = new Date();
+
       // 触发 dispatch
       const dispatchUrl = `https://api.github.com/repos/${owner}/${repo}/actions/workflows/${encodeURIComponent(
         workflowFile,
