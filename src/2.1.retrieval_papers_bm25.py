@@ -764,13 +764,21 @@ def main() -> None:
 
     process_single_file(input_path, output_path)
   else:
-    if not os.path.isdir(RAW_DIR):
-      log(f"[INFO] 原始目录不存在：{RAW_DIR}（今天没有新论文，将跳过 BM25 检索）")
+    if os.path.isdir(RAW_DIR):
+      raw_files = sorted(f for f in os.listdir(RAW_DIR) if f.lower().endswith(".json"))
+    else:
+      raw_files = []
+
+    if not raw_files and supabase_enabled:
+      # Supabase-only 模式：无本地原始文件，直接走数据库端 BM25 召回
+      log("[INFO] 原始目录不存在或为空，但 Supabase BM25 已启用，将直接使用数据库端召回。")
+      output_path = os.path.join(FILTERED_DIR, f"arxiv_papers_{TODAY_STR}.bm25.json")
+      if not run_supabase_rank(output_path):
+        log("[WARN] Supabase BM25 未能召回结果，且无本地原始文件可回退。")
       return
 
-    raw_files = sorted(f for f in os.listdir(RAW_DIR) if f.lower().endswith(".json"))
     if not raw_files:
-      log(f"[INFO] 在 {RAW_DIR} 下未找到任何 .json 原始文件。（今天没有新论文，将跳过 BM25 检索）")
+      log(f"[INFO] 原始目录不存在或为空：{RAW_DIR}（今天没有新论文，将跳过 BM25 检索）")
       return
 
     log(f"[INFO] 批量模式：将在 {RAW_DIR} 下处理 {len(raw_files)} 个 JSON 文件。")

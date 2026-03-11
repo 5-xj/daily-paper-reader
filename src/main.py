@@ -27,7 +27,7 @@ def run_step(label: str, args: list[str]) -> None:
     subprocess.run(args, check=True)
 
 
-def load_arxiv_paper_setting() -> dict:
+def _load_full_config() -> dict:
     if yaml is None or not os.path.exists(CONFIG_FILE):
         return {}
     try:
@@ -35,10 +35,36 @@ def load_arxiv_paper_setting() -> dict:
             data = yaml.safe_load(f) or {}
     except Exception:
         return {}
-    if not isinstance(data, dict):
-        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def load_arxiv_paper_setting() -> dict:
+    data = _load_full_config()
     setting = data.get("arxiv_paper_setting") or {}
     return setting if isinstance(setting, dict) else {}
+
+
+def should_skip_fetch(config: dict | None = None) -> bool:
+    """
+    当 Supabase 已完全接管检索（BM25 + 向量 RPC 均已启用）时，
+    Step 1（全量数据拉取到本地）可以跳过——后续 Step 2.1 / 2.2
+    会直接走数据库端召回，不再依赖本地原始文件。
+    """
+    if config is None:
+        config = _load_full_config()
+    sb = config.get("supabase") or {}
+    if not sb.get("enabled", False):
+        return False
+    paper_setting = config.get("arxiv_paper_setting") or {}
+    if not paper_setting.get("prefer_supabase_read", False):
+        return False
+    if not sb.get("use_bm25_rpc", False):
+        return False
+    if not sb.get("use_vector_rpc", False):
+        return False
+    if not sb.get("url") or not sb.get("anon_key"):
+        return False
+    return True
 
 
 def build_sidebar_date_label(days: int) -> str:
@@ -396,6 +422,19 @@ def main() -> None:
         default=None,
         help="可重复传入，追踪指定 arXiv ID 在各阶段是否命中；支持逗号分隔多个值。",
     )
+    parser.add_argument(
+        "--skip-fetch",
+        default=None,
+        action="store_true",
+        help="跳过 Step 1（全量数据拉取）。当 Supabase 已完全接管检索时自动检测；"
+             "显式传入则强制跳过。",
+    )
+    parser.add_argument(
+        "--no-skip-fetch",
+        dest="skip_fetch",
+        action="store_false",
+        help="强制执行 Step 1（全量数据拉取），即使 Supabase 已启用。",
+    )
     args = parser.parse_args()
 
     python = sys.executable
@@ -449,15 +488,30 @@ def main() -> None:
             [python, os.path.join(SRC_DIR, "0.enrich_config_queries.py")],
         )
 
-    run_step(
-        "Step 1 - fetch arxiv",
-        [
-            python,
-            os.path.join(SRC_DIR, "1.fetch_paper_arxiv.py"),
-            *(["--days", str(args.fetch_days)] if args.fetch_days is not None else []),
-            *(["--ignore-seen"] if args.fetch_ignore_seen else []),
-        ],
-    )
+    # 判断是否跳过 Step 1（全量数据拉取）
+    if args.skip_fetch is None:
+        # 自动检测：Supabase 已完全接管检索时跳过
+        skip_fetch = should_skip_fetch()
+    else:
+        skip_fetch = args.skip_fetch
+
+    if skip_fetch:
+        print(
+            "[INFO] 跳过 Step 1（全量数据拉取）："
+            "Supabase 已完全接管检索（BM25 + 向量 RPC），"
+            "后续步骤将直接使用数据库端召回。",
+            flush=True,
+        )
+    else:
+        run_step(
+            "Step 1 - fetch arxiv",
+            [
+                python,
+                os.path.join(SRC_DIR, "1.fetch_paper_arxiv.py"),
+                *(["--days", str(args.fetch_days)] if args.fetch_days is not None else []),
+                *(["--ignore-seen"] if args.fetch_ignore_seen else []),
+            ],
+        )
     if trace_ids:
         print_trace_retrieval("RAW", raw_path, trace_ids)
     run_step(

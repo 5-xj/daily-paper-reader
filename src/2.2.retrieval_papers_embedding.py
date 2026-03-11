@@ -598,6 +598,66 @@ def main() -> None:
       )
     return coarse_filter
 
+  def run_supabase_vector_recall(output_path: str, top_k: int = 50) -> bool:
+    """Supabase-only 向量召回：不依赖本地原始文件。"""
+    filter_inst = get_filter()
+    label = os.path.basename(output_path)
+    group_start(f"Step 2.2 - supabase vector recall ({label})")
+    try:
+      exact_rpc = str(supabase_conf.get("vector_rpc_exact") or "").strip()
+      ann_rpc = str(
+        supabase_conf.get("vector_rpc_ann")
+        or supabase_conf.get("vector_rpc")
+        or "match_arxiv_papers"
+      ).strip()
+      rpc_plan: List[tuple[str, str]] = []
+      if exact_rpc:
+        rpc_plan.append(("exact", exact_rpc))
+      if ann_rpc and all(x[1] != ann_rpc for x in rpc_plan):
+        rpc_plan.append(("ann", ann_rpc))
+
+      if not rpc_plan:
+        log("[WARN] Supabase 向量召回未配置可用 RPC。")
+        return False
+
+      for mode, rpc_name in rpc_plan:
+        log(f"[INFO] Supabase 向量召回尝试：mode={mode} rpc={rpc_name}")
+        result_sb = rank_papers_for_queries_via_supabase(
+          model=filter_inst.model,
+          queries=queries,
+          top_k=top_k,
+          supabase_conf=supabase_conf,
+          start_dt=sb_start_dt,
+          end_dt=sb_end_dt,
+          time_fields=SUPABASE_TIME_FIELDS,
+          rpc_name_override=rpc_name,
+          rpc_mode=mode,
+        )
+        total_hits = int(result_sb.get("total_hits") or 0)
+        non_empty_queries = int(result_sb.get("non_empty_queries") or 0)
+        query_total = len(queries)
+        avg_hits_per_query = (float(total_hits) / float(query_total)) if query_total > 0 else 0.0
+
+        if total_hits <= 0:
+          log(f"[WARN] Supabase 向量召回无命中（mode={mode} rpc={rpc_name}）。")
+          continue
+
+        log(
+          f"[INFO] Supabase 向量召回命中 {total_hits} 条，采用数据库召回结果。"
+          f" mode={mode} rpc={rpc_name} "
+          f"non_empty_queries={non_empty_queries}/{query_total} "
+          f"avg_hits_per_query={avg_hits_per_query:.1f}"
+        )
+        save_tagged_results(result_sb, output_path)
+        return True
+
+      log("[WARN] Supabase 向量召回未通过可用性检查。")
+    except Exception as e:
+      log(f"[WARN] Supabase 向量召回异常：{e}")
+    finally:
+      group_end()
+    return False
+
   def process_single_file(input_path: str, output_path: str) -> None:
     papers = load_paper_pool(input_path)
     if not papers:
@@ -753,15 +813,26 @@ def main() -> None:
 
     process_single_file(input_path, output_path)
   else:
-    if not os.path.isdir(RAW_DIR):
-      log(f"[INFO] 原始目录不存在：{RAW_DIR}（今天没有新论文，将跳过 Embedding 检索）")
+    supabase_enabled = (
+      bool(supabase_conf.get("enabled"))
+      and bool(supabase_conf.get("use_vector_rpc"))
+      and not bool(args.disable_supabase_vector)
+    )
+    if os.path.isdir(RAW_DIR):
+      raw_files = sorted(f for f in os.listdir(RAW_DIR) if f.lower().endswith(".json"))
+    else:
+      raw_files = []
+
+    if not raw_files and supabase_enabled:
+      # Supabase-only 模式：无本地原始文件，直接走数据库端向量召回
+      log("[INFO] 原始目录不存在或为空，但 Supabase 向量召回已启用，将直接使用数据库端召回。")
+      output_path = os.path.join(FILTERED_DIR, f"arxiv_papers_{TODAY_STR}.embedding.json")
+      if not run_supabase_vector_recall(output_path):
+        log("[WARN] Supabase 向量召回未能召回结果，且无本地原始文件可回退。")
       return
 
-    raw_files = sorted(
-      f for f in os.listdir(RAW_DIR) if f.lower().endswith(".json")
-    )
     if not raw_files:
-      log(f"[INFO] 在 {RAW_DIR} 下未找到任何 .json 原始文件。（今天没有新论文，将跳过 Embedding 检索）")
+      log(f"[INFO] 原始目录不存在或为空：{RAW_DIR}（今天没有新论文，将跳过 Embedding 检索）")
       return
 
     log(f"[INFO] 批量模式：将在 {RAW_DIR} 下处理 {len(raw_files)} 个 JSON 文件。")
