@@ -9,6 +9,7 @@
 import argparse
 import json
 import os
+import math
 from datetime import datetime, timedelta, timezone
 from dataclasses import dataclass, field
 from typing import Dict, List, Set, Any, Optional
@@ -32,6 +33,7 @@ FILTERED_DIR = os.path.join(ARCHIVE_DIR, "filtered")
 DATE_RE_DAY = re.compile(r"^\d{8}$")
 DATE_RE_RANGE = re.compile(r"^\d{8}-\d{8}$")
 SUPABASE_TIME_FIELDS = ("published",)
+SUPABASE_VECTOR_SHARD_DAYS = 7
 
 def log(message: str) -> None:
   ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
@@ -203,6 +205,288 @@ def _format_supabase_window_for_log(
     published = window if "published" in safe_fields else "N/A"
     updated = window if "updated_at" in safe_fields else "N/A"
   return published, updated, ",".join(sorted(safe_fields))
+
+
+def _normalize_utc_datetime(value: datetime | None) -> datetime | None:
+  if not isinstance(value, datetime):
+    return None
+  if value.tzinfo is None:
+    return value.replace(tzinfo=timezone.utc)
+  return value.astimezone(timezone.utc)
+
+
+def split_supabase_time_window(
+  start_dt: datetime | None,
+  end_dt: datetime | None,
+  *,
+  shard_days: int = SUPABASE_VECTOR_SHARD_DAYS,
+) -> list[tuple[datetime, datetime]]:
+  safe_start = _normalize_utc_datetime(start_dt)
+  safe_end = _normalize_utc_datetime(end_dt)
+  if safe_start is None or safe_end is None or safe_end <= safe_start:
+    return []
+
+  safe_shard_days = max(int(shard_days or 1), 1)
+  step = timedelta(days=safe_shard_days)
+  if safe_end - safe_start <= step:
+    return [(safe_start, safe_end)]
+
+  shards: list[tuple[datetime, datetime]] = []
+  cursor = safe_start
+  while cursor < safe_end:
+    next_dt = min(cursor + step, safe_end)
+    shards.append((cursor, next_dt))
+    cursor = next_dt
+  return shards
+
+
+def _resolve_supabase_similarity(row: Dict[str, Any]) -> float:
+  score_raw = row.get("similarity")
+  if score_raw is None:
+    score_raw = row.get("score")
+  try:
+    return float(score_raw)
+  except Exception:
+    return 0.0
+
+
+def merge_supabase_vector_rows(
+  rows_per_shard: list[list[Dict[str, Any]]],
+  *,
+  top_k: int,
+) -> list[Dict[str, Any]]:
+  merged_by_id: Dict[str, Dict[str, Any]] = {}
+
+  for shard_idx, rows in enumerate(rows_per_shard):
+    for local_rank, row in enumerate(rows, start=1):
+      if not isinstance(row, dict):
+        continue
+      pid = str(row.get("id") or "").strip()
+      if not pid:
+        continue
+      similarity = _resolve_supabase_similarity(row)
+      existing = merged_by_id.get(pid)
+      should_replace = False
+      if existing is None:
+        should_replace = True
+      else:
+        old_similarity = float(existing.get("_merged_similarity") or 0.0)
+        old_shard_idx = int(existing.get("_merged_shard_idx") or 0)
+        old_local_rank = int(existing.get("_merged_local_rank") or 0)
+        if similarity > old_similarity:
+          should_replace = True
+        elif similarity == old_similarity and (
+          shard_idx < old_shard_idx
+          or (shard_idx == old_shard_idx and local_rank < old_local_rank)
+        ):
+          should_replace = True
+
+      if not should_replace:
+        continue
+
+      normalized = dict(row)
+      normalized["_merged_similarity"] = similarity
+      normalized["_merged_shard_idx"] = shard_idx
+      normalized["_merged_local_rank"] = local_rank
+      merged_by_id[pid] = normalized
+
+  merged = sorted(
+    merged_by_id.values(),
+    key=lambda item: (
+      -float(item.get("_merged_similarity") or 0.0),
+      int(item.get("_merged_shard_idx") or 0),
+      int(item.get("_merged_local_rank") or 0),
+      str(item.get("id") or ""),
+    ),
+  )
+  if top_k > 0:
+    merged = merged[:top_k]
+
+  for item in merged:
+    item.pop("_merged_similarity", None)
+    item.pop("_merged_shard_idx", None)
+    item.pop("_merged_local_rank", None)
+  return merged
+
+
+def _query_supabase_vector_window(
+  *,
+  url: str,
+  api_key: str,
+  rpc_name: str,
+  query_embedding: list[float],
+  match_count: int,
+  schema: str,
+  start_dt: datetime,
+  end_dt: datetime,
+  time_fields: tuple[str, ...],
+  shard_days: int,
+  min_shard_days: int = 1,
+  depth: int = 0,
+  rpc_mode: str = "exact",
+) -> tuple[list[list[Dict[str, Any]]], int, list[str]]:
+  rows, msg = match_papers_by_embedding(
+    url=url,
+    api_key=api_key,
+    rpc_name=rpc_name,
+    query_embedding=query_embedding,
+    match_count=match_count,
+    schema=schema,
+    start_dt=start_dt,
+    end_dt=end_dt,
+    time_fields=time_fields,
+  )
+  window = f"{start_dt.isoformat()} ~ {end_dt.isoformat()}"
+  log(
+    f"[Supabase Vector:{rpc_mode}] "
+    f"depth={depth} "
+    f"window={window} "
+    f"{msg}"
+  )
+  if msg.startswith("rpc 查询成功"):
+    return ([rows], 1, [])
+
+  failure_message = f"depth={depth} window={window} {msg}"
+  safe_start = _normalize_utc_datetime(start_dt)
+  safe_end = _normalize_utc_datetime(end_dt)
+  if safe_start is None or safe_end is None or safe_end <= safe_start:
+    return ([], 0, [failure_message])
+  if "57014" not in msg:
+    return ([], 0, [failure_message])
+
+  span_seconds = max((safe_end - safe_start).total_seconds(), 0.0)
+  span_days = max(int(math.ceil(span_seconds / 86400.0)), 1)
+  safe_min_shard_days = max(int(min_shard_days or 1), 1)
+  if span_days <= safe_min_shard_days:
+    return ([], 0, [failure_message])
+
+  next_shard_days = max(span_days // 2, safe_min_shard_days)
+  if shard_days > 1:
+    next_shard_days = min(next_shard_days, shard_days - 1)
+  if next_shard_days >= span_days:
+    next_shard_days = span_days - 1
+  if next_shard_days < safe_min_shard_days:
+    next_shard_days = safe_min_shard_days
+  if next_shard_days >= span_days:
+    return ([], 0, [failure_message])
+
+  sub_shards = split_supabase_time_window(
+    safe_start,
+    safe_end,
+    shard_days=next_shard_days,
+  )
+  if len(sub_shards) <= 1:
+    return ([], 0, [failure_message])
+
+  log(
+    f"[Supabase Vector:{rpc_mode}] "
+    f"timeout fallback window={window} "
+    f"split_to={len(sub_shards)} "
+    f"sub_shard_days={next_shard_days}"
+  )
+
+  rows_per_shard: list[list[Dict[str, Any]]] = []
+  success_count = 0
+  failure_messages: list[str] = []
+  for sub_start, sub_end in sub_shards:
+    sub_rows, sub_success, sub_failures = _query_supabase_vector_window(
+      url=url,
+      api_key=api_key,
+      rpc_name=rpc_name,
+      query_embedding=query_embedding,
+      match_count=match_count,
+      schema=schema,
+      start_dt=sub_start,
+      end_dt=sub_end,
+      time_fields=time_fields,
+      shard_days=next_shard_days,
+      min_shard_days=safe_min_shard_days,
+      depth=depth + 1,
+      rpc_mode=rpc_mode,
+    )
+    rows_per_shard.extend(sub_rows)
+    success_count += sub_success
+    failure_messages.extend(sub_failures)
+
+  if success_count > 0:
+    return (rows_per_shard, success_count, failure_messages)
+  return ([], 0, [failure_message, *failure_messages])
+
+
+def query_supabase_vector_with_shards(
+  *,
+  url: str,
+  api_key: str,
+  rpc_name: str,
+  query_embedding: list[float],
+  match_count: int,
+  schema: str,
+  start_dt: datetime | None,
+  end_dt: datetime | None,
+  time_fields: tuple[str, ...],
+  shard_days: int = SUPABASE_VECTOR_SHARD_DAYS,
+  rpc_mode: str = "exact",
+) -> tuple[list[Dict[str, Any]], str]:
+  safe_start = _normalize_utc_datetime(start_dt)
+  safe_end = _normalize_utc_datetime(end_dt)
+  if safe_start is None or safe_end is None or safe_end <= safe_start:
+    return match_papers_by_embedding(
+      url=url,
+      api_key=api_key,
+      rpc_name=rpc_name,
+      query_embedding=query_embedding,
+      match_count=match_count,
+      schema=schema,
+      start_dt=start_dt,
+      end_dt=end_dt,
+      time_fields=time_fields,
+    )
+
+  shards = split_supabase_time_window(
+    safe_start,
+    safe_end,
+    shard_days=shard_days,
+  )
+  if not shards:
+    return ([], "rpc 分片查询失败：未生成有效时间分片")
+
+  rows_per_shard: list[list[Dict[str, Any]]] = []
+  success_count = 0
+  failure_messages: list[str] = []
+
+  for shard_start, shard_end in shards:
+    sub_rows, sub_success, sub_failures = _query_supabase_vector_window(
+      url=url,
+      api_key=api_key,
+      rpc_name=rpc_name,
+      query_embedding=query_embedding,
+      match_count=match_count,
+      schema=schema,
+      start_dt=shard_start,
+      end_dt=shard_end,
+      time_fields=time_fields,
+      shard_days=max(int(shard_days or 1), 1),
+      rpc_mode=rpc_mode,
+    )
+    rows_per_shard.extend(sub_rows)
+    success_count += sub_success
+    failure_messages.extend(sub_failures)
+
+  merged_rows = merge_supabase_vector_rows(
+    rows_per_shard,
+    top_k=max(int(match_count or 1), 1),
+  )
+  if success_count <= 0:
+    detail = " | ".join(failure_messages[:2]) if failure_messages else "所有分片均失败"
+    return ([], f"rpc 分片查询失败：success=0/{len(shards)} | {detail}")
+
+  summary = (
+    f"rpc 分片查询成功：{len(merged_rows)} 条"
+    f"（initial_shards={len(shards)} success_windows={success_count} failed_windows={len(failure_messages)}）"
+  )
+  if failure_messages:
+    summary += f" | partial_failures={len(failure_messages)}"
+  return (merged_rows, summary)
 
 
 def parse_embedding_value(value: Any) -> Optional[np.ndarray]:
@@ -401,17 +685,32 @@ def rank_papers_for_queries_via_supabase(
     )
 
     q_vec = q_embs[idx]
-    rows, msg = match_papers_by_embedding(
-      url=url,
-      api_key=api_key,
-      rpc_name=rpc_name,
-      query_embedding=q_vec.tolist(),
-      match_count=max(int(top_k or 1), 1),
-      schema=schema,
-      start_dt=start_dt,
-      end_dt=end_dt,
-      time_fields=time_fields,
-    )
+    query_embedding = q_vec.tolist()
+    if rpc_mode == "exact":
+      rows, msg = query_supabase_vector_with_shards(
+        url=url,
+        api_key=api_key,
+        rpc_name=rpc_name,
+        query_embedding=query_embedding,
+        match_count=max(int(top_k or 1), 1),
+        schema=schema,
+        start_dt=start_dt,
+        end_dt=end_dt,
+        time_fields=time_fields,
+        rpc_mode=rpc_mode,
+      )
+    else:
+      rows, msg = match_papers_by_embedding(
+        url=url,
+        api_key=api_key,
+        rpc_name=rpc_name,
+        query_embedding=query_embedding,
+        match_count=max(int(top_k or 1), 1),
+        schema=schema,
+        start_dt=start_dt,
+        end_dt=end_dt,
+        time_fields=time_fields,
+      )
     log(f"[Supabase Vector:{rpc_mode}] {msg} | tag={q.get('tag') or ''}")
 
     # 语句超时（57014）是服务端配置限制，后续批次也会超时，直接跳过
@@ -424,7 +723,7 @@ def rank_papers_for_queries_via_supabase(
       pid = str(row.get("id") or "").strip()
       if not pid:
         continue
-      score = float(row.get("similarity") or 0.0)
+      score = _resolve_supabase_similarity(row)
       sim_scores[pid] = {"score": score, "rank": rank_idx}
       total_hits += 1
 
