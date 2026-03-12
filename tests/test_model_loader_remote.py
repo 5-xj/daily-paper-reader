@@ -64,7 +64,10 @@ class RemoteSentenceTransformerTest(unittest.TestCase):
         self.assertEqual(model.model_name, "BAAI/bge-small-en-v1.5")
         self.assertEqual(model.endpoint, "https://embed.zwwen.online/embed")
         self.assertEqual(model.timeout, 45)
-        self.assertEqual(model.api_key, "dpr-embed-public")
+        self.assertEqual(
+            model.api_key,
+            "26932a86d772001af60cbd9d2c162bfda3a90e094f797f3d6806f6077478b27a",
+        )
 
 
 if __name__ == "__main__":
