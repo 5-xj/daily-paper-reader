@@ -3399,6 +3399,8 @@ window.$docsify = {
             if (link.classList && link.classList.contains('dpr-sidebar-export-link')) return;
             const rawHref = String(link.getAttribute('href') || '').trim();
             if (rawHref.startsWith('blob:')) return;
+            // 跳过外部链接（如 PDF 地址），让浏览器直接打开
+            if (/^https?:\/\//i.test(rawHref)) return;
             const href = link.getAttribute('href') || '';
             const target = normalizeHref(href);
             if (!target || !isPaperHref(target) && !isPaperHrefFallback(target)) {
