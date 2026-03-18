@@ -7,6 +7,7 @@ sys.path.insert(0, str(ROOT))
 from src.source_config import (
     ARXIV_SOURCE_KEY,
     get_source_backend,
+    get_supabase_shared_config,
     migrate_source_config_inplace,
     resolve_source_backends,
 )
@@ -58,11 +59,15 @@ class SourceConfigMigrationTest(unittest.TestCase):
 
     def test_resolve_source_backends_prefers_new_shape(self):
         cfg = {
+            "supabase_shared": {
+                "enabled": True,
+                "url": "https://shared.supabase.co",
+                "anon_key": "shared-key",
+                "schema": "public",
+            },
             "source_backends": {
                 "arxiv": {
-                    "enabled": True,
                     "url": "https://new.supabase.co",
-                    "anon_key": "new-key",
                     "papers_table": "papers",
                 }
             },
@@ -74,7 +79,32 @@ class SourceConfigMigrationTest(unittest.TestCase):
         }
         backends = resolve_source_backends(cfg)
         self.assertEqual(backends["arxiv"]["url"], "https://new.supabase.co")
-        self.assertEqual(get_source_backend(cfg, "arxiv")["anon_key"], "new-key")
+        self.assertEqual(get_source_backend(cfg, "arxiv")["anon_key"], "shared-key")
+
+    def test_resolve_source_backends_merges_supabase_shared(self):
+        cfg = {
+            "supabase_shared": {
+                "enabled": True,
+                "url": "https://shared.supabase.co",
+                "anon_key": "shared-key",
+                "schema": "public",
+            },
+            "source_backends": {
+                "biorxiv": {
+                    "enabled": False,
+                    "papers_table": "biorxiv_papers",
+                    "vector_rpc_exact": "match_biorxiv_papers_exact",
+                    "bm25_rpc": "match_biorxiv_papers_bm25",
+                }
+            },
+        }
+        shared = get_supabase_shared_config(cfg)
+        self.assertEqual(shared["url"], "https://shared.supabase.co")
+        backend = get_source_backend(cfg, "biorxiv")
+        self.assertEqual(backend["url"], "https://shared.supabase.co")
+        self.assertEqual(backend["anon_key"], "shared-key")
+        self.assertEqual(backend["papers_table"], "biorxiv_papers")
+        self.assertFalse(backend["enabled"])
 
 
 if __name__ == "__main__":

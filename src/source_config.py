@@ -40,8 +40,28 @@ def normalize_source_list(value: Any) -> List[str]:
     return out
 
 
-def _normalize_backend_entry(raw: Dict[str, Any], *, default_papers_table: str) -> Dict[str, Any]:
-    entry = copy.deepcopy(raw) if isinstance(raw, dict) else {}
+def _merge_dicts(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
+    out = copy.deepcopy(base if isinstance(base, dict) else {})
+    for key, value in (override or {}).items():
+        out[key] = value
+    return out
+
+
+def get_supabase_shared_config(config: Dict[str, Any]) -> Dict[str, Any]:
+    cfg = config if isinstance(config, dict) else {}
+    shared = cfg.get("supabase_shared")
+    if isinstance(shared, dict):
+        return copy.deepcopy(shared)
+    return {}
+
+
+def _normalize_backend_entry(
+    raw: Dict[str, Any],
+    *,
+    default_papers_table: str,
+    shared: Dict[str, Any] | None = None,
+) -> Dict[str, Any]:
+    entry = _merge_dicts(shared or {}, raw if isinstance(raw, dict) else {})
     vector_rpc_exact = _norm(entry.get("vector_rpc_exact") or "")
     vector_rpc = _norm(entry.get("vector_rpc") or "")
     return {
@@ -80,6 +100,7 @@ def _normalize_legacy_supabase_entry(raw: Dict[str, Any]) -> Dict[str, Any]:
 def resolve_source_backends(config: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
     cfg = config if isinstance(config, dict) else {}
     backends: Dict[str, Dict[str, Any]] = {}
+    shared = get_supabase_shared_config(cfg)
 
     raw_backends = cfg.get("source_backends")
     if isinstance(raw_backends, dict):
@@ -89,7 +110,11 @@ def resolve_source_backends(config: Dict[str, Any]) -> Dict[str, Dict[str, Any]]
                 continue
             if not isinstance(raw_value, dict):
                 continue
-            backends[source_key] = _normalize_backend_entry(raw_value, default_papers_table="papers")
+            backends[source_key] = _normalize_backend_entry(
+                raw_value,
+                default_papers_table="papers",
+                shared=shared,
+            )
 
     legacy_supabase = cfg.get("supabase")
     if ARXIV_SOURCE_KEY not in backends and isinstance(legacy_supabase, dict):
