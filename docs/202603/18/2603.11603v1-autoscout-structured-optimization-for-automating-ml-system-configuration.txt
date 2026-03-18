@@ -1,0 +1,491 @@
+Title: AutoScout: Structured Optimization for Automating ML System Configuration
+
+URL Source: https://arxiv.org/pdf/2603.11603v1
+
+Published Time: Fri, 13 Mar 2026 00:33:08 GMT
+
+Number of Pages: 12
+
+Markdown Content:
+# AutoScout: Structured Optimization for Automating ML System Configuration 
+
+Jimmy Shong 1 Yuhan Ding 1 Yihan Jiang 1 Liheng Jing 1 Haonan Chen 2 Gaokai Zhang 1 Aditya Akella 3
+
+Fan Lai 1
+
+## Abstract 
+
+Machine learning (ML) systems expose a rapidly expanding configuration space spanning model-parallelism strategies, communication optimiza-tions, and low-level runtime parameters. End-to-end system efficiency is highly sensitive to these choices, yet identifying high-performance con-figurations is challenging due to heterogeneous feature types (e.g., sparse and dense parameters), conditional dependencies (e.g., valid execution pa-rameters only under specific upstream decisions), and the high search (profiling) cost. Existing ap-proaches either optimize a narrow subset of con-figuration dimensions or rely on ad-hoc heuristics that fail to generalize as configuration spaces con-tinue to grow. We present AutoScout, a general-purpose systems configurator for ML training, fine-tuning, and inference. It formulates the sys-tem configuration as a mixed-discrete/continuous optimization problem with hierarchical dependen-cies and introduces a hybrid optimization frame-work that jointly refines sparse structural deci-sions and dense execution parameters. To reduce profiling cost, AutoScout adaptively prioritizes high-impact configuration features and ensembles simulators with varying fidelity. Across diverse models, hardware platforms, and deployment ob-jectives, AutoScout consistently identifies high-performance configurations, achieving 2.7–3.0 ×
+
+training speedup over expert-tuned settings. 
+
+## 1. Introduction 
+
+Machine learning systems expose an increasingly wide spec-trum of performance-critical optimizations, spanning model parallelism (Narayanan et al., 2019; Zheng et al., 2022), communication overlap (Huang et al., 2019), and low-level runtime parameters (e.g., chunked-prefill size). Each new    
+
+> 1University of Illinois Urbana-Champaign 2University of Cali-fornia, Berkeley 3The University of Texas at Austin. Correspon-dence to: Fan Lai <fanlai@illinois.edu >.
+> Preprint. March 13, 2026.
+
+framework, hardware, or deployment objective introduces compound configuration dimensions whose interactions are already difficult to reason about in isolation. Worse yet, this configuration space expands rapidly with the prevalence of distributed deployments. Our analysis of widely used frameworks, such as vLLM (Kwon et al., 2023) and Mega-tron (Shoeybi et al., 2020), shows that even for a fixed model and hardware setup, the number of valid configurations that already reaches the order of thousands continues to grow year over year as frameworks evolve. Our studies show that a well-configured deployment can im-prove end-to-end execution speed by 1.4–4.0 × compared to naive or default settings. However, identifying such config-urations is notoriously challenging. First, ML configuration spaces combine sparse features (e.g., categorical choices such as parallelism strategies) with dense features (e.g., continuous execution parameters such as DDP communi-cation bucket size and GPU memory utilization). Second, these features are rarely independent: many parameters are only meaningful under specific upstream decisions (e.g., SM allocation for communication in tensor parallellism), leading to strong hierarchical and conditional dependen-cies. Third, the performance-optimal configuration is highly context-dependent; it varies across models, accelerator types and counts, and deployment objectives such as latency-throughput tradeoffs in serving (Narayanan et al., 2019; Tarnawski et al., 2021). Finally, evaluating a single con-figuration often requires expensive GPU-based execution, making efficient search essential. Existing advances are fundamentally limited. First, they mostly focus on optimizing a narrow subset of configuration dimensions, such as data, tensor, or pipeline parallelism de-grees (Narayanan et al., 2019; Shoeybi et al., 2020; Zheng et al., 2022; Um et al., 2024). However, even under identical parallelism strategies, system performance can vary by up to 
+
+42 × depending on other execution parameters (§2). Second, more recent advances rely on task-specific heuristics (e.g., limiting tensor parallelism to single nodes or prioritizing data parallelism via capacity-aware pruning) (Tarnawski et al., 2021; Um et al., 2024; Strati et al., 2025) or carefully engineered simulators, yet difficult to sustain as configura-tion spaces continue to evolve. Third, traditional black-box optimization methods, such as Bayesian Optimization, are 1
+
+> arXiv:2603.11603v1 [cs.LG] 12 Mar 2026
+
+AutoScout: Structured Optimization for Automating ML System Configuration 
+
+ill-suited to such configuration spaces that combine sparse and dense parameters with strong hierarchical dependencies (Jamieson & Talwalkar, 2016; Li et al., 2017). Furthermore, they fail to account for the high-profile cost per search step. In this paper, we introduce AutoScout, a systems configura-tion optimizer for ML training, fine-tuning, and inference. Given a target model, deployment objective, and accelerator environment, AutoScout efficiently navigates the configura-tion space to identify high-performance configurations. At its core, AutoScout employs a hybrid optimization frame-work that jointly explores sparse structural decisions and refines dense execution parameters. Sparse configuration choices are organized into a tree-based search space ex-plored by a sparse optimizer, while dense features are op-timized using coordinate-wise stochastic gradient descent. Feedback from each search step is integrated through a hy-brid bandit mechanism that dynamically coordinates explo-ration between the sparse and dense optimizers. To further improve efficiency, AutoScout incorporates a tournament-based design to prioritize high-impact configuration features and adaptively ensembles multiple simulators with varying fidelity to reduce reliance on expensive profiling. In summary, this paper makes the following contributions: • We identify ML systems configuration optimization as a mixed discrete-continuous optimization problem with strong hierarchical and conditional dependencies. • We propose AutoScout, a novel hybrid system configura-tor that combines tree-based search over sparse structural decisions with gradient-guided optimization of dense exe-cution parameters, coordinated by adaptive exploration. • We demonstrate that AutoScout consistently outperforms existing approaches across diverse models and deploy-ment objectives, generating configurations that lead to 
+
+1.3–3.0 × speedup while being 13.7–16.5 × faster than existing system configurators. 
+
+## 2. Background and Motivation 
+
+As model sizes continue to grow and training and inference pipelines increasingly exploit heterogeneous hardware, ML practitioners must navigate an ever-expanding configuration space spanning parallelism strategies, execution-level pa-rameters, and system optimization policies (Zhang et al., 2026; Sun et al., 2025), e.g., using activation checkpointing or not (Tarnawski et al., 2021; Zheng et al., 2022). 
+
+Ever-Growing Systems Configuration Complexity in ML Workloads. Even when fixing the underlying model and hardware, the space of valid system configurations can be enormous. A single deployment typically involves a mixture of discrete, sparse decisions (e.g., parallelism strategies), continuous parameters (e.g., GPU memory utilization and 2021-07 2022-01 2022-07 2023-01 2023-07 2024-01 2024-07 2025-01 2025-07 
+
+> Release Date
+> 10 1
+> 10 2
+> Execution Parameter Count  Megatron
+> DeepSpeed
+> SGLang
+> VLLM
+> Sailor
+
+Figure 1. The number of exposed configuration knobs in modern ML systems has steadily increased over time, significantly expand-ing the dimensionality and complexity of the optimization space. 
+
+Figure 2. Configuration space in modern ML systems is enormous, consisting of both discrete and continuous features and leading to orders-of-magnitude throughput differences. 
+
+communication bucket size), and conditional constraints that tie these choices together. As shown in Figure 1, the number of exposed configuration parameters in widely used ML systems has increased steadily over time. Each new knob expands the search space and introduces additional dependencies that must be reasoned about jointly. Indeed, even on identical hardware, Figure 2 shows that the performance gap between two configurations can exceed 
+
+40 ×. Such disparities indicate that naive defaults or ad hoc tuning can leave substantial ML system efficiency untapped. At the scale of frontier-model deployment, even modest per-formance improvements can translate into jobs completing weeks or months earlier, yielding millions of dollars in cost savings (Cottier et al., 2025). Unfortunately, optimal system configurations are highly dependent on the underlying hardware, model character-istics, and deployment objectives, making it difficult for hand-crafted heuristics or static rules to generalize. For example, the optimal communication bucket size and par-allelism strategies vary significantly across GPU types and network topologies (Um et al., 2024). Therefore, even when carefully engineered heuristics perform well initially, they quickly become outdated as frameworks, optimization strat-gies, or the user’s latency requirements evolve. 
+
+Limitations of Existing Solutions. Existing configuration optimizers for ML systems largely focus on a narrow subset 2AutoScout: Structured Optimization for Automating ML System Configuration 
+
+of decisions, most notably three-dimensional model paral-lelism (data, tensor, and pipeline parallelism) (Um et al., 2024; Strati et al., 2025). However, even when the best 3D parallelism strategy is selected for a fixed cluster, execution-level configuration choices can lead to performance gaps of 1.4-4 × (§4.2). These results indicate that parallelism-only optimization leaves substantial performance untapped. To manage the resulting complexity, prior systems often rely on task-specific heuristics or carefully engineered sim-ulators to prune the search space. Such approaches are inherently brittle: heuristics must be repeatedly redesigned as new execution optimizations, and simulator accuracy degrades rapidly as configuration interactions grow more complex (Figure 1). As a result, heuristic-driven search does not scale with the pace at which ML frameworks and hardware evolve. Yet, general black-box optimizers such as Bayesian optimization struggle due to high-dimensional, mixed discrete-continuous spaces, as well as prohibitive profiling cost (Zheng et al., 2022). Together, these limitations expose a fundamental gap: exist-ing approaches neither scale with configuration complexity nor adapt reliably across ML deployments. 
+
+## 3. AutoScout Design 
+
+This paper introduces AutoScout, a general-purpose systems configurator for ML training, fine-tuning, and inference. AutoScout aims to efficiently identify high-performance configurations in large, structured configuration spaces by explicitly reasoning about hierarchical dependencies, het-erogeneous parameters, and high profiling cost. 
+
+3.1. Design Overview 
+
+Unlike existing approaches that rely on feature-specific heuristics or simulators (Tarnawski et al., 2021; Um et al., 2024; Strati et al., 2025), AutoScout decomposes config-uration optimization into coordinated sparse structural ex-ploration and dense continuous refinement. This separation enables scalable and extensible optimization as ML systems and configuration spaces continue to evolve. Figure 3 illustrates the overall workflow of AutoScout. Upon receiving a user request, the Orchestrator coordinates the optimization process by dispatching sparse structural features and dense (continuous) features to the Sparse Op-timizer and Dense Optimizer , respectively. Each optimizer proposes candidate configurations for the features under its control and forwards them to the Synthesizer , which as-sembles complete configurations and determines whether to evaluate them using simulator ensembles or real profil-ing, based on confidence and estimated cost. Evaluation feedback is then returned to the Orchestrator to guide subse-quent search steps, including refining feature-level impor-14 14     
+
+> Adaptive Evaluator
+> Profiler
+> Simulators
+> Split
+> Config
+> ❸
+> Hierarchical Hybrid Search Optimizer
+> Sparse Optimizer
+> Dense Optimizer
+> Orchestrator ❹
+> Reassemble
+> Confi g
+> Tournament ❶
+> Submit Job
+> ❺
+> Evaluate
+> Candidate
+> Config
+> ❻Propagate Reward
+> Training / Finetuning / Inference
+> ❷
+> Obtain Param. Order
+
+Figure 3. AutoScout overview and workflow. It combines sparse and dense optimizers with an adaptive evaluator to efficiently search the ML system configuration space. 
+
+tance. This iterative process continues until convergence criteria are met or a time budget is reached, at which point AutoScout terminates the optimization loop and returns the selected configuration to the user. We next introduce the design of the Sparse Optimizer and the Dense Optimizer to minimize the number of search steps (§3.2), while adaptively orchestrating simulators to minimize per-step search overhead (§3.3). 
+
+3.2. Hierarchical Hybrid Search Optimizer 
+
+Configuration optimization for ML systems differs funda-mentally from classical hyperparameter tuning. Beyond the coexistence of sparse and dense features, many configura-tion decisions are hierarchical and conditional: downstream parameters are only meaningful once upstream structure is fixed (Tarnawski et al., 2021; Zheng et al., 2022). For example, valid tensor- and data-parallelism degrees depend on how the model is partitioned into pipeline stages, while communication overlap depends on the activated parallelism policy. This induces a search space with strict ordering con-straints and fragmented feasibility regions across sparse and dense dimensions, exceeding the capabilities of existing flat optimization strategies (Gonz´ alez-Duque et al., 2024). Our key insight is that sparse configuration features naturally form a dependency tree with categorical branching, making them amenable to tree-based exploration. In contrast, dense execution parameters often exhibit local smoothness within a fixed structure, allowing efficient numerical refinement. Motivated by this structural dichotomy, AutoScout adopts a hierarchical hybrid optimization strategy that explicitly separates sparse structural exploration from dense parameter optimization, enabling efficient and scalable search in large, structured configuration spaces. 
+
+Sparse Optimizer with Adaptive Feature Prioritization. 
+
+AutoScout models sparse, structural configuration deci-sions as a dependency-aware search tree and explores this space using Monte Carlo Tree Search (MCTS)(Kocsis & 3AutoScout: Structured Optimization for Automating ML System Configuration 
+
+Szepesv ´ari, 2006). Each node corresponds to a partial con-figuration s ∈ S , and each edge represents a valid refine-ment that satisfies feasibility constraints induced by up-stream decisions. MCTS naturally supports conditional validity, delayed rewards, and asymmetric branching fac-tors, making it well-suited for hierarchical configuration spaces. Rollouts complete partial configurations by invok-ing downstream numerical optimization and return an ob-served reward r(s), such as vLLM’s per-token latency with the proposed configuration, for backpropagation. However, not all configuration features contribute equally to performance. Let F = {f1, . . . , f d} denote the set of sparse structural features. In practice, only a small subset 
+
+F⋆ ⊂ F has significant performance impact for a given workload (Klimovic et al., 2018; Alipourfard et al., 2017), and the identity of F⋆ varies across models, hardware envi-ronments, and deployment objectives, so pre-engineering a fixed feature ordering is impractical. Moreover, the order-ing of features in the search tree critically affects MCTS efficiency: prioritizing high-impact features earlier reduces effective branching and accelerates credit assignment, while suboptimal orderings lead to wasted exploration. To address this challenge, AutoScout introduces alightweight tournament-based feature prioritization mech-anism that adapts the tree structure online. Our key obser-vation is that while feature importance is job-dependent, it often lies within a small set of commonly effective orderings. Accordingly, AutoScout maintains a candidate set of K tree structures {T 1, . . . , TK }, each corresponding to a different prioritization of F and initialized from prior optimization runs (e.g., past jobs). During a brief warm-up phase, these trees are instantiated with negligible overhead. At each optimization iteration, AutoScout alternates among the candidate trees, allowing each Tk to propose a config-uration sk. The selected configuration is evaluated once, and the resulting reward is propagated to all K trees, ensur-ing shared learning without duplicated evaluation cost. To avoid bias from update order, AutoScout traverses trees in a zigzag schedule across rounds, ensuring balanced credit assignment. After each tournament round, which consists of 
+
+K optimization iterations, AutoScout ranks tree structures by the cumulative reward of their proposed configurations and retains only the top-performing half. This elimination process repeats until a single tree structure remains. The tournament converges in O(log K · N ) iterations and in-curs minimal overhead, as each iteration requires only one configuration evaluation. Our evaluations show that this mechanism rapidly identifies effective feature orderings, significantly improving MCTS efficiency (§4.3). 
+
+Dependency-aware Dense Optimizer. Given a fixed structural configuration, system performance still depends critically on continuous execution parameters, such as chunked-prefill length, kernel fusion thresholds, and GPU memory budget for KV cache. These parameters often exhibit local smoothness, but their feasible ranges and per-formance impact can depend on other decisions (e.g., KV cache offloading or not determined by the sparse optimizer), making global surrogate modeling unreliable. Structural decisions may activate, constrain, or disable sub-sets of dense parameters. Rather than rejecting proposals from either optimizer, AutoScout explicitly encodes these dependencies using a structure-dependent masking function 
+
+M (s), which maps the global dense parameter space to a feasible subspace X (s). When the sparse optimizer pro-poses a new structure s, the dense optimizer projects its current state onto X (s) by masking inactive dimensions, naturally aligning with its coordinate-wise update strategy. The dense optimizer employs a coordinate-wise search strat-egy that refines one parameter at a time using a momentum-based update rule. At each iteration, the optimizer perturbs the active parameter along its current search direction; if the perturbation yields improvement, it continues along that direction to exploit local structure, while failures trigger a switch to a different parameter to encourage exploration across dimensions. This design naturally accommodates the discrete, grid-structured nature of execution parameters exposed by modern ML systems, where valid settings are typically drawn from a finite set of system-supported values rather than a continuous range. However, end-to-end performance is jointly determined by structural and dense parameters, making the reward r(s, x)
+
+non-separable. Poor performance may stem from poorly tuned dense parameters, and navely attributing the reward to the sparse optimizer can mislead learning. To address this challenge, we next introduce an optimizer orchestrator that mediates reward assignment and controls optimization flow. 
+
+3.3. Optimizer Orchestrator 
+
+Our optimizer orchestrator adaptively decomposes the re-ward signal r(s) to inform the update of the sparse and dense optimizers, based on observed improvement trends and uncertainty estimates. In addition, it dynamically se-lects between low-cost simulator-based evaluation and high-fidelity profiling for each proposed configuration, exposing a fundamental tradeoff between feedback fidelity and per-step efficiency: over-reliance on noisy simulator feedback can misguide optimizer updates and increase the number of search iterations, while excessive reliance on profiling incurs prohibitively high evaluation cost. Algorithm 1 illustrates AutoScout’s configuration optimiza-tion workflow. We optionally warm-start the sparse search via a tournament over candidate tree structures (i.e., parame-4AutoScout: Structured Optimization for Automating ML System Configuration 
+
+Algorithm 1 AutoScout Configuration Optimization Work-flow  
+
+> 1:
+
+Input: workload W, search budget T 
+
+> 2:
+
+Hyperparams: check interval τ , error threshold ϵ 
+
+> 3:
+
+Output: best configuration (S⋆, X ⋆)  
+
+> 4: // Phase 0: Tournament warm-start (optional)
+> 5:
+
+(T ⋆, π ⋆) ← TOURNAMENT WARM START (W)  
+
+> 6: // Phase 1: Initialization
+> 7:
+
+O ← INIT ORCHESTRATOR (τ, ϵ ) 
+
+> 8:
+
+S ← INIT SPARSE OPTIMIZER (T ⋆, π ⋆) 
+
+> 9:
+
+D ← INIT DENSE OPTIMIZER (W) 
+
+> 10:
+
+(Sbase , S cand ) ← PROPOSE SPARSE PAIR (S) 
+
+> 11:
+
+(Xbase , X cand ) ← PROPOSE DENSE PAIR (D) 
+
+> 12:
+
+(S⋆, X ⋆) ← (Sbase , X base )  
+
+> 13: // Phase 2: Iterative coordinated optimization
+> 14:
+
+for t ← 1 to T do       
+
+> 15: // Construct a 2×2evaluation batch
+> 16:
+
+Cbb , C bc ← (Sbase , X base ), (Sbase , X cand ) 
+
+> 17:
+
+Ccb , C cc ← (Scand , X base ), (Scand , X cand ) 
+
+> 18:
+
+C ← { Cbb , C bc , C cb , C cc }  
+
+> 19: // Fidelity-adaptive evaluation (simulators vs. profiling)
+> 20:
+
+c ← EVAL BATCH ADAPTIVE (O, C, t )  
+
+> 21: // Update best-so-far and orchestrator state
+> 22:
+
+(S⋆, X ⋆) ← UPDATE BEST (( S⋆, X ⋆), C, c) 
+
+> 23:
+
+O ← UPDATE ORCHESTRATOR (O, C, c)  
+
+> 24: // Orchestrated candidate generation for next round
+> 25:
+
+(Sbase , S cand ) ← NEXT SPARSE PAIR (O, S) 
+
+> 26:
+
+(Xbase , X cand ) ← NEXT DENSE PAIR (O, D) 
+
+> 27:
+
+end for  
+
+> 28:
+
+return (S⋆, X ⋆)
+
+ter ordering), retaining a high-performing structure (Line 5). The optimization then proceeds iteratively under the co-ordination of an optimizer orchestrator. At each iteration, AutoScout forms a small evaluation batch by combining the current baseline and candidate configurations proposed by the sparse and dense optimizers (Lines 16–17). The batch is evaluated through a fidelity-adaptive controller that dy-namically selects between low-cost simulator feedback and high-fidelity profiling (Line 20). Based on the evaluation results, the orchestrator updates its internal state and coordi-nates the generation of the next sparse and dense candidate configurations for the subsequent iteration (Lines 23–26). 
+
+Coordinating Sparse and Dense Optimizers. AutoScout coordinates the sparse and dense optimizers using a hier-archical multi-armed bandit formulation (Jamieson & Tal-walkar, 2016). Each optimizer is modeled as an arm, where pulling an arm corresponds to allocating one unit of search budget, i.e., an optimization iteration that proposes and eval-uates a candidate configuration. A bandit formulation is well suited for this setting because the relative benefit of ex-ploring new structural configurations versus refining dense execution parameters is unknown a priori , varies across workloads, and evolves over the course of optimization. At iteration t, the orchestrator selects an optimizer at ∈{SPARSE , DENSE } according to the Upper Confidence Bound (UCB1) criterion: 
+
+at = arg max 
+
+> a
+
+"
+
+Qa
+
+Na
+
++ C(t)
+
+r ln Ntotal 
+
+Na
+
+#
+
+, (1) where Qa and Na denote the cumulative reward and number of selections for optimizer a, respectively, and Ntotal is the total number of iterations so far. The exploration coefficient 
+
+C(t) = C0 · γt decays exponentially over time, enabling the orchestrator to favor exploration early in the search and gradually shift toward exploitation as confidence in promising optimization directions increases. The bandit observes reward signals derived from adifference-of-differences estimator that disentangles the marginal contributions of each optimizer. Specifically, at each iteration, the orchestrator evaluates a 2 × 2 grid of configurations combining sparse baseline/candidate with dense baseline/candidate, computing marginal improve-ments ∆SPARSE and ∆DENSE while controlling for the other optimizer’s contribution. Early in the search, the bandit fa-vors structural, sparse features to rapidly prune unpromising regions of the configuration space; as promising structures emerge, it shifts budget toward dense refinement to exploit local smoothness. This adaptive exploration–exploitation tradeoff enables AutoScout to dynamically balance global structural search and local parameter optimization with-out manual scheduling, improving robustness and sample efficiency across workloads with heterogeneous structure-parameter interactions. 
+
+Cost-Aware Profiling with Simulators. Evaluating a con-figuration via real profiling is time- and resource-intensive, often requiring dedicated GPU execution. To reduce per-iteration overhead, AutoScout maintains an ensemble of lightweight simulators that provide fast performance pre-dictions based on subsets of configuration features. During optimization, simulator predictions are aggregated to esti-mate configuration cost, enabling efficient early-stage search and reducing reliance on expensive real measurements. To guard against simulator bias, AutoScout periodically val-idates selected configurations using real profiling at fixed intervals of τ iterations, computing the mean absolute per-centage error (MAPE) between predicted and observed costs. When the error exceeds a threshold ϵ, AutoScout triggers a fidelity switch that transitions subsequent evaluations from simulation to real profiling. This transition preserves accumulated search knowledge rather than discarding it. The MCTS tree structure is re-tained. Bandit statistics collected during simulation are 5AutoScout: Structured Optimization for Automating ML System Configuration 
+
+treated as weak priors rather than reset, allowing the op-timizer to adapt smoothly to higher-fidelity feedback. In addition, the top-K configurations identified during simu-lation are prioritized for re-evaluation under real profiling. Together, these mechanisms ensure that simulators provide a meaningful head start by narrowing the search space, while the adaptive fidelity switch prevents inaccurate predictions from misleading subsequent optimization. 
+
+## 4. Evaluation 
+
+We evaluate AutoScout using a cluster of 8 A100s and 4 A40 GPUs, spanning LLM training and inference jobs. Our evaluations show that AutoScout generates configurations that leads to 1.3–3.0 × speedup while using 28 .6% –93 .07% 
+
+less search steps than existing advances. 
+
+4.1. Evaluation Setup Models and Workloads. We evaluate AutoScout across models with diverse architectures and scales, includ-ing L LAMA -3.2-3B, L LAMA -3.1-N EMOTRON -N ANO -VL-8B-V1, and the Q WEN 3-30B-A3B variant as training jobs on the LMSYS-Chat-1M (Zheng et al., 2023) dataset. For inference, we evaluate on M ETA -L LAMA -3-8B-I NSTRUCT 
+
+using the LMSYS-Chat-1M dataset. For each model, AutoScout searches a large, multi-dimensional configu-ration space spanning tensor-parallel degree, micro-batch size, communication bucket size, activation recomputation, and other widely used execution parameters, resulting in up to ∼30,000 feasible configurations. Following prior work (Strati et al., 2025; Um et al., 2024), we construct lightweight model latency simulators based on multiple lin-ear regression to enable efficient performance estimation during search. Additional details on the configuration space and simulator design are provided in Appendix A and B, respectively. 
+
+Baselines. We compare against the following advances: • vLLM (Kwon et al., 2023): a widely used LLM serving framework with expert-tuned default configurations. • Megatron-LM (Shoeybi et al., 2020): a popular distributed LLM training framework using expert-recommended par-allelism and execution settings. • UDO (Wang et al., 2021): a general-purpose system con-figuration optimizer that applies MCTS to explore config-uration spaces. • CherryPick (Alipourfard et al., 2017): a cloud job config-uration framework based on Bayesian Optimization. • Metis (Um et al., 2024): a system that automatically dis-cover the best 3D model parallelism plan for machine learning jobs on heterogeneous clusters. 0 1000 2000   
+
+> Real Time (s)
+> 1.0
+> 1.2
+> 1.4
+> Cum. Best Latency (s/iter) 0200 400
+> Search Steps
+> 1.0
+> 1.2
+> 1.4
+> 1.6
+> Cum. Best Latency (s/iter)  CherryPick
+> AutoScout
+> UDO
+> Optimal
+> Metis
+
+Figure 4. End-to-end training performance and search behavior of AutoScout on Q WEN -M OE. 0 1000 2000   
+
+> Real Time (s)
+> 1.0
+> 1.2
+> 1.4
+> Cum. Best Latency (s/iter) 0200 400
+> Search Steps
+> 1.0
+> 1.2
+> 1.4
+> Cum. Best Latency (s/iter)  CherryPick
+> AutoScout
+> UDO
+> Optimal
+> Metis
+
+Figure 5. End-to-end training performance and search behavior of AutoScout on L LAMA -3.2-3B. 
+
+Metrics. Our evaluation focuses on two objectives: (i) minimizing configuration search time and profiling cost, while (ii) maximizing end-to-end system performance. For training workloads, we report execution latency measured in seconds per training iteration ( s/iter ). For inference workloads, we report generation latency measured in mil-liseconds per generated token ( ms /token ). All results are reported as averages over 20 independent runs to ensure statistical significance. 
+
+4.2. End-to-End Performance AutoScout identifies high-performance configurations for ML systems. Figures 4–7,show that AutoScout con-sistently identifies configurations with lower end-to-end latency than expert-tuned system configurations and prior automatic parallelization systems across all evaluated mod-els. For the Q WEN -M OE workload, AutoScout’s best configuration improves performance by 1.4–2.7 ×. Simi-larly, when training L LAMA -3.2-3B, AutoScout achieves a 1.3–2.7 × improvement over Megatron. For L LAMA -3.1-NEMOTRON -N ANO -VL-8B-V1, AutoScout identifies a configuration that outperforms those generated by 3D auto-parallelizers 1.3–3.0 ×, respectively. For inference jobs on QWEN -M OE, AutoScout identifies a configuration that out-performs expert-tuned system defaults of vLLM by 1.02 ×.These gains arise because AutoScout optimizes a broader set of performance-critical configuration dimensions beyond traditional three-dimensional model parallelism (Narayanan et al., 2019; Shoeybi et al., 2020), many of which have a substantial impact on execution efficiency but are not 6AutoScout: Structured Optimization for Automating ML System Configuration 0 1000 2000   
+
+> Real Time (s)
+> 2.5
+> 3.0
+> Cum. Best Latency (s/iter) 0200 400
+> Search Steps
+> 2.5
+> 3.0
+> Cum. Best Latency (s/iter)  CherryPick
+> AutoScout
+> UDO
+> Optimal
+> Metis
+
+Figure 6. End-to-end training performance and search behavior of AutoScout on L LAMA -3.1-N EMOTRON -N ANO -VL-8B-V1. 
+
+captured by existing auto-parallelization systems. 
+
+AutoScout reliably converges to optimal configurations. 
+
+Figures 4–7 further demonstrate AutoScout’s ability to con-sistently converge to the best-performing configurations for each job. In contrast, CherryPick and UDO often stagnate early in the search and plateau at suboptimal regions of the configuration space. For the Q WEN -M OE workload, Au-toScout’s best configuration outperforms CherryPick’s best result by 1.10 × and UDO’s by 1.06 ×. Similarly, when train-ing L LAMA -3.2-3B, AutoScout achieves a 1.08 × improve-ment. For L LAMA -3.1-N EMOTRON , AutoScout identifies a configuration that exceeds those produced by CherryPick and UDO by 1.07 × and 1.06 ×, respectively. 
+
+AutoScout achieves superior search efficiency. Beyond identifying better final configurations, Figures 4–7 show that AutoScout substantially improves search efficiency in both the number of optimization steps and wall-clock time. For the Q WEN -M OE workload, AutoScout reduces the number of search steps required to reach the best configuration by 
+
+87 .1% relative to CherryPick and by 91 .7% relative to UDO. When training L LAMA -3.2-3B, AutoScout achieves step re-ductions of 80 .0% and 80 .8% compared to CherryPick and UDO, respectively. For L LAMA -3.1-N EMOTRON -N ANO -VL-8B-V1, AutoScout reduces the number of search steps by over 92% against cloud config baselines. For inference jobs on Q WEN -M OE, AutoScout reduces the number of search steps by over 28 .6% .These reductions translate directly into substantial wall-clock speedups. AutoScout achieves up to 16 .5× faster search time on Q WEN -M OE, 13 .7× on L LAMA -3.2-3B, and 22 .9× on L LAMA -3.1-N EMOTRON -N ANO -VL-8B-V1. Moreover, AutoScout consistently outperforms com-peting methods throughout most of the search trajectory, exhibiting strong anytime performance and remaining ef-fective under both limited and extended search budgets, an important property for online and production settings such as cloud deployments or large-scale cluster scheduling (So-mashekar et al., 2024). 0 10000 20000 
+
+> Real Time (s)
+> 0.60
+> 0.65
+> 0.70
+> Cum. best latency (ms/token)
+> Cherrypick
+> AutoScout
+> UDO
+> Optimal
+> vLLM
+
+Figure 7. End-to-end inference performance of AutoScout on QWEN -M OE0 1000 2000 
+
+> Real Time (s)
+> 0.9
+> 1.0
+> 1.1
+> 1.2
+> Cum. Best Latency (s/iter)  AutoScout
+> w/o Tournament
+> w/o Adaptive Simulator
+> w/o Orchestrator
+> w/o Dense Optimizer
+
+Figure 8. Performance break-down of AutoScout. 
+
+4.3. Ablation Studies Performance Breakdown. Figure 8 presents an ablation study of AutoScout on Q WEN -M OE training, where indi-vidual system components are selectively disabled under a fixed optimization budget of 2000 seconds. When Au-toScout is restricted to the sparse optimizer alone, it makes reasonable initial progress but settles on a configuration that is 1.46 × slower. This behavior reflects convergence to a suboptimal region and stems from the sparse optimizer’s limited ability to exploit local smoothness in continuous, performance-sensitive parameters. Reintroducing the dense optimizer while removing the or-chestrator further degrades both search efficiency and final configuration quality, underscoring the orchestrator’s critical role in adaptively coordinating sparse exploration and dense refinement based on their effectiveness at different stages of the search. Finally, when AutoScout’s evaluator is restricted to real profiling without simulator assistance, the system still converges but does so 1.19 × more slowly, reflecting the loss of low-cost feedback during early exploration. 
+
+Impact of Number of Tournament Candidates. Figure 9 presents an ablation study on the number of initial candidate tree structures K used in AutoScout’s tournament-based feature prioritization. The results reveal a clear trade-off between early-stage exploration efficiency and tournament overhead. Small tournaments ( K=5 ) already deliver sub-stantial improvements over single- or no-tournament base-lines, rapidly converging to near-optimal configurations by identifying high-impact feature orderings early in the search. In contrast, overly large tournaments ( K=40 ) exhibit slower early progress due to the dilution of exploration budget across many candidate trees, although they eventually con-verge to competitive solutions. Overall, this ablation reports that AutoScout can efficiently learn effective feature order-ings with only a few candidates. 
+
+Scalability Across Configuration Spaces. Figure 10 eval-uates AutoScout’s scalability as the configuration space di-mensionality increases. We consider three progressively 7AutoScout: Structured Optimization for Automating ML System Configuration 0 1000 2000 
+
+> Real Time (s)
+> 1.0
+> 1.2
+> 1.4
+> Cum. Best Latency (s/iter)  k = 0
+> k = 1
+> k = 10
+> k = 40
+> Optimal
+> Metis
+
+Figure 9. Moderate tournament sizes achieve the best trade-off between search efficiency and final convergence quality. 3dp 5dp full 
+
+> Search Space
+> 0
+> 100
+> 200
+> 300
+> Time to Target (s)
+> 22
+> 248
+> 133
+
+Figure 10. AutoScout achieves fast plan-ning for different configuration spaces. 0 1000 2000 
+
+> Real Time (s)
+> 0.9
+> 1.0
+> 1.1
+> 1.2
+> Cum. Best Latency (s/iter)  AutoScout (0% Noise)
+> AutoScout (40% Noise)
+> AutoScout (80% Noise)
+
+Figure 11. AutoScout is robust to simula-tors of different accuracies. 
+
+larger feature spaces: a low-dimensional space ( 3dp ) com-prising knobs used in three-dimensional automatic paral-lelism; an intermediate space ( 5dp ) that additionally in-cludes five-dimensional parallelism degrees; and the full space ( full ), which further incorporates execution-level parameters such as {ar , ddp optim , ddp bucket }.Figure 10 shows that despite the increase in search dimen-sionality, AutoScout incurs only a modest increase in conver-gence time when scaling to larger configuration spaces. In some cases, AutoScout converges even faster, as the richer feature space provides additional performance signals that enable more effective pruning and refinement. 
+
+Impact of Simulator Fidelity. Figure 11 reports the ro-bustness of AutoScout’s adaptive evaluator under increasing levels of noise injected into simulator outputs. We evaluate AutoScout with 0%, 40%, and 80% additive noise applied to simulator predictions, emulating progressively less reli-able performance models. As simulator noise increases, we observe a gradual degradation in search efficiency, reflected in slower convergence toward low-latency configurations. Nevertheless, even under severe noise (80%), AutoScout remains stable and converges to near-optimal configura-tions by adaptively falling back to profiling-based evaluation. This behavior demonstrates the effectiveness of AutoScout’s adaptive evaluator in mitigating erroneous predictions and preventing catastrophic search failures. 
+
+## 5. Related Work 
+
+Cloud Configuration. Prior work on cloud configura-tion has largely focused on traditional analytics rather than modern ML systems. SELECTA (Klimovic et al., 2018) formulates cloud storage configuration as a recommenda-tion problem using collaborative filtering, while C HERRY P- 
+
+> ICK
+
+(Alipourfard et al., 2017) applies Bayesian Optimiza-tion (BO) to select VM instance types. While effective in their target domains, these approaches assume relatively flat configuration spaces and inexpensive evaluation and do not account for hierarchical dependencies, mixed sparse-dense features, or high profiling costs in ML system configuration (Um et al., 2024; Strati et al., 2025). 
+
+Model Parallelism. Distributed training frameworks such as Megatron-LM and DeepSpeed (Shoeybi et al., 2020; Rasley et al., 2020) have demonstrated the effectiveness of large-scale parallel training, but require manually select-ing parallelism degrees, often leading to suboptimal per-formance. Automatic parallelization systems (Zheng et al., 2022; Li et al., 2022; Miao et al., 2022; Tarnawski et al., 2021; Liu et al., 2025) aim to automate this process and can identify near-optimal parallelism strategies under fixed assumptions. To reduce search overhead, these systems typically rely on heuristics, simulators, or restricted search spaces. However, most are designed for homogeneous clus-ters and pre-training workloads, and struggle to generalize to broader configuration dimensions (Um et al., 2024). 
+
+Tuning Algorithms and Search Methods. Monte Carlo Tree Search (MCTS) (Kocsis & Szepesv ´ari, 2006) has been applied to design-space exploration in ML systems. A L-
+
+> PHA
+
+X (Wang et al., 2019) employs MCTS to discover high-accuracy neural architectures with significantly fewer evalu-ations than prior NAS methods, while LA-MCTS (Wang et al., 2020) accelerates optimization in high-dimensional black-box spaces by partitioning the search space. AutoScout builds on these insights by integrating MCTS with dense optimization, adaptive orchestration, and cost-aware evaluation to address the unique challenges of ML systems. 
+
+## 6. Conclusion 
+
+This paper presents AutoScout, a general-purpose system configurator that addresses the growing complexity of ML system configuration across training, fine-tuning, and in-ference. By formulating configuration optimization as a structured mixed discrete-continuous problem, AutoScout combines a hierarchical sparse optimizer with an efficient dense optimizer, coordinated through adaptive orchestration and cost-aware evaluation. Our evaluations show that Au-toScout identifies configurations with 1.3–3 × speedup while 8AutoScout: Structured Optimization for Automating ML System Configuration 
+
+being 16.5 × faster than existing system configurators. 
+
+## References 
+
+Alipourfard, O., Liu, H. H., Chen, J., Venkataraman, S., Yu, M., and Zhang, M. CherryPick: Adaptively unearthing the best cloud configurations for big data analytics. In 
+
+14th USENIX Symposium on Networked Systems Design and Implementation (NSDI 17) , pp. 469–482, Boston, MA, March 2017. USENIX Association. ISBN 978-1-931971-37-9. URL https://www.usenix.org/ conference/nsdi17/technical-sessions/ presentation/alipourfard .Cottier, B., Rahman, R., Fattorini, L., Maslej, N., Besiroglu, T., and Owen, D. The rising costs of training frontier ai models, 2025. URL https://arxiv.org/abs/ 2405.21015 .Gonz ´alez-Duque, M., Michael, R., Bartels, S., Zainchkovskyy, Y., Hauberg, S., and Boomsma, W. A survey and benchmark of high-dimensional bayesian optimization of discrete sequences. In 
+
+Proceedings of the 38th International Conference on Neural Information Processing Systems , NIPS ’24, Red Hook, NY, USA, 2024. Curran Associates Inc. ISBN 9798331314385. Huang, Y., Cheng, Y., Bapna, A., Firat, O., Chen, M. X., Chen, D., Lee, H., Ngiam, J., Le, Q. V., Wu, Y., and Chen, Z. Gpipe: efficient training of giant neural networks using pipeline parallelism. In Proceedings of the 33rd Inter-national Conference on Neural Information Processing Systems , Red Hook, NY, USA, 2019. Curran Associates Inc. Jamieson, K. and Talwalkar, A. Non-stochastic best arm identification and hyperparameter optimization. In Gret-ton, A. and Robert, C. C. (eds.), Proceedings of the 19th International Conference on Artificial Intelligence and Statistics , volume 51 of Proceedings of Machine Learn-ing Research , pp. 240–248, Cadiz, Spain, 09–11 May 2016. PMLR. URL https://proceedings.mlr. press/v51/jamieson16.html .Klimovic, A., Litz, H., and Kozyrakis, C. Selecta: Het-erogeneous cloud storage configuration for data analyt-ics. In 2018 USENIX Annual Technical Conference (USENIX ATC 18) , pp. 759–773, Boston, MA, July 2018. USENIX Association. ISBN 978-1-939133-01-4. URL https://www.usenix.org/conference/ atc18/presentation/klimovic-selecta .Kocsis, L. and Szepesv ´ari, C. Bandit based monte-carlo planning. In Proceedings of the 17th Euro-pean Conference on Machine Learning , ECML’06, pp. 282293, Berlin, Heidelberg, 2006. Springer-Verlag. ISBN 354045375X. doi: 10.1007/11871842 29. URL https: //doi.org/10.1007/11871842_29 .Kwon, W., Li, Z., Zhuang, S., Sheng, Y., Zheng, L., Yu, C. H., Gonzalez, J. E., Zhang, H., and Stoica, I. Efficient memory management for large language model serving with pagedattention. In Proceedings of the ACM SIGOPS 29th Symposium on Operating Systems Principles , 2023. Li, D., Wang, H., Xing, E., and Zhang, H. Amp: automati-cally finding model parallel strategies with heterogeneity awareness. In Proceedings of the 36th International Con-ference on Neural Information Processing Systems , NIPS ’22, Red Hook, NY, USA, 2022. Curran Associates Inc. ISBN 9781713871088. Li, L., Jamieson, K., DeSalvo, G., Rostamizadeh, A., and Talwalkar, A. Hyperband: a novel bandit-based approach to hyperparameter optimization. J. Mach. Learn. Res. , 18 (1):67656816, January 2017. ISSN 1532-4435. Liu, B., Lin, W.-Y., Fang, M., Jiang, Y., and Lai, F. Circinus: Efficient query planner for compound ml serving, 2025. URL https://arxiv.org/abs/2504.16397 .Miao, X., Wang, Y., Jiang, Y., Shi, C., Nie, X., Zhang, H., and Cui, B. Galvatron: Efficient transformer training over multiple gpus using automatic parallelism. Proc. VLDB Endow. , 16(3):470479, November 2022. ISSN 2150-8097. doi: 10.14778/3570690.3570697. URL https: //doi.org/10.14778/3570690.3570697 .Narayanan, D., Harlap, A., Phanishayee, A., Seshadri, V., Devanur, N. R., Ganger, G. R., Gibbons, P. B., and Zaharia, M. Pipedream: generalized pipeline paral-lelism for dnn training. In Proceedings of the 27th ACM Symposium on Operating Systems Principles , SOSP ’19, pp. 115, New York, NY, USA, 2019. Associa-tion for Computing Machinery. ISBN 9781450368735. doi: 10.1145/3341301.3359646. URL https://doi. org/10.1145/3341301.3359646 .Rasley, J., Rajbhandari, S., Ruwase, O., and He, Y. Deep-speed: System optimizations enable training deep learn-ing models with over 100 billion parameters. In Pro-ceedings of the 26th ACM SIGKDD International Con-ference on Knowledge Discovery & Data Mining , KDD ’20, pp. 35053506, New York, NY, USA, 2020. Associa-tion for Computing Machinery. ISBN 9781450379984. doi: 10.1145/3394486.3406703. URL https://doi. org/10.1145/3394486.3406703 .Shoeybi, M., Patwary, M., Puri, R., LeGresley, P., Casper, J., and Catanzaro, B. Megatron-lm: Training multi-billion parameter language models using model par-allelism, 2020. URL https://arxiv.org/abs/ 1909.08053 .9AutoScout: Structured Optimization for Automating ML System Configuration 
+
+Somashekar, G., Tandon, K., Kini, A., Chang, C.-C., Husak, P., Bhagwan, R., Das, M., Gandhi, A., and Natarajan, N. OPPerTune: Post-Deployment configuration tun-ing of services made easy. In 21st USENIX Sympo-sium on Networked Systems Design and Implementa-tion (NSDI 24) , pp. 1101–1120, Santa Clara, CA, April 2024. USENIX Association. ISBN 978-1-939133-39-7. URL https://www.usenix.org/conference/ nsdi24/presentation/somashekar .Strati, F., Zhang, Z., Manos, G., P ´eriz, I. S., Hu, Q., Chen, T., Buzcu, B., Han, S., Delgado, P., and Klimovic, A. Sailor: Automating distributed training over dynamic, heteroge-neous, and geo-distributed clusters, 2025. URL https: //doi.org/10.1145/3731569.3764839 .Sun, T., Wang, P., and Lai, F. Hygen: Efficient llm serving via elastic online-offline request co-location, 2025. Tarnawski, J. M., Narayanan, D., and Phanishayee, A. Piper: Multidimensional planner for dnn paralleliza-tion. In Ranzato, M., Beygelzimer, A., Dauphin, Y., Liang, P., and Vaughan, J. W. (eds.), Advances in Neural Information Processing Systems , vol-ume 34, pp. 24829–24840. Curran Associates, Inc., 2021. URL https://proceedings.neurips. cc/paper_files/paper/2021/file/ d01eeca8b24321cd2fe89dd85b9beb51-Paper. pdf .Um, T., Oh, B., Kang, M., Lee, W.-Y., Kim, G., Kim, D., Kim, Y., Muzzammil, M., and Jeon, M. Metis: Fast automatic distributed training on heterogeneous GPUs. In 2024 USENIX Annual Technical Conference (USENIX ATC 24) , pp. 563–578, Santa Clara, CA, July 2024. USENIX Association. ISBN 978-1-939133-41-0. URL https://www.usenix.org/conference/ atc24/presentation/um .Wang, J., Trummer, I., and Basu, D. Udo: universal database optimization using reinforcement learning. Proc. VLDB Endow. , 14(13):34023414, September 2021. ISSN 2150-8097. doi: 10.14778/3484224.3484236. URL https: //doi.org/10.14778/3484224.3484236 .Wang, L., Zhao, Y., and Jinnai, Y. Alphax: explor-ing neural architectures with deep neural networks and monte carlo tree search. ArXiv , abs/1805.07440, 2019. URL https://api.semanticscholar. org/CorpusID:29159963 .Wang, L., Fonseca, R., and Tian, Y. Learning search space partition for black-box optimization using monte carlo tree search. In Proceedings of the 34th International Conference on Neural Information Processing Systems ,NIPS ’20, Red Hook, NY, USA, 2020. Curran Associates Inc. ISBN 9781713829546. Zhang, W., Wu, Z., Mu, Y., Ning, R., Liu, B., Sarda, N., Lee, M., and Lai, F. Jitserve: Slo-aware llm serving with imprecise request information, 2026. Zheng, L., Li, Z., Zhang, H., Zhuang, Y., Chen, Z., Huang, Y., Wang, Y., Xu, Y., Zhuo, D., Xing, E. P., Gonzalez, J. E., and Stoica, I. Alpa: Au-tomating inter- and Intra-Operator parallelism for dis-tributed deep learning. In 16th USENIX Sympo-sium on Operating Systems Design and Implementa-tion (OSDI 22) , pp. 559–578, Carlsbad, CA, July 2022. USENIX Association. ISBN 978-1-939133-28-1. URL https://www.usenix.org/conference/ osdi22/presentation/zheng-lianmin .Zheng, L., Chiang, W.-L., Sheng, Y., Li, T., Zhuang, S., Wu, Z., Zhuang, Y., Li, Z., Lin, Z., Xing, E. P., Gonzalez, J. E., Stoica, I., and Zhang, H. Lmsys-chat-1m: A large-scale real-world llm conversation dataset, 2023. 10 AutoScout: Structured Optimization for Automating ML System Configuration 
+
+## A. Tuned Configuration Parameters 
+
+Table 1 lists the Megatron-LM configuration parameters that AutoScout tunes during the optimization process for our training projects.                                                 
+
+> Table 1. Megatron-LM Parameters.
+> Configuration Parameter Type Range
+> pp Int {1,2,4,8}
+> tp Int {1,2,4,8}
+> dp Int {1,2,4,8}
+> ep Int {1,2,4,8}
+> cp Int {1,2,4,8}
+> sp Bool {True ,False }
+> ar Bool {True ,False }
+> mbs Int {1,2,4,8}
+> ddp Int [1 ,#GPUs ]
+> tp comm Int [12 ,20]
+> ddp bucket Int [1 ,8]
+
+Parameter Descriptions: 
+
+• pp : Pipeline parallelism degree, partitioning model layers across GPU groups. • tp : Tensor parallelism degree, splitting individual layers across GPUs. • dp : Data parallelism degree, replicating the model across GPU groups. • ep : Expert parallelism degree for Mixture-of-Experts models. • cp : Context parallelism degree for distributing long sequences. • sp : Sequence parallelism, enabling parallel computation along the sequence dimension (requires tp > 1). • ar : Activation recomputation/checkpointing to trade compute for memory. • mbs : Micro batch size for gradient accumulation. • ddp : Distributed data parallel bucket count (requires dp > 1). • tp comm : The number of SMs allocated to communication in tensor parallelism. • ddp bucket : the data-parallel communication bucket size in MB. 
+
+## B. Simulator Configurations 
+
+Table 2 lists the simulators used in our adaptive simulators experiment. Each simulator is a linear regression model trained on a different subset of configuration knobs, enabling the ensemble to capture diverse aspects of system performance.                                 
+
+> Table 2. Simulators Used in the Adaptive Ensemble.
+> Simulator Input Knobs
+> 3D-Parallelism a100 ,a40 ,mbs ,tp ,pp ,dp
+> 5D-Parallelism a100 ,a40 ,mbs ,tp ,pp ,dp ,ep ,cp ,sp
+> DDP-Aware a100 ,a40 ,mbs ,tp ,pp ,dp ,ddp optim
+> Communication-Aware a100 ,a40 ,mbs ,tp ,pp ,dp ,ar ,tp comm
+
+Simulator Descriptions: 
+
+• 3D-Parallelism : Models the baseline parallelism configuration with hardware allocation, micro-batch size, and core parallelism dimensions (tensor, pipeline, data). • 5D-Parallelism : Extends the core model with additional parallelism strategies including expert parallelism ( ep ), context parallelism ( cp ), and sequence parallelism ( sp ). • DDP-Aware : Incorporates distributed data parallel optimization settings to model gradient synchronization overhead. 11 AutoScout: Structured Optimization for Automating ML System Configuration 
+
+• Communication-Aware : Captures communication overhead through activation recomputation ( ar ) and tensor parallel communication overlap ( tp comm ). During search, the ensemble prediction is computed as a weighted average of individual simulator outputs, where weights are determined by each simulator’s R2 score on held-out validation data: 
+
+ˆcensemble =
+
+> 4
+
+X
+
+> i=1
+
+wi · ˆci, where wi = max(0 , R 2 
+
+> i
+
+)
+
+P4 
+
+> j=1
+
+max(0 , R 2 
+
+> j
+
+) (2) 12
