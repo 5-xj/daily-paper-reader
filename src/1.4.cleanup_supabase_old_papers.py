@@ -35,7 +35,7 @@ def load_config() -> Dict[str, Any]:
     if not os.path.exists(CONFIG_FILE):
         return {}
     try:
-        return load_config_with_source_migration(CONFIG_FILE)
+        return load_config_with_source_migration(CONFIG_FILE, write_back=False)
     except Exception as exc:
         log(f"[WARN] 读取 config.yaml 失败：{exc}")
         return {}

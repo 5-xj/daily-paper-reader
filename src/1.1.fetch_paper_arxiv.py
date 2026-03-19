@@ -33,7 +33,7 @@ RANGE_TOKEN_RE = re.compile(r"^\d{8}-\d{8}$")
 
 def load_config() -> dict:
     try:
-        return load_config_with_source_migration(CONFIG_FILE)
+        return load_config_with_source_migration(CONFIG_FILE, write_back=False)
     except Exception as e:
         log(f"[WARN] 读取 config.yaml 失败：{e}")
         return {}

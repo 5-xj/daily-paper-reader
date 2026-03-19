@@ -1,6 +1,7 @@
 import unittest
 import sys
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -197,6 +198,27 @@ class SubscriptionPlanTest(unittest.TestCase):
         }
         with self.assertRaises(ValueError):
             build_pipeline_inputs(cfg)
+
+    def test_build_pipeline_inputs_can_append_runtime_paper_sources(self):
+        cfg = {
+            'source_backends': {
+                'arxiv': {'enabled': True},
+                'biorxiv': {'enabled': True},
+            },
+            'subscriptions': {
+                'intent_profiles': [
+                    {
+                        'tag': 'SR',
+                        'enabled': True,
+                        'paper_sources': ['arxiv'],
+                        'keywords': [{'keyword': 'x', 'query': 'x'}],
+                    }
+                ],
+            }
+        }
+        with patch.dict('os.environ', {'DPR_APPEND_PAPER_SOURCES': 'biorxiv'}, clear=False):
+            plan = build_pipeline_inputs(cfg)
+        self.assertEqual(plan['profiles'][0].get('paper_sources'), ['arxiv', 'biorxiv'])
 
     def test_count_tags(self):
         cfg = {

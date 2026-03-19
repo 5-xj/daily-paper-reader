@@ -21,10 +21,10 @@ import numpy as np
 from filter import E5_QUERY_PREFIX, EmbeddingCoarseFilter, encode_queries
 try:
   from source_backend_router import group_queries_by_source, merge_pipeline_results
-  from source_config import ARXIV_SOURCE_KEY, get_source_backend, load_config_with_source_migration
+  from source_config import ARXIV_SOURCE_KEY, get_source_backend, load_config_with_source_migration, normalize_source_list
 except Exception:  # pragma: no cover - 兼容 package 导入路径
   from src.source_backend_router import group_queries_by_source, merge_pipeline_results
-  from src.source_config import ARXIV_SOURCE_KEY, get_source_backend, load_config_with_source_migration
+  from src.source_config import ARXIV_SOURCE_KEY, get_source_backend, load_config_with_source_migration, normalize_source_list
 from subscription_plan import build_pipeline_inputs
 from supabase_source import (
   count_papers_by_date_range,
@@ -52,6 +52,57 @@ LEGACY_EMBEDDING_CACHE_KEY = "embedding_cache"
 def log(message: str) -> None:
   ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
   print(f"[{ts}] {message}", flush=True)
+
+
+def multi_source_rpc_enabled() -> bool:
+  return str(os.getenv("DPR_ENABLE_MULTI_SOURCE_RPC") or "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def resolve_multi_source_vector_backend(config: Dict[str, Any], queries: List[dict]) -> Dict[str, Any] | None:
+  all_sources: List[str] = []
+  for query in queries or []:
+    all_sources.extend(normalize_source_list(query.get("paper_sources")))
+  all_sources = normalize_source_list(all_sources)
+  if len(all_sources) <= 1:
+    return None
+
+  backends = []
+  for source_key in all_sources:
+    backend = get_source_backend(config, source_key)
+    if not backend:
+      return None
+    backends.append(backend)
+  if not backends:
+    return None
+
+  first = backends[0]
+  first_key = (
+    str(first.get("url") or "").strip(),
+    str(first.get("anon_key") or "").strip(),
+    str(first.get("schema") or "public").strip(),
+  )
+  if not all(
+    (
+      str(item.get("url") or "").strip(),
+      str(item.get("anon_key") or "").strip(),
+      str(item.get("schema") or "public").strip(),
+    ) == first_key
+    for item in backends[1:]
+  ):
+    return None
+  if not all(bool(item.get("use_vector_rpc")) for item in backends):
+    return None
+
+  rpc_name = str(os.getenv("DPR_MULTI_SOURCE_VECTOR_RPC_EXACT") or "match_multi_source_papers_exact").strip()
+  return {
+    "enabled": True,
+    "use_vector_rpc": True,
+    "url": first_key[0],
+    "anon_key": first_key[1],
+    "schema": first_key[2],
+    "vector_rpc": rpc_name,
+    "vector_rpc_exact": rpc_name,
+  }
 
 
 def resolve_supabase_recall_window(config: Dict[str, Any], end_dt: datetime | None = None) -> tuple[datetime, datetime]:
@@ -152,7 +203,7 @@ def load_config() -> dict:
     return {}
 
   try:
-    data = load_config_with_source_migration(CONFIG_FILE)
+    data = load_config_with_source_migration(CONFIG_FILE, write_back=False)
     if isinstance(data, dict):
       return data
     log("[WARN] config.yaml 顶层结构不是字典，将忽略该配置文件。")
@@ -559,6 +610,7 @@ def _query_supabase_vector_window(
   min_shard_days: int = 1,
   depth: int = 0,
   rpc_mode: str = "exact",
+  filter_sources: List[str] | None = None,
 ) -> tuple[list[list[Dict[str, Any]]], int, list[str]]:
   rows, msg = match_papers_by_embedding(
     url=url,
@@ -570,6 +622,7 @@ def _query_supabase_vector_window(
     start_dt=start_dt,
     end_dt=end_dt,
     time_fields=time_fields,
+    filter_sources=filter_sources,
   )
   window = f"{start_dt.isoformat()} ~ {end_dt.isoformat()}"
   log(
@@ -638,6 +691,7 @@ def _query_supabase_vector_window(
       min_shard_days=safe_min_shard_days,
       depth=depth + 1,
       rpc_mode=rpc_mode,
+      filter_sources=filter_sources,
     )
     rows_per_shard.extend(sub_rows)
     success_count += sub_success
@@ -661,6 +715,7 @@ def query_supabase_vector_with_shards(
   time_fields: tuple[str, ...],
   shard_days: int = SUPABASE_VECTOR_SHARD_DAYS,
   rpc_mode: str = "exact",
+  filter_sources: List[str] | None = None,
 ) -> tuple[list[Dict[str, Any]], str]:
   safe_start = _normalize_utc_datetime(start_dt)
   safe_end = _normalize_utc_datetime(end_dt)
@@ -675,6 +730,7 @@ def query_supabase_vector_with_shards(
       start_dt=start_dt,
       end_dt=end_dt,
       time_fields=time_fields,
+      filter_sources=filter_sources,
     )
 
   shards = split_supabase_time_window(
@@ -702,6 +758,7 @@ def query_supabase_vector_with_shards(
       time_fields=time_fields,
       shard_days=max(int(shard_days or 1), 1),
       rpc_mode=rpc_mode,
+      filter_sources=filter_sources,
     )
     rows_per_shard.extend(sub_rows)
     success_count += sub_success
@@ -899,6 +956,7 @@ def rank_papers_for_queries_via_supabase(
   time_fields: tuple[str, ...] = SUPABASE_TIME_FIELDS,
   rpc_name_override: str | None = None,
   rpc_mode: str = "ann",
+  query_filter_sources: bool = False,
 ) -> dict:
   if not queries:
     return {"queries": [], "papers": {}, "total_hits": 0}
@@ -972,6 +1030,7 @@ def rank_papers_for_queries_via_supabase(
         end_dt=end_dt,
         time_fields=time_fields,
         rpc_mode=rpc_mode,
+        filter_sources=normalize_source_list(q.get("paper_sources")) if query_filter_sources else None,
       )
     else:
       rows, msg = match_papers_by_embedding(
@@ -984,6 +1043,7 @@ def rank_papers_for_queries_via_supabase(
         start_dt=start_dt,
         end_dt=end_dt,
         time_fields=time_fields,
+        filter_sources=normalize_source_list(q.get("paper_sources")) if query_filter_sources else None,
       )
     log(f"[Supabase Vector:{rpc_mode}] {msg} | tag={q.get('tag') or ''}")
 
@@ -1169,6 +1229,7 @@ def main() -> None:
     if not get_source_backend(config, source_key):
       log(f"[ERROR] 词条引用了论文源「{source_key}」，但未配置 source_backends.{source_key}。")
       return
+  multi_source_backend = resolve_multi_source_vector_backend(config, queries) if multi_source_rpc_enabled() else None
 
   # 使用 EmbeddingCoarseFilter 类进行粗筛（模型只加载一次）
   coarse_filter = None
@@ -1293,8 +1354,50 @@ def main() -> None:
       group_end()
     return None
 
+  def run_multi_source_vector_recall(output_path: str, source_queries: List[dict]) -> dict | None:
+    if not multi_source_backend:
+      return None
+    label = os.path.basename(output_path)
+    count_value, count_msg = count_papers_by_date_range(
+      url=str(multi_source_backend.get("url") or "").strip(),
+      api_key=str(multi_source_backend.get("anon_key") or "").strip(),
+      papers_table="multi_source_papers",
+      start_dt=sb_start_dt,
+      end_dt=sb_end_dt,
+      schema=str(multi_source_backend.get("schema") or "public").strip(),
+    )
+    log(f"[INFO] Multi-source 向量召回窗口计数：{count_msg}")
+    dynamic_top_k = args.top_k if isinstance(args.top_k, int) and args.top_k > 0 else estimate_dynamic_top_k(count_value)
+    group_start(f"Step 2.2 - multi-source vector recall ({label})")
+    try:
+      result_sb = rank_papers_for_queries_via_supabase(
+        model=None,
+        queries=source_queries,
+        top_k=dynamic_top_k,
+        supabase_conf=multi_source_backend,
+        start_dt=sb_start_dt,
+        end_dt=sb_end_dt,
+        time_fields=SUPABASE_TIME_FIELDS,
+        rpc_name_override=str(multi_source_backend.get("vector_rpc_exact") or multi_source_backend.get("vector_rpc") or "").strip(),
+        rpc_mode="exact",
+        query_filter_sources=True,
+      )
+      total_hits = int(result_sb.get("total_hits") or 0)
+      if total_hits > 0:
+        log(f"[INFO] Multi-source 向量召回命中 {total_hits} 条。")
+        return result_sb
+      log("[WARN] Multi-source 向量召回未命中。")
+      return None
+    finally:
+      group_end()
+
   def process_single_file(input_path: str, output_path: str) -> None:
     merged_results: List[dict] = []
+    if multi_source_backend:
+      multi_source_result = run_multi_source_vector_recall(output_path, queries)
+      if multi_source_result:
+        save_tagged_results(multi_source_result, output_path)
+        return
     arxiv_queries = query_groups.get(ARXIV_SOURCE_KEY) or []
     arxiv_supabase_result = run_supabase_vector_recall_for_source(
       output_path,
@@ -1402,6 +1505,11 @@ def main() -> None:
 
     if not raw_files:
       output_path = os.path.join(FILTERED_DIR, f"arxiv_papers_{TODAY_STR}.embedding.json")
+      if multi_source_backend:
+        multi_source_result = run_multi_source_vector_recall(output_path, queries)
+        if multi_source_result:
+          save_tagged_results(multi_source_result, output_path)
+          return
       merged_results: List[dict] = []
       for source_key, source_queries in query_groups.items():
         result_sb = run_supabase_vector_recall_for_source(

@@ -54,7 +54,7 @@ def _norm(value: Any) -> str:
 
 def load_config() -> dict:
     try:
-        return load_config_with_source_migration(CONFIG_FILE)
+        return load_config_with_source_migration(CONFIG_FILE, write_back=False)
     except Exception as exc:
         log(f"[WARN] 读取 config.yaml 失败：{exc}")
         return {}

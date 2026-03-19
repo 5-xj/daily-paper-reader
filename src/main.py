@@ -36,7 +36,7 @@ def run_step(label: str, args: list[str], env: dict[str, str] | None = None) -> 
 def _load_full_config() -> dict:
     if not os.path.exists(CONFIG_FILE):
         return {}
-    return load_config_with_source_migration(CONFIG_FILE)
+    return load_config_with_source_migration(CONFIG_FILE, write_back=False)
 
 
 def load_arxiv_paper_setting() -> dict:

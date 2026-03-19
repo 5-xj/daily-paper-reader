@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import copy
 from datetime import datetime, timezone
+import os
 from typing import Any, Dict, List, Tuple
 import re
 
@@ -71,6 +72,29 @@ def _uniq_keep_order(items: List[str]) -> List[str]:
     seen.add(key)
     out.append(t)
   return out
+
+
+def _runtime_source_override(paper_sources: List[str]) -> List[str]:
+  force_env = str(os.getenv("DPR_FORCE_PAPER_SOURCES") or "").strip()
+  append_env = str(os.getenv("DPR_APPEND_PAPER_SOURCES") or "").strip()
+
+  def _split(raw: str) -> List[str]:
+    parts = re.split(r"[,\s]+", str(raw or "").strip())
+    out: List[str] = []
+    seen = set()
+    for item in parts:
+      key = _norm_text(item).lower()
+      if not key or key in seen:
+        continue
+      seen.add(key)
+      out.append(key)
+    return out
+
+  if force_env:
+    return _split(force_env)
+  if append_env:
+    return _uniq_keep_order(list(paper_sources or []) + _split(append_env))
+  return list(paper_sources or [])
 
 
 def _normalize_text_item(item: Any) -> str:
@@ -245,6 +269,7 @@ def _normalize_profile(profile: Dict[str, Any], idx: int, known_sources: List[st
   kw_rules: List[Dict[str, Any]] = _normalize_keyword_list(kw_rules_in, profile_index=idx)
   intent_queries: List[Dict[str, Any]] = _normalize_query_list(profile.get("intent_queries"), profile_index=idx)
   paper_sources, _ = validate_profile_paper_sources(profile, known_sources=known_sources)
+  paper_sources = _runtime_source_override(paper_sources)
 
   result = {
     "tag": tag,

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import os
 from typing import Any, Dict, List, Tuple
 
 try:
@@ -53,6 +54,37 @@ def get_supabase_shared_config(config: Dict[str, Any]) -> Dict[str, Any]:
     if isinstance(shared, dict):
         return copy.deepcopy(shared)
     return {}
+
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    value = str(os.getenv(name) or "").strip().lower()
+    if not value:
+        return default
+    return value in ("1", "true", "yes", "on")
+
+
+def build_env_source_backend_overrides() -> Dict[str, Dict[str, Any]]:
+    out: Dict[str, Dict[str, Any]] = {}
+
+    if _env_bool("DPR_ENABLE_BIORXIV_BACKEND", False):
+        backend: Dict[str, Any] = {
+            "enabled": _env_bool("DPR_BIORXIV_ENABLED", True),
+            "papers_table": _norm(os.getenv("DPR_BIORXIV_PAPERS_TABLE") or "biorxiv_papers"),
+            "use_vector_rpc": _env_bool("DPR_BIORXIV_USE_VECTOR_RPC", True),
+            "vector_rpc": _norm(os.getenv("DPR_BIORXIV_VECTOR_RPC") or "match_biorxiv_papers_exact"),
+            "vector_rpc_exact": _norm(os.getenv("DPR_BIORXIV_VECTOR_RPC_EXACT") or "match_biorxiv_papers_exact"),
+            "use_bm25_rpc": _env_bool("DPR_BIORXIV_USE_BM25_RPC", True),
+            "bm25_rpc": _norm(os.getenv("DPR_BIORXIV_BM25_RPC") or "match_biorxiv_papers_bm25"),
+        }
+        if _norm(os.getenv("DPR_BIORXIV_URL")):
+            backend["url"] = _norm(os.getenv("DPR_BIORXIV_URL"))
+        if _norm(os.getenv("DPR_BIORXIV_ANON_KEY")):
+            backend["anon_key"] = _norm(os.getenv("DPR_BIORXIV_ANON_KEY"))
+        if _norm(os.getenv("DPR_BIORXIV_SCHEMA")):
+            backend["schema"] = _norm(os.getenv("DPR_BIORXIV_SCHEMA"))
+        out["biorxiv"] = backend
+
+    return out
 
 
 def _normalize_backend_entry(
@@ -115,6 +147,16 @@ def resolve_source_backends(config: Dict[str, Any]) -> Dict[str, Dict[str, Any]]
                 default_papers_table="papers",
                 shared=shared,
             )
+
+    env_backends = build_env_source_backend_overrides()
+    for source_key, override in env_backends.items():
+        existing = backends.get(source_key) or {}
+        merged = _merge_dicts(existing, override)
+        backends[source_key] = _normalize_backend_entry(
+            merged,
+            default_papers_table="papers",
+            shared=shared,
+        )
 
     legacy_supabase = cfg.get("supabase")
     if ARXIV_SOURCE_KEY not in backends and isinstance(legacy_supabase, dict):

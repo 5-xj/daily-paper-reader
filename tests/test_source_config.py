@@ -1,6 +1,7 @@
 import unittest
 import sys
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -105,6 +106,30 @@ class SourceConfigMigrationTest(unittest.TestCase):
         self.assertEqual(backend["anon_key"], "shared-key")
         self.assertEqual(backend["papers_table"], "biorxiv_papers")
         self.assertFalse(backend["enabled"])
+
+    def test_resolve_source_backends_supports_env_biorxiv_backend(self):
+        cfg = {
+            "supabase_shared": {
+                "url": "https://shared.supabase.co",
+                "anon_key": "shared-key",
+                "schema": "public",
+            }
+        }
+        with patch.dict(
+            "os.environ",
+            {
+                "DPR_ENABLE_BIORXIV_BACKEND": "1",
+                "DPR_BIORXIV_ENABLED": "1",
+                "DPR_BIORXIV_PAPERS_TABLE": "biorxiv_papers",
+                "DPR_BIORXIV_VECTOR_RPC_EXACT": "match_biorxiv_papers_exact",
+                "DPR_BIORXIV_BM25_RPC": "match_biorxiv_papers_bm25",
+            },
+            clear=False,
+        ):
+            backend = get_source_backend(cfg, "biorxiv")
+        self.assertEqual(backend["url"], "https://shared.supabase.co")
+        self.assertEqual(backend["papers_table"], "biorxiv_papers")
+        self.assertEqual(backend["vector_rpc_exact"], "match_biorxiv_papers_exact")
 
 
 if __name__ == "__main__":

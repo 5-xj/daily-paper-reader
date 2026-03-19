@@ -486,6 +486,7 @@ def match_papers_by_embedding(
     start_dt: datetime | None = None,
     end_dt: datetime | None = None,
     time_fields: tuple[str, ...] = ("published",),
+    filter_sources: List[str] | None = None,
 ) -> Tuple[List[Dict[str, Any]], str]:
     """
     调用 Supabase RPC，在数据库侧执行向量相似度检索。
@@ -508,6 +509,8 @@ def match_papers_by_embedding(
         "match_count": k,
         **_build_date_filter_payload(start_dt, end_dt),
     }
+    if isinstance(filter_sources, list) and filter_sources:
+        payload["filter_sources"] = [str(item).strip() for item in filter_sources if str(item).strip()]
     try:
         resp = _request_with_retries(
             "POST",
@@ -576,6 +579,7 @@ def match_papers_by_bm25(
     start_dt: datetime | None = None,
     end_dt: datetime | None = None,
     time_fields: tuple[str, ...] = ("published",),
+    filter_sources: List[str] | None = None,
 ) -> Tuple[List[Dict[str, Any]], str]:
     """
     调用 Supabase RPC，在数据库侧执行 BM25 风格检索（PostgreSQL FTS）。
@@ -598,6 +602,8 @@ def match_papers_by_bm25(
         "match_count": k,
         **_build_date_filter_payload(start_dt, end_dt),
     }
+    if isinstance(filter_sources, list) and filter_sources:
+        payload["filter_sources"] = [str(item).strip() for item in filter_sources if str(item).strip()]
     try:
         resp = _request_with_retries(
             "POST",
