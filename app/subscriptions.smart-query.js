@@ -223,14 +223,29 @@ window.SubscriptionsSmartQuery = (function () {
 
   const getPaperSourceLabel = (source) => {
     const key = normalizeText(source).toLowerCase();
+    if (key === 'all') return 'all';
     if (key === 'biorxiv') return 'bioRxiv';
     if (key === 'arxiv') return 'arXiv';
     return key || '未知源';
   };
 
   const renderPaperSourceChoices = (selectedSources) => {
+    const availableSources = getAvailablePaperSources();
     const selected = new Set(normalizePaperSources(selectedSources, { fallbackToArxiv: false }));
-    return getAvailablePaperSources().map((source) => {
+    const allChecked =
+      availableSources.length > 0 &&
+      availableSources.every((source) => selected.has(source));
+    const allItem = `
+      <label class="dpr-paper-source-item dpr-paper-source-item-all">
+        <input
+          type="checkbox"
+          data-action="toggle-paper-source-all"
+          ${allChecked ? 'checked' : ''}
+        />
+        <span>${escapeHtml(getPaperSourceLabel('all'))}</span>
+      </label>
+    `;
+    const sourceItems = availableSources.map((source) => {
       const checked = selected.has(source) ? 'checked' : '';
       return `
         <label class="dpr-paper-source-item">
@@ -239,6 +254,7 @@ window.SubscriptionsSmartQuery = (function () {
         </label>
       `;
     }).join('');
+    return `${allItem}${sourceItems}`;
   };
 
   const normalizeProfileKeywords = (profile) => {
@@ -2150,10 +2166,25 @@ window.SubscriptionsSmartQuery = (function () {
   const handleModalChange = (e) => {
     const target = e.target;
     if (!target || !target.matches) return;
+    if (target.matches('input[type="checkbox"][data-action="toggle-paper-source-all"]')) {
+      if (!modalState) return;
+      const availableSources = getAvailablePaperSources();
+      const shouldSelectAll = !!target.checked;
+      modalState.paper_sources = shouldSelectAll ? availableSources.slice() : [];
+      if (modalPanel) {
+        modalPanel
+          .querySelectorAll('input[type="checkbox"][data-action="toggle-paper-source"]')
+          .forEach((input) => {
+            input.checked = shouldSelectAll;
+          });
+      }
+      return;
+    }
     if (target.matches('input[type="checkbox"][data-action="toggle-paper-source"]')) {
       if (!modalState) return;
       const source = normalizeText(target.getAttribute('data-source') || '').toLowerCase();
       if (!source) return;
+      const availableSources = getAvailablePaperSources();
       const current = new Set(normalizePaperSources(modalState.paper_sources, { fallbackToArxiv: false }));
       if (target.checked) {
         current.add(source);
@@ -2161,6 +2192,14 @@ window.SubscriptionsSmartQuery = (function () {
         current.delete(source);
       }
       modalState.paper_sources = Array.from(current);
+      const allToggle = modalPanel
+        ? modalPanel.querySelector('input[type="checkbox"][data-action="toggle-paper-source-all"]')
+        : null;
+      if (allToggle) {
+        allToggle.checked =
+          availableSources.length > 0 &&
+          availableSources.every((item) => current.has(item));
+      }
       return;
     }
     if (!target.matches('input[type="checkbox"][data-action="toggle-chat-choice"]')) return;
