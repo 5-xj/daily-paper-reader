@@ -265,6 +265,19 @@ window.SubscriptionsSmartQuery = (function () {
     return `${allItem}${sourceItems}`;
   };
 
+  const renderProfileSourceChips = (selectedSources) => {
+    const availableSources = getAvailablePaperSources();
+    const normalized = normalizePaperSources(selectedSources, { fallbackToArxiv: false });
+    const allSelected =
+      normalized.length > 0 &&
+      availableSources.length > 0 &&
+      availableSources.every((source) => normalized.includes(source));
+    const visibleSources = allSelected ? ['all'] : normalized;
+    return visibleSources
+      .map((source) => `<span class="dpr-entry-source-chip">${escapeHtml(getPaperSourceLabel(source))}</span>`)
+      .join('');
+  };
+
   const normalizeProfileKeywords = (profile) => {
     return normalizeKeywordEntries(profile && profile.keywords);
   };
@@ -1584,7 +1597,7 @@ window.SubscriptionsSmartQuery = (function () {
                 <span class="dpr-entry-title">${escapeHtml(p.tag || '')}</span>
                 ${pausedBadge}
                 <span class="dpr-entry-desc-inline">${escapeHtml(p.description || '（无描述）')}</span>
-                <span class="dpr-entry-source-inline">${normalizePaperSources(p.paper_sources).map((source) => `<span class="dpr-entry-source-chip">${escapeHtml(getPaperSourceLabel(source))}</span>`).join('')}</span>
+                <span class="dpr-entry-source-inline">${renderProfileSourceChips(p.paper_sources)}</span>
               </div>
               <div class="dpr-entry-actions">
                 <button class="arxiv-tool-btn ${pauseBtnClass}" data-action="pause-profile" data-profile-id="${escapeHtml(getProfileKey(p) || '')}">${pauseLabel}</button>
