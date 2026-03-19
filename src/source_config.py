@@ -11,7 +11,7 @@ except Exception:  # pragma: no cover
 
 
 ARXIV_SOURCE_KEY = "arxiv"
-DEFAULT_SUPPORTED_SOURCES = (ARXIV_SOURCE_KEY, "biorxiv")
+DEFAULT_SUPPORTED_SOURCES = (ARXIV_SOURCE_KEY, "biorxiv", "neurips")
 
 
 def _norm(value: Any) -> str:
@@ -83,6 +83,24 @@ def build_env_source_backend_overrides() -> Dict[str, Dict[str, Any]]:
         if _norm(os.getenv("DPR_BIORXIV_SCHEMA")):
             backend["schema"] = _norm(os.getenv("DPR_BIORXIV_SCHEMA"))
         out["biorxiv"] = backend
+
+    if _env_bool("DPR_ENABLE_NEURIPS_BACKEND", False):
+        backend = {
+            "enabled": _env_bool("DPR_NEURIPS_ENABLED", True),
+            "papers_table": _norm(os.getenv("DPR_NEURIPS_PAPERS_TABLE") or "neurips_openreview_papers"),
+            "use_vector_rpc": _env_bool("DPR_NEURIPS_USE_VECTOR_RPC", True),
+            "vector_rpc": _norm(os.getenv("DPR_NEURIPS_VECTOR_RPC") or "match_neurips_openreview_papers_exact"),
+            "vector_rpc_exact": _norm(os.getenv("DPR_NEURIPS_VECTOR_RPC_EXACT") or "match_neurips_openreview_papers_exact"),
+            "use_bm25_rpc": _env_bool("DPR_NEURIPS_USE_BM25_RPC", True),
+            "bm25_rpc": _norm(os.getenv("DPR_NEURIPS_BM25_RPC") or "match_neurips_openreview_papers_bm25"),
+        }
+        if _norm(os.getenv("DPR_NEURIPS_URL")):
+            backend["url"] = _norm(os.getenv("DPR_NEURIPS_URL"))
+        if _norm(os.getenv("DPR_NEURIPS_ANON_KEY")):
+            backend["anon_key"] = _norm(os.getenv("DPR_NEURIPS_ANON_KEY"))
+        if _norm(os.getenv("DPR_NEURIPS_SCHEMA")):
+            backend["schema"] = _norm(os.getenv("DPR_NEURIPS_SCHEMA"))
+        out["neurips"] = backend
 
     return out
 

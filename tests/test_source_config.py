@@ -131,6 +131,30 @@ class SourceConfigMigrationTest(unittest.TestCase):
         self.assertEqual(backend["papers_table"], "biorxiv_papers")
         self.assertEqual(backend["vector_rpc_exact"], "match_biorxiv_papers_exact")
 
+    def test_resolve_source_backends_supports_env_neurips_backend(self):
+        cfg = {
+            "supabase_shared": {
+                "url": "https://shared.supabase.co",
+                "anon_key": "shared-key",
+                "schema": "public",
+            }
+        }
+        with patch.dict(
+            "os.environ",
+            {
+                "DPR_ENABLE_NEURIPS_BACKEND": "1",
+                "DPR_NEURIPS_ENABLED": "1",
+                "DPR_NEURIPS_PAPERS_TABLE": "neurips_openreview_papers",
+                "DPR_NEURIPS_VECTOR_RPC_EXACT": "match_neurips_openreview_papers_exact",
+                "DPR_NEURIPS_BM25_RPC": "match_neurips_openreview_papers_bm25",
+            },
+            clear=False,
+        ):
+            backend = get_source_backend(cfg, "neurips")
+        self.assertEqual(backend["url"], "https://shared.supabase.co")
+        self.assertEqual(backend["papers_table"], "neurips_openreview_papers")
+        self.assertEqual(backend["vector_rpc_exact"], "match_neurips_openreview_papers_exact")
+
 
 if __name__ == "__main__":
     unittest.main()
