@@ -109,7 +109,11 @@ window.SubscriptionsManager = (function () {
       : {};
     const seen = new Set();
     const out = [];
-    ['arxiv', ...Object.keys(rawBackends || {})].forEach((key) => {
+    const runtimeCandidates = [];
+    if (window.DPR_RUNTIME_SOURCE_BACKENDS && typeof window.DPR_RUNTIME_SOURCE_BACKENDS === 'object') {
+      runtimeCandidates.push(...Object.keys(window.DPR_RUNTIME_SOURCE_BACKENDS || {}));
+    }
+    ['arxiv', ...Object.keys(rawBackends || {}), ...runtimeCandidates].forEach((key) => {
       const normalized = normalizeSourceKey(key);
       if (!normalized || seen.has(normalized)) return;
       seen.add(normalized);

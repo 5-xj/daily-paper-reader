@@ -188,6 +188,7 @@ window.SubscriptionsSmartQuery = (function () {
 
   const normalizePaperSources = (values, options = {}) => {
     const fallbackToArxiv = options.fallbackToArxiv !== false;
+    const fallbackToAll = options.fallbackToAll === true;
     const rawList = Array.isArray(values)
       ? values
       : (typeof values === 'string' && values ? [values] : []);
@@ -202,6 +203,9 @@ window.SubscriptionsSmartQuery = (function () {
     if (!out.length && fallbackToArxiv) {
       return ['arxiv'];
     }
+    if (!out.length && fallbackToAll) {
+      return getAvailablePaperSources();
+    }
     return out;
   };
 
@@ -212,7 +216,11 @@ window.SubscriptionsSmartQuery = (function () {
       : {};
     const seen = new Set();
     const out = [];
-    ['arxiv', ...Object.keys(rawBackends || {})].forEach((value) => {
+    const runtimeCandidates = [];
+    if (window.DPR_RUNTIME_SOURCE_BACKENDS && typeof window.DPR_RUNTIME_SOURCE_BACKENDS === 'object') {
+      runtimeCandidates.push(...Object.keys(window.DPR_RUNTIME_SOURCE_BACKENDS || {}));
+    }
+    ['arxiv', ...Object.keys(rawBackends || {}), ...runtimeCandidates].forEach((value) => {
       const key = normalizeText(value).toLowerCase();
       if (!key || seen.has(key)) return;
       seen.add(key);
@@ -1605,7 +1613,7 @@ window.SubscriptionsSmartQuery = (function () {
       customKeyword: '',
       customKeywordLogic: '',
       customQuery: '',
-      paper_sources: normalizePaperSources(candidates && candidates.paper_sources, { fallbackToArxiv: true }),
+      paper_sources: normalizePaperSources(candidates && candidates.paper_sources, { fallbackToAll: true }),
     };
     modalState.keywords = clampSelectionsByLimit(modalState.keywords, 'keyword');
     modalState.intent_queries = clampSelectionsByLimit(modalState.intent_queries, 'intent');
@@ -1633,7 +1641,7 @@ window.SubscriptionsSmartQuery = (function () {
       requestHistory: [],
       inputTag: normalizeText(options.tag || ''),
       inputDesc: normalizeText(options.description || ''),
-      paper_sources: normalizePaperSources(options.paper_sources, { fallbackToArxiv: true }),
+      paper_sources: normalizePaperSources(options.paper_sources, { fallbackToAll: true }),
       pending: false,
       chatStatus: '',
     };
@@ -2043,7 +2051,7 @@ window.SubscriptionsSmartQuery = (function () {
       editProfileId: targetKey,
       tag: profile.tag || '',
       description: profile.description || '',
-      paper_sources: normalizePaperSources(profile.paper_sources, { fallbackToArxiv: true }),
+      paper_sources: normalizePaperSources(profile.paper_sources, { fallbackToAll: true }),
       keywords: existingKeywords,
       intent_queries: existingIntentQueries,
     });
