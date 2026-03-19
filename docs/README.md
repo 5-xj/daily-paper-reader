@@ -6,70 +6,79 @@
 </div>
 
 ## 每次日报
-- 最新运行日期：2026-03-18
-- 运行时间：2026-03-18 20:09:37 UTC
+- 最新运行日期：2026-03-19
+- 运行时间：2026-03-19 20:19:22 UTC
 - 运行状态：成功
-- 本次总论文数：16
-- 精读区：4
+- 本次总论文数：19
+- 精读区：7
 - 速读区：12
 
 ### 今日简报（AI）
-今日深度复盘 16 篇 AI 论文，重点揭示了万次实验背后的收敛规律与移动端算子自动化的新突破。
-核心结论指出自动化研究正取代单纯调参，且 LLM 在移动端高效算子编写及零数据自进化多模态领域展现出巨大潜力。
-建议优先研读 9.0 分的收敛分析报告，掌握从海量实验中提取科研洞察并优化底层硬件性能的系统方法。
-- 详情：[/202603/18/README](/202603/18/README)
+今日深度解析 19 篇前沿成果，重点攻克机器学习算法发现任务的程序化生成与多智能体硬件优化。
+满分论文揭示了自动化构建算法挑战的新范式，同时多智能体协作框架在 RTL 代码生成与 PPA 优化上展现出显著潜力。
+推荐关注演化算法与智能体技术在自动化设计领域的深度融合，探索从算法发现到硬件优化的全链路提效。
+- 详情：[/202603/19/README](/202603/19/README)
 
 ### 精读区论文标签
-1. [Auto Researching, not hyperparameter tuning: Convergence Analysis of 10,000 Experiments](/202603/18/2603.15916v1-auto-researching-not-hyperparameter-tuning-convergence-analysis-of-10000-experiments)  
-   标签：评分：9.0/10、query:llm-ec
-   evidence：LLM智能体自主设计机器学习实验和架构搜索
-2. [MobileKernelBench: Can LLMs Write Efficient Kernels for Mobile Devices?](/202603/18/2603.11935v2-mobilekernelbench-can-llms-write-efficient-kernels-for-mobile-devices)  
+1. [Procedural Generation of Algorithm Discovery Tasks in Machine Learning](/202603/19/2603.17863v1-procedural-generation-of-algorithm-discovery-tasks-in-machine-learning)  
+   标签：评分：10.0/10、query:ahd
+   evidence：算法发现任务的程序化生成
+2. [Automated Grammar-based Algebraic Multigrid Design With Evolutionary Algorithms](/202603/19/2603.17641v1-automated-grammar-based-algebraic-multigrid-design-with-evolutionary-algorithms)  
+   标签：评分：9.0/10、query:ahd
+   evidence：使用演化算法自动设计多网格算法
+3. [Projection-Free Evolution Strategies for Continuous Prompt Search](/202603/19/2603.13786v1-projection-free-evolution-strategies-for-continuous-prompt-search)  
    标签：评分：8.0/10、query:llm-ec
-   evidence：使用大模型自动生成算子内核
-3. [SciDesignBench: Benchmarking and Improving Language Models for Scientific Inverse Design](/202603/18/2603.12724v1-scidesignbench-benchmarking-and-improving-language-models-for-scientific-inverse-design)  
+   evidence：用于大模型连续提示词搜索的演化策略
+4. [LLM-Guided Safe Reinforcement Learning for Energy System Topology Reconfiguration](/202603/19/2603.14018v1-llm-guided-safe-reinforcement-learning-for-energy-system-topology-reconfiguration)  
    标签：评分：8.0/10、query:llm-ec
-   evidence：使用语言模型搜索组合设计空间
-4. [Beyond Local Code Optimization: Multi-Agent Reasoning for Software System Optimization](/202603/18/2603.14703v1-beyond-local-code-optimization-multi-agent-reasoning-for-software-system-optimization)  
+   evidence：大模型引导的强化学习优化
+5. [SAGE: Multi-Agent Self-Evolution for LLM Reasoning](/202603/19/2603.15255v1-sage-multi-agent-self-evolution-for-llm-reasoning)  
    标签：评分：8.0/10、query:llm-ec
-   evidence：用于自动化软件系统性能优化的多智能体LLM框架
+   evidence：用于LLM推理和任务生成的自我演化框架
+6. [Evaluating Agentic Optimization on Large Codebases](/202603/19/2603.16011v1-evaluating-agentic-optimization-on-large-codebases)  
+   标签：评分：8.0/10、query:llm-ec
+   evidence：评估大型代码库上的智能体优化
+7. [Deep Reinforcement Learning-Assisted Automated Operator Portfolio for Constrained Multi-objective Optimization](/202603/19/2603.16401v1-deep-reinforcement-learning-assisted-automated-operator-portfolio-for-constrained-multi-objective-optimization)  
+   标签：评分：8.0/10、query:ahd
+   evidence：深度强化学习辅助的约束多目标优化算子自动选择
 
 ### 速读区论文标签
-1. [MM-Zero: Self-Evolving Multi-Model Vision Language Models From Zero Data](/202603/18/2603.09206v1-mm-zero-self-evolving-multi-model-vision-language-models-from-zero-data)  
+1. [Surrogate-Assisted Genetic Programming with Rank-Based Phenotypic Characterisation for Dynamic Multi-Mode Project Scheduling](/202603/19/2603.16286v1-surrogate-assisted-genetic-programming-with-rank-based-phenotypic-characterisation-for-dynamic-multi-mode-project-scheduling)  
+   标签：评分：8.0/10、query:llm-ec
+   evidence：利用遗传编程演化调度问题的启发式规则
+2. [CODMAS: A Dialectic Multi-Agent Collaborative Framework for Structured RTL Optimization](/202603/19/2603.17204v1-codmas-a-dialectic-multi-agent-collaborative-framework-for-structured-rtl-optimization)  
+   标签：评分：8.0/10、query:llm-ec
+   evidence：使用 LLM 进行自动化 RTL 代码优化的多智能体框架
+3. [VeriAgent: A Tool-Integrated Multi-Agent System with Evolving Memory for PPA-Aware RTL Code Generation](/202603/19/2603.17613v1-veriagent-a-tool-integrated-multi-agent-system-with-evolving-memory-for-ppa-aware-rtl-code-generation)  
+   标签：评分：8.0/10、query:llm-ec
+   evidence：具有演化记忆的多智能体系统，用于自动化代码生成与优化
+4. [Training Diffusion Language Models for Black-Box Optimization](/202603/19/2603.17919v1-training-diffusion-language-models-for-black-box-optimization)  
+   标签：评分：8.0/10、query:llm-ec
+   evidence：将扩散语言模型应用于黑盒优化任务
+5. [Deterministic Algorithm for Non-monotone Submodular Maximization under Matroid and Knapsack Constraints](/202603/19/2603.11996v1-deterministic-algorithm-for-non-monotone-submodular-maximization-under-matroid-and-knapsack-constraints)  
    标签：评分：7.0/10、query:llm-ec
-   evidence：基于强化学习的多模态模型自我演化框架
-2. [Novelty Adaptation Through Hybrid Large Language Model (LLM)-Symbolic Planning and LLM-guided Reinforcement Learning](/202603/18/2603.11351v1-novelty-adaptation-through-hybrid-large-language-model-llm-symbolic-planning-and-llm-guided-reinforcement-learning)  
+   evidence：组合子模最大化的确定性近似算法
+6. [Data Darwinism Part II: DataEvolve -- AI can Autonomously Evolve Pretraining Data Curation](/202603/19/2603.14420v1-data-darwinism-part-ii-dataevolve----ai-can-autonomously-evolve-pretraining-data-curation)  
    标签：评分：7.0/10、query:llm-ec
-   evidence：大模型识别缺失算子并编写强化学习奖励函数
-3. [Faster Relational Algorithms Using Geometric Data Structures](/202603/18/2603.11402v1-faster-relational-algorithms-using-geometric-data-structures)  
-   标签：评分：7.0/10、query:ahd
-   evidence：为关系数据优化设计更快速算法的框架
-4. [Quantum mechanical framework for quantization-based optimization: from Gradient flow to Schroedinger equation](/202603/18/2603.11536v1-quantum-mechanical-framework-for-quantization-based-optimization-from-gradient-flow-to-schroedinger-equation)  
-   标签：评分：7.0/10、query:ahd
-   evidence：用于分析优化算法的量子力学框架
-5. [CreativeBench: Benchmarking and Enhancing Machine Creativity via Self-Evolving Challenges](/202603/18/2603.11863v1-creativebench-benchmarking-and-enhancing-machine-creativity-via-self-evolving-challenges)  
-   标签：评分：7.0/10、query:ahd
-   evidence：用于生成新颖工件和代码生成的演化系统
-6. [An Evolutionary Algorithm with Probabilistic Annealing for Large-scale Sparse Multi-objective Optimization](/202603/18/2603.11874v1-an-evolutionary-algorithm-with-probabilistic-annealing-for-large-scale-sparse-multi-objective-optimization)  
+   evidence：通过迭代优化实现策略自动演化的闭环演化框架
+7. [Evolutionary Transfer Learning for Dragonchess](/202603/19/2603.15297v1-evolutionary-transfer-learning-for-dragonchess)  
    标签：评分：7.0/10、query:llm-ec
-   evidence：用于大规模稀疏多目标优化的演化算法
-7. [A Unifying Primal-Dual Proximal Framework for Distributed Nonconvex Optimization](/202603/18/2603.09524v1-a-unifying-primal-dual-proximal-framework-for-distributed-nonconvex-optimization)  
+   evidence：针对复杂博弈策略启发式算法的演化优化
+8. [An Agentic Evaluation Framework for AI-Generated Scientific Code in PETSc](/202603/19/2603.15976v1-an-agentic-evaluation-framework-for-ai-generated-scientific-code-in-petsc)  
+   标签：评分：7.0/10、query:llm-ec
+   evidence：AI生成科学代码的智能体评估
+9. [Automating Skill Acquisition through Large-Scale Mining of Open-Source Agentic Repositories: A Framework for Multi-Agent Procedural Knowledge Extraction](/202603/19/2603.11808v1-automating-skill-acquisition-through-large-scale-mining-of-open-source-agentic-repositories-a-framework-for-multi-agent-procedural-knowledge-extraction)  
+   标签：评分：6.0/10、query:llm-ec
+   evidence：通过挖掘仓库自动获取智能体技能
+10. [A Geometrically-Grounded Drive for MDL-Based Optimization in Deep Learning](/202603/19/2603.12304v1-a-geometrically-grounded-drive-for-mdl-based-optimization-in-deep-learning)  
    标签：评分：6.0/10、query:ahd
-   evidence：分布式优化方法的统一框架
-8. [PivotAttack: Rethinking the Search Trajectory in Hard-Label Text Attacks via Pivot Words](/202603/18/2603.10842v1-pivotattack-rethinking-the-search-trajectory-in-hard-label-text-attacks-via-pivot-words)  
-   标签：评分：6.0/10、query:llm-ec
-   evidence：用于搜索的组合标记组和多臂老虎机算法
-9. [AutoVeriFix+: High-Correctness RTL Generation via Trace-Aware Causal Fix and Semantic Redundancy Pruning](/202603/18/2603.11489v1-autoverifix-high-correctness-rtl-generation-via-trace-aware-causal-fix-and-semantic-redundancy-pruning)  
-   标签：评分：6.0/10、query:llm-ec
-   evidence：基于LLM的硬件设计代码生成与修复框架
-10. [AutoScout: Structured Optimization for Automating ML System Configuration](/202603/18/2603.11603v1-autoscout-structured-optimization-for-automating-ml-system-configuration)  
+   evidence：深度学习的新型优化框架
+11. [Deep Predictor-Corrector Networks for Robust Parameter Estimation in Non-autonomous System with Discontinuous Inputs](/202603/19/2603.12965v1-deep-predictor-corrector-networks-for-robust-parameter-estimation-in-non-autonomous-system-with-discontinuous-inputs)  
    标签：评分：6.0/10、query:ahd
-   evidence：用于自动化系统配置和搜索的结构化优化
-11. [A Further Efficient Algorithm with Best-of-Both-Worlds Guarantees for $m$-Set Semi-Bandit Problem](/202603/18/2603.11764v1-a-further-efficient-algorithm-with-best-of-both-worlds-guarantees-for-m-set-semi-bandit-problem)  
-   标签：评分：6.0/10、query:llm-ec
-   evidence：组合半老虎机问题的高效算法
-12. [EvolveCoder: Evolving Test Cases via Adversarial Verification for Code Reinforcement Learning](/202603/18/2603.12698v1-evolvecoder-evolving-test-cases-via-adversarial-verification-for-code-reinforcement-learning)  
-   标签：评分：6.0/10、query:llm-ec
-   evidence：代码强化学习的对抗性测试用例演化
+   evidence：学习用于优化的参数更新规则
+12. [From Gradients to Riccati Geometry: Kalman World Models for Single-Pass Learning](/202603/19/2603.13423v1-from-gradients-to-riccati-geometry-kalman-world-models-for-single-pass-learning)  
+   标签：评分：6.0/10、query:ahd
+   evidence：基于控制理论的 LLM 无梯度训练与自适应范式
 
 
 <div class="dpr-home-promo-card">
