@@ -1,0 +1,827 @@
+Title: Not All Invariants Are Equal: Curating Training Data to Accelerate Program Verification with SLMs
+
+URL Source: https://arxiv.org/pdf/2603.15510v1
+
+Published Time: Tue, 17 Mar 2026 06:19:41 GMT
+
+Number of Pages: 17
+
+Markdown Content:
+# Not All Invariants Are Equal: Curating Training Data to Accelerate Program Verification with SLMs 
+
+Ido Pinto 1 Yizhak Yisrael Elboher 1 Haoze Wu 2 Nina Narodytska 3 Guy Katz 1
+
+## Abstract 
+
+The synthesis of inductive loop invariants is a critical bottleneck in automated program verifi-cation. While Large Language Models (LLMs) show promise in mitigating this issue, they often fail on hard instances, generating invariants that are invalid or computationally ineffective. While fine-tuning is a natural route to mitigate this limi-tation, obtaining high-quality training data for in-variant generation remains an open challenge. We present a rigorous data curation pipeline designed to extract high-quality training signals from raw verifier-generated invariants. First, we formalize the properties required for a high-quality train-ing invariant. Second, we propose W ONDA , a pipeline that refines noisy data via AST-based normalization, followed by LLM-driven semantic rewriting and augmentation with provable qual-ity guarantees. We demonstrate that fine-tuning Small Language Models (SLMs) on this curated dataset result in consistent and significant perfor-mance gain. In particular, a fine-tuned 4B pa-rameter model matches the utility of a GPT-OSS-120B baseline and approaches the state-of-the-art GPT-5.2, without incurring reasoning-time over-head. On challenging instances from the recent InvBench evaluation suite, our approach doubles the invariant correctness and speedup rates of base models; and improves their Virtual Best Perfor-mance (VBP) rates on the verification task by up to 14.2%. 
+
+> 1
+
+Hebrew University of Jerusalem, Israel 2Amherst Col-lege, USA 3VMware Research, by Broadcom, USA. Cor-respondence to: Ido Pinto <ido.pinto@mail.huji.ac.il >,Yizhak Yisrael Elboher <yizhak.elboher@mail.huji.ac.il >,Haoze Wu <hwu@amherst.edu >, Nina Naro-dytska <n.narodytska@gmail.com >, Guy Katz 
+
+<g.katz@mail.huji.ac.il >.
+
+Preprint. March 17, 2026. 
+
+## 1. Introduction 
+
+Automated program verification is a powerful technique for ensuring the reliability of critical software infrastructure. At the core of deductive verification lies the challenge of loop invariant synthesis, the identification of a logical property that holds before the loop begins and after each of its itera-tions, sufficient to prove a program’s correctness. Despite decades of research into symbolic methods like Craig inter-polation (McMillan, 2003) and constraint solving (Col ´on et al., 2003; Gupta & Rybalchenko, 2009), finding inductive invariants remains a challenging problem, and a practical bottleneck for modern verifiers. The advent of Large Language Models (LLMs) has intro-duced a new paradigm: generate-and-verify . Models such as GPT-4 (OpenAI, 2023) and Claude (Anthropic, 2024) have demonstrated a latent ability to hypothesize loop invariants (Pei et al., 2023). Recent tools such as Loopy (Kamath et al., 2024), Lemur (Wu et al., 2024b), and ACInv (Liu et al., 2025) leverage this capability, wrapping LLMs in iterative refinement strategies that filter hallucinations using SMT solvers. However, despite this progress, a significant gap re-mains. As observed in the recent InvBench evaluation (Wei et al., 2025), while LLM-based verifiers represent a promis-ing direction, they do not yet offer a significant advantage over state-of-the-art symbolic tools, such as UAutomizer, which do not leverage LLMs. Given these limitations, the natural question arises: can we 
+
+train an LLM that specializes in the task of invariant gener-ation? Such specialization is standard practice in many do-mains and has proven highly successful. Indeed, within the program verification literature, this specific problem has re-ceived increasing attention (Pei et al., 2023; Wei et al., 2025). However, somewhat surprisingly, the success of these train-ing efforts has only been partial. Recent work on fine-tuning invariant generation models reports improvements on easy verification problems, yet achieving significant speedups on hard benchmarks remains elusive. We posit that the primary limitation of current neural invari-ant synthesizers is data quality rather than model scale. Ex-isting datasets rely on raw, uncurated outputs from symbolic tools (e.g. UAutomizer (Heizmann et al., 2013)), which 1
+
+> arXiv:2603.15510v1 [cs.LG] 16 Mar 2026
+
+Not All Invariants Are Equal                                                
+
+> int x=0; int y=100; assume(x==0 && y == 100); ▷p
+> while (y > 0) {
+> // Location l
+> x+= 3; y-= 5;
+> }
+> assert(x > y); ▷q
+> Input Query: ⟨A, P, q ⟩where A={p}
+> int x=0; int y=100; assume(x==0 && y== 100); ▷p
+> while (y >0) {
+> x+= 3; y-= 5;
+> }
+> assert(x >y); ▷q
+> Baseline: V(A, P, q )
+
+LLM                                               
+
+> I= ( l, 5x+ 3 y= 300) int x = 0; int y = 100; assume(x==0 && y == 100); ▷p
+> while (y > 0) {
+> assert(5*x + 3*y == 300); ▷I
+> x += 3; y -= 5;
+> }
+> int x=0; int y=100; assume(x==0 && y== 100); ▷p
+> while (y >0) {
+> assume(5*x +3*y == 300); ▷I
+> x+= 3; y-= 5;
+> }
+> assert(x >y); ▷q
+> Correctness Check: V1=V(A, P, I )Sufficiency Check: V2=V(A∪ { I}, P, q )
+
+VBS 
+
+> tb
+> t2
+> t1
+
+Figure 1. Illustration of the Virtual Best Solver (VBS) metric relative to our verification procedure. Given a query ⟨A, P, q ⟩, the LLM proposes a candidate property I = ( l, φ ). The tasks run in parallel: V1 evaluates correctness (inductiveness) while V2 evaluates sufficiency. VBS captures the fastest conclusive path: if the decomposed checks yield a correct invariant with conclusive result (per Table 1), we record min( tb, t v ); otherwise we revert to baseline time tb.
+
+> ((((((((((((((((((((((36 <= y) && (36 <= x)) || ((21 <= y) && (45 <= x))) || ((21 <= x) && (65 <= y))) || ((42 <= x) && (26 <= y))) || ((12 <= x) && (80 <= y))) || ((11 <= y) && (51 <= x))) ...|| ((16 <= y) && (48 <= x)))
+
+V0: Raw Verifier Output 
+
+> 603 chars, 21 disjuncts
+> 36 <= y && 36 <= x || 21 <= y && 45 <= x || 21 <= x && 65 <= y || 42 <= x && 26 <= y || 12 <= x && 80 <= y ...|| 16 <= y && 48 <= x
+
+V1: Normalized 
+
+> 441 chars, 21 disjuncts
+
+LLM 5*x + 3*y == 300 
+
+V2: Simplified  
+
+> 18 chars, 1 equation
+> normalize simplify
+
+Figure 2. WONDA pipeline. The raw verifier output ( V0) is normalized ( V1), then an LLM simplifies it to a compact closed-form expression ( V2): 5x + 3 y = 300 , achieving a 2x verification speedup. 
+
+suffer from two critical defects: 1. Low Pedagogical Value: Solver-generated invariants are often technically correct but structurally obfuscated (see Figure 4 in Appendix A). This noise forces mod-els to learn verifier-specific artifacts rather than the underlying logic of program verification. 2. The Overfitting Trap: Training exclusively on solver outputs creates a closed-loop dependency, where the model’s capability is inherently upper-bounded by the “teacher” it seeks to surpass. This hinders the model from generalizing beyond the current symbolic state-of-the-art. To address these limitations in data quality, we introduce WONDA , a rigorous data curation pipeline. Instead of di-rectly training on verifier-generated invariants, W ONDA 
+
+distinctly optimizes for learnability. We employ Abstract Syntax Tree (AST) normalization to canonicalize and sim-plify the structural representation of invariants. We further implement an LLM-driven semantic rewriting engine that transforms obscure machine-generated invariants into con-cise, interpretable forms, simplifying their logical semantics while maintaining soundness for training. To ensure the cor-rectness of the training data (i.e., the invariants are correct and help to verify the desired properties), we use a formal verification tool to validate the invariants after transforma-tion steps that are not guaranteed to preserve correctness. Finally, we address the metrics used to evaluate LLM-based invariant generators. We argue that standard “speedup” met-rics are somewhat misleading, as they erroneously assume a sequential dependency, penalizing the system whenever 2Not All Invariants Are Equal 
+
+the LLM fails to accelerate the process. In contrast, we pro-pose a portfolio-based perspective utilizing the Virtual Best Performance (VBP) metric. VBP tracks the time it takes the first tool within the portfolio to solve each problem. This captures the practical reality of deployment: because the LLM runs in parallel with the symbolic baseline, it acts as a zero-risk augmentation where failures are ignored and successes provide considerable value. 
+
+Our Contributions. Our contributions are as follows: 1. We demonstrate that directly bootstrapping invariants generated by symbolic solvers is not guaranteed to boost model performance on invariant generation tasks, and can sometimes even hurt performance. 2. We propose W ONDA , a rigorous data curation frame-work that combines AST canonicalization with LLM-driven semantic rewriting and transforms raw, obfus-cated symbolic outputs into high-quality training sig-nals while maintaining correctness. 3. We present a thorough experimental evaluation demon-strating the practical effectiveness of the proposed tech-niques across multiple base models. In particular, a 4B-parameter small language model (SLM) fine-tuned on W ONDA -curated data is able to achieve verification performance gains comparable to strong models such as GPT-OSS-120B and GPT-5.2. 
+
+Reproducibility. To facilitate future research and benchmark-ing, we release the full W ONDA codebase and evaluation harness on GitHub, and the trained models together with the curated datasets in the Hugging Face W ONDA collection. 
+
+## 2. Related Work 
+
+Traditional Invariant Synthesis. Invariant synthesis has been extensively studied through various formalisms. Ab-stract Interpretation methods (Cousot & Cousot, 1977) gave rise to various for techniques for discovering specific classes of invariants, such as affine relationships (Karr, 1976) and linear restraints (Cousot & Halbwachs, 1978) among vari-ables. Model Checking techniques (Clarke et al., 2018) and Predicate Abstraction (Flanagan & Qadeer, 2002; Lahiri & Bryant, 2007) were also used to infer invariants, by refining abstract states based on a set of predicates. Craig Interpola-tion (McMillan, 2003) is also widely used to generate loop invariants from proofs of unsatisfiability in bounded model checking traces. Tools like UAutomizer (Heizmann et al., 2013) and Eldarica (Hojjat & R ¨ummer, 2018) build on these approaches. Another approach is to cast invariant generation as a constraint-satisfaction problem, and apply off-the-shelf solvers (Col ´on et al., 2003; Gupta & Rybalchenko, 2009; Fedyukovich & Bod ´ık, 2018). Finally, dynamic analysis tools like Daikon (Ernst et al., 2007) infer likely invariants by observing program execution traces. While efficient, dynamic methods are unsound, as they can only guarantee correctness for the observed executions. 
+
+Learning-based Invariant Synthesis. Early techniques for data-driven invariant synthesis relied on decision trees (Garg et al., 2016), algebraic inference (Sharma et al., 2013), and Horn-ICE learning (Ezudheen et al., 2018). With the rise of LLMs, more recent frameworks, such as Loopy (Kamath et al., 2024) and LaM4Inv (Wu et al., 2024a), began employ-ing iterative “generate-and-verify” loops, using symbolic solvers to filter or refine LLM proposals. LEMUR (Wu et al., 2024b) introduced backtracking algorithms to actively repair invalid invariants, while iRank (Chakraborty et al., 2023) leverages contrastive ranking to prioritize high-quality candidates and reduce verifier overhead. Other work extends these capabilities to specific domains, such as C++ class invariants in ClassInvGen (Sun et al., 2025) and complex loop structures in ACInv (Liu et al., 2025). (Wei et al., 2025) demonstrated the potential of LLMs for invariant gen-eration, by fine-tuning LLMs on invariants generated by the symbolic solver UAutomizer. Here, we take a related approach, but seek to improve and diversify the data used for fine-tuning, to allow the LLM to significantly outdo the symbolic engine used for generating it originally. 
+
+## 3. Preliminaries 
+
+We ground our approach in Hoare logic (Hoare, 1969), a seminal framework for reasoning about program correctness. A Hoare triple {p} S {q} asserts that if precondition p holds before executing statement S, then postcondition q holds afterward. While sequential statements are straightforward to compose, loops pose a fundamental challenge: they may execute for an unbounded number of iterations, requiring an auxiliary predicate, a loop invariant , to enable finite reasoning. For a loop while B do S with precondition p and post-condition q, a valid invariant I must satisfy: (i) Initia-tion: p ⇒ I, meaning the invariant holds upon loop en-try; (ii) Consecution: {I ∧ B} S {I}, meaning the invari-ant is preserved by each iteration; and (iii) Sufficiency: 
+
+I ∧ ¬ B ⇒ q, meaning that upon termination, the invari-ant implies the postcondition. A predicate satisfying both initiation and consecution is termed an inductive invari-ant . Throughout this paper, we refer to this property as 
+
+correctness and use the terms interchangeably; if the predi-cate additionally satisfies sufficiency, it constitutes a formal proof of the postcondition q.3Not All Invariants Are Equal 
+
+Running Example. We illustrate these concepts using the program shown in Figure 1 (left). The program initializes 
+
+x = 0 and y = 100 (the precondition p), then repeatedly increments x by 3 and decrements y by 5 until y ≤ 0.The verification goal is to prove the postcondition q ≡
+
+x > y . We claim that the candidate invariant I ≡ 5x +3y = 300 satisfies these criteria. It is inductive because it holds initially (5(0) + 3(100) = 300) and is preserved by the loop body updates: assuming I holds, the new state satisfies 5( x + 3) + 3( y − 5) = 5 x + 15 + 3 y − 15 = 5x+3 y = 300 . Furthermore, the invariant is sufficient : upon loop termination, ¬B ≡ y ≤ 0 combined with I implies 
+
+5x+3 y = 300 ∧y ≤ 0. Substituting, 5x = 300 −3y ≥ 300 
+
+(since −3y ≥ 0), so x ≥ 60 . As x ≥ 60 > 0 ≥ y, the postcondition q ≡ x > y follows. 
+
+3.1. Program Verification 
+
+Let P denote a program, let Loc( P ) denote its set of pro-gram locations, and let L(P ) ⊆ Loc( P ) denote its loop entry locations. 
+
+Definition 3.1 (Property) . A property is a pair (l, φ ), where 
+
+l ∈ Loc( P ) and φ is a predicate over the variables of pro-gram P . For a given execution of P , a property holds , or is 
+
+satisfied , if φ holds , when P reaches line l.
+
+Definition 3.2 (Verification Query) . A verification query 
+
+is a triple ⟨A, P, q ⟩ where P is a program, q is a property (the postcondition), and A is a set of properties representing preconditions. 
+
+Definition 3.3 (Verification Query Validity) . A verification query ⟨A, P, q ⟩ is valid if every execution of P that sat-isfies the (precondition) properties in A also satisfies the postcondition q.
+
+Definition 3.4 (Verification Oracle) . A verification oracle 
+
+V takes a verification query ⟨A, P, r ⟩ and returns: 
+
+V(A, P, r ) ∈ { TRUE , FALSE , UNKNOWN }
+
+where T RUE indicates the query is valid, F ALSE indicates a counterexample exists, and U NKNOWN indicates the or-acle could not determine the result (e.g., due to timeout or inherent incompleteness). Here, we consider only sound 
+
+oracles: if V(A, P, r ) = TRUE , then the query is valid; if 
+
+V(A, P, r ) = FALSE , then a counterexample exists. Verification queries use assume( φ) and assert( φ)
+
+statements. assume( φ) at line l restricts traces to those satisfying φ (equivalent to if (¬φ) halt ), while 
+
+assert( φ) jumps to ERROR if violated (equivalent to if (¬φ) goto ERROR ). For query ⟨A, P, q ⟩, we annotate 
+
+P with assume( φ) for each (l, φ ) ∈ A and assert( φ)
+
+where q = ( l, φ ). P is safe with respect to the verification query if the and only if ERROR is unreachable (see the gray block in Figure 1). 
+
+3.2. Program Verification using Invariants 
+
+Given a verification query ⟨A, P, q ⟩, the task can be addressed through a direct invocation of the verifier: 
+
+V(A, P, q ). Alternatively, we can break the problem into sub-problems, by introducing a candidate invariant prop-erty I = ( l, φ ), where l ∈ L (P ). This approach splits the verification task into two distinct queries: 1. Correctness Check (V1): Verify that the property I is correct (inductive) within the program P given A:
+
+V1 := V(A, P, I )
+
+2. Sufficiency Check (V2): Verify that the target postcondi-tion q holds, assuming the correctness of the candidate invariant I:
+
+V2 := V(A ∪ { I}, P, q )
+
+The final outcome is determined by Table 1. This proce-dure is sound; conclusive outcomes (T RUE or F ALSE ) are guaranteed to be correct (Wei et al., 2025). Compared to direct verification, this approach aims to augment the prob-lem with new knowledge that can be useful to prove the desired property. The correctness and validity checks are independent and can therefore be performed in parallel, and in the case where both queries are simpler than the original query, the wall-clock verification time is reduced.            
+
+> Table 1. Decision procedure for verification queries using a candi-date invariant. Note that a F ALSE outcome in the sufficiency check implies the original query is invalid regardless of the invariant’s correctness.
+> V1(Correctness) V2(Sufficiency) Outcome TRUE TRUE TRUE
+> ∗FALSE FALSE
+> otherwise UNKNOWN
+
+An illustration of the approach appears in Figure 1. Instead of directly verifying the query (gray box), we can use the invariant I = ( l, 5x + 3 y = 300) , and verify its correctness (green box) and sufficiency (yellow box). When the verifier returns TRUE for both of these queries, we can immediately deduce the safety of the program. 
+
+Generating Invariants. The usefulness of the aforemen-tioned techniques is conditional upon our ability to generate useful invariant candidates — i.e., such that will allow us to reach a T RUE /F ALSE outcome, as per Table 1. We define the invariant generation task, which is the primary focus of this work, as follows: given a verification query ⟨A, P, q ⟩,a verification oracle V, and a designated loop entry loca-tion l ∈ L (P ), the objective is to synthesize a predicate 
+
+φ such that the resulting property I = ( l, φ ) satisfies the 4Not All Invariants Are Equal 
+
+correctness and sufficiency checks; i.e., V returns T RUE for the corresponding correctness and sufficiency queries. We also consider invariant candidates that fail their sufficiency checks as desirable, as these can expose bugs in P .
+
+## 4. Methodology 
+
+The main component of the “generate-and-verify” loop paradigm is the LLM that performs invariant synthesis. Ide-ally, we want it to produce correct and sufficient invariants that speed up the verification process. In practice, off-the-shelf LLMs are not very effective at this task and need to be fine-tuned for the invariant generation domain. Some-what counterintuitively, the state-of-the-art approach to fine-tuning LLMs for the invariant generation task using data produced by modern verification tools does not show a per-formance boost in challenging verification problems (Wei et al., 2025). In this work, we claim that fine-tuning can in fact be quite useful, provided we have “good”, high-quality 
+
+data. To this end, we investigate two research questions: (a) how to define “good” training in this context; and (b) how to design a procedure for producing such training data. Given a verification query ⟨A, P, q ⟩, a baseline verifier V
+
+and loop locations L(P ), our goal is to produce training samples that pair programs with high-quality loop invariants. We claim that a good invariant I = ( l, φ ) should satisfy the following characteristics: 1. Non-Degeneracy: we exclude trivial invariants φ ∈{FALSE , TRUE }.2. Correctness: invariant φ holds at location l on all exe-cutions, i.e., V(A, P, I ) = TRUE .3. Usefulness: using I expedites verification times. This entails sufficiency, that is, V(A ∪ { I}, P, q ) = TRUE ;and also that tv < t b, where tb is the time it takes the verifier to dispatch the original query V(A, P, q ),and tv is the time it takes to dispatch the correctness and sufficiency queries, in parallel; i.e., the maximum between the solving times of V(A, P, I ) and V(A ∪
+
+I, P, q ).4. Compactness: invariant I has a succinct syntactic form, which we hypothesize facilitates learning and improves generalization. 
+
+Grounding to Verifier-Generated Invariants. Following Wei et al. (2025), we initialize our curation process using invariants extracted from UAutomizer. When UAutomizer proves a verification query ⟨{ p}, P, q ⟩, it emits discovered invariants {(l, φ raw )} as part of its proof. These invariants satisfy correctness by construction. However, they are not guaranteed to be useful (they may not provide speedup) or 
+
+compact (they often contain tool-specific artifacts). Figure 4 (Appendix A) depicts an example: while correct, the raw invariant is cluttered with type casts and verbose structure, making it a poor training target. We address these issues with a two-stage pipeline: 1. Invariant Normalization (§4.1): AST-based rewriting that removes tautologies, contradictions, minimizes parentheses and strips redundant type casts. 2. LLM-Based Simplification (§4.2): A data augmentation step where an LLM generalizes verbose invariants into compact candidates, each verified for correctness and usefulness. Figure 2 illustrates output produced by our pipeline. An-other example appears in Figure 5 (Appendix A). 
+
+4.1. Invariant Normalization 
+
+Raw invariants from automated verifiers are often clut-tered with syntactic noise that obscures underlying program logic. This noise typically manifests as: (i) tautological clauses (e.g., n <= n ); (ii) redundant parenthesization, and (iii) excessive integral type casts (e.g., int128 and 
+
+long long ) used for bit-precise semantics. In rare cases, verifiers may even produce contradictions within unreach-able or dead-code paths, such as (x > x), which can confuse models during training. We apply a semantic-preserving AST normalization, N OR -
+
+> MALIZE
+
+, which performs a single bottom-up traversal using the rules in Table 2. It also strips the invariants of any unrequired parentheses, based on standard C operator prece-dence rules.                                                            
+
+> Table 2. Rewrite rules applied during AST normalization. e
+> represents a numeric variable, φa predicate, ca constant, and
+> ▷◁ ∈ {≤ ,≥,=, <, >, ̸=}a relational operator.
+> Rule Transformation
+> Tautology Elimination
+> TAUT CONJ φ∧true or true ∧φ−→ φ
+> TAUT REFL e ▷◁ e −→ true for ▷◁ ∈ {≤ ,≥,=}
+> TAUT CONST c1▷◁ c 2−→ true if c1▷◁ c 2holds
+> Contradiction Propagation
+> CONTRA CONJ φ∧false or false ∧φ−→ false
+> CONTRA DISJ φ∨false or false ∨φ−→ φ
+> CONTRA REFL e ▷◁ e −→ false for ▷◁ ∈ { <, >, ̸=}
+
+Proposition 4.1 (Normalization Soundness) . For any predi-cate φ, the normalized predicate φ′ = NORMALIZE (φ) is semantically equivalent to the original ( φ′ ≡ φ). Proof. The rewrite rules implement standard first-order logic identities applied inductively via bottom-up AST 5Not All Invariants Are Equal 
+
+traversal. Parenthesis minimization follows C operator precedence while preserving associativity and binding. As an additional optimization step, we eliminate integral casts to reduce clutter. While stripping casts can break soundness (e.g., under certain overflow conditions), we prioritize logical clarity for model training; and we also formally verify the final generated invariants against the original program, to ensure that correctness is maintained. 
+
+4.2. LLM-Based Invariant Simplification 
+
+AST normalization removes syntactic noise, but many invari-ants remain verbose due to semantic complexity: enumer-ated cases, redundant bounds, or overly strong constraints. These patterns require reasoning beyond local rewrites. To bridge this gap, we employ an LLM as a simplification function fθ : Φ → ΦN , where Φ is the set of possible predi-cates and N is the number of generated candidates. Unlike the rules in Table 2, fθ is not guaranteed to be semantics-preserving ( fθ (φ)̸ ≡ φ). Instead, we leverage the LLM’s ability to perform abstraction , aiming for candidates that are more compact yet still sufficient to prove property q. The resulting predicate can be equivalent, stronger, weaker or incomparable with the original predicate; this does not jeop-erdize soundness, as we later invoke the verifier to ensure the correctness and sufficiency of the rewritten predicates. 
+
+Simplification Procedure. To guide the LLM toward high-quality invariants, we provide a prompt context C =
+
+⟨P, φ, G⟩ containing the program P , the reference invariant 
+
+φ, and a set of transformation goals G. The following trans-formation goals capture our main insights for achieving the desired characteristics of compactness and usefulness .
+
+Range generalization. We observed that a large number of raw invariants have a case-enumeration structure; for example, Wki=1 (x = i) might come from a loop that runs for k steps. We prompt an LLM to simplify such invariants into a more compact range invariant, 1 ≤ x ≤ k, which is easier to learn than the enumeration representation. 
+
+Constraint factoring. Some invariants form Boolean expres-sions that have unnecessarily complex logical structure, e.g., 
+
+(a ∧ b1) ∨ . . . ∨ (a ∧ bk). We encourage an LLM to perform logical simplification, e.g., rewrite this as a ∧ (b1 ∨ . . . ∨ bk).
+
+Closed-form discovery. Often, we would like to generalize the normalized invariant to replace case enumerations with arithmetic relations, where linear expressions are preferred for solver efficiency, though non-linear closed forms are also possible. This gives us compact, reusable invariants that are easier to learn; for example, Pni=1 i → n(n+1) 2 .
+
+Redundancy removal. Some expressions are implied by program semantics and hold throughout the program, e.g., preconditions or variables with fixed values. To simplify them, we can remove these redundant clauses to obtain more compact and easier-to-learn invariants. Overall, our strategy encourages semantic abstraction over syntactic rewriting; for the full prompt, see Appendix B.2. 
+
+Definition 4.2 (Quality Grade Q). To measure the util-ity of a candidate φ′, we define a grading function 
+
+Q(φ′, ⟨A, P, q ⟩, t b) ∈ { 0, 1, 2, 3} based on two verification queries V1, V2 defined in §3.2. 
+
+Q(φ′) = 
+
+
+
+0 if V1 = FALSE 
+
+1 if V1 = TRUE ∧ V 2̸ = TRUE 
+
+2 if V1 = TRUE ∧ V 2 = TRUE ∧ tv ≥ tb
+
+3 if V1 = TRUE ∧ V 2 = TRUE ∧ tv < t b
+
+where tv = max( t1, t 2) represents parallel execution time and tb is the baseline time. We retain candidates with 
+
+Q(φ′) ≥ 2 as “golden” training samples. The simplification procedure is given in Algorithm 2 (Appendix C). It first discards degenerate invariants, i.e., 
+
+φnorm ∈ { 0, 1}. Otherwise, if the invariant is deemed ver-bose (in our implementation, if |φnorm | > η for a threshold 
+
+η > 0), an LLM generates N candidates. These candidates are deduplicated by exact match, filtered again for degener-acy, and each is graded using Algorithm 1; we retain those with grade g ≥ 2. If no candidate qualifies (or if φnorm is not verbose), we instead grade φnorm itself. 
+
+Proposition 4.3 (Pipeline Soundness) . If the pipeline out-puts (l, φ ∗), then φ∗ is a correct loop invariant sufficient to prove q.Proof. By construction, φ∗ is returned only if it passes the formal verifier’s correctness check ( V1 = TRUE ) and sufficiency check ( V2 = TRUE ). 
+
+## 5. Experimental Setup 
+
+Training Dataset. In order to fine-tune models and measure their improved performance, we use a training set of pro-grams released by the authors of InvBench (Wei et al., 2025). We then use the UAutomizer tool to perform verification and extract invariants from its output (see Appendix H). We refer to this set of programs and invariants as V 0. We then apply the normalization step from our pipeline to obtain dataset V 1; and the subsequent LLM simplification step (us-ing the Kimi K2 Thinking model (Team et al., 2025), with 
+
+N = 4 ) to obtain the final dataset, V 2 which consists of 7,283 samples with quality grade ≥ 2. For dataset statistics and split details, see Appendix D. 
+
+Evaluation Dataset. For evaluation purposes, we use a col-lection of C programs with loop invariant verification tasks 6Not All Invariants Are Equal 
+
+Table 3. Main results on the Hard instances ( n = 123 ). Results shown as mean ± std. across three runs. Rvalid/correct/speedup : indicator rates (%). ¯S>1: mean speedup among accelerated instances. VBP: Virtual Best Performance in seconds (verifier-only baseline VBP: 193s). Solved: baseline timeouts (of 20) resolved per run. Bold : indicates best per model scale 
+
+Model Rvalid (%) Rcorrect (%) Rspeedup (%) ¯S>1 (x) VBP ↓ (s) VBP E2E ↓ (s) Solved GPT-5.2 94.0 ±1.7 72.4 ±2.2 37.1 ±1.2 10.7 ±0.4 155.6 ±3.0 163.4 ±3.0 3, 2, 3 GPT-OSS-120B 92.1 ±1.2 58.0 ±1.2 27.4 ±2.9 7.0 ±1.4 165.8 ±5.6 167.6 ±5.7 3, 2, 1 Qwen3-8B (Base) 89.4 ±7.8 23.9 ±3.1 10.8 ±0.5 8.5 ±5.2 181.6 ±4.3 181.7 ±4.2 0, 0, 3 Qwen3-8B-V2 (Ours) 100.0 ±0.0 42.8 ±4.6 21.7 ±1.7 10.7 ±2.3 166.5 ±4.3 166.7 ±4.3 2, 1, 4 
+
+Qwen3-4B (Base) 99.2 ±0.0 22.8 ±2.2 11.1 ±1.0 8.9 ±2.5 185.6 ±2.3 185.7 ±2.3 1, 0, 1 Qwen3-4B-V2 (Ours) 100.0 ±0.0 44.4 ±2.3 24.7 ±1.2 12.4 ±2.2 165.5 ±3.2 165.7 ±3.2 3, 2, 2 
+
+Qwen3-0.6B (Base) 88.4 ±0.5 28.5 ±2.8 12.2 ±2.2 5.3 ±3.3 182.9 ±5.7 183.0 ±5.7 2, 0, 1 Qwen3-0.6B-V2 (Ours) 99.7 ±0.5 27.9 ±0.5 14.1 ±2.5 8.5 ±3.1 174.0 ±5.6 174.1 ±5.6 2, 2, 1 
+
+Table 4. Ablation study. V0: raw verifier invariants; V1: normalized; V2: simplified and verified. Bold indicates best per model scale. 
+
+Model Rvalid (%) Rcorrect (%) Rspeedup (%) ¯S>1 (x) VBP ↓ (s) VBP E2E ↓ (s) Qwen3-8B (Base) 89.4 ±7.8 23.9 ±3.1 10.8 ±0.5 8.5 ±5.2 181.6 ±4.3 181.7 ±4.2 Qwen3-8B-V0 88.4 ±1.7 29.8 ±1.7 13.55 ±2.9 9.6 ±5.5 175.0 ±10.3 175.2 ±10.3 Qwen3-8B-V1 97.0 ±0.9 30.1 ±0.8 13.0 ±2.2 9.1 ±1.9 175.3 ±3.2 175.5 ±3.2 Qwen3-8B-V2 (Ours) 100.0 ±0.0 42.8 ±4.6 21.7 ±1.7 10.7 ±2.3 166.5 ±4.3 166.7 ±4.3 
+
+Qwen3-4B (Base) 99.2 ±0.0 22.8 ±2.2 11.1 ±1.0 8.9 ±2.5 185.6 ±2.3 185.7 ±2.3 Qwen3-4B-V0 81.3 ±0.8 29.3 ±3.5 13.55 ±1.9 10.1 ±1.5 177.5 ±1.5 177.7 ±1.5 Qwen3-4B-V1 97.6 ±1.41 33.1 ±2.4 12.7 ±2.4 11.4 ±2.9 174.2 ±4.7 174.4 ±4.7 Qwen3-4B-V2 (Ours) 100.0 ±0.0 44.4 ±2.3 24.7 ±1.2 12.4 ±2.2 165.5 ±3.2 165.7 ±3.2 
+
+Qwen3-0.6B (Base) 88.4 ±0.5 28.5 ±2.8 12.2 ±2.2 5.3 ±3.3 182.9 ±5.7 183.0 ±5.7 Qwen3-0.6B-V0 85.9 ±2.6 18.7 ±0.8 8.9 ±0.8 11.7 ±9.4 178.0 ±2.7 178.1 ±2.7 Qwen3-0.6B-V1 97.6 ±1.4 23.3 ±1.2 9.8 ±2.2 15.3 ±0.9 174.4 ±4.4 174.5 ±4.4 Qwen3-0.6B-V2 (Ours) 99.7 ±0.5 27.9 ±0.5 14.1 ±2.5 8.5 ±3.1 174.0 ±5.6 174.1 ±5.6 
+
+derived from SV-COMP (Beyer & Strejcek, 2025), also released by the authors of InvBench (Wei et al., 2025). Start-ing from 219 programs, we apply expansion, where each loop in a multi-loop program becomes a separate evaluation instance, obtaining 362 instances. We partition these into 
+
+Easy (n = 239 , 66%) and Hard (n = 123 , 34%) subsets, using a 15-second threshold on the UAutomizer baseline’s verification time. We focus exclusively on the Hard cate-gory, as these instances represent cases where invariant hints can provide meaningful verification speedup. We note that for 20 of the hard instances, UAutomizer timed out (See Appendix E). We use D = {(pi, P i, q i, l i, t (i) 
+
+> b
+
+)}ni=1 to denote the evalua-tion dataset, where each instance consists of a precondition 
+
+pi, a program Pi, a postcondition qi, a target loop location 
+
+li ∈ L (Pi), and median baseline verification time t(i) 
+
+> b
+
+for 
+
+V(pi, P i, q i) over k = 3 runs. We invoke multiple models on each benchmark, prompting them to produce an invariant in a structured JSON output format. Invariants that are syn-tactically ill-formed or which use operators with side effects (e.g., ++ , −− , + = , − =, =) are discarded and receive the verdict U NKNOWN .
+
+Models. We evaluate three models from the Qwen3 fam-ily (Yang et al., 2025): Qwen3-0.6B, Qwen3-4B-Instruct-2507, and Qwen3-8B. We fine-tune these models on the 
+
+V 2 dataset (see Appendix F for training details) and com-pare them against GPT-OSS-120B (Agarwal et al., 2025) and GPT-5.2 (Singh et al., 2025). By focusing on Small Language Models (SLMs) ranging from 0.6B to 8B pa-rameters, we demonstrate that high-quality data curation enables lightweight models to achieve strong performance on program verification, which is challenging even for large frontier models. All models are trained and evaluated in 
+
+non-thinking mode to (1) assess intrinsic generation capa-bility without chain-of-thought reasoning, and (2) minimize inference latency for practical deployment. 
+
+Decision Procedure. For valid candidates, we apply the procedure from §3.2, executing two queries in parallel :
+
+V(i)1 = V({pi}, P i, (li, ˆφi)) (Correctness Check) 
+
+V(i)2 = V({pi, (li, ˆφi)}, P i, q i) (Sufficiency Check) with wall-clock times t(i)1 and t(i)2 , respectively. Since both queries execute in parallel, the verification time is t(i) 
+
+> v
+
+=max( t(i)1 , t (i)2 ). The outcome Di is determined by Table 1. 
+
+Evaluation Metrics. We define binary indicators for each 7Not All Invariants Are Equal 
+
+instance i:• V ALID (i) = 1 iff syntactic validation passes; • C ORRECT (i) = 1 iff V ALID (i) and V(i)1 = TRUE ;• S PEEDUP (i) = 1 iff CORRECT (i) and Di ∈{TRUE , FALSE } and t(i) 
+
+> v
+
+< t (i) 
+
+> b
+
+.We report the mean of each indicator across the evaluation set. We also define the speedup factor: 
+
+S(i) = 
+
+
+
+t(i) 
+
+> b
+
+/t (i) 
+
+> v
+
+if C ORRECT (i) ∧
+
+Di ∈ { TRUE , FALSE }
+
+1 otherwise We report ¯S>1 as the mean speedup factor among instances with S PEEDUP (i) = 1 .
+
+Virtual Best Solver. Our technique is designed to run as part of a portfolio, in parallel to direct verification; thus, unhelpful invariants can be ignored, making the LLM a zero-risk augmentation. The Virtual Best Solver (VBS) metric selects the faster strategy per instance (cf. Figure 1): VBS (i) = 
+
+
+
+min( t(i) 
+
+> v
+
+, t (i) 
+
+> b
+
+) if C ORRECT (i) ∧
+
+Di ∈ { TRUE , FALSE }
+
+t(i) 
+
+> b
+
+otherwise The Virtual Best Performance VBP = 1
+
+> n
+
+P 
+
+> i
+
+VBS (i) mea-sures the average achievable verification time when opti-mally combining LLM invariants with baseline verification. 
+
+Note on Model Latency. We exclude inference latency 
+
+t(i) 
+
+> m
+
+from the above metrics to isolate model capability from deployment factors. For completeness, we also report on the VBP E2E mteric, which includes t(i) 
+
+> m
+
+for sufficient instances. 
+
+## 6. Results and Analysis 
+
+Benefits of W ONDA . Table 3 depicts our main results. For each model, we show indicator rates ( Rvalid/correct/speedup ), the mean speedup among accelerated instances ( ¯S>1) and performance of virtual best (VBP). Across all scales, V2 curation significantly boosts performance. For example, 
+
+Qwen3-4B-V2 nearly doubles its base model’s correctness (22 .8% → 44 .4% ) and speedup rate ( 11 .1% → 24 .7% ). 
+
+Qwen3-8B-V2 also shows a significant improvement, with correctness rate going from 23 .9% on the base model to 
+
+42 .8% on the fine-tuned model; and the corresponding speedup rate goes from 8.5% to 10 .7% . In all cases, we observe a VBP time reduction of 12–20 seconds. 
+
+Comparison to Large Models. Qwen3-4B-V2 achieves the best VBP among our trained models, 165.5s, which matches the VBP of GPT-OSS-120B (165.8s). More in-terestingly, when we add the inference latency to the run-time calculation ( VBP E2E ), Qwen3-4B-V2 , GPT-OSS-120B, and GPT-5.2 achieve comparable performance gains (165.7, 167.6, and 163.4). This suggests that extended reasoning does not always translate to better wall-clock performance. We note that the effect of model invocation overhead will be-come even more pronounced in verification frameworks that involves repeated prompting of LLMs (Wu et al., 2024b). 
+
+Quality over Quantity. The Qwen3-0.6B results reveal a nuanced trade-off. The base model achieves approximately the same correctness ( 28 .5% ± 2.8 vs. 27 .9% ± 0.5) as its V2 counterpart. However, these base model invariants do not translate to better practical performance: Qwen3-0.6B-V2 achieves a higher speedup rate ( 14 .1% vs. 12 .2% ), a larger mean speedup factor ( 8.5× vs. 5.3×), and lower VBP (174.0s vs. 182.9s). This suggests that the base model pro-duces invariants that do not accelerate verification, whereas V2 curation teaches the model to generate invariants that are practically useful for reducing solver runtime. 
+
+Timeouts remain a Challenge. The Solved column re-veals that resolving baseline timeouts remains a hard open problem. GPT-5.2 on average solves 2.67 instances across runs, and our best SLM ( Qwen3-4B-V2 ), despite being much smaller, achieves comparable results (2.33). 
+
+Ablation Analysis. Table 4 highlights the impact of each pipeline stage. Fine-tuning in V0 initially decreases valida-tion (e.g., 99 .2% → 81 .3% for Qwen3-4B), suggesting that training on inconsistently formatted data introduces syntac-tic noise. V1 normalization restores syntax, with validation jumping to 97 .0% (8B) and 97 .6% (4B), while stagnant VBP scores suggest no semantic gain. The transition from V1 to V2 yields the most significant improvements. For both Qwen3-4B and 8B, the pipeline achieves perfect 100 .0% validation, while correctness rises substantially (reaching 44 .4% and 42 .8% respectively). Most notably, speedup nearly doubles for both models, rising from 13% → 21 .7% for the 8B model and from 
+
+12 .7% → 24 .7% for the 4B model. Across these scales, VBP drops significantly, confirming that verified, simplified invariants provide superior supervision compared to raw or merely normalized data. 
+
+## 7. Conclusion 
+
+We introduced W ONDA , a novel data curation pipeline for neural invariant generation. We demonstrated that training on data collected through W ONDA is more effective than training directly on invariants generated by symbolic tools. 8Not All Invariants Are Equal 
+
+Moreover, the improvement in verification time brought by our best fine-tuned SLM is comparable to that of large language models such as GPT-5.2 and GPT-OSS-120B. Moving forward, we plan to evaluate W ONDA with addi-tional backend verifiers, besides UAutomizer. In addition, WONDA currently treats invariant generation as a supervised learning problem over input-output pairs, without exposing intermediate reasoning steps or leveraging verifier feedback during training. Both incorporating chain-of-thought su-pervision and reinforcement learning driven by verification outcomes are interesting next challenges to tackle. 
+
+## Impact Statement 
+
+This work contributes to our understanding of how to cu-ration training data for improving model performance on logical reasoning tasks. In addition, this work help make formal verification more practical in high-stake domains where reliability of the software system is important. We do not anticipate significant negative societal impacts arising from this work. 
+
+## Acknowledgments 
+
+The work of Pinto, Elboher and Katz was partially funded by the European Union (RobustifAI project, ID 101212818). Views and opinions expressed are however those of the author(s) only and do not necessarily reflect those of the European Union or the European Health and Digital Exec-utive Agency (HADEA). Neither the European Union nor the granting authority can be held responsible for them 
+
+## References 
+
+Agarwal, S., Ahmad, L., Ai, J., Altman, S., et al. GPT-OSS-120B & GPT-OSS-20B Model Card, 2025. Technical Re-port. https://arxiv.org/abs/2508.10925 .Anthropic. The Claude 3 Model Family: Opus, Sonnet, Haiku, 2024. Technical Report. https://arxiv. org/abs/2403.05530 .Beyer, D. and Strejcek, J. Improvements in Software Ver-ification and Witness Validation: SV-COMP 2025. In 
+
+Proc. 31st Int. Conf. on Tools and Algorithms for the Construction and Analysis of Systems (TACAS) , 2025. Chakraborty, S., Lahiri, S., Fakhoury, S., Lal, A., Musu-vathi, M., Rastogi, A., Senthilnathan, A., Sharma, R., and Swamy, N. Ranking LLM-Generated Loop Invariants for Program Verification. In Proc. 28th Int. Conf. on Empiri-cal Methods in Natural Language Processing (EMNLP) ,pp. 9164–9175, 2023. Clarke, E. M., Henzinger, T. A., and Veith, H. Introduction to Model Checking. In Handbook of Model Checking , pp. 1–26. Springer, 2018. Col ´on, M., Sankaranarayanan, S., and Sipma, H. Linear In-variant Generation Using Non-Linear Constraint Solving. In Proc. 15th Int. Conf. on Computer Aided Verification (CAV) , pp. 420–432, 2003. Cousot, P. and Cousot, R. Abstract Interpretation: A Unified Lattice Model for Static Analysis of Programs by Con-struction or Approximation of Fixpoints. In Proc. 4th Int. Conf. on Principles of Programming Languages (POPL) ,pp. 238–252, 1977. Cousot, P. and Halbwachs, N. Automatic Discovery of Linear Restraints Among Variables of a Program. In Proc. 5th Int. Conf. on Principles of Programming Languages (POPL) , pp. 84–96, 1978. Ernst, M. D., Perkins, J. H., Guo, P. J., McCamant, S., Pacheco, C., Tschantz, M. S., and Xiao, C. The Daikon System for Dynamic Detection of Likely Invariants. Sci-ence of Computer Programming , 69(1-3):35–45, 2007. Ezudheen, P., Neider, D., D’Souza, D., Garg, P., and Mad-husudan, P. Horn-ICE Learning for Synthesizing Invari-ants and Contracts. In Proc. Conf. on Object-Oriented Programming, Systems, Languages & Applications (OOP-SLA) , 2018. Fedyukovich, G. and Bod ´ık, R. Accelerating Syntax-Guided Invariant Synthesis. In Proc. 24th Int. Conf. on Tools and Algorithms for the Construction and Analysis of Systems (TACAS) , 2018. Flanagan, C. and Qadeer, S. Predicate Abstraction for Soft-ware Verification. In Proc. 29th Int. Conf. on Principles of Programming Languages (POPL) , pp. 191–202, 2002. Garg, P., Neider, D., Madhusudan, P., and Roth, D. Learning Invariants Using Decision Trees and Implication Coun-terexamples. ACM Sigplan Notices , 51(1):499–512, 2016. Gupta, A. and Rybalchenko, A. InvGen: An Efficient In-variant Generator. In Proc. 21st Int. Conf. on Computer Aided Verification (CAV) , pp. 634–640, 2009. Heizmann, M., Christ, J., Dietsch, D., Ermis, E., Hoenicke, J., Lindenmann, M., Nutz, A., Schilling, C., and Podelski, A. Ultimate Automizer with SMTInterpol: (Competition Contribution). In Proc. 19th Int. Conf. on Tools and Algorithms for the Construction and Analysis of Systems (TACAS) , pp. 641–643, 2013. Hoare, C. A. R. An Axiomatic Basis for Computer Program-ming. Communications of the ACM , 12(10):576–580, 1969. 9Not All Invariants Are Equal 
+
+Hojjat, H. and R ¨ummer, P. The ELDARICA Horn Solver. In Proc. 18th Int. Conf. on Formal Methods in Computer-Aided Design (FMCAD) , pp. 1–7, 2018. Hu, J. E., Shen, Y., Wallis, P., Allen-Zhu, Z., Li, Y., Wang, S., and Chen, W. LoRA: Low-Rank Adaptation of Large Language Models. In Proc. 10th Int. Conf. on Learning Representations (ICLR) , 2022. Kamath, A., Mohammed, N., Senthilnathan, A., Chakraborty, S., Deligiannis, P., Lahiri, S. K., Lal, A., Rastogi, A., Roy, S., and Sharma, R. Leveraging LLMs for Program Verification. In Proc. 24th Int. Conf. on Formal Methods in Computer-Aided Design (FMCAD) , pp. 107–118, 2024. Karr, M. Affine Relationships Among Variables of a Pro-gram. Acta Informatica , 6(2):133–151, 1976. Lahiri, S. K. and Bryant, R. E. Predicate Abstraction with Indexed Predicates. ACM Transactions on Computational Logic (TOCL) , 9(1):4–es, 2007. Liu, R., Chen, M., Wu, L.-I., Ke, J., and Li, G. Enhanc-ing Automated Loop Invariant Generation for Complex Programs with Large Language Models. Science of Com-puter Programming , 243:103387, 2025. McMillan, K. L. Interpolation and SAT-Based Model Check-ing. In Proc. 15th Int. Conf. on Computer Aided Verifica-tion (CAV) , pp. 1–13, 2003. OpenAI. GPT-4 Technical Report, 2023. Technical Report. 
+
+https://arxiv.org/abs/2303.08774 .Pei, K., Bieber, D., Shi, K., Sutton, C., and Yin, P. Can Large Language Models Reason About Program Invariants? In 
+
+Proc. 40th Int. Conf. on Machine Learning (ICML) , pp. 27496–27520, 2023. Sharma, R., Gupta, S., Hariharan, B., Aiken, A., Liang, P., and Nori, A. V. A Data Driven Approach for Algebraic Loop Invariants. In Proc. 22nd Int. Conf. on European Symposium on Programming (ESOP) , pp. 574–592, 2013. Singh, A., Fry, A., Perelman, A., Tart, A., Ganesh, A., El-Kishky, A., McLaughlin, A., Low, A., Ostrow, A., Ananthram, A., et al. OpenAI GPT-5 System Card, 2025. Technical Report. https://arxiv.org/ abs/2601.03267 .Sun, C., Agashe, V., Chakraborty, S., Taneja, J., Barrett, C., Dill, D., Qiu, X., and Lahiri, S. K. ClassInvGen: Class Invariant Synthesis Using Large Language Models. In Proc. 2nd Symposium on AI Verification (SAIV) , pp. 64–96, 2025. Team, K., Bai, Y., Bao, Y., Chen, G., Chen, J., Chen, N., Chen, R., Chen, Y., Chen, Y., Chen, Y., et al. Kimi K2: Open Agentic Intelligence, 2025. Technical Report. 
+
+https://arxiv.org/abs/2507.20534 .Wei, A., Suresh, T., Sun, T., Wu, H., Wang, K., and Aiken, A. InvBench: Can LLMs Accelerate Program Verifica-tion with Invariant Synthesis?, 2025. Technical Report. 
+
+https://arxiv.org/abs/2509.21629v1 .Wu, G., Cao, W., Yao, Y., Wei, H., Chen, T., and Ma, X. LLM Meets Bounded Model Checking: Neuro-symbolic Loop Invariant Inference. In Proc. 39th Int. Conf. on Automated Software Engineering (ASE) , pp. 406–417, 2024a. Wu, H., Barrett, C., and Narodytska, N. Lemur: Integrating Large Language Models in Automated Program Verifica-tion. In Proc. 12th Int. Conf. on Learning Representations (ICLR) , 2024b. Yang, A., Li, A., Yang, B., Zhang, B., Hui, B., Zheng, B., Yu, B., Gao, C., Huang, C., Lv, C., Zheng, C., Liu, D., Zhou, F., Huang, F., Hu, F., Ge, H., Wei, H., Lin, H., Tang, J., Yang, J., Tu, J., Zhang, J., Yang, J., Yang, J., Zhou, J., Zhou, J., Lin, J., Dang, K., Bao, K., Yang, K.-P., Yu, L., Deng, L.-C., Li, M., Xue, M., Li, M., Zhang, P., Wang, P., Zhu, Q., Men, R., Gao, R., Liu, S.-Q., Luo, S., Li, T., Tang, T., Yin, W., Ren, X., Wang, X., Zhang, X., Ren, X., Fan, Y., Su, Y., Zhang, Y.-C., Zhang, Y., Wan, Y., Liu, Y., Wang, Z., Cui, Z., Zhang, Z., Zhou, Z., and Qiu, Z. Qwen3 Technical Report, 2025. Technical Report. 
+
+https://arxiv.org/abs/2505.09388 .10 Not All Invariants Are Equal 
+
+## Appendix 
+
+The appendix provides technical details and additional experiments that were not included in the main paper. 
+
+## A. Additional Examples 
+
+cohendiv ll valuebound50 6.c 
+
+void assert(int cond) { if (!(cond)) { ERROR: { reach error(); abort(); } } } 
+
+void assume(int cond) { if (!cond) { abort(); } } 
+
+int main() {
+
+int x, y; long long q, r, a, b; x = VERIFIER nondet int(); assume((x >= 0) && (x <= 50)); y = VERIFIER nondet int(); assume((y >= 0) && (y <= 50)); assume(y >= 1); q = 0; r = x; a = 0; b = 0; while (1) {
+
+if (!(r >= y)) break; a = 1; b = y; while (1) {
+
+// Location l if (!(r >= (2 * b))) break; assert(r >= ((2 * y) * a)); a = 2 * a; b = 2 * b; 
+
+}
+
+r = r - b; q = q + a; 
+
+}
+
+return 0; 
+
+}
+
+Baseline verifier runtime (no LLM): 214.28s (TRUE) 
+
+(r >= (2 * y) * a) && (b == (2 ˆ (a / 2))) 
+
+Qwen3-8B-Base 
+
+Valid Syntax, Incorrect 
+
+(((((((b == ((( int128) ((long long) 2 * a) * y) % 9223372036854775808)) + (( int128) ((long long) 2 * a) * y))) || ((((a >= 0) ? (a / 2) : ((a / 2) - 1)) + 1) < a)) && (y != 0)) && (1 <= y)) && (((( int128) ((long long) a * y) + b) % 9223372036854775808) == r)) 
+
+Qwen3-8B-V0 
+
+Valid Syntax, Incorrect 
+
+a == 0 || b < y + 1 
+
+Qwen3-8B-V1 
+
+Valid, Incorrect 
+
+a*y == b 
+
+Qwen3-8B-V2 
+
+Valid, Correct, Sufficient (39.75 ×)
+
+Figure 3. Inference-time invariant predictions on cohendiv ll valuebound50 6.c inner loop from the evaluation set across all stages. The progression demonstrates that the fine-tuning process works as expected where V2 successfully synthesizes the correct relationship 
+
+a × y = b. This V2 invariant drastically reduces the total verification runtime from 214.28s down to 5.39s, achieving a significant 39.75 ×
+
+speedup (including the LLM inference time). 
+
+((((((((((((((((((1 <= weight1) && ((((long long) weight1 + weight2) + 1) <= max threshold)) && (weight2 <= 10)) && (20 <= (( int128) ((long long) weight1 * 14) + cumulative weight))) && (weight1 <= 10)) && (count <= 4)) && (1 <= weight2)) && (((long long) weight1 + weight2) <= cumulative weight)) || ((((((((1 <= weight1) && ((((long long) weight1 + weight2) + 1) <= max threshold)) && (weight2 <= 10)) ...|| ((((((((1 <= weight1) && ((((long long) weight1 + weight2) + 1) <= max threshold)) && (count <= 5)) && (weight2 <= 10)) && (weight1 <= 10)) && (20 <= (( int128) cumulative weight + ((long long) weight1 * 13)))) && (1 <= weight2)) && (((long long) weight1 + weight2) <= cumulative weight))) 
+
+V0: Raw Verifier Output 
+
+3084 chars, 75 conjuncts, 11 disjuncts 
+
+Figure 4. Example of a raw verbose invariant generated by the verifier. 
+
+11 Not All Invariants Are Equal  
+
+> ((((((((7 <= i) && (N <= 10)) || ((2 == i) && (N <= 10))) || ((5 == i) && (N <= 10))) || ((i == 1) && (N <= 10))) || ((3 == i) && (N <= 10))) || ((i == 4) && (N <= 10))) || ((6 <= i) && (N <= 10)))
+> V0: Raw Verifier Output
+> 239 chars, 7 disjuncts
+> 7 <= i && N <= 10 || 2 == i && N <= 10 || 5 == i && N <= 10 || i == 1 && N <= 10 || 3 == i && N <= 10 || i == 4 && N <= 10 || 6 <= i && N <= 10
+> V1: Normalized
+> 147 chars, 7 disjuncts
+> LLM
+
+1 <= i && i <= N && N <= 10  
+
+> V2: Simplified
+> 30 chars, Grade 3
+> normalize simplify
+
+Figure 5. Invariant refinement pipeline. The LLM factors out the common constraint N <= 10 and reduces case enumeration into a compact range, achieving a 3.47x verification speedup. 
+
+## B. Prompts 
+
+B.1. Prompt for training and evaluation 
+
+We provide here the system and user prompts for loop invariant generation task, used for both training and evaluation. 
+
+System: You are an expert C programmer and highly proficient in generating strong loop invariants for C programs that accelerate traditional verifiers’ verification process. ## Input format - A C program instrumented with loop markers of the form: ‘‘‘c INVARIANT_MARKER_k(); // appears at the *start of each loop body* ‘‘‘ - The program contains a single target property as an assertion of the form: ‘‘‘c assert(<target_property>); ‘‘‘ - A target loop marker (e.g., "INVARIANT_MARKER_1") ## Task - Propose ONE loop invariant that is intended to hold specifically at the target loop marker. - The invariant should help prove the target property and be inductive if possible. ## Output format - Output MUST be a single JSON object on one line wrapped in ‘‘‘json‘‘‘ tags and nothing else. - The JSON MUST have exactly these keys: - "marker": MUST be exactly the target loop marker (e.g., "INVARIANT_MARKER_1") - "content": ONLY a valid C boolean expression for the invariant. ## Output format example ‘‘‘json {"marker":"<target_marker>","content":"<content>"} ‘‘‘ User: ## User Input ### C Program ‘‘‘c {program} ‘‘‘ ### Target Loop Marker {target_marker} 
+
+12 Not All Invariants Are Equal 
+
+B.2. Prompt for Invariant Simplification 
+
+We provide here the full system and user prompts used for the simplification step in the W ONDA pipeline. 
+
+System: ## Task Given the C program and the invariant, your task is to simplify the invariant to a more compact and general form. ## Output format - Output MUST be a single JSON object. - The JSON MUST have exactly these keys: - "simplified_invariant": A single compact, inductive, C boolean expression, nothing else. - "rationale": A short explanation of why you simplified the invariant to the given form. ## Output format example {"simplified_invariant":"<simplified_invariant>", "rationale":"<rationale>"} ## Guidelines - The simplified invariant should be logically weaker than (or equivalent to) the original, but still inductive and strong enough to prove the target property. - Prefer LINEAR arithmetic expressions (the verifier struggles with non-linear math like x*y) - Prefer mathematical relationships over case enumeration - Look for patterns across disjuncts (e.g., repeated structure with varying constants) - Generalize enumerated values to ranges (e.g., "i == 1 || i == 2|| i == 3" -> "1 <= i && i <= 3") - Remove tautological constraints (e.g., "a == a", "n <= n", "0 <= 0", "a + 0 == a", "true", "1") - Remove constraints on constant variables (variables initialized but never modified in loops) - Replace redundant constraints with simpler equivalents (e.g., "a <= b && b <= a" -> "a == b") - Ensure the simplified invariant is still inductive (holds before loop and preserved by each iteration) - Use the program context to understand variable semantics and loop structure - Use ONLY plain ASCII characters in your output (no Unicode symbols) User: Simplify the following invariant for the given C program and marker. c_program: ‘‘‘c {program} ‘‘‘ invariant: ‘‘‘c {invariant} ‘‘‘ marker: ‘‘‘c {marker} ‘‘‘ 
+
+13 Not All Invariants Are Equal 
+
+## C. Algorithms 
+
+Algorithm 1 Candidate Invariant Grading  
+
+> 1:
+
+Input: Verification query ⟨A, P, q ⟩, location l, candidate predicate φ, baseline time tb 
+
+> 2:
+
+Output: Quality grade g ∈ { 0, 1, 2, 3} 
+
+> 3: 4:
+
+if not SYNTAX VALID (φ) then  
+
+> 5:
+
+return 0 {Invalid syntax } 
+
+> 6:
+
+end if  
+
+> 7: 8:
+
+I ← (l, φ ) 
+
+> 9:
+
+{Parallel execution (cf. Figure 1) } 
+
+> 10:
+
+(V1, t 1) ← V (A, P, I ) {Correctness Check } 
+
+> 11:
+
+(V2, t 2) ← V (A ∪ { I}, P, q ) {Sufficiency Check } 
+
+> 12:
+
+tv ← max( t1, t 2) {Total wall-clock time } 
+
+> 13: 14:
+
+if V1̸ = TRUE then  
+
+> 15:
+
+return 0 {Incorrect (not inductive) } 
+
+> 16:
+
+else if V2̸ = TRUE then  
+
+> 17:
+
+return 1 {Correct but not sufficient } 
+
+> 18:
+
+else if tv ≥ tb then  
+
+> 19:
+
+return 2 {Correct and sufficient, but no speedup } 
+
+> 20:
+
+else  
+
+> 21:
+
+return 3 {Correct, sufficient, and provides speedup } 
+
+> 22:
+
+end if 
+
+14 Not All Invariants Are Equal 
+
+Algorithm 2 Invariant Simplification  
+
+> 1:
+
+Input: Verification query ⟨A, P, q ⟩, location l, normalized invariant φnorm , baseline time tb, N candidates, minimum character length η 
+
+> 2:
+
+Output: Set R of qualifying simplified invariants with their corresponding grades.  
+
+> 3:
+
+R ← ∅  
+
+> 4:
+
+if φnorm ∈ { 0, 1} then  
+
+> 5:
+
+return R 
+
+> 6:
+
+end if  
+
+> 7:
+
+if |φnorm | > η then  
+
+> 8:
+
+C ← LLM (P, φ norm , l, N ) 
+
+> 9:
+
+C ← DEDUPLICATE (C) 
+
+> 10:
+
+for each φ ∈ C do  
+
+> 11:
+
+if φ ∈ { 0, 1} then  
+
+> 12:
+
+continue  
+
+> 13:
+
+end if  
+
+> 14:
+
+g ← GRADE CANDIDATE (⟨A, P, q ⟩, l, φ, t b) {via Alg. 1 } 
+
+> 15:
+
+if g ≥ 2 then  
+
+> 16:
+
+R ← R ∪ { (φ, g )} 
+
+> 17:
+
+end if  
+
+> 18:
+
+end for  
+
+> 19:
+
+end if  
+
+> 20:
+
+if R = ∅ then  
+
+> 21:
+
+g ← GRADE CANDIDATE (⟨A, P, q ⟩, l, φ norm , t b) 
+
+> 22:
+
+if g ≥ 2 then  
+
+> 23:
+
+R ← { (φnorm , g )} 
+
+> 24:
+
+end if  
+
+> 25:
+
+end if  
+
+> 26:
+
+return R
+
+## D. Training Data Statistics 
+
+The V 2 dataset consists of 7,283 total samples, characterized by a stable token length distribution across both training (5,826 samples) and validation (1,457 samples) splits. As shown in Figure 6, the dataset is categorized into two primary quality tiers: Correct and Sufficient (Grade 2, i.e. all φ s.t. Q(φ) = 2 ), which comprises 4,516 samples, and Provides Speedup (Grade 3, i.e. all φ s.t. Q(φ) = 3 ), which includes 2,767 samples. The mean total sequence length is approximately 518 tokens, reflecting the complexity of the verification queries, while the generated invariants themselves are highly concise, with a mean length of only 15.8 tokens. While the baseline verification across the entire dataset shows a mean speedup of 1.21x, the Grade 3 subset demonstrates a more substantial performance gain—visible in the speedup metrics of Figure 6—with a mean speedup of 2.13x and peaks reaching up to 41.39x. This indicates that the curated invariants in the V2 dataset not only preserve correctness but also offer significant computational advantages for the formal solver. 
+
+## E. Evaluation Data Statistics 
+
+To quantify the difficulty of the hard cases, we evaluate the baseline verifier on this subset 3 times and use the median timing among them. Figure 7 reports the verifier’s performance on the 123 selected hard instances. The verifier fails to solve 16.3% of these cases (compared to 5.5% across all instances), confirming that these represent substantially more challenging verification problems. Figure 8 shows the runtime distribution of the baseline verifier on the 123 hard cases. Execution times range from 15.5 s to the 600 s timeout, with a median of 112.2 s and a mean of 193.0 s. 15 Not All Invariants Are Equal 
+
+Figure 6. Statistical distribution of the V2 curated dataset. The metrics are reported across the 80-20 train-validation split used for fine-tuning all models in our evaluation. 
+
+Figure 7. Hard split baseline verifier outcomes. Figure 8. Hard split verification time distribution (n=123). 
+
+## F. Model training details 
+
+All models below trained with no-think mode. 
+
+Table 5. Supervised Fine-Tuning (SFT) Hyperparameters for Qwen3-8B-V2 on Invariant Generation task with LoRA. (Hu et al., 2022) 
+
+Category Hyperparameter Value / Setting 
+
+Optimizer & LR Learning Rate 5 × 10 −4
+
+LR Scheduler cosine with min lr (Min ratio: 0.1) Warmup Ratio 0.03 Max Grad Norm 0.3 Optimizer adamw torch fused 
+
+Batch Config Epochs 2Per-device Batch Size 16 Grad. Accumulation 2Effective Batch Size 32 Max Seq. Length 1024 tokens 
+
+LoRA (PEFT) Rank ( r) 128 Alpha ( α) 64 Dropout 0.05 Target Modules All linear layers + embed tokens 
+
+Modules to Save lm head , embed tokens 
+
+16 Not All Invariants Are Equal 
+
+Table 6. Full Supervised Fine-Tuning (SFT) Hyperparameters for Qwen3-0.6B and Qwen3-4B-V2 (Instruct-2507) on invariant generation task. 
+
+Category Hyperparameter Value / Setting 
+
+Optimizer & LR Learning Rate 1 × 10 −4
+
+LR Scheduler cosine with min lr (Min ratio: 0.1) Warmup Ratio 0.03 Max Grad Norm 0.3 Optimizer adamw torch fused 
+
+Batch Config Epochs 2Per-device Batch Size 16 Grad. Accumulation 2Effective Batch Size 32 Max Seq. Length 1024 tokens 
+
+## G. Model sampling parameters 
+
+Table 7. Sampling hyperparameters for all Qwen3 non-think models on the invariant generation task. 
+
+Hyperparameter Value 
+
+Max New Tokens 1024 Temperature 0.7 Top-p 0.8 Top-k 20 Min-p 0Repetition Penalty 1.1 
+
+## H. Hardware, UAutomizer Release & Configuration 
+
+We used UAutomizer release for SVCOMP-2025 (Heizmann et al., 2013) with the configuration shown in Table 8. 
+
+Table 8. UAutomizer Configuration 
+
+Parameter Value 
+
+Version 0.3.0-dev-d790fec 1 (Java 21, jdk-21.0.1) Property unreach-call.prp 
+
+Property specification CHECK( init(main()), LTL(G ! call(reach error())) ) 
+
+Architecture 32-bit Memory limit 16 GB (enforced via runlim 2)Timeout 600 seconds per verification task 
+
+Hardware. Experiments ran on a Linux SLURM cluster node with 8 AMD EPYC 9354 cores, 256 GB RAM, and one NVIDIA L40S GPU. The verifier was memory-limited to 16 GB using runlim .
+
+> 1
+
+https://zenodo.org/records/14209043 
+
+> 2
+
+https://github.com/arminbiere/runlim 
+
+17
