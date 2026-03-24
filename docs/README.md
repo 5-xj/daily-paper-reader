@@ -6,61 +6,76 @@
 </div>
 
 ## 每次日报
-- 最新运行日期：2026-03-23
-- 运行时间：2026-03-23 19:42:25 UTC
+- 最新运行日期：2026-03-24
+- 运行时间：2026-03-24 20:39:12 UTC
 - 运行状态：成功
-- 本次总论文数：13
-- 精读区：5
-- 速读区：8
+- 本次总论文数：18
+- 精读区：6
+- 速读区：12
 
 ### 今日简报（AI）
-今日深度解析 LLM 赋能的芯片 RTL 功耗优化与自进化混合智能体工作流，共收录 13 篇前沿进展。
-重点推荐 POET 框架在硬件 PPA 优化上的突破，以及 HyEvo 通过自进化机制实现的推理效率飞跃。
-建议关注 AI 自动化设计硬件与逻辑推理的深度融合，探索智能体工作流在复杂场景下的自我演进潜力。
-- 详情：[/202603/23/README](/202603/23/README)
+今日深度解析 18 篇前沿论文，重点聚焦 Agentic AI 的系统级优化与神经符号演化搜索。
+满分论文攻克了 Agent 任务连贯性难题，而 FormalEvolve 则通过演化搜索显著提升了自动形式化的证明效力。
+建议关注
+- 详情：[/202603/24/README](/202603/24/README)
 
 ### 精读区论文标签
-1. [POET: Power-Oriented Evolutionary Tuning for LLM-Based RTL PPA Optimization](/202603/23/2603.19333v1-poet-power-oriented-evolutionary-tuning-for-llm-based-rtl-ppa-optimization)  
+1. [Improving Coherence and Persistence in Agentic AI for System Optimization](/202603/24/2603.21321v1-improving-coherence-and-persistence-in-agentic-ai-for-system-optimization)  
+   标签：评分：10.0/10、query:llm-ec
+   evidence：用于设计高性能系统启发式算法的智能体研究员架构
+2. [FormalEvolve: Neuro-Symbolic Evolutionary Search for Diverse and Prover-Effective Autoformalization](/202603/24/2603.19828v2-formalevolve-neuro-symbolic-evolutionary-search-for-diverse-and-prover-effective-autoformalization)  
    标签：评分：9.0/10、query:llm-ec
-   evidence：LLM驱动的演化框架用于多目标优化
-2. [HyEvo: Self-Evolving Hybrid Agentic Workflows for Efficient Reasoning](/202603/23/2603.19639v1-hyevo-self-evolving-hybrid-agentic-workflows-for-efficient-reasoning)  
+   evidence：结合LLM驱动变异与交叉的神经符号演化框架
+3. [LLM-Driven Heuristic Synthesis for Industrial Process Control: Lessons from Hot Steel Rolling](/202603/24/2603.20537v1-llm-driven-heuristic-synthesis-for-industrial-process-control-lessons-from-hot-steel-rolling)  
    标签：评分：9.0/10、query:llm-ec
-   evidence：利用LLM驱动的演化进行自动化工作流生成
-3. [FormalEvolve: Neuro-Symbolic Evolutionary Search for Diverse and Prover-Effective Autoformalization](/202603/23/2603.19828v1-formalevolve-neuro-symbolic-evolutionary-search-for-diverse-and-prover-effective-autoformalization)  
+   evidence：LLM驱动的工业过程控制启发式合成
+4. [LLM-ODE: Data-driven Discovery of Dynamical Systems with Large Language Models](/202603/24/2603.20910v1-llm-ode-data-driven-discovery-of-dynamical-systems-with-large-language-models)  
    标签：评分：9.0/10、query:llm-ec
-   evidence：神经符号演化框架中的LLM驱动变异和交叉
-4. [Hyperagents](/202603/23/2603.19461v1-hyperagents)  
-   标签：评分：8.0/10、query:ahd
-   evidence：用于自动算法发现的自我改进AI系统
-5. [Evolving Jailbreaks: Automated Multi-Objective Long-Tail Attacks on Large Language Models](/202603/23/2603.20122v1-evolving-jailbreaks-automated-multi-objective-long-tail-attacks-on-large-language-models)  
+   evidence：大语言模型辅助的模型发现框架，引导符号演化
+5. [Decoupling Numerical and Structural Parameters: An Empirical Study on Adaptive Genetic Algorithms via Deep Reinforcement Learning for the Large-Scale TSP](/202603/24/2603.20702v1-decoupling-numerical-and-structural-parameters-an-empirical-study-on-adaptive-genetic-algorithms-via-deep-reinforcement-learning-for-the-large-scale-tsp)  
    标签：评分：8.0/10、query:llm-ec
-   evidence：用于LLM越狱发现的多目标演化搜索
+   evidence：通过深度强化学习实现的大规模TSP自适应遗传算法
+6. [Large Neighborhood Search meets Iterative Neural Constraint Heuristics](/202603/24/2603.20801v1-large-neighborhood-search-meets-iterative-neural-constraint-heuristics)  
+   标签：评分：8.0/10、query:llm-ec
+   evidence：用于约束满足中大邻域搜索的神经启发式算法
 
 ### 速读区论文标签
-1. [Computer-Orchestrated Design of Algorithms: From Join Specification to Implementation](/202603/23/2603.19434v1-computer-orchestrated-design-of-algorithms-from-join-specification-to-implementation)  
-   标签：评分：7.0/10、query:ahd
-   evidence：从规范到实现的计算机编排算法设计
-2. [Helix: A Dual-Helix Co-Evolutionary Multi-Agent System for Prompt Optimization and Question Reformulation](/202603/23/2603.19732v1-helix-a-dual-helix-co-evolutionary-multi-agent-system-for-prompt-optimization-and-question-reformulation)  
+1. [Towards Solving Polynomial-Objective Integer Programming with Hypergraph Neural Networks](/202603/24/2603.19318v1-towards-solving-polynomial-objective-integer-programming-with-hypergraph-neural-networks)  
    标签：评分：7.0/10、query:llm-ec
-   evidence：用于提示词优化的协同演化多智能体系统
-3. [Two-Time-Scale Learning Dynamics: A Population View of Neural Network Training](/202603/23/2603.19808v1-two-time-scale-learning-dynamics-a-population-view-of-neural-network-training)  
+   evidence：使用超图神经网络求解多项式目标整数规划
+2. [Stone-in-Waiting: A Cloud-Based Accelerator for the Quantum Approximate Optimization Algorithm](/202603/24/2603.19980v1-stone-in-waiting-a-cloud-based-accelerator-for-the-quantum-approximate-optimization-algorithm)  
    标签：评分：7.0/10、query:llm-ec
-   evidence：基于种群学习和演化策略的理论框架
-4. [Process Supervision for Chain-of-Thought Reasoning via Monte Carlo Net Information Gain](/202603/23/2603.17815v1-process-supervision-for-chain-of-thought-reasoning-via-monte-carlo-net-information-gain)  
+   evidence：获取组合优化算法初始参数的加速器
+3. [HCAG: Hierarchical Abstraction and Retrieval-Augmented Generation on Theoretical Repositories with LLMs](/202603/24/2603.20299v1-hcag-hierarchical-abstraction-and-retrieval-augmented-generation-on-theoretical-repositories-with-llms)  
+   标签：评分：7.0/10、query:llm-ec
+   evidence：用于算法博弈论仓库级代码生成的LLM框架
+4. [Procedural Refinement by LLM-driven Algorithmic Debugging for ARC-AGI-2](/202603/24/2603.20334v1-procedural-refinement-by-llm-driven-algorithmic-debugging-for-arc-agi-2)  
+   标签：评分：7.0/10、query:llm-ec
+   evidence：LLM驱动的算法调试与过程细化
+5. [MOELIGA: a multi-objective evolutionary approach for feature selection with local improvement](/202603/24/2603.20934v1-moeliga-a-multi-objective-evolutionary-approach-for-feature-selection-with-local-improvement)  
+   标签：评分：7.0/10、query:llm-ec
+   evidence：用于特征选择优化的多目标遗传算法
+6. [Shadoks Approach to Parallel Reconfiguration of Triangulations](/202603/24/2603.21293v1-shadoks-approach-to-parallel-reconfiguration-of-triangulations)  
+   标签：评分：7.0/10、query:llm-ec
+   evidence：结合精确方法与贪婪启发式算法解决三角剖分重构问题
+7. [To See is Not to Master: Teaching LLMs to Use Private Libraries for Code Generation](/202603/24/2603.15159v3-to-see-is-not-to-master-teaching-llms-to-use-private-libraries-for-code-generation)  
    标签：评分：6.0/10、query:llm-ec
-   evidence：自动生成LLM推理的步骤级标签
-5. [RAMP: Reinforcement Adaptive Mixed Precision Quantization for Efficient On Device LLM Inference](/202603/23/2603.17891v1-ramp-reinforcement-adaptive-mixed-precision-quantization-for-efficient-on-device-llm-inference)  
+   evidence：通过自动数据合成教LLM使用私有库进行代码生成
+8. [CoVerRL: Breaking the Consensus Trap in Label-Free Reasoning via Generator-Verifier Co-Evolution](/202603/24/2603.17775v2-coverrl-breaking-the-consensus-trap-in-label-free-reasoning-via-generator-verifier-co-evolution)  
    标签：评分：6.0/10、query:llm-ec
-   evidence：用于自适应LLM量化的强化学习
-6. [TARo: Token-level Adaptive Routing for LLM Test-time Alignment](/202603/23/2603.18411v1-taro-token-level-adaptive-routing-for-llm-test-time-alignment)  
+   evidence：LLM无标签推理中的生成器-验证器协同演化
+9. [MemMA: Coordinating the Memory Cycle through Multi-Agent Reasoning and In-Situ Self-Evolution](/202603/24/2603.18718v1-memma-coordinating-the-memory-cycle-through-multi-agent-reasoning-and-in-situ-self-evolution)  
    标签：评分：6.0/10、query:llm-ec
-   evidence：在推理时引导LLM进行结构化推理
-7. [Variational and Annealing-Based Approaches to Quantum Combinatorial Optimization](/202603/23/2603.19117v1-variational-and-annealing-based-approaches-to-quantum-combinatorial-optimization)  
+   evidence：具有原位自我演化能力的内存循环协调多智能体框架
+10. [Breaking the Capability Ceiling of LLM Post-Training by Reintroducing Markov States](/202603/24/2603.19987v1-breaking-the-capability-ceiling-of-llm-post-training-by-reintroducing-markov-states)  
    标签：评分：6.0/10、query:llm-ec
-   evidence：量子组合优化方法综述
-8. [Stepwise: Neuro-Symbolic Proof Search for Automated Systems Verification](/202603/23/2603.19715v1-stepwise-neuro-symbolic-proof-search-for-automated-systems-verification)  
+   evidence：用于LLM后训练的强化学习以发现新策略
+11. [SymCircuit: Bayesian Structure Inference for Tractable Probabilistic Circuits via Entropy-Regularized Reinforcement Learning](/202603/24/2603.20392v1-symcircuit-bayesian-structure-inference-for-tractable-probabilistic-circuits-via-entropy-regularized-reinforcement-learning)  
    标签：评分：6.0/10、query:ahd
-   evidence：用于自动证明搜索的神经符号框架
+   evidence：通过强化学习进行自动化结构学习
+12. [AE-LLM: Adaptive Efficiency Optimization for Large Language Models](/202603/24/2603.20492v1-ae-llm-adaptive-efficiency-optimization-for-large-language-models)  
+   标签：评分：6.0/10、query:ahd
+   evidence：自动选择和组合最优效率技术的统一框架
 
 
 <div class="dpr-home-promo-card">

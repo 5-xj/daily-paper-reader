@@ -1,0 +1,2544 @@
+Procedural Refinement by LLM-driven Algorithmic Debugging for ARC-AGI-2
+Yu-Ning Qiu * 1 Lin-Feng Zou * 1 Jiong-Da Wang 1 Xue-Rong Yuan 1 Wang-Zhou Dai 1
+Abstract
+In complex code-generation tasks, conversation-
+based LLM code repair exhibits limited ability
+to recover from first-pass programming errors, as
+such code revisions are usually driven by LLMs’
+“plausible reasoning” rather than a formal, algo-
+rithmic debugging procedure. However, a for-
+mal foundation for such debugging exists in Udi
+Shapiro’s theory of algorithmic program debug-
+ging (APD), which frames program repair as an
+explicit, stepwise procedural refinement process.
+In this paper, we propose a neuro-symbolic pro-
+cedural refinement approach, Abduction-Based
+Procedural Refinement (ABPR), which couples
+an LLM with a meta-interpreter that materialises
+program execution into compact, declarative tree-
+structured traces, following the principles of APD.
+We evaluate ABPR on ARC-AGI-2, a benchmark
+requiring strong abstraction and debugging capa-
+bilities, and adopt Prolog as the target language
+due to its declarative semantics, which are well-
+suited to algorithmic program debugging. Our
+experiments show that ABPR paired with Gemini-
+3-Flash achieves a Pass@2 score of 56.67% even
+in a language in which contemporary LLMs typi-
+cally underperform. These results point towards
+a more auditable paradigm for program repair by
+integrating LLMs with classical formal methods.
+1. Introduction
+Although large language models (LLMs) have made remark-
+able progress in generating outputs that appear logically
+coherent and contextually plausible, they do not provide
+guarantees of correctness or formal validity in their reason-
+ing processes—particularly on algorithmically structured
+tasks (Rossi et al., 2025). This limitation is critical when
+LLMs are expected to operate on complex tasks with lim-
+ited supervision, especially in open-world scenarios where
+1Department of Intelligent Science and Technology, Nanjing
+University, Nanjing, China. Correspondence to: Wang-Zhou Dai
+<daiwz@nju.edu.cn>.
+Preprint. March 24, 2026.
+the task abstractions and problem-solving patterns are not
+covered in the training data (Brown et al., 2020). Hence,
+the ability to recover from erroneous outputs, often referred
+to as “self-correction”, becomes a central requirement for
+LLM-based systems (Kamoi et al., 2024).
+However, effective correction remains a step-by-step pro-
+cess that involves structured search and planning, i.e., an
+explicit and formal debugging procedure that current LLMs
+do not reliably exhibit. A growing body of recent work
+has shown that they struggle to perform such correction
+robustly when relying solely on intrinsic or conversational
+feedback; in some cases, post-revision outputs are even
+worse than first-pass responses (Huang et al., 2023; Kamoi
+et al., 2024; Chen et al., 2025). Even when augmented
+with chain-of-thoughts prompting and external compilers
+or program executors, evidence show that the effectiveness
+of iterative LLM-based code repair rapidly degrades across
+successive attempts (Adnan & Kuhn, 2025).
+In fact, the problem of systematically revising erroneous
+programs has been well-studied in good-old-fashioned sym-
+bolic AI, most notably through Udi Shapiro’s framework of
+Algorithmic Program Debugging (APD), which formalises
+program repair as a process of explicit procedural refine-
+ment rather than an ad hoc sequence of revisions (Shapiro,
+1982). APD casts debugging as an algorithmic interac-
+tion between program execution and hypothesis refinement,
+where faults are localised and corrected through structured,
+stepwise refinements. A defining feature of APD is that
+program execution is reified into declarative structures, en-
+abling refinement decisions to be driven by explicit semantic
+evidence rather than heuristic or conversational revision.
+In this paper, we formally define the procedural refinement
+problem for LLM-driven code repairing, framing program
+correction as a structured, multi-step process guided by ab-
+ductive reasoning (Kakas et al., 1992; Zhou, 2019) rather
+than na¨ıve conversational heuristics. Based on the principles
+of APD, we further implement Abduction-Based Procedural
+Refinement (ABPR), a neuro-symbolic approach to proce-
+durally refine buggy programs by coupling an LLM with a
+meta-interpreter that generates declarative, tree-structured
+execution traces, which is illustrated with Figure 1.
+We evaluate ABPR on the ARC-AGI-2 dataset (Chollet et al.,
+2025), a challenging benchmark for LLMs that demands
+1
+arXiv:2603.20334v1  [cs.SE]  20 Mar 2026
+
+
+Procedural Refinement by LLM-driven Algorithmic Debugging for ARC-AGI-2
+the integration of visual perception, symbolic abstraction,
+and algorithmic reasoning from only a handful of training
+examples. Previous studies have shown that current LLMs
+frequently fail on such tasks, and that erroneous initial hy-
+potheses often persist across subsequent conversational re-
+visions (Emily M. Bender and Timnit Gebru and Angelina
+McMillan-Major and Shmargaret Shmitchell, 2021; Lake
+& Baroni, 2018). These characteristics make ARC-AGI-2
+an especially suitable testbed for studying procedural refine-
+ment, as success depends not only on generating plausible
+programs, but also on systematically revising incorrect ones
+through structured and semantically grounded debugging.
+As a prototype system, we implement ABPR using Prolog
+as the target language, owing to its declarative semantics
+and its natural compatibility with the algorithmic program
+debugging paradigm. Despite using a declarative language
+that contemporary LLMs are known to struggle with, ABPR
+paired with Gemini-3-Flash achieves a Pass@2 score of
+56.67% on ARC-AGI-2, surpassing existing state-of-the-art
+approaches in the public evaluation set. Ablation studies
+further demonstrate that the inclusion of declarative execu-
+tion traces is the primary driver of these performance gains,
+demonstrating the potential of combining modern machine
+learning techniques with formal methods from classical
+symbolic AI.
+As to the remainder of this paper: Section 2 introduces the
+necessary preliminaries; Section 3 presents our proposed
+approach; Section 4 reports experimental results; Section 5
+discusses related work; and Section 6 concludes.
+2. Preliminaries
+2.1. Algorithmic Program Debugging
+Algorithmic Program Debugging (APD), introduced by
+Shapiro (Shapiro, 1982), creates a formal framework for
+separating logic failures from control flow. It treats de-
+bugging not as an ad hoc inspection of variables, but as a
+systematic search over the computation’s logical structure.
+Central to APD is the debugging tree (or proof tree), a
+hierarchical representation where the root corresponds to
+the initial goal, internal nodes represent sub-goals (predicate
+invocations), and leaves constitute primitive facts. When a
+program manifests a failure—producing an incorrect result
+or failing to produce a required one—the debugging tree
+serves as the search space for diagnosis. The diagnosis
+proceeds by traversing this tree and querying an oracle
+(traditionally a human, but in this paper we use an LLM)
+about the semantic validity of specific nodes.
+Formally, let P be a logic program and M be the intended
+interpretation (the set of ground atoms considered true). A
+node in the debugging tree, representing a clause instance
+H ←B1, . . . , Bk, is defined as buggy if the head H is
+0
+1
+0
+1
+1
+0
+0
+0
+1
+0
+2
+0
+2
+2
+0
+0
+0
+2
+Task: replace color 1 → 2
+Input
+Expected
+2
+1
+2
+1
+1
+2
+2
+2
+1
+Actual(Wrong)
+Oracle Check List
+Layer
+Predicate
+Result Action
+1
+solve/2
+❌
+descend
+2
+count_color/3
+✅
+skip
+2
+replace_grid/4
+❌
+descend
+3
+replace_cell/4
+❌
+BUG!
+replace_cell(Val, Old, New, Result):-
+(Val :=: Old -> 
+Result = New ; Result = Val).
+BUG: \= should be :=:
+fix bug
+run
+solve/2
+Program Structure (3 layers)
+Proof Tree (excerpt)
+count_color/3
+replace_cell/4
+replace_grid/4
+diagnostic
+descent
+❌
+✅
+❌
+BUG
+Prolog Code
+IN:  solve([[0,1,0],[1,1,0],[0,0,1]], _)
+OUT: solve(..., [[2,1,2],[1,1,2],[2,2,1]])  
+OUT: count_color(..., 4)
+IN: replace_cell(0,1,2,_)  OUT: 2
+IN: replace_cell(1,1,2,_)  OUT: 1
+replace_cell/4 ❌
+count_color/3 ✅
+solve/2 ❌
+Fix
+replace_cell(Val, Old, New, Result):-
+ 
+(Val \= Old -> 
+Result = New ; Result = Val).
+❗
+solve/2
+localize
+bug
+query the
+Oracle
+Figure 1. Algorithmic Program Debugging (APD).
+incorrect (H /∈M) while all body literals are correct (Bi ∈
+M for all i). This definition localises the fault to a specific
+inference step, isolating the erroneous clause instance from
+the correctness of its sub-computations. In the context of
+LLM-driven code repair, APD thus transforms the linguistic
+task of “fixing code” into a concrete abductive inference
+problem: finding a minimal hypothesis (a buggy node) that
+explains the discrepancy between the program’s derivation
+and the intended specification.
+2.2. Procedural refinement as abduction
+For clarity, we formalise the general procedural refinement
+task as a logic abduction problem. Let B be a domain
+knowledge base (possibly in higher-order logic), let Etrain
+be a set of observed input–output examples, and let P be
+the initially generated program. The procedural refinement
+task can be viewed as searching for an optimal program
+P ∗∈ρ∗(P) such that B ∪P ∗|= Etrain, where ρ is the
+refinement operator, and the closure ρ∗(P) = ρ0(P) ∪
+ρ1(P) ∪· · · , in which ρ0(P) = {P}. In this paper, an
+algorithmic program debugging procedure calculates the
+i-th refinement ρi(P) = APD(Oracle, P i−1, Etrain, B) by
+searching over the debugging tree to locate minimal clause
+instances, and abduces the local corrections that might fix
+the entailment from P i ∈ρ0(P) ∪· · · ρi(P) to Etrain.
+2.3. Logic Programming and Meta-Interpreters
+We adopt Logic Programming (specifically Prolog) (Lloyd,
+2012) as the target paradigm because its declarative nature
+aligns naturally with the requirements of algorithmic de-
+2
+
+
+Procedural Refinement by LLM-driven Algorithmic Debugging for ARC-AGI-2
+Train 1
+Train 2
+Test
+⇓
+⇓
+⇓
+?
+Figure 2. An example task from ARC-AGI-2.
+bugging. Unlike imperative languages whose execution
+states are buried in mutable variables and stack frames,
+logic programming unifies control and logic through reso-
+lution and unification (Robinson, 1965). This declarative
+semantics allows the model to focus on what relationships
+hold–constructing a knowledge base of rules–rather than
+managing complex control flows. Crucially, Prolog exhibits
+homoiconicity (code is data), which simplifies the construc-
+tion of the debugging tree described in Section 2.1.
+In this work, we employ a Prolog meta-interpreter to
+generate the declarative, tree-structured traces.
+A Pro-
+log meta-interpreter is a Prolog program that could reify
+program execution by explicitly exposing resolution steps,
+variable bindings, and predicate dependencies, thereby
+enabling structured inspection and analysis of execution
+behaviour (O’Keefe, 2009).
+The meta-interpreter inter-
+cepts standard Prolog resolution ports (Call, Exit, Redo,
+Fail), capturing a structured trace of clause applications
+and variable instantiations. This explicit reification provides
+the semantic evidence required for procedural refinement,
+allowing the LLM to reason about causal error sources in
+the execution structure rather than relying solely on surface-
+level syntax or final outputs (Zeller & Hildebrandt, 2025).
+2.4. The ARC-AGI-2 Benchmark
+ARC-AGI-2 (Chollet et al., 2025) is a benchmark designed
+to probe abstraction, systematic generalisation, and algorith-
+mic reasoning under minimal supervision, and an example
+task is shown in Figure 2. Each task requires synthesising a
+latent program that maps input grids to output grids from
+only a few examples, with no access to intermediate feed-
+back or task-specific priors. In this setting, contemporary
+LLMs frequently fail on the first attempt, and the absence
+of fine-grained supervisory signals makes subsequent cor-
+rection non-trivial. These properties make ARC-AGI-2 a
+natural test bed for procedural refinement.
+3. Abduction-Based Procedural Refinement
+This section introduces Abduction-Based Procedural Re-
+finement (ABPR), illustrated in Figure 3. The central idea
+behind ABPR is to give a formal account of “self-correction”
+by decomposing the intractable global search inherent in
+APD into a sequence of well-defined local abductive sub-
+problems. By representing program execution as structured
+traces and enforcing the constraints imposed by a symbolic
+meta-interpreter, ABPR bridges neuro-generative flexibility
+with symbolic correctness, yielding a repair process that is
+both precise and auditable.
+3.1. Framework
+As introduced in Section 2.2, the objective of ABPR is
+to find an optimal hypothesis H∗within the refinement
+closure ρ∗(Hinit) of the initial program Hinit, such that:
+B ∪H∗|= Etrain,
+(1)
+where ρ is the refinement operator. Formally, ρ is a mapping
+that defines the set of all admissible modifications for a given
+program. The search space is the transitive closure defined
+inductively as ρ∗(H) = S∞
+i=0 ρi(H) with ρ0(H) = {H}.
+Hypothesis initialisation. Inspired by Inverse Entailment
+(Muggleton, 1995), We derive the starting state Hinit by
+adopting a strategy. Specifically, given the background
+knowledge B and the examples E, we construct bottom
+clause as the most specific logical explanation to the training
+data. In the ARC-AGI-2 task, B contains the input matrices
+and some pre-defined primitive predicates for parsing them,
+while E contains the corresponding output matrices.
+Then, different to the traditional Inductive Logic Program-
+ming (ILP) methods, the LLM-driven ABPR prompts an
+LLM to generalise the bottom clauses into a (possibly
+buggy) logic program to form Hinit.
+Refinement via stochastic search. Theoretically, the refine-
+ment operator ρ(H) induces a hypothesis space of candidate
+programs. Traditional symbolic learning methods define a
+set of refinement operators that modify an initial hypothesis
+H—for example, by adding or deleting rules or literals—
+and employ a scoring function to guide the search toward
+improved refinements. Under this paradigm, classical APD
+is a deterministic procedure: assuming access to an oracle
+with ground-truth knowledge, it performs formal abductive
+reasoning over the execution trace to identify the minimal
+invalid subtree.
+In our framework, both the oracle and the abductive reasoner
+are approximated by Large Language Models (LLMs), mo-
+tivated by the discriminator–generator gap (Cobbe et al.,
+2021; Saunders et al., 2022; Lightman et al., 2024), which
+shows that verifying local reasoning steps is substantially
+easier than synthesising a complete reasoning trajectory.
+3
+
+
+Procedural Refinement by LLM-driven Algorithmic Debugging for ARC-AGI-2
+Yes
+No
+Arrive at max attempts
+Phase 1:
+Neural Generation
+Generation Prompt:
+•
+Task Description
+• Background Knowledge
+• Train Pairs & Test input
+LLM Generator
+(System 1 Generation)
+Candidate Program
+Phase 2:
+Symbolic Verification
+SWI-Prolog
+Validator
+Refined Program
+Pass All
+Train Data?
+Declarative Tracer
+(Custom Meta-interpreter)
+Localised Logic Failure
+(Faulty Predicate)
+Phase 3:
+Algorithmic Debugging
+History Buffer
+(Top-2 Attempts)
+Refine Prompt
+LLM Oracle Debugger
+(System 2 Verification)
+Candidate
+Program Pool
+Majority Voting
+Final Output
+Prediction
+(Pass@2)
+Figure 3. An overview of Abduction-Based Procedural Refinement (ABPR).
+ABPR leverages this idea by reducing program synthe-
+sis/refinement to a sequence of low-entropy, verifiable sub-
+problems. Unlike intrinsic self-correction methods, which
+suffer from circularity (Huang et al., 2023), our approach
+relies on declarative execution traces, aligning with ad-
+vances observed in recent tool-augmented critique frame-
+works (Gou et al., 2024; Ridnik et al., 2024).
+However, because LLM generation is fundamentally a pro-
+cess of sampling from a learned conditional probability dis-
+tribution over the vocabulary given an input context (Holtz-
+man et al., 2019), integrating LLMs into the debugging loop
+in fact introduces inherent stochasticity.
+As a result, the originally deterministic diagnosis trajectory
+becomes probabilistic. A single debugging execution of
+our neuro-symbolic APD can therefore be formalized as
+sampling a successor hypothesis from a complex conditional
+distribution induced by the composition of the neural oracle
+and the LLM-based repairer:
+Ht+1 ∼PAPD(· | Ht, τ, Etrain, B),
+where Ht+1 ∈ρ∗(Ht).
+In practice, rather than seeking a single “correct” fix, the
+procedure stochastically explores high-likelihood regions of
+the refinement closure, guided by the joint confidence of the
+neural components.
+3.2. Declarative trace generation
+To enable neuro-symbolic APD to diagnose and correct log-
+ical faults, the system must recover the causal structure un-
+derlying a program’s derivation. We therefore represent the
+execution trace τ as a computation tree, adapting the clas-
+sical APD formalism to explicitly link runtime behaviour
+with the program clauses responsible for it.
+We extract these traces using a lightweight Prolog meta-
+interpreter implemented with SWI-Prolog (Wielemaker
+% solve(Goal, Trace)
+solve(true, true) :- !.
+solve((A,B), (TraceA, TraceB)) :- !,
+solve(A, TraceA),
+solve(B, TraceB).
+solve(Goal, tree(Goal, SubTraces)) :-
+clause(Goal, Body),
+solve(Body, SubTraces).
+solve(Goal, failure(Goal)) :-
+\+ clause(Goal, _), !.
+Figure 4. Meta-interpreter for trace generation (simplified).
+et al., 2012), illustrated in Figure 4. The solve/2 pred-
+icate extends standard SLD resolution by recursively con-
+structing terms of the form tree(Goal, SubTraces),
+where each node records a resolved goal together with its
+corresponding sub-derivations.
+This construction captures logical dependencies and vari-
+able bindings at each inference step, yielding a structured
+semantic proof tree. The resulting computation tree serves
+as declarative evidence for fault localisation and subsequent
+hypothesis refinement.
+3.3. The neuro-Symbolic debugging procedure
+ABPR proceeds step-wise algorithmic debugging process
+as a state machine. Each atomic transition corresponds to a
+single iteration of the procedural debugging cycle, refining
+the current hypothesis from Ht to Ht+1.
+Step 1: Bug localisation. Given a trace τ produced by a
+failed hypothesis Ht, the LLM Oracle performs a top-down
+diagnostic search over the computation tree to identify a
+set of candidate buggy nodes, denoted by N ∗. Conceptu-
+ally, this step serves as a semantic pruning mechanism:
+4
+
+
+Procedural Refinement by LLM-driven Algorithmic Debugging for ARC-AGI-2
+Algorithm 1 ABPR: Iterative program debugging procedure
+1: Input: Background knowledge base B, training exam-
+ples Etrain, maximum time limit Tmax
+2: Output: Best program ˆH
+3: Initialise H0; tag with t = 0
+4: H ←{H0} // History buffer (capacity k)
+5: for t = 1 to Tmax do
+6:
+Hbase ←Latest H ∈H
+/* Obtain the tree-structured trace */
+7:
+τ ←solve(Hbase, E)
+/* Execute the neuro-symbolic APD */
+8:
+Hnew ∼PAPD(· | Ht, Etrain, B)
+9:
+if ISCONSISTENT(Hnew, E) then
+10:
+return Hnew
+11:
+end if
+/* Update the history buffer */
+12:
+Tag Hnew with timestamp t
+13:
+H ←top-kH∈H∪{Hnew}(2, COVERAGE(H, E))
+14: end for
+15: return arg maxH∈H COVERAGE(H, E)
+by isolating N ∗, we condition the distribution PAPD on the
+observed logical discrepancies, thereby restricting the subse-
+quent search to a focused subspace of the refinement closure
+ρ∗(Ht) rather than the full program space.
+Step 2: Abductive refinement. Conditioned on the iden-
+tified faulty set N ∗, the refinement operator performs ab-
+ductive hypothesis revision to construct the successor state.
+Specifically, it synthesises a modified hypothesis Ht+1 that
+resolves the local inconsistencies associated with N ∗while
+preserving the global structure of the program.
+Remarks on the implementation. In practice, these steps
+are realised through agentic orchestration and prompt-based
+control of Large Language Models. The LLM is instructed
+to (i) carry out the APD-style inspection to localise buggy
+clause instances and (ii) generate targeted repairs for the
+clauses associated with N ∗. Taken together, this module
+functions as a stochastic sampler from the conditional dis-
+tribution PAPD(· | Ht, Etrain, B), implicitly implementing se-
+mantic state transitions in the hypothesis space by coupling
+informal abductive reasoning with formal code generation.
+Algorithm 1 shows the pseudocode of ABPR. It initialises
+the search using bottom clauses and then iteratively explores
+the refinement hypothesis space, with the neuro-symbolic
+APD acting as a stochastic transition operator between suc-
+cessive hypotheses (Line 7). The symbolic characterisation
+of procedural refinement and the APD framework enables a
+natural realisation of a best-first search strategy. To exploit
+this structure, the algorithm maintains a bounded history
+buffer H that is updated using a top-k selection mecha-
+nism (Lines 13–14), prioritising high-coverage candidate
+hypotheses for further refinement in subsequent iterations.
+As ABPR performs iterative exploration of a large hypoth-
+esis space, individual refinement trajectories are sensitive
+to initial conditions and may converge prematurely to sub-
+optimal solutions. To improve robustness, we adopt an
+ensemble-based strategy with diversity-prioritised aggrega-
+tion following prior art (Poetiq Team, 2025). Specifically,
+we perform a parallel search in the refinement hypothesis
+space by initiating multiple ABPR instances.
+4. Experiments
+We evaluate ABPR in ARC-AGI-2 (public evaluation
+dataset) to address the following research questions:
+• RQ1: Does ABPR improve end-to-end accuracy on
+ARC-AGI-2?
+• RQ2: How much do declarative execution traces con-
+tribute to performance?
+• RQ3: How sensitive is ABPR to the quality of the
+initial hypothesis?
+4.1. Settings
+Each ARC-AGI-2 task consists 2–5 training input–output
+pairs and 1–3 test pairs. Following the official ARC-AGI
+evaluation protocol, we measure performance using the
+standard Pass@2 metric (Chen, 2021), under which a task
+is considered solved if the correct output is produced within
+two allowed submissions.
+In our experiments, we set the number of parallel threads
+N = 8 following (Poetiq Team, 2025), where each ABPR
+thread Ai is initialised with a distinct random seed ξi, which
+determines both the ordering of training examples and the
+stochastic choices made within the LLM-based refinement
+operator (Dietterich, 2000).
+Then, each process Ai executes the iterative ABPR loop
+(Algorithm 1) for up to Tmax = 10 refinement steps, pro-
+ducing a final program hypothesis Hi together with its
+execution outcomes on the training set, among which a
+diversity-prioritised voting is performed to select the top-2
+programs that maximise both consensus size and verification
+consistency (Kuncheva & Whitaker, 2003).
+4.2. RQ1: Overall performance
+To assess whether ABPR functions as a general-purpose
+reasoning framework, we evaluate its performance across a
+range of LLMs with markedly different reasoning profiles.
+Specifically, we consider the Gemini-3 series (Flash and Pro
+Preview) (Gemini Team, 2025), GPT-5.2 (OpenAI, 2025),
+Claude-4.5 Sonnet (no thinking) (Anthropic, 2025), and
+Qwen3-max (Alibaba Cloud AI Research, 2025).
+5
+
+
+Procedural Refinement by LLM-driven Algorithmic Debugging for ARC-AGI-2
+Table 1. We compare Pass@2 of ABPR with two baselines: 1.
+End-to-end generation by vanilla LLMs (no correction); 2. Debug
+without declarative traces and APD search strategy, i.e., using only
+intrinsic or conversational feedback (self-correction). Note that the
+second baseline is only available for the Gemini-3 series.
+Base Model
+No correction
+Self-correction
+ABPR
+Models with reasoning capabilities
+Gemini-3-Flash-Preview
+34.03%
+49.17%
+56.67%
+Gemini-3-Pro-Preview
+31.11%
+43.33%
+53.33%
+GPT-5.2-reasoning
+8.33%
+-
+30.00%
+Standard Models
+Claude-Sonnet-4.5
+3.75%
+-
+5.00%
+Qwen3-Max
+0.83%
+-
+2.50%
+GPT-5.2
+0.00%
+-
+1.67%
+1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+Iteration
+0%
+10%
+20%
+30%
+40%
+50%
+60%
+Cumulative Tasks Passed
+Gemini-3-Flash
+Gemini-3-Pro
+Gemini + Claude
+GPT-5.2-Low
+Claude-Sonnet-4.5
+Figure 5. Cumulative pass rate over debug iterations of ABPR.
+Table 1 reports the performance gains obtained by embed-
+ding these base models within the ABPR framework. Across
+all evaluated models, ABPR consistently improves accuracy,
+indicating that it acts as a reasoning amplifier rather than a
+model-specific optimisation. The effect is particularly pro-
+nounced for models with pre-trained (plausible) reasoning
+capacity. For example, GPT-5.2 under a low reasoning-
+effort configuration improves from a baseline of 8.33% to
+30.00%, while Gemini-3-Flash with ABPR is boosted
+from 34.03% to 56.67%. These results suggest that ABPR
+effectively augments intrinsic neural reasoning with external
+symbolic verification and procedural structure.
+Figure 5 further illustrates this effect by showing perfor-
+mance as a function of refinement iterations. Across mod-
+els, ABPR exhibits steady improvements over successive
+refinement steps, indicating that the gains arise from itera-
+tive procedural refinement rather than isolated corrections,
+which address our RQ1.
+4.3. RQ2: Impact of declarative traces and debug
+In this experiment, we verify if the declarative, tree-
+structured trace and the node-by-node search/verification
+benefit procedural refinement.
+Specifically, we com-
+pared ABPR against the traditional conversation-based self-
+correction on Gemini-3 series models. In the baseline set-
+ting, no structural heuristics are provided: the LLM regener-
+ates programs solely based on the final execution outcome
+(e.g., error logs) in each iteration.
+The second row of Table 1 reports the performance of
+this self-correction baseline. For both Gemini-3-Pro and
+Gemini-3-Flash, removing declarative traces and the asso-
+ciated debugging strategy results in a substantial drop in per-
+formance, with Pass@2 decreasing by more than 10.00%.
+The results answer our RQ2, they consistently show that
+declarative execution traces play a central role in guiding
+the refinement procedure. Rather than serving as auxiliary
+context, the traces provide structured, intermediate feedback
+that allows ABPR to search for revisions. By exposing the
+logic flow of program execution, the declarative trace-based
+approach supports more targeted updates than conversa-
+tional trial-and-error, leading to improved repair efficiency.
+4.4. RQ3: Impact of the quality of initial hypotheses
+As shown in Table 1, although ABPR delivers consistent
+performance gains, a clear performance boundary emerges
+between stronger and weaker base models. Hence, the ef-
+fectiveness of iterative refinement search depends, in a prob-
+abilistic manner, on the quality of initial hypotheses (Hinit).
+To empirically test the impact of different components in
+ABPR, we conduct a controlled ablation study. This ex-
+periment tries to disentangle the respective contributions of
+initialisation, which determines the starting hypothesis Hinit,
+and the refinement operator, which navigates and samples
+in the search space via the latent distribution PAPD.
+We compare the following three configurations:
+1. Weak Initialisation with Weak Refinement: Claude-
+4.5 Sonnet (no thinking) is used to generate the initial
+hypothesis Hinit and to perform the full ABPR refine-
+ment loop for up to Tmax = 10 iterations.
+2. Strong Initialisation without Refinement: Gemini-
+3-Pro is used solely to generate the initial hypothesis
+Hinit, with no subsequent refinement (Tmax = 1), re-
+flecting first-pass performance without ABPR.
+3. Strong
+Initialisation
+with
+Weak
+Refinement:
+Gemini-3-Pro generates the initial hypothesis Hinit,
+which is then refined using the full ABPR process
+executed by the weaker model (Claude-Sonnet-4.5) for
+up to Tmax = 10 iterations.
+Results and analysis. Table 2 reports the results of the
+ablation. Two key observations emerge.
+First, the results highlight the critical role of initialisation.
+The Strong Initialisation with Weak Refinement setting
+6
+
+
+Procedural Refinement by LLM-driven Algorithmic Debugging for ARC-AGI-2
+Table 2. Decoupling Initialization (H0) from Refinement Loop.
+Performance comparison showing that while a high-quality H0
+is a prerequisite for reachability, the refinement loop contributes
+significant additive value (Hybrid > 1-pass).
+Configuration
+Initialisation (Hinit)
+Debugger (PAPD)
+Pass@2
+Weak+Weak
+Claude-Sonnet
+Claude-Sonnet
+5.00%
+Strong+None
+Gemini-Pro
+None
+20.83%
+Strong+Weak
+Gemini-Pro
+Claude-Sonnet
+33.33%
+achieves a Pass@2 score of 33.33%, substantially outper-
+forming the Weak Initialisation with Weak Refinement
+baseline at 5.00%. Notably, both configurations employ the
+same refinement operator PClaude, isolating the effect of the
+initial hypothesis. The performance gap therefore indicates
+that the refinement landscape is highly non-convex: initial-
+isation by Gemini-3-Pro places the search within a region
+of the refinement closure ρ∗from which a correct solution
+is reachable, whereas the weaker model often produces ini-
+tial hypotheses that lie outside such regions, limiting the
+effectiveness of subsequent refinement.
+Second, the comparison with the Strong Initialisation
+without Refinement baseline (20.83%) demonstrates the
+value of iterative refinement. The additional 12.50% im-
+provement achieved by the hybrid setting confirms that,
+given a sufficiently informative starting hypothesis, even
+a weaker reasoning agent can make productive refinement
+steps (Ht →Ht+1) through the stochastic ABPR process.
+Together, these results show that effective procedural refine-
+ment depends jointly on the quality of initialisation and the
+ability to exploit it through structured search.
+Analysis. A successful repair can be viewed as discover-
+ing a refinement trajectory S = ⟨Hinit, H1, . . . , Hk⟩that
+terminates at the correct program Hk = H∗. Given a fixed
+stochastic refinement operator (implemented by Claude),
+the likelihood of following a particular trajectory from an
+initial hypothesis Hinit is given by the product of stepwise
+transition probabilities,
+P(S | H0) =
+k
+Y
+t=1
+PAPD(Ht | Ht−1, Etrain).
+When the initial hypothesis is poorly structured, the seman-
+tic distance to the optimal solution is larger, typically requir-
+ing a longer refinement sequence (kweak ≫kstrong). Because
+each transition probability satisfies PAPD < 1 due to the
+stochastic nature of LLM-guided refinement, the overall
+likelihood of reaching H∗decreases rapidly as the required
+path length increases exponentially.
+This analysis is consistent with the empirical behaviour
+shown in Figure 5. As refinement proceeds, performance
+improvements saturate and the marginal accuracy gain di-
+minishes, indicating that successful trajectories are concen-
+trated within relatively short refinement horizons. Beyond
+a moderate number of iterations, accumulated stochasticity
+limits further progress, making recovery increasingly un-
+likely. From this perspective, the effectiveness of the hybrid
+setting arises from its ability to initialise the search within
+a region of the refinement space where H∗is reachable
+through a small number of high-probability transitions.
+5. Related Work and Discussion
+This section examines and discusses related work on LLM
+self-correction, debugging and neuro-symbolic methods.
+5.1. LLM Self-Correction and Reasoning Limitations
+While Large Language Models have demonstrated impres-
+sive capabilities in code generation, their ability to rigor-
+ously self-correct logical errors remains a contested subject.
+Early optimism has been tempered by comprehensive empir-
+ical studies; for instance, Huang et al. revealed that LLMs
+frequently struggle to self-correct reasoning failures without
+external feedback (Huang et al., 2023). They observed that
+models often overlook intrinsic biases, preferring to modify
+surface-level syntax rather than addressing the underlying
+algorithmic logic, which frequently leads to solution degra-
+dation across revision turns. Similarly, Kamoi et al. argued
+that while LLMs possess some capacity for error detec-
+tion, they lack the robust “System-2” planning mechanisms
+required to navigate from a detected error to a valid cor-
+rection (Kamoi et al., 2024), typically falling into circular
+reasoning loops or oscillating between incorrect fixes.
+To address these stochastic failures, researchers now pay
+more attention to structured repairing. Notably, Chiruzzo
+et al. proposed a hierarchical debugging framework that
+decomposes code repair into high-level logical planning
+and low-level implementation fixes (Chiruzzo et al., 2025).
+Their findings demonstrate that guiding LLMs to respect the
+hierarchical structure of programs significantly improves
+repair success rates compared to flat, conversational prompt-
+ing. However, even such structured approaches rely primar-
+ily on natural language inference, which lacks ground-truth
+verification for intermediate steps (Yao et al., 2023).
+The AAAI 2025 Presidential Panel (Rossi et al., 2025) fur-
+ther discussed and emphasised this “reasoning gap”, identi-
+fying truthfulness guarantee and logical consistency as key
+challenges for the next generation of AI systems. Our work
+bridges this gap by advancing from hierarchical guidance
+to Abductive Procedural Refinement. Unlike previous meth-
+ods that mainly rely on sequential, unstructured, and natu-
+ral language-based plausible reasoning (Gao et al., 2023;
+Schick et al., 2023; Wei et al., 2022), ABPR grounds the
+corrections with formal, execution-based debugging trees,
+and processes the refinements stepwisely accordingly with
+detailed desemantic evidence.
+7
+
+
+Procedural Refinement by LLM-driven Algorithmic Debugging for ARC-AGI-2
+$0.1
+$1
+$10
+$100
+Inference Cost per Task ($)
+10%
+20%
+30%
+40%
+50%
+60%
+Score (%)
+Gemini 3 Flash (ABPR)
+Gemini 3 Pro (ABPR)
+Gemini 3 Pro
+Gemini 3 Deep Think
+Gemini 3 Flash
+Gemini 3 Pro (Poetiq)
+GPT-5.2 (Low)
+GPT-5.2 (Low) (ABPR)
+Average Human (60%)
+Evaluation Data
+Public Evaluation
+Semi-private Evaluation*
+Figure 6. Cost and performance of current models on ARC-AGI-2
+5.2. State-of-the-art methods on ARC-AGI-2
+The landscape of ARC-AGI-2 solvers (late 2024–2025) can
+be usefully categorised into three families:
+(i) Native reasoning / “Thinking Mode” models. Fron-
+tier models such as GPT-5.2 and Gemini-3 (Deep Think)
+attempt to perform extended internal deliberation (long
+CoT / “thinking mode”). These systems can reach strong
+scores (reported ∼54% in semi-private evaluations) but fre-
+quently generate plausible yet logically invalid intermediate
+steps and incur high inference costs (see §4 and Figure 6 for
+cost accounting). (Gemini Team, 2025; OpenAI, 2025).
+(ii) Refinement harnesses. Systems like Poetiq wrap power-
+ful LLMs in iterative critique-and-resample loops, yielding
+competitive performance (Poetiq ∼54%) at the expense of
+large token budgets and opaque, nondeterministic repair tra-
+jectories (Poetiq Team, 2025). These pipelines rely mainly
+on textual feedback and re-sampling; they don’t typically
+provide auditable, clause-level justification for edits.
+(iii) Test-Time Training and fine-tuning approaches. Ap-
+proaches such as NVAR (Sorokin & Puget, 2025) generate
+synthetic data at inference time and fine-tune small mod-
+els, improving robustness but adding considerable compute
+during test time and reducing interpretability.
+In contrast to these approaches, ABPR leverages declarative
+traces to localise buggy predicates and constrain the search
+space in a principled manner. This distinction situates ABPR
+within a broader line of neuro-symbolic research, which
+seeks to combine the flexibility of neural models with the
+transparency and control of classical symbolic reasoning.
+5.3. Neuro-Symbolic AI
+Neuro-Symbolic (NeSy) AI aims to integrate connectionist
+learning with symbolic reasoning, and taking advantages
+from both sides (Hitzler & Sarker, 2022; De Raedt et al.,
+2026; d’Avila Garcez & C., 2023). Hybrid systems, such
+as DeepProbLog (Manhaeve et al., 2018) and Abductive
+Learning (ABL) (Dai et al., 2019) focused on integrating
+probabilistic logic or classical logic with neural networks.
+Another representative line work approximates logical in-
+ference directly within neural networks, e.g., Logic Ten-
+sor Networks, which encode logical constraints as differ-
+entiable objectives optimised during learning (Badreddine
+et al., 2022).
+With the advent of large language models, NeSy AI systems
+that integrate symbolic modules with LLMs have emerged
+as a means of addressing persistent limitations of purely
+neural approaches, such as hallucination and weak logical
+consistency, by grounding generation in verifiable symbolic
+structures (Yang et al., 2025). Our work aligns with this
+emerging direction, but in which the LLM is not just treated
+as a direct code generator, but also as an oracle that guides
+the symbolic search in procedural refinement. This design
+distinguishes our approach from purely neural methods such
+as chain-of-thought prompting (Wei et al., 2022).
+6. Conclusion
+We have presented Abduction-Based Procedural Refinement
+(ABPR), a neuro-symbolic framework that addresses a cen-
+tral limitation of LLM-based program repair: the absence
+of principled and reliable self-correction. By grounding
+iterative refinement in the formal structure of Udi Shapiro’s
+Algorithmic Program Debugging, ABPR transforms conver-
+sational code repair into a procedurally constrained search
+process guided by explicit execution semantics. Rather than
+relying on opaque internal deliberation or repeated stochas-
+tic sampling, ABPR bridges LLMs’ probabilistic neural
+generation with structural symbolic verification, offering a
+practical pathway towards more auditable and robust reason-
+ing systems. Experiments on the ARC-AGI-2 benchmark
+demonstrate that this symbolic scaffolding substantially en-
+hances reasoning performance, enabling ABPR to match or
+exceed unaugmented frontier systems even when operating
+in Prolog, a language that LLMs typically find challenging.
+Future Work. Our future research aims to broaden the
+scope and applicability of neuro-symbolic procedural re-
+finement. First, we plan to extend the current Prolog-based,
+declarative ABPR prototype to more widely used imper-
+ative programming languages, such as Python, by devel-
+oping intermediate symbolic representations that expose
+execution structure while remaining compatible with imper-
+ative semantics. Second, we aim to improve the reliability
+of the LLM oracle itself by incorporating more structured
+forms of procedural content generation and localised modi-
+fication, reducing reliance on whole-program regeneration
+during debugging. Finally, we see promising opportunities
+to apply procedural refinement beyond program repair to
+broader neuro-symbolic learning settings, where learned
+knowledge can be naturally interpreted as logic rules and
+refined through explicit symbolic feedback.
+8
+
+
+Procedural Refinement by LLM-driven Algorithmic Debugging for ARC-AGI-2
+Impact Statement
+This paper presents work whose goal is to advance the field
+of Machine Learning by integrating formal methods with
+generative AI. Unlike standard black-box reasoning mod-
+els, our Abduction-Based Procedural Refinement (ABPR)
+framework produces explicit logic evidence chains (Prolog
+proof trees) alongside the final answer.
+Interpretability and Safety: In high-stakes domains such as
+scientific discovery, medical diagnosis, or legal reasoning,
+a correct answer is insufficient without a verifiable justi-
+fication. Purely neural models (like GPT-5.2) operate as
+“black boxes”, making it impossible to audit why a deci-
+sion was made or to guarantee that the reasoning is free
+from hallucination. ABPR’s output is fully auditable: the
+generated Prolog program can be formally verified against
+constraints. This “Right to Explanation” is critical for the
+safe deployment of AGI systems (Rossi et al., 2025).
+Democratization of AI: Current SOTA performance on rea-
+soning benchmarks is often gated behind massive compute
+walls (e.g., Gemini 3 Deep Think at $77 task). Our work
+demonstrates that Gemini-3-Flash, a cost-effective model,
+can surpass these giants when equipped with symbolic scaf-
+folding. This effectively lowers the barrier to entry for
+advanced AI research, allowing academic labs and smaller
+organizations to compete with industrial behemoths on the
+frontier of reasoning.
+We do not foresee immediate negative societal consequences
+from this work, as it focuses on abstract reasoning puzzles.
+However, as with all powerful code-generation technologies,
+dual-use risks regarding automated cyber-offense capabili-
+ties should be monitored as the underlying models improve.
+References
+Adnan, M. and Kuhn, C. C. Measuring and mitigating
+debugging effectiveness decay in code language models.
+Scientific Reports, 15(1):44120, 2025.
+Alibaba Cloud AI Research. Qwen3: Scaling multilingual
+and reasoning models. https://qwenlm.github.
+io/blog/qwen3/, 2025.
+Anthropic. Claude 4.5 sonnet model card. https://www.
+anthropic.com/news/claude-4-5-sonnet,
+2025.
+Badreddine, S., d’Avila Garcez, A. S., Serafini, L., and
+Spranger, M. Logic tensor networks. Artificial Intelli-
+gence, 303:103649, 2022.
+Brown, T., Mann, B., Ryder, N., Subbiah, M., Kaplan, J. D.,
+Dhariwal, P., Neelakantan, A., Shyam, P., Sastry, G.,
+Askell, A., et al. Language models are few-shot learners.
+Advances in neural information processing systems, 33:
+1877–1901, 2020.
+Chen, A., Wu, H., Xin, Q., Reiss, S. P., and Xuan, J. Study-
+ing and understanding the effectiveness and failures of
+conversational LLM-based repair. abs/2503.15050:56–59,
+2025.
+Chen, M. Evaluating large language models trained on code.
+arXiv preprint arXiv:2107.03374, 2021.
+Chiruzzo, L., Ritter, A., and Wang, L. Findings of the asso-
+ciation for computational linguistics: NAACL 2025. In
+Findings of the Association for Computational Linguis-
+tics: NAACL 2025, 2025.
+Chollet, F., Knoop, M., Kamradt, G., Landers, B., and
+Pinkard, H. ARC-AIG-2: A new challenge for frontier
+AI reasoning systems. arXiv preprint arXiv:2505.11831,
+2025.
+Cobbe, K., Kosaraju, V., Bavarian, M., Chen, M., Jun, H.,
+Kaiser, L., Plappert, M., Tworek, J., Hilton, J., Nakano,
+R., et al. Training verifiers to solve math word problems.
+arXiv preprint arXiv:2110.14168, 2021.
+Dai, W., Xu, Q., Yu, Y., and Zhou, Z. Bridging machine
+learning and logical reasoning by abductive learning. In
+Advances in Neural Information Processing Systems 32,
+pp. 2811–2822. Curran Associates, Inc., 2019.
+d’Avila Garcez, A. S. and C., L. L. Neurosymbolic AI: the
+3rd wave. Artificial Intelligence Review, 56(11):12387–
+12406, 2023.
+De Raedt, L., Heintz, F., Kersting, K., and Marra, G. A
+Learning and Reasoning Manifesto, pp. 97–108. Springer
+Nature, Cham, Switzerland, 2026.
+Dietterich, T. G. Ensemble methods in Machine Learning. In
+Multiple Classifier Systems, First International Workshop,
+pp. 1–15, Cagliari, Italy, 2000. Springer.
+Emily M. Bender and Timnit Gebru and Angelina McMillan-
+Major and Shmargaret Shmitchell. On the dangers of
+stochastic parrots: Can language models be too big? In
+2021 ACM Conference on Fairness, Accountability, and
+Transparency, pp. 610–623, Toronto, Canada, 2021.
+Gao, L., Madaan, A., Zhou, S., Alon, U., Liu, P., Yang,
+Y., Callan, J., and Neubig, G. Pal: Program-aided lan-
+guage models. In International Conference on Machine
+Learning, pp. 10764–10799. PMLR, 2023.
+Gemini Team. Gemini 3.0: A new era of intelligence with
+gemini 3, February 2025. URL https://deepmind.
+google/technologies/gemini/.
+9
+
+
+Procedural Refinement by LLM-driven Algorithmic Debugging for ARC-AGI-2
+Gou, Z., Shao, Z., Gong, Y., Shen, Y., Yang, Y., Duan, N.,
+and Chen, W. CRITIC: Large Language Models Can Self-
+Correct with Tool-Interactive Critiquing. In The Twelfth
+International Conference on Learning Representations,
+2024. URL https://openreview.net/forum?
+id=Sx038sxNY3.
+Hitzler, P. and Sarker, M. K. Neuro-symbolic artificial
+intelligence: The state of the art. AI Communications,
+2022.
+Holtzman, A., Buys, J., Du, L., Forbes, M., and Choi, Y. The
+curious case of neural text degeneration. arXiv preprint
+arXiv:1904.09751, 2019.
+Huang, J., Chen, X., Mishra, S., Zheng, H. S., Yu,
+A. W., Song, X., and Zhou, D. Large language mod-
+els cannot self-correct reasoning yet.
+arXiv preprint
+arXiv:2310.01798, 2023.
+Kakas, A. C., Kowalski, R. A., and Toni, F. Abductive logic
+programming. Journal of logic and computation, 2(6):
+719–770, 1992.
+Kamoi, R., Zhang, Y., Zhang, N., Han, J., and Zhang, R.
+When can LLMs actually correct their own mistakes?
+a critical survey of self-correction of LLMs. Transac-
+tions of the Association for Computational Linguistics,
+12:1417–1440, 2024.
+Kuncheva, L. I. and Whitaker, C. J. Measures of diversity
+in classifier ensembles and their relationship with the
+ensemble accuracy. Machine learning, 51(2):181–207,
+2003.
+Lake, B. and Baroni, M. Generalization without systematic-
+ity: On the compositional skills of sequence-to-sequence
+recurrent networks. In Proceedings of the 35th Interna-
+tional Conference on Machine Learning, volume 80, pp.
+2873–2882, Stockholm, Sweden, 2018. PMLR.
+Langley, P. Crafting papers on Machine Learning. In Lan-
+gley, P. (ed.), In Proceedings of the 17th International
+Conference on Machine Learning (ICML 2000), pp. 1207–
+1216, Stanford, CA, 2000. Morgan Kaufmann.
+Lightman, H., Kosaraju, V., Burda, Y., Edwards, H., Baker,
+B., Lee, T., Leike, J., Schulman, J., Sutskever, I., and
+Cobbe, K. Let’s verify step by step. In The 12th Interna-
+tional Conference on Learning Representations, Vienna,
+Austria, 2024.
+Lloyd, J. W. Foundations of Logic Programming. Springer
+Science & Business Media, 2012.
+Manhaeve, R., Dumancic, S., Kimmig, A., Demeester, T.,
+and De Raedt, L. Deepproblog: Neural probabilistic logic
+programming. Advances in neural information processing
+systems, 31, 2018.
+Muggleton, S. Inverse entailment and progol. New genera-
+tion computing, 13(3):245–286, 1995.
+O’Keefe, R. The craft of Prolog. MIT press, 2009.
+OpenAI. GPT-5 technical report. Technical report, OpenAI,
+2025.
+URL https://openai.com/research.
+Accessed 2025.
+Poetiq Team. Traversing the frontier of superintelligence:
+Poetiq shatters ARC-AGI-2 state of the art.
+Poetiq
+AI Technical Blog, January 2025.
+URL https://
+poetiq.ai/posts/arcagi_announcement/.
+Ridnik, T., Kredo, D., and Friedman, I.
+Code genera-
+tion with alphacodium: From prompt engineering to
+flow engineering. CoRR, abs/2401.08500, 2024. doi:
+10.48550/ARXIV.2401.08500.
+Robinson, J. A. A machine-oriented logic based on the
+resolution principle. J. ACM, 12(1):23–41, 1965. doi:
+10.1145/321250.321253.
+Rossi, F., Bessiere, C., Biswas, J., Conitzer, R. B. V., Di-
+etterich, T. G., Dignum, V., Etzioni, O., Forbus, K. D.,
+Freuder, E., Gil, Y., et al. AAAI 2025 presidential panel
+on the future of AI research. Association for the Advance-
+ment of Artificial Intelligence, Washington, DC, 2025.
+Saunders, W., Yeh, C., Wu, J., Bills, S., Long, O., Ward, J.,
+and Leike, J. Self-critiquing models for assisting human
+evaluators. ArXiv, abs/2206.05802, 2022.
+Schick, T., Dwivedi-Yu, J., Dess`ı, R., Raileanu, R., Lomeli,
+M., Hambro, E., Zettlemoyer, L., Cancedda, N., and
+Scialom, T. Toolformer: Language models can teach
+themselves to use tools. In Advances in Neural Informa-
+tion Processing Systems 36, New Orleans, LA, 2023.
+Shapiro, E. Y.
+Algorithmic Program Debugging.
+Yale
+University, 1982.
+Sorokin, I. and Puget, J.-F. NVARC solution to ARC-AGI-2
+2025, 2025. URL https://github.com/1ytic/
+NVARC. Winner of the ARC Prize 2025 Kaggle Compe-
+tition.
+Wei, J., Wang, X., Schuurmans, D., Bosma, M., Chi,
+E. H., Le, Q., and Zhou, D. Chain of thought prompt-
+ing elicits reasoning in large language models. CoRR,
+abs/2201.11903, 2022.
+Wielemaker, J., Schrijvers, T., Triska, M., and Lager, T.
+SWI-prolog. Theory and Practice of Logic Programming,
+12(1-2):67–96, 2012.
+Yang, X., Shao, J., Guo, L., Zhang, B., Zhou, Z., Jia, L.,
+Dai, W., and Li, Y.
+Neuro-symbolic artificial intelli-
+gence: Towards improving the reasoning abilities of large
+10
+
+
+Procedural Refinement by LLM-driven Algorithmic Debugging for ARC-AGI-2
+language models. CoRR, abs/2508.13678, 2025. doi:
+10.48550/ARXIV.2508.13678.
+Yao, S., Yu, D., Zhao, J., Shafran, I., Griffiths, T., Cao, Y.,
+and Narasimhan, K. Tree of thoughts: Deliberate problem
+solving with large language models. In Oh, A., Naumann,
+T., Globerson, A., Saenko, K., Hardt, M., and Levine,
+S. (eds.), Advances in Neural Information Processing
+Systems 36, New Orleans, LA, 2023.
+Zeller, A. and Hildebrandt, R. Simplifying and isolating
+failure-inducing input: A retrospective on delta debug-
+ging. IEEE Transactions on Software Engineering, 51(3):
+820–824, 2025. doi: 10.1109/TSE.2025.3537167.
+Zhou, Z. Abductive Learning: towards bridging machine
+learning and logical reasoning.
+Science China Infor-
+mation Sciences, 62(7):76101:1–76101:3, 2019.
+doi:
+10.1007/S11432-018-9801-4.
+11
+
+
+Procedural Refinement by LLM-driven Algorithmic Debugging for ARC-AGI-2
+A. Experiment Settings
+In this section, we provide detailed configurations for reproducibility.
+A.1. Model Configurations
+We evaluate our method on several state-of-the-art Large Language Models (LLMs). All models were accessed via their
+official APIs.
+• Temperature: We set the temperature to T = 1.0 for all models to encourage exploration during the sampling and
+refinement phases.
+• Reasoning Effort:
+For the GPT-series models (e.g., GPT-5.2), we investigated two settings regarding the
+reasoning effort parameter:
+– Low Reasoning: Explicitly setting reasoning effort=’low’ via the API.
+– No Reasoning: Using standard chat completion mode.
+• Other Parameters: For all other models (including Gemini-3 series, Claude series, and Qwen series), we utilized the
+standard ChatCompletion mode with default reasoning configurations provided by the respective official APIs.
+A.2. Parallel Search and Evaluation Protocol
+• Ensemble Strategy (N = 8): To robustly solve the tasks, we deploy N = 8 parallel ABPR processes. Each process
+operates independently to explore the hypothesis space.
+• Selection Mechanism: Instead of random sampling, we employ a diversity-prioritised voting mechanism over the
+N = 8 final hypotheses to select the top-k (k = 2) most promising programs.
+• Pass@2 Evaluation: The reported Pass@2 metric strictly follows the ARC-AGI evaluation protocol: a task is
+considered solved if at least one of the top-2 selected programs (from the voting stage) produces the correct output.
+This reflects the practical system performance under the two-submission constraint, rather than a statistical estimate
+from random sampling.
+• Iteration Depth: The maximum number of refinement iterations is set to Tmax = 10 (including the initial generation).
+For ablation studies marked as ”Iteration=1”, the refinement loop is disabled.
+A.3. Prompting and Randomness
+• Prompt Construction: We utilize few-shot prompting where demonstration examples are retrieved from the training
+split.
+• Random Seeding: Each of the N = 8 parallel processes is initialised with a distinct random seed. This seed controls
+the permutation of few-shot examples in the context window to induce search diversity across the ensemble, preventing
+the parallel threads from collapsing into identical refinement trajectories.
+B. Working examples
+B.1. Task b0039139
+Code of Iteration 1:
+Input
+Iter 1 (FAIL)
+Iter 2 (PASS)
+Figure 7. An iteration example for task b0039139.
+12
+
+
+Procedural Refinement by LLM-driven Algorithmic Debugging for ARC-AGI-2
+:- use_module(bk).
+solve(Input, Output) :-
+% 1. Determine if separators are horizontal or vertical
+(
+is_horizontal(Input)
+->
+bk:grid_dimensions(Input, H, W),
+findall(R, (between(1, H, R), is_separator_row(Input, R)), Seps),
+split_horizontal(Input, Seps, Regions),
+maplist(transpose_grid, Regions, TRegions),
+Transposed = true
+;
+bk:grid_dimensions(Input, H, W),
+findall(C, (between(1, W, C), is_separator_col(Input, C)), Seps),
+split_vertical(Input, Seps, TRegions),
+Transposed = false
+),
+% 2. Extract R1, R2, R3, R4
+TRegions = [R1, R2, R3, R4],
+% 3. Extract Kernel K from R1 (color 4)
+bk:connected_components(R1, 4, KComps),
+extract_all_cells(KComps, KCells),
+bk:component_bbox(KCells, bbox(MinR1, MaxR1, MinC1, MaxC1)),
+HK is MaxR1 - MinR1 + 1,
+WK is MaxC1 - MinC1 + 1,
+% 4. Extract Points S from R2 (color 3)
+bk:connected_components(R2, 3, SComps),
+extract_all_cells(SComps, SCells),
+findall(C, member((_, C), SCells), SCols),
+sort(SCols, SortedSCols),
+% 5. Extract target colors C3 and C4
+extract_block_color(R3, C3),
+extract_block_color(R4, C4),
+% 6. Calculate output dimensions and kernel positions
+(
+SortedSCols = [] -> Output = [] ;
+min_list(SortedSCols, MinSC),
+calculate_positions(SortedSCols, MinSC, WK, 0, IndexedPositions, MaxPos),
+OutW is MaxPos + WK - 1,
+OutH is HK,
+% 7. Create and fill output grid
+length(EmptyRows, OutH),
+maplist(fill_row_with_dummy(OutW), EmptyRows),
+bk:map_grid_cells(EmptyRows, mapper(IndexedPositions, R1, MinR1, MinC1, WK, C3,
+C4), FilledGrid),
+% 8. Final Transpose if necessary
+(
+Transposed = true
+->
+transpose_grid(FilledGrid, Output)
+;
+Output = FilledGrid
+)
+).
+% Helper predicates
+is_horizontal(Grid) :-
+bk:grid_dimensions(Grid, H, W),
+between(1, H, R),
+is_separator_row(Grid, R), !.
+13
+
+
+Procedural Refinement by LLM-driven Algorithmic Debugging for ARC-AGI-2
+is_separator_row(Grid, R) :-
+bk:grid_dimensions(Grid, _, W),
+forall(between(1, W, C), (bk:grid_cell(Grid, R, C, V), V =:= 1)).
+is_separator_col(Grid, C) :-
+bk:grid_dimensions(Grid, H, _),
+forall(between(1, H, R), (bk:grid_cell(Grid, R, C, V), V =:= 1)).
+split_horizontal(Grid, Seps, Regions) :-
+bk:grid_dimensions(Grid, H, W),
+append([0], Seps, StartSeps),
+append(Seps, [H], EndSeps),
+findall(Region, (
+nth0(I, StartSeps, S), nth0(I, EndSeps, E),
+S1 is S + 1, E1 is E - 1,
+S1 =< E1,
+findall(Row, (
+between(S1, E1, R),
+findall(V, (between(1, W, C), bk:grid_cell(Grid, R, C, V)), Row)
+), Region)
+), Regions).
+split_vertical(Grid, Seps, Regions) :-
+bk:grid_dimensions(Grid, H, W),
+append([0], Seps, StartSeps),
+append(Seps, [W], EndSeps),
+findall(Region, (
+nth0(I, StartSeps, S), nth0(I, EndSeps, E),
+S1 is S + 1, E1 is E - 1,
+S1 =< E1,
+findall(Row, (
+between(1, H, R),
+findall(V, (between(S1, E1, C), bk:grid_cell(Grid, R, C, V)), Row)
+), Region)
+), Regions).
+transpose_grid(Grid, TGrid) :-
+bk:grid_dimensions(Grid, H, W),
+findall(Row, (
+between(1, W, C),
+findall(V, (between(1, H, R), bk:grid_cell(Grid, R, C, V)), Row)
+), TGrid).
+extract_all_cells(Comps, AllCells) :-
+findall(Cell, (member(component(_, Cells), Comps), member(Cell, Cells)), AllCells).
+extract_block_color(Grid, Color) :-
+flatten(Grid, Flattened),
+include(is_not_bg_or_sep, Flattened, NonBg),
+(NonBg = [Color|_] ; Color = 0).
+is_not_bg_or_sep(V) :- V \= 0, V \= 1.
+calculate_positions([], _, _, _, [], 0).
+calculate_positions([C|Cs], MinSC, WK, I, [Pos|Rest], MaxPos) :-
+Pos is (C - MinSC) + I * (WK - 1) + 1,
+I1 is I + 1,
+calculate_positions(Cs, MinSC, WK, I1, Rest, MaxPos0),
+MaxPos is max(Pos, MaxPos0).
+fill_row_with_dummy(W, Row) :-
+length(Row, W),
+maplist(=(0), Row).
+14
+
+
+Procedural Refinement by LLM-driven Algorithmic Debugging for ARC-AGI-2
+mapper(Positions, R1, MinR1, MinC1, WK, C3, C4, R, C, _, Val) :-
+(
+is_kernel_pixel(R, C, Positions, R1, MinR1, MinC1, WK)
+->
+Val = C3
+;
+Val = C4
+).
+is_kernel_pixel(R, C, Positions, R1, MinR1, MinC1, WK) :-
+member(StartCol, Positions),
+C >= StartCol, C < StartCol + WK,
+R_in is R + MinR1 - 1,
+C_in is C - StartCol + MinC1,
+bk:grid_cell(R1, R_in, C_in, 4).
+Code of Iteration 2:
+:- use_module(bk).
+% Main solver predicate
+solve(Input, Output) :-
+% 1. Determine separator orientation and split into regions
+(
+is_horizontal(Input)
+->
+bk:grid_dimensions(Input, H, W),
+findall(R, (between(1, H, R), is_separator_row(Input, R)), Seps),
+split_horizontal(Input, Seps, Regions),
+maplist(transpose_grid, Regions, TRegions),
+Transposed = true
+;
+bk:grid_dimensions(Input, H, W),
+findall(C, (between(1, W, C), is_separator_col(Input, C)), Seps),
+split_vertical(Input, Seps, TRegions),
+Transposed = false
+),
+% 2. Identify the four regions: Kernel, Markers, ColorBlock1, ColorBlock2
+TRegions = [R1, R2, R3, R4],
+% 3. Extract the kernel dimensions and bounding box from R1 (color 4)
+bk:connected_components(R1, 4, KComps),
+extract_all_cells(KComps, KCells),
+bk:component_bbox(KCells, bbox(MinR1, MaxR1, MinC1, MaxC1)),
+HK is MaxR1 - MinR1 + 1,
+WK is MaxC1 - MinC1 + 1,
+% 4. Count the number of marker objects in R2 (color 3)
+bk:connected_components(R2, 3, Markers),
+length(Markers, N),
+% 5. Extract target colors C3 and C4 from R3 and R4
+extract_block_color(R3, C3),
+extract_block_color(R4, C4),
+% 6. Calculate output dimensions (tiled horizontally in the transposed space)
+OutW is N * WK + (N - 1),
+OutH is HK,
+% 7. Create and fill the output grid tile by tile
+length(EmptyRows, OutH),
+maplist(fill_row_with_dummy(OutW), EmptyRows),
+bk:map_grid_cells(EmptyRows, mapper(N, HK, WK, R1, MinR1, MinC1, C3, C4), TOutput),
+% 8. Transpose back if the original orientation was horizontal
+15
+
+
+Procedural Refinement by LLM-driven Algorithmic Debugging for ARC-AGI-2
+(
+Transposed = true
+->
+transpose_grid(TOutput, Output)
+;
+Output = TOutput
+).
+% Helper: Check if grid has horizontal separators
+is_horizontal(Grid) :-
+bk:grid_dimensions(Grid, H, _),
+between(1, H, R),
+is_separator_row(Grid, R), !.
+is_separator_row(Grid, R) :-
+bk:grid_dimensions(Grid, _, W),
+forall(between(1, W, C), (bk:grid_cell(Grid, R, C, V), V =:= 1)).
+is_separator_col(Grid, C) :-
+bk:grid_dimensions(Grid, H, _),
+forall(between(1, H, R), (bk:grid_cell(Grid, R, C, V), V =:= 1)).
+% Split grid by horizontal separators
+split_horizontal(Grid, Seps, Regions) :-
+bk:grid_dimensions(Grid, H, W),
+append([0], Seps, StartSeps),
+append(Seps, [H], EndSeps),
+findall(Region, (
+nth0(I, StartSeps, S), nth0(I, EndSeps, E),
+S1 is S + 1, E1 is E - 1,
+S1 =< E1,
+findall(Row, (
+between(S1, E1, R),
+findall(V, (between(1, W, C), bk:grid_cell(Grid, R, C, V)), Row)
+), Region)
+), Regions).
+% Split grid by vertical separators
+split_vertical(Grid, Seps, Regions) :-
+bk:grid_dimensions(Grid, H, W),
+append([0], Seps, StartSeps),
+append(Seps, [W], EndSeps),
+findall(Region, (
+nth0(I, StartSeps, S), nth0(I, EndSeps, E),
+S1 is S + 1, E1 is E - 1,
+S1 =< E1,
+findall(Row, (
+between(1, H, R),
+findall(V, (between(S1, E1, C), bk:grid_cell(Grid, R, C, V)), Row)
+), Region)
+), Regions).
+% Standard matrix transpose
+transpose_grid(Grid, TGrid) :-
+bk:grid_dimensions(Grid, H, W),
+findall(Row, (
+between(1, W, C),
+findall(V, (between(1, H, R), bk:grid_cell(Grid, R, C, V)), Row)
+), TGrid).
+% Collect all cells from a list of components
+extract_all_cells(Comps, AllCells) :-
+findall(Cell, (member(component(_, Cells), Comps), member(Cell, Cells)), AllCells).
+% Extract the dominant color from a block region
+extract_block_color(Grid, Color) :-
+16
+
+
+Procedural Refinement by LLM-driven Algorithmic Debugging for ARC-AGI-2
+Input
+Iter 1 (FAIL)
+Iter 2 (FAIL)
+Iter 3 (FAIL)
+Iter 4 (PASS)
+Figure 8. An iteration example for task 9aaea919.
+flatten(Grid, Flattened),
+include(is_not_bg_or_sep, Flattened, NonBg),
+(
+NonBg = [Color|_]
+->
+true
+;
+Color = 0
+).
+is_not_bg_or_sep(V) :- V \= 0, V \= 1.
+% Create a row of a specific width filled with 0s
+fill_row_with_dummy(W, Row) :-
+length(Row, W),
+maplist(=(0), Row).
+% Mapper function for tiling the kernel in the output grid
+mapper(N, _HK, WK, R1, MinR, MinC, C3, C4, R, C, _OldVal, NewVal) :-
+TileIndex is (C - 1) // (WK + 1),
+RelC is (C - 1) mod (WK + 1) + 1,
+(
+RelC > WK
+->
+NewVal = C4
+;
+(
+TileIndex < N
+->
+(
+R_in is R + MinR - 1,
+C_in is RelC + MinC - 1,
+bk:grid_cell(R1, R_in, C_in, 4)
+->
+NewVal = C3
+;
+NewVal = C4
+)
+;
+NewVal = C4
+)
+).
+B.2. Task 9aaea919
+Code of Iteration 1:
+:- use_module(bk).
+% Main solve predicate
+solve(Input, Output) :-
+bk:grid_cell(Input, 1, 1, BG),
+bk:connected_components(Input, nonzero, AllComps),
+% Filter out background components
+findall(component(V, Cells), (member(component(V, Cells), AllComps), V \= BG),
+Shapes),
+% Bars are at row 30, centered at columns 6, 12, 18, 24
+findall(Col, (member(Col, [6, 12, 18, 24]), bk:grid_cell(Input, 30, Col, 2)),
+RedBars),
+17
+
+
+Procedural Refinement by LLM-driven Algorithmic Debugging for ARC-AGI-2
+findall(Col, (member(Col, [6, 12, 18, 24]), bk:grid_cell(Input, 30, Col, 3)),
+GreenBars),
+% Count shapes above all Red bars
+findall(S, (member(C, RedBars), shapes_above(C, Shapes, Ss), member(S, Ss)),
+AllRedShapes),
+length(AllRedShapes, N_Red),
+% Pre-calculate highest shapes for each Green bar
+findall(green_info(Col, V, Cells),
+(member(Col, GreenBars),
+shapes_above(Col, Shapes, Ss),
+Ss \= [],
+highest_shape(Ss, component(V, Cells))),
+GreenInfos),
+% Transform the grid cell by cell
+bk:map_grid_cells(Input, transform(BG, Shapes, RedBars, GreenInfos, N_Red), Output)
+.
+% Find all shapes that have at least one pixel in a specific column
+shapes_above(C, Shapes, Ss) :-
+findall(component(V, Cells),
+(member(component(V, Cells), Shapes), member((_, C), Cells)),
+Ss).
+% Find the component with the minimum row coordinate (the highest one)
+highest_shape([S|Ss], Highest) :-
+highest_shape_helper(Ss, S, Highest).
+highest_shape_helper([], H, H).
+highest_shape_helper([S|Ss], CurrentH, Highest) :-
+S = component(_, Cells),
+CurrentH = component(_, HCells),
+min_row(Cells, R1),
+min_row(HCells, R2),
+(R1 < R2 -> NewH = S ; NewH = CurrentH),
+highest_shape_helper(Ss, NewH, Highest).
+% Helper to get the minimum row in a list of cells
+min_row(Cells, MinR) :-
+findall(R, member((R, _), Cells), Rs),
+min_list(Rs, MinR).
+% Transformation logic for each cell
+transform(BG, Shapes, RedBars, GreenInfos, N_Red, R, C, OldV, NewV) :-
+(
+R =:= 30
+->
+NewV = BG
+;
+% Rule 1: Change color of shapes above Red bars to 5 (Grey)
+member(RedCol, RedBars),
+member(component(_V, Cells), Shapes),
+member((_, RedCol), Cells),
+member((R, C), Cells)
+->
+NewV = 5
+;
+% Rule 2: Extend highest shape above Green bars by N_Red copies
+member(green_info(_GreenCol, V, Cells), GreenInfos),
+member(I, [1, 2, 3, 4, 5, 6, 7]),
+I =< N_Red,
+Offset is 4 * I,
+R_orig is R + Offset,
+member((R_orig, C), Cells)
+->
+NewV = V
+;
+% Default: keep original value
+NewV = OldV
+18
+
+
+Procedural Refinement by LLM-driven Algorithmic Debugging for ARC-AGI-2
+).
+Code of Iteration 2:
+:- use_module(bk).
+% Main solve predicate
+solve(Input, Output) :-
+bk:grid_dimensions(Input, Rows, Cols),
+bk:grid_cell(Input, 1, 1, BG),
+bk:connected_components(Input, any, AllComps),
+% Shapes are components not of the background color and not part of the control row
+findall(component(V, Cells),
+(member(component(V, Cells), AllComps),
+V \= BG,
+forall(member((R, _), Cells), R < Rows)),
+Shapes),
+% Find centers of Red (2) and Green (3) bars at the bottom row
+findall(C, (member(C, [6, 12, 18, 24]), bk:grid_cell(Input, Rows, C, 2)),
+RedBarCenters),
+findall(C, (member(C, [6, 12, 18, 24]), bk:grid_cell(Input, Rows, C, 3)),
+GreenBarCenters),
+% Identify shapes above Red bars and count them
+findall(S, (member(C, RedBarCenters), member(S, Shapes), S = component(_, Cells),
+member((_, C), Cells)), RedShapesList),
+sort(RedShapesList, UniqueRedShapes),
+length(UniqueRedShapes, N_Red),
+% Identify the highest shape above each Green bar
+findall(Highest,
+(member(GC, GreenBarCenters),
+findall(S, (member(S, Shapes), S = component(_, Cells), member((_, GC),
+Cells)), Ss),
+Ss \= [],
+highest_shape(Ss, Highest)),
+GreenHighestShapes),
+% Pre-calculate all new cells created by the Green bar rule
+findall((R_copy, C, V),
+(member(component(V, Cells), GreenHighestShapes),
+member(I, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]),
+I =< N_Red,
+Offset is 4 * I,
+member((R, C), Cells),
+R_copy is R - Offset,
+R_copy >= 1),
+CopyCells),
+% Map the final grid
+bk:map_grid_cells(Input, transform(BG, Rows, UniqueRedShapes, CopyCells), Output).
+% Helper to find the highest component (minimum row)
+highest_shape([S|Ss], Highest) :-
+highest_shape_helper(Ss, S, Highest).
+highest_shape_helper([], H, H).
+highest_shape_helper([S|Ss], CurrentH, Highest) :-
+S = component(_, Cells),
+19
+
+
+Procedural Refinement by LLM-driven Algorithmic Debugging for ARC-AGI-2
+CurrentH = component(_, HCells),
+min_row(Cells, R1),
+min_row(HCells, R2),
+(R1 < R2 -> NewH = S ; NewH = CurrentH),
+highest_shape_helper(Ss, NewH, Highest).
+min_row(Cells, MinR) :-
+findall(R, member((R, _), Cells), Rs),
+min_list(Rs, MinR).
+% Transformation logic for each cell
+transform(BG, LastRow, RedShapes, CopyCells, R, C, OldV, NewV) :-
+(
+R =:= LastRow
+->
+NewV = BG
+;
+member((R, C, V), CopyCells)
+->
+NewV = V
+;
+member(component(_, Cells), RedShapes), member((R, C), Cells)
+->
+NewV = 5
+;
+NewV = OldV
+).
+Code of Iteration 3:
+:- use_module(bk).
+% Main solve predicate
+solve(Input, Output) :-
+bk:grid_cell(Input, 1, 1, BG),
+bk:grid_dimensions(Input, Rows, Cols),
+bk:connected_components(Input, any, AllComps),
+% Shapes are components not of the background color and not part of the control row
+findall(component(V, Cells),
+(member(component(V, Cells), AllComps),
+V \= BG,
+\+ (member((R, _), Cells), R =:= Rows)),
+Shapes),
+% Find centers of Red (2) and Green (3) bars at the bottom row
+findall(C, (member(C, [6, 12, 18, 24]), C =< Cols, bk:grid_cell(Input, Rows, C, 2))
+, RedBarCenters),
+findall(C, (member(C, [6, 12, 18, 24]), C =< Cols, bk:grid_cell(Input, Rows, C, 3))
+, GreenBarCenters),
+% Identify shapes above Red bars and count them (N_Red)
+findall(S, (member(C, RedBarCenters), member(S, Shapes), S = component(_, Cells),
+member((_, C), Cells)), RS),
+length(RS, N_Red),
+% Collect all pixels of Red shapes to be recolored to 5
+findall((R, C), (member(component(_, Cells), RS), member((R, C), Cells)), RC_raw),
+sort(RC_raw, RC),
+% Identify the highest shape above each Green bar
+findall(H, (member(GC_Col, GreenBarCenters),
+findall(S, (member(S, Shapes), S = component(_, Cells), member((_,
+GC_Col), Cells)), GS),
+GS \= [],
+highest_shape(GS, H)),
+GHS),
+20
+
+
+Procedural Refinement by LLM-driven Algorithmic Debugging for ARC-AGI-2
+% Pre-calculate all new cells created by the Green bar replication rule
+findall((Rnew, C, V), (member(component(V, Cells), GHS),
+member(I, [1,2,3,4,5,6,7,8,9,10]), I =< N_Red,
+Offset is 4*I, member((R, C), Cells),
+Rnew is R - Offset, Rnew > 0),
+GC_raw),
+sort(GC_raw, GC),
+% Map the final grid using the pre-calculated transformation data
+bk:map_grid_cells(Input, transform(BG, Rows, GC, RC), Output).
+% Helper to find the highest component (minimum row) in a list of components
+highest_shape([S|Ss], Highest) :-
+min_row(S, MinR),
+highest_shape_helper(Ss, S, MinR, Highest).
+highest_shape_helper([], S, _, S).
+highest_shape_helper([S|Ss], BestS, BestMinR, Highest) :-
+min_row(S, MinR),
+(MinR < BestMinR ->
+highest_shape_helper(Ss, S, MinR, Highest) ;
+highest_shape_helper(Ss, BestS, BestMinR, Highest)).
+% Helper to get the minimum row index from a component’s cells
+min_row(component(_, Cells), MinR) :-
+findall(R, member((R, _), Cells), Rs),
+min_list(Rs, MinR).
+% Fast lookup for Green replication copies
+find_in_gc(R, C, GC, V) :- member((R, C, V), GC), !.
+% Transformation logic for each cell
+transform(BG, Rows, GC, RC, R, C, OldV, NewV) :-
+(
+R =:= Rows
+->
+NewV = BG
+;
+find_in_gc(R, C, GC, V_GC)
+->
+NewV = V_GC
+;
+memberchk((R, C), RC)
+->
+NewV = 5
+;
+NewV = OldV
+).
+Code of Iteration 4:
+:- use_module(bk).
+/**
+* The transformation pattern follows a consistent logic across all examples:
+* 1.
+Identify the background color (BG) from the top-left cell.
+* 2.
+Identify "control bars" in the last row (Row 30). Red bars (color 2) and Green
+bars (color 3)
+*
+are contiguous segments of their respective colors.
+* 3.
+Identify all "shapes" in the grid (connected components that are not the
+background
+*
+and are not part of the last row).
+* 4.
+A shape is "above" a bar if they share any column.
+* 5.
+Calculate N_Red: the total number of distinct shapes that are above any Red bar.
+* 6.
+Rule 1 (Greying): Any shape that is above any Red bar has its color changed to
+Grey (color 5).
+* 7.
+Rule 2 (Copying): For every shape that is above any Green bar, create N_Red
+copies of that
+21
+
+
+Procedural Refinement by LLM-driven Algorithmic Debugging for ARC-AGI-2
+*
+shape. Each copy is shifted vertically upwards by a period of 4 rows (4, 8, 12,
+...).
+* 8.
+Rule 3 (Cleanup): The entire control row (the last row) is set to the
+background color.
+* 9.
+All other shapes that are not above a Red or Green bar remain unchanged.
+*/
+% Main solve predicate
+solve(Input, Output) :-
+bk:grid_dimensions(Input, Rows, Cols),
+bk:grid_cell(Input, 1, 1, BG),
+% Find all shapes: connected components of each color (0-9) excluding BG
+% and components that are entirely on the last row (control bars).
+findall(component(V, Cells), (
+between(0, 9, V),
+V \= BG,
+bk:connected_components(Input, V, Comps),
+member(component(V, Cells), Comps),
+% A shape must have at least one pixel NOT on the last row
+\+ forall(member((R, _), Cells), R =:= Rows)
+), Shapes),
+% Find all Red (2) and Green (3) bars in the last row
+findall(bar(2, Cells), (
+bk:connected_components(Input, 2, Comps),
+member(component(2, Cells), Comps),
+forall(member((R, _), Cells), R =:= Rows)
+), RedBars),
+findall(bar(3, Cells), (
+bk:connected_components(Input, 3, Comps),
+member(component(3, Cells), Comps),
+forall(member((R, _), Cells), R =:= Rows)
+), GreenBars),
+% N_Red: the count of distinct shapes above any Red bar
+findall(S, (member(B, RedBars), member(S, Shapes), is_above(S, B)), RedAffected),
+sort(RedAffected, UniqueRedAffected),
+length(UniqueRedAffected, N_Red),
+% Identify pixels belonging to shapes that turn Grey
+findall((R, C), (
+member(component(_, Cells), UniqueRedAffected),
+member((R, C), Cells)
+), GreyPixels),
+% Identify pixels and colors created by the copying rule
+findall((RNew, C, V), (
+member(B, GreenBars),
+member(S, Shapes),
+is_above(S, B),
+S = component(V, Cells),
+between(1, N_Red, I),
+Offset is 4 * I,
+member((R, C), Cells),
+RNew is R - Offset,
+RNew >= 1
+), CopyPixels),
+% Transform the grid cell by cell
+bk:map_grid_cells(Input, transform(BG, Rows, GreyPixels, CopyPixels), Output).
+% A shape is "above" a bar if they share at least one column
+22
+
+
+Procedural Refinement by LLM-driven Algorithmic Debugging for ARC-AGI-2
+is_above(component(_, Cells), bar(_, BarCells)) :-
+member((_, C), Cells),
+member((_, C), BarCells).
+% Transformation logic for each cell (R, C)
+transform(BG, LastRow, GreyPixels, CopyPixels, R, C, OldV, NewV) :-
+(
+R =:= LastRow
+->
+% Rule 3: Cleanup the control row
+NewV = BG
+;
+% Rule 2: Place copies first (highest priority for newly added objects)
+member((R, C, V), CopyPixels)
+->
+NewV = V
+;
+% Rule 1: Apply Grey (5) to shapes above Red bars
+member((R, C), GreyPixels)
+->
+NewV = 5
+;
+% Default: Keep existing cell value
+NewV = OldV
+).
+C. Prolog Background Knowledge
+:- module(bk, [
+grid_dimensions/3,
+grid_cell/4,
+grid_in_bounds/3,
+grid_neighbors4/4,
+collect_points/4,
+connected_components/3,
+components_with_holes/4,
+component_bbox/2,
+component_hole_count/3,
+component_hole_count/4,
+apply_component_labels/4,
+map_grid_cells/3
+]).
+:- use_module(library(lists)).
+% ------------------------------------------------------------------
+% Grid primitives
+% ------------------------------------------------------------------
+% grid_dimensions(+Grid, -Rows, -Cols)
+grid_dimensions(Grid, Rows, Cols) :-
+length(Grid, Rows),
+( Grid = [First|_] -> length(First, Cols) ; Cols = 0 ).
+% grid_cell(+Grid, +Row, +Col, -Value)
+grid_cell(Grid, Row, Col, Value) :-
+nth1(Row, Grid, R),
+nth1(Col, R, Value).
+% grid_in_bounds(+Grid, +Row, +Col)
+grid_in_bounds(Grid, Row, Col) :-
+grid_dimensions(Grid, Rows, Cols),
+Row >= 1, Row =< Rows,
+Col >= 1, Col =< Cols.
+% grid_neighbors4(+Grid, +Row, +Col, -Neighbors)
+grid_neighbors4(Grid, Row, Col, Neighbors) :-
+grid_dimensions(Grid, Rows, Cols),
+23
+
+
+Procedural Refinement by LLM-driven Algorithmic Debugging for ARC-AGI-2
+neighbors4_bounds(Row, Col, Rows, Cols, Neighbors).
+neighbors4_bounds(Row, Col, Rows, Cols, Neighs) :-
+findall((NR,NC),
+( (NR is Row+1, NR =< Rows, NC = Col)
+; (NR is Row-1, NR >= 1, NC = Col)
+; (NC is Col+1, NC =< Cols, NR = Row)
+; (NC is Col-1, NC >= 1, NR = Row)
+),
+Neighs).
+% ------------------------------------------------------------------
+% Point collection and matching
+% ------------------------------------------------------------------
+% collect_points(+Grid, +Matcher, -Points, -Values?)
+collect_points(Grid, Matcher, Points, Values) :-
+grid_dimensions(Grid, Rows, Cols),
+findall((Coord, Val),
+( between(1, Rows, R),
+between(1, Cols, C),
+nth1(R, Grid, Row),
+nth1(C, Row, Val),
+match_value(Matcher, Val),
+Coord = (R,C)
+),
+Raw),
+unzip_points(Raw, Points, Values).
+collect_points(Grid, Matcher, Points) :-
+collect_points(Grid, Matcher, Points, _).
+unzip_points([], [], []).
+unzip_points([((R,C),V)|Rest], [(R,C)|PR], [V|VR]) :-
+unzip_points(Rest, PR, VR).
+match_value(any, _) :- !.
+match_value(nonzero, Val) :- Val =\= 0, !.
+match_value(nonzero, _) :- !, fail.
+match_value(color(N), Val) :-
+!,
+number(N),
+Val =:= N.
+match_value(Matcher, Val) :-
+callable(Matcher),
+call(Matcher, Val), !.
+match_value(Matcher, Val) :-
+is_list(Matcher),
+memberchk(Val, Matcher), !.
+match_value(Matcher, Val) :-
+number(Matcher),
+Val =:= Matcher.
+% ------------------------------------------------------------------
+% Connected components
+% ------------------------------------------------------------------
+% connected_components(+Grid, +Matcher, -Components)
+% Components are terms component(Value, Cells)
+connected_components(Grid, Matcher, Components) :-
+grid_dimensions(Grid, Rows, Cols),
+collect_points(Grid, Matcher, Points),
+components_from_points(Points, Grid, Rows, Cols, Matcher, [], Components).
+24
+
+
+Procedural Refinement by LLM-driven Algorithmic Debugging for ARC-AGI-2
+components_from_points([], _, _, _, _, _, []).
+components_from_points([(R,C)|Rest], Grid, Rows, Cols, Matcher, Seen, Components) :-
+( memberchk((R,C), Seen) ->
+components_from_points(Rest, Grid, Rows, Cols, Matcher, Seen, Components)
+;
+grid_cell(Grid, R, C, Val),
+flood_component(Grid, Rows, Cols, Matcher, [(R,C)], [], Cells),
+append(Cells, Seen, NewSeen),
+Components = [component(Val, Cells)|Tail],
+components_from_points(Rest, Grid, Rows, Cols, Matcher, NewSeen, Tail)
+).
+flood_component(_, _, _, _, [], Visited, Visited).
+flood_component(Grid, Rows, Cols, Matcher, [(R,C)|Queue], Visited, Component) :-
+( memberchk((R,C), Visited) ->
+flood_component(Grid, Rows, Cols, Matcher, Queue, Visited, Component)
+;
+cell_value(Grid, Rows, Cols, R, C, Val),
+match_value(Matcher, Val) ->
+neighbors4_bounds(R, C, Rows, Cols, Neighs),
+append(Queue, Neighs, NextQueue),
+flood_component(Grid, Rows, Cols, Matcher, NextQueue, [(R,C)|Visited],
+Component)
+;
+flood_component(Grid, Rows, Cols, Matcher, Queue, Visited, Component)
+).
+% ------------------------------------------------------------------
+% Component utilities
+% ------------------------------------------------------------------
+component_bbox(Cells, bbox(MinR, MaxR, MinC, MaxC)) :-
+findall(R, member((R,_), Cells), Rs),
+min_list(Rs, MinR),
+max_list(Rs, MaxR),
+findall(C, member((_,C), Cells), Cs),
+min_list(Cs, MinC),
+max_list(Cs, MaxC).
+components_with_holes(Grid, Matcher, BackgroundMatcher, Components) :-
+connected_components(Grid, Matcher, Raw),
+annotate_holes(Grid, BackgroundMatcher, Raw, Components).
+annotate_holes(_, _, [], []).
+annotate_holes(Grid, BackgroundMatcher, [component(Val, Cells)|Rest], [component(Val,
+Cells, holes(H))|Tail]) :-
+component_hole_count(Grid, Cells, BackgroundMatcher, H),
+annotate_holes(Grid, BackgroundMatcher, Rest, Tail).
+% Example: Hole counting
+component_hole_count(Grid, Cells, Count) :-
+component_hole_count(Grid, Cells, 0, Count).
+component_hole_count(Grid, Cells, BackgroundMatcher, Count) :-
+grid_dimensions(Grid, Rows, Cols),
+component_bbox(Cells, bbox(MinR, MaxR, MinC, MaxC)),
+PMinR is MinR - 1,
+PMaxR is MaxR + 1,
+PMinC is MinC - 1,
+PMaxC is MaxC + 1,
+Limits = limits(PMinR, PMaxR, PMinC, PMaxC),
+list_to_ord_set(Cells, ComponentSet),
+border_background_cells(Grid, Rows, Cols, Limits, ComponentSet, BackgroundMatcher,
+25
+
+
+Procedural Refinement by LLM-driven Algorithmic Debugging for ARC-AGI-2
+BorderStarts),
+flood_background(Grid, Rows, Cols, Limits, ComponentSet, BackgroundMatcher,
+BorderStarts, ReachableRaw),
+list_to_ord_set(ReachableRaw, Reachable),
+all_background_in_limits(Grid, Rows, Cols, Limits, ComponentSet, BackgroundMatcher,
+BackgroundRaw),
+list_to_ord_set(BackgroundRaw, Background),
+ord_subtract(Background, Reachable, HoleSet),
+count_hole_components(HoleSet, Limits, Count).
+border_background_cells(_, _, _, limits(MinR, MaxR, MinC, MaxC), _, _, Starts) :-
+MinR > MaxR ; MinC > MaxC, !,
+Starts = [].
+border_background_cells(Grid, Rows, Cols, limits(MinR, MaxR, MinC, MaxC), ComponentSet,
+BackgroundMatcher, Starts) :-
+findall((R,C),
+( between(MinC, MaxC, C), (R = MinR ; R = MaxR)
+; between(MinR, MaxR, R), (C = MinC ; C = MaxC)
+),
+RawBorder),
+sort(RawBorder, BorderCoords),
+filter_background_coords(BorderCoords, Grid, Rows, Cols, ComponentSet,
+BackgroundMatcher, Starts).
+all_background_in_limits(Grid, Rows, Cols, limits(MinR, MaxR, MinC, MaxC),
+ComponentSet, BackgroundMatcher, Background) :-
+findall((R,C),
+( between(MinR, MaxR, R),
+between(MinC, MaxC, C),
+background_cell(Grid, Rows, Cols, ComponentSet, BackgroundMatcher, R, C)
+),
+Background).
+background_cell(Grid, Rows, Cols, ComponentSet, BackgroundMatcher, R, C) :-
+\+ ord_memberchk((R,C), ComponentSet),
+cell_value(Grid, Rows, Cols, R, C, Val),
+match_value(BackgroundMatcher, Val).
+flood_background(_, _, _, _, _, _, [], []).
+flood_background(Grid, Rows, Cols, Limits, ComponentSet, BackgroundMatcher, Starts,
+Reachable) :-
+flood_background_queue(Grid, Rows, Cols, Limits, ComponentSet, BackgroundMatcher,
+Starts, [], Visit),
+reverse(Visit, Reachable).
+flood_background_queue(_, _, _, _, _, _, [], Vis, Vis).
+flood_background_queue(Grid, Rows, Cols, Limits, ComponentSet, BackgroundMatcher, [(R,
+C)|Queue], Vis, Result) :-
+( memberchk((R,C), Vis) ->
+flood_background_queue(Grid, Rows, Cols, Limits, ComponentSet,
+BackgroundMatcher, Queue, Vis, Result)
+; background_cell(Grid, Rows, Cols, ComponentSet, BackgroundMatcher, R, C) ->
+neighbors_within_limits((R,C), Limits, Neighs),
+filter_background_coords(Neighs, Grid, Rows, Cols, ComponentSet,
+BackgroundMatcher, Valid),
+append(Queue, Valid, NextQueue),
+flood_background_queue(Grid, Rows, Cols, Limits, ComponentSet,
+BackgroundMatcher, NextQueue, [(R,C)|Vis], Result)
+;
+flood_background_queue(Grid, Rows, Cols, Limits, ComponentSet,
+BackgroundMatcher, Queue, Vis, Result)
+).
+neighbors_within_limits((R,C), limits(MinR, MaxR, MinC, MaxC), Neighs) :-
+26
+
+
+Procedural Refinement by LLM-driven Algorithmic Debugging for ARC-AGI-2
+findall((NR,NC),
+( (NR is R+1, between(MinR, MaxR, NR), NC = C)
+; (NR is R-1, between(MinR, MaxR, NR), NC = C)
+; (NC is C+1, between(MinC, MaxC, NC), NR = R)
+; (NC is C-1, between(MinC, MaxC, NC), NR = R)
+),
+Neighs).
+count_hole_components([], _, 0).
+count_hole_components(HoleSet, Limits, Count) :-
+HoleSet \= [],
+count_hole_components_loop(HoleSet, Limits, 0, Count).
+count_hole_components_loop([], _, Acc, Acc).
+count_hole_components_loop(HoleSet, Limits, Acc, Count) :-
+HoleSet = [Cell|_],
+hole_component(Cell, HoleSet, Limits, Component),
+ord_subtract(HoleSet, Component, Remaining),
+Acc1 is Acc + 1,
+count_hole_components_loop(Remaining, Limits, Acc1, Count).
+hole_component(Cell, HoleSet, Limits, ComponentOrd) :-
+flood_subset([Cell], [], HoleSet, Limits, Component),
+list_to_ord_set(Component, ComponentOrd).
+flood_subset([], Vis, _, _, Vis).
+flood_subset([(R,C)|Queue], Vis, HoleSet, Limits, Component) :-
+( memberchk((R,C), Vis) ->
+flood_subset(Queue, Vis, HoleSet, Limits, Component)
+; ord_memberchk((R,C), HoleSet) ->
+neighbors_within_limits((R,C), Limits, Neighs),
+filter_ord_members(Neighs, HoleSet, Valid),
+append(Queue, Valid, NextQueue),
+flood_subset(NextQueue, [(R,C)|Vis], HoleSet, Limits, Component)
+;
+flood_subset(Queue, Vis, HoleSet, Limits, Component)
+).
+filter_background_coords([], _, _, _, _, _, []).
+filter_background_coords([(R,C)|Rest], Grid, Rows, Cols, ComponentSet,
+BackgroundMatcher, Filtered) :-
+( background_cell(Grid, Rows, Cols, ComponentSet, BackgroundMatcher, R, C) ->
+Filtered = [(R,C)|Tail]
+;
+Filtered = Tail
+),
+filter_background_coords(Rest, Grid, Rows, Cols, ComponentSet, BackgroundMatcher,
+Tail).
+filter_ord_members([], _, []).
+filter_ord_members([(R,C)|Rest], HoleSet, Filtered) :-
+( ord_memberchk((R,C), HoleSet) ->
+Filtered = [(R,C)|Tail]
+;
+Filtered = Tail
+),
+filter_ord_members(Rest, HoleSet, Tail).
+cell_value(_, Rows, _, R, _, 0) :-
+(R < 1 ; R > Rows), !.
+cell_value(_, _, Cols, _, C, 0) :-
+(C < 1 ; C > Cols), !.
+cell_value(Grid, _, _, R, C, Val) :-
+nth1(R, Grid, Row),
+27
+
+
+Procedural Refinement by LLM-driven Algorithmic Debugging for ARC-AGI-2
+nth1(C, Row, Val), !.
+cell_value(_, _, _, _, _, 0).
+% ------------------------------------------------------------------
+% Component labeling helpers
+% ------------------------------------------------------------------
+apply_component_labels(Grid, Components, Labeler, Result) :-
+findall(((R,C)-Label),
+( member(Component, Components),
+call(Labeler, Component, Label),
+component_cells(Component, Cells),
+member((R,C), Cells)
+),
+Pairs),
+map_grid(Grid, Pairs, Result).
+component_cells(component(_, Cells), Cells).
+component_cells(component(_, Cells, _), Cells).
+map_grid(Grid, Pairs, Result) :-
+map_rows(Grid, Pairs, 1, Result).
+map_rows([], _, _, []).
+map_rows([Row|Rest], Pairs, RowIdx, [Mapped|Tail]) :-
+map_row(Row, Pairs, RowIdx, 1, Mapped),
+NextIdx is RowIdx + 1,
+map_rows(Rest, Pairs, NextIdx, Tail).
+map_row([], _, _, _, []).
+map_row([Val|Rest], Pairs, R, C, [NewVal|Tail]) :-
+( memberchk(((R,C)-Label), Pairs) ->
+NewVal = Label
+;
+NewVal = Val
+),
+NextC is C + 1,
+map_row(Rest, Pairs, R, NextC, Tail).
+% ------------------------------------------------------------------
+% Ordered-set helpers
+% ------------------------------------------------------------------
+list_to_ord_set(List, OrdSet) :-
+sort(List, OrdSet).
+ord_subtract([], _, []).
+ord_subtract([A|As], Bs, Cs) :-
+( ord_memberchk(A, Bs) ->
+ord_subtract(As, Bs, Cs)
+;
+Cs = [A|Rest],
+ord_subtract(As, Bs, Rest)
+).
+ord_memberchk(_, []) :- fail.
+ord_memberchk(X, [Y|Ys]) :-
+( X == Y ->
+true
+; X @> Y ->
+ord_memberchk(X, Ys)
+; X @< Y ->
+fail
+).
+28
+
+
+Procedural Refinement by LLM-driven Algorithmic Debugging for ARC-AGI-2
+% ------------------------------------------------------------------
+% Grid cell mapping
+% ------------------------------------------------------------------
+% map_grid_cells(+Grid, +Mapper, -NewGrid)
+% Apply a cell-level transformation to every cell in the grid.
+% Mapper is called as: call(Mapper, Row, Col, OldValue, NewValue)
+% Example usage:
+%
+map_grid_cells(Input, my_transform, Output).
+%
+my_transform(R, C, OldVal, NewVal) :-
+%
+( in_target_region(R, C), OldVal =:= 0 -> NewVal = 4 ; NewVal = OldVal ).
+map_grid_cells(Grid, Mapper, NewGrid) :-
+map_grid_rows(Grid, Mapper, 1, NewGrid).
+map_grid_rows([], _, _, []).
+map_grid_rows([Row|RestRows], Mapper, RowIdx, [NewRow|RestNewRows]) :-
+map_grid_cols(Row, Mapper, RowIdx, 1, NewRow),
+NextRow is RowIdx + 1,
+map_grid_rows(RestRows, Mapper, NextRow, RestNewRows).
+map_grid_cols([], _, _, _, []).
+map_grid_cols([Val|RestVals], Mapper, RowIdx, ColIdx, [NewVal|RestNewVals]) :-
+call(Mapper, RowIdx, ColIdx, Val, NewVal),
+NextCol is ColIdx + 1,
+map_grid_cols(RestVals, Mapper, RowIdx, NextCol, RestNewVals).
+D. Prompts
+System Prompt
+You are a world-class expert in solving Abstract Reasoning Corpus (ARC) tasks.
+Your
+approach is methodical, creative, and highly effective.
+You are also a master Prolog
+programmer, producing elegant, efficient, and well-documented solutions.
+**IMPORTANT: Your Ultimate Goal**
+You will be given:
+1.
+**Training Examples** - Input-output pairs to help you understand the
+transformation pattern
+2.
+**Challenge(s)** - New input(s) for which you must produce correct output(s)
+The Training Examples are for learning the pattern.
+Your REAL GOAL is to produce a
+‘solve/2‘ predicate that correctly transforms the Challenge input(s).
+The training
+examples help you understand what transformation to apply, but success is measured by
+whether your code works on the Challenge(s).
+**Part 1:
+Initial Analysis and Hypothesis Generation**
+1.
+**Example Inspection:** Carefully examine the input and output grids for each
+training example.
+Note their dimensions, color palettes, and any prominent visual
+features (shapes, symmetries, patterns).
+2.
+**Challenge Awareness:** Look at the Challenge input(s).
+Consider how they relate
+to the training examples - are they similar in structure?
+Do they have edge cases not
+seen in training?
+3.
+**Formulate a Hypothesis:**
+* Based on your analysis, formulate a transformation rule that works consistently
+across all examples AND generalizes to the challenge.
+29
+
+
+Procedural Refinement by LLM-driven Algorithmic Debugging for ARC-AGI-2
+* Express the rule as a sequence of image manipulation operations.
+* Prioritize simpler, more general rules that avoid overfitting to training examples.
+* Consider these types of transformations:
+* **Object Manipulation:** Moving, rotating, reflecting, or resizing objects.
+* **Color Changes:** Changing the color of specific objects or regions.
+* **Spatial Arrangements:** Rearranging the objects in a specific pattern.
+* **Object Addition/Removal:** Adding or removing objects based on certain criteria.
+**Part 2:
+bk.pl Library API**
+You have access to a powerful Prolog library called ‘bk.pl‘ for grid manipulation.
+Use
+it!
+**Available predicates from bk.pl module:**
+You MUST use ‘:- use module(bk).‘ at the beginning of your code to access these
+predicates.
+Call them with ‘bk:predicate name(...)‘ syntax.
+**CRITICAL: All coordinates are 1-indexed!
+(Row=1, Col=1) is the top-left cell.**
+===============================================================================
+GRID PRIMITIVES
+===============================================================================
+• bk:grid dimensions(+Grid, -Rows, -Cols)
+Get grid dimensions.
+Example:
+bk:grid dimensions(Input, H, W)
+• bk:grid cell(+Grid, +Row, +Col, -Value)
+Get cell value at position (1-indexed!).
+Example:
+bk:grid cell(Grid, 1, 1, TopLeftVal)
+• bk:grid in bounds(+Grid, +Row, +Col)
+Check if position is within grid bounds.
+• bk:grid neighbors4(+Grid, +Row, +Col, -Neighbors)
+Get 4-connected neighbors as list of (R,C) tuples.
+===============================================================================
+GRID TRANSFORMATION (RECOMMENDED for cell-by-cell operations)
+===============================================================================
+• bk:map grid cells(+Grid, +Mapper, -NewGrid)
+Transform every cell in the grid.
+Mapper is called as:
+call(Mapper, Row, Col, OldValue, NewValue)
+**IMPORTANT: Mapper must have 4 parameters (Row, Col, OldVal, NewVal)**
+Example:
+‘‘‘prolog
+solve(Input, Output) :-
+bk:map grid cells(Input, my transform, Output).
+my transform(R, C, OldVal, NewVal) :-
+( OldVal =:= 0 -> NewVal = 5 ; NewVal = OldVal ).
+‘‘‘
+===============================================================================
+COMPONENT DISCOVERY
+===============================================================================
+• bk:connected components(+Grid, +Matcher, -Components)
+Find all connected components matching the criteria.
+30
+
+
+Procedural Refinement by LLM-driven Algorithmic Debugging for ARC-AGI-2
+**Matcher options:**
+- Plain number:
+2, 8, 0 (matches cells with that exact value)
+- color(N): same as plain number
+- nonzero:
+matches any non-zero cell
+- any:
+matches all cells
+- List [1,2,3]:
+matches any value in the list
+**NEVER use =:=(N) or =(N) as matcher!**
+Returns:
+list of component(Value, Cells) where Cells is list of (Row,Col)
+Example:
+‘‘‘prolog
+bk:connected components(Grid, 8, Comps),
+member(component(8, Cells), Comps)
+‘‘‘
+• bk:components with holes(+Grid, +Matcher, +BackgroundMatcher, -Components)
+Like connected components but also counts holes in each component.
+Returns:
+list of component(Value, Cells, holes(Count))
+Example:
+‘‘‘prolog
+bk:components with holes(Input, 2, 0, Comps),
+member(component(2, Cells, holes(HoleCount)), Comps)
+‘‘‘
+===============================================================================
+COMPONENT UTILITIES
+===============================================================================
+• bk:component bbox(+Cells, -BBox)
+Get bounding box of a component.
+**IMPORTANT: BBox is bbox(MinRow, MaxRow, MinCol, MaxCol) - a compound term, NOT a
+list!**
+Example:
+‘‘‘prolog
+bk:component bbox(Cells, bbox(MinR, MaxR, MinC, MaxC)),
+Height is MaxR - MinR + 1,
+Width is MaxC - MinC + 1
+‘‘‘
+• bk:apply component labels(+Grid, +Components, +Labeler, -Result)
+Relabel components according to a labeling function.
+**Labeler signature:
+Labeler(Component, NewLabel)**
+Component is component(Value, Cells) or component(Value, Cells, holes(H))
+Example:
+‘‘‘prolog
+solve(Input, Output) :-
+bk:components with holes(Input, 8, 0, Comps),
+bk:apply component labels(Input, Comps, label by holes, Output).
+label by holes(component( Val,
+Cells, holes(H)), NewLabel) :-
+hole to color(H, NewLabel).
+hole to color(1, 5).
+hole to color(2, 3).
+‘‘‘
+31
+
+
+Procedural Refinement by LLM-driven Algorithmic Debugging for ARC-AGI-2
+===============================================================================
+COMPLETE WORKING EXAMPLES
+===============================================================================
+**Example 1:
+Relabel components by hole count**
+‘‘‘prolog
+:- use module(bk).
+solve(Input, Output) :-
+bk:components with holes(Input, 8, 0, Comps),
+bk:apply component labels(Input, Comps, label by holes, Output).
+label by holes(component( Val,
+Cells, holes(H)), NewLabel) :-
+hole to label(H, NewLabel).
+hole to label(1, 5).
+hole to label(2, 3).
+hole to label(3, 7).
+‘‘‘
+**Example 2:
+Fill regions based on component size**
+‘‘‘prolog
+:- use module(bk).
+solve(Input, Output) :-
+bk:connected components(Input, 2, Frames),
+findall(region(MinR,MaxR,MinC,MaxC,Color),
+(member(component(2,Cells), Frames),
+bk:component bbox(Cells, bbox(MinR,MaxR,MinC,MaxC)),
+Height is MaxR - MinR + 1,
+size to color(Height, Color)),
+Regions),
+bk:map grid cells(Input, fill regions(Regions), Output).
+fill regions(Regions, R, C, OldVal, NewVal) :-
+( OldVal =:= 0,
+member(region(MinR,MaxR,MinC,MaxC,Color), Regions),
+R > MinR, R < MaxR, C > MinC, C < MaxC
+-> NewVal = Color
+; NewVal = OldVal
+).
+size to color(5, 8).
+size to color(7, 4).
+‘‘‘
+**Example 3:
+Simple pixel-wise transformation**
+‘‘‘prolog
+:- use module(bk).
+solve(Input, Output) :-
+bk:map grid cells(Input, recolor cell, Output).
+recolor cell( R,
+C, OldVal, NewVal) :-
+( OldVal =:= 8 -> NewVal = 0 ; NewVal = OldVal ).
+‘‘‘
+===============================================================================
+COMMON MISTAKES TO AVOID
+===============================================================================
+WRONG: bk:connected components(Grid, =:=(N), ...)
+RIGHT: bk:connected components(Grid, N, ...)
+32
+
+
+Procedural Refinement by LLM-driven Algorithmic Debugging for ARC-AGI-2
+WRONG: bk:component bbox(Cells, [MinR,MinC,MaxR,MaxC])
+RIGHT: bk:component bbox(Cells, bbox(MinR,MaxR,MinC,MaxC))
+WRONG: my mapper(OldVal, NewVal) :- ...
+(missing Row, Col)
+RIGHT: my mapper(Row, Col, OldVal, NewVal) :- ...
+WRONG: Using 0-indexed coordinates
+RIGHT: All coordinates are 1-indexed (top-left is Row=1, Col=1)
+**Part 3:
+Output Requirements**
+1.
+**Output Format:**
+* Begin with a concise paragraph explaining the proposed solution.
+* You *must* provide code representing your best attempt.
+Do not give up or refuse to
+produce code.
+* **The code section must be a single, valid Prolog code block in markdown fenced code
+block format.**
+* **Start with ‘:- use module(bk).‘**
+* The main predicate must have the signature ‘solve(Input, Output)‘.
+* Include all helper predicates - the code must be self-contained except for bk.pl.
+* **Ensure your solution generalizes** - avoid hardcoding values specific to training
+examples.
+First Generation Prompt
+**PROBLEM:**
+Below are the Training Examples (with input-output pairs) and Challenge(s) (input only,
+you must figure out the output).
+{examples}
+**Your Task:**
+1.
+Study the Training Examples to understand the transformation pattern
+2.
+Write a Prolog ‘solve/2‘ predicate that correctly implements this transformation
+3.
+Your code will be tested on the Training Examples for debugging, and the FINAL goal
+is to correctly transform the Challenge input(s)
+Remember to use ‘:- use module(bk).‘ and leverage the bk.pl library predicates when
+appropriate.
+Fix Prompt
+**CODE REFINEMENT REQUIRED - Attempt {current iteration}/{max iterations}**
+Your code has gone through {iteration count} iteration(s) of testing.
+Please carefully
+analyze:
+1.
+{history description}
+2.
+The detailed execution trace of the most recent attempt
+3.
+Identify the root cause of failures - is it a logic error, edge case handling, or
+incorrect pattern matching?
+Based on this analysis, produce an improved solution that addresses all identified
+issues.
+**REFERENCE SOLUTIONS ({history type}):**
+{attempts history}
+33
+
+
+Procedural Refinement by LLM-driven Algorithmic Debugging for ARC-AGI-2
+**DECLARATIVE DEBUGGER OUTPUT (Iteration {iteration}):**
+The following is the output from the declarative debugger showing:
+1.
+**INPUT/EXPECTED/ACTUAL grids** - visual comparison of what was expected vs
+produced
+2.
+**DIFFERENCE SUMMARY** - specific cells that differ
+3.
+**PROOF TREE** - the successful execution path showing how your code transformed
+the data
+Before you produce your solution, study the proof tree carefully by appling **algothmic
+program debugging** rules to identify the buggy predicates:
+1.
+Start from the root node and check if its output is correct given its input.
+2.
+If a node’s output is CORRECT →skip its entire subtree (no bug there).
+3.
+If a node’s output is INCORRECT →examine its children nodes.
+4.
+A node is the **bug location** when:
+its own output is incorrect, BUT all its
+children outputs are correct.
+‘‘‘
+{trace detail}
+‘‘‘
+**CHALLENGE INPUT(S) - Your code must correctly transform these:**
+{challenge diagrams}
+Remember:
+The training examples are for learning the pattern, but the REAL goal is to
+produce correct outputs for the Challenge input(s) above.
+Now provide a corrected, complete Prolog program.
+Make sure to:
+1.
+Address all issues identified in the trace
+2.
+Handle edge cases properly
+3.
+**CRITICAL: Ensure the solution GENERALIZES to the Challenge input(s)** - don’t
+overfit to training examples
+4.
+Use bk.pl library predicates correctly (remember:
+1-indexed coordinates, bbox is a
+compound term)
+5.
+Avoid hardcoding specific values that only work for training examples
+34

@@ -1,0 +1,1304 @@
+Title: 2603.20392v1.pdf
+
+URL Source: https://arxiv.org/pdf/2603.20392v1
+
+Published Time: Tue, 24 Mar 2026 00:08:48 GMT
+
+Number of Pages: 17
+
+Markdown Content:
+1
+
+# SymCircuit: Bayesian Structure Inference for Tractable 
+
+# Probabilistic Circuits via Entropy -Regularized 
+
+# Reinforcement Learning 
+
+Y. Sungtaek Ju 
+
+Department of Mechanical and Aerospace Engineering 
+
+University of California, Los Angeles 
+
+Abstract. Probabilistic circuit (PC) structure learning is hampered by greedy algorithms 
+
+that make irreversible, locally optimal decisions. We propose SymCircuit, which replaces 
+
+greedy search with a learned generative policy trained via entropy -regularized 
+
+reinforcement learning. Instantiating the RL -as -inference framework in the PC domain, we 
+
+show the optimal policy is a tempered Bayesian posterior , recovering the exact posterior 
+
+when the regularization temperature is set inversely proportional to the dataset size . The 
+
+policy is implemented as SymFormer, a grammar -constrained autoregressive Transformer 
+
+with tree -relative self -attention that guarantees valid circuits at every generation step. We 
+
+introduce option -level REINFORCE, restricting gradient updates to structural decisions 
+
+rather than all tokens, yielding a n SNR (signal to noise ratio) improvement and >10 times 
+
+sample efficiency gain on the NLTCS dataset . A three -layer uncertainty decomposition 
+
+(structural via model averaging, parametric via the delta method, leaf via conjugate 
+
+Dirichlet –Categorical propagation) is grounded in the multilinear polynomial structure of 
+
+PC outputs. On NLTCS, SymCircuit closes 93% of the gap to LearnSPN; preliminary results 
+
+on Plants (69 variables) suggest scalability. 
+
+# 1. Introduction 
+
+Probabilistic circuits (PCs) , including Sum -Product Networks (SPNs), Cutset Networks, 
+
+and related structures , are a family of tractable probabilistic models that support exact, 
+
+polynomial -time inference for a wide class of queries including marginals, conditionals, 
+
+and maximum a posteriori assignments [Darwiche 2003; Choi, Vergari & Van den Broeck 
+
+2020]. Their tractability derives from two structural properties: decomposability (each 
+
+product node’s children have disjoint variable scopes) and smoothness (each sum node’s 
+
+children cover the same scope). These properties ensure that the circuit output is a 
+
+multilinear polynomial in its parameters , a fact we exploit heavily in our uncertainty 
+
+quantification framework. 2
+
+The primary bottleneck in PC methodology is structure learning. The dominant algorithms 
+
+— LearnSPN [Gens & Domingos 2013], ID -SPN, Strudel [Dang, Vergari & Van den Broeck 
+
+2020] — are greedy: they partition variables and data using independence tests or 
+
+clustering heuristics, grow the circuit top -down, and commit irrevocably to each structural 
+
+decision. Greedy approaches cannot recover from early partitioning errors, do not 
+
+naturally express uncertainty about structure, and do not generalize their search strategies 
+
+across datasets. 
+
+The natural alternative is to learn a generative policy over circuits from data, analogous to 
+
+how neural program synthesis learns to generate programs. Several recent works explore 
+
+Transformer -based approaches for symbolic structures [Park et al. 2026 (SymPlex); Liu et 
+
+al. 2025 (Tracformer)], but none have directly addressed PC structure learning through a 
+
+policy gradient framework with a clear Bayesian interpretation. 
+
+This paper makes the following contributions: 
+
+1.  Theoretical : Applying the RL -as -inference framework of Levine (2018) to the discrete, 
+
+grammar -constrained setting of PC structure generation, we derive that the optimal 
+
+policy under entropy -regularized expected log -likelihood is a tempered Bayesian 
+
+posterior  𝜋 ∗(𝒮 ) ∝ 𝑃 0(𝒮 ) ⋅ 𝑝 (𝒟 |𝒮 )1/(𝑁𝛼 ), recovering the exact posterior at  𝛼 = 1/𝑁 .
+
+The novelty is the specific instantiation — PC structures as the hypothesis space, 
+
+data log -likelihood as the reward, and the identification of the  1/𝑁  scaling that 
+
+governs the posterior temperature — rather than the underlying variational 
+
+derivation, which is standard. 
+
+2.  Algorithmic : We introduce option -level REINFORCE with structural decision 
+
+masking, which improves the signal -to -noise ratio of the policy gradient by the ratio 
+
+of total tokens to structural decision token , empirically 3 times on NLTCS. We 
+
+analyze the SNR of both estimators formally. 
+
+3.  Architectural : SymFormer implements tree -relative self -attention, dynamic 
+
+grammar masking for structural validity, and traversal -aware positional encoding, 
+
+all within a standard autoregressive Transformer framework. 
+
+4.  Optimization : A hybrid Adam/Anemone optimizer leverages flow -weighted EM for 
+
+sum weights and Adam for leaf parameters. The split is motivated by the known 
+
+equivalence between full -batch EM and natural gradient descent for mixture 
+
+models, and by empirical evidence that applying EM to leaf parameters causes 
+
+divergence in early training. 
+
+5.  Uncertainty quantification: A three -layer decomposition assigns structural, 
+
+parametric, and leaf uncertainty to distinct mechanisms. The leaf layer is exactly 
+
+closed -form under the conjugate Dirichlet –Categorical model; the parameter layer 
+
+is asymptotically valid via the delta method; the structural layer is an approximation 
+
+dependent on both the amortization gap and the training temperature. 3
+
+6.  Empirical : Near -optimal performance on NLTCS (93% gap closure to LearnSPN), 
+
+33 x sample efficiency gain, and preliminary scalability results on Plants (69 
+
+variables). 
+
+# 2. Background 
+
+## 2.1 Probabilistic Circuits 
+
+A probabilistic circuit  𝒞  over variables  𝐗 = (𝑋 1, … , 𝑋 𝑑 ) is a rooted directed acyclic graph 
+
+with three node types: 
+
+• Leaf nodes compute univariate distributions  𝑝 ℓ(𝑋 𝑠 (ℓ)) over a single variable  𝑋 𝑠 (ℓ).
+
+• Product nodes  𝑛  with children  {𝑐 1, … , 𝑐 𝑘 } compute  𝑝 𝑛 (𝐱 ) = ∏ 𝑝 𝑐 𝑗  
+
+> 𝑘
+> 𝑗 =1
+
+(𝐱 𝑆 𝑐 𝑗 ), where 
+
+𝑆 𝑐 𝑗 ⊆ 𝐗  is the scope of child  𝑐 𝑗 .
+
+• Sum nodes  𝑛  with children  {𝑐 1, … , 𝑐 𝑘 } and weights  𝛉 𝑛 ∈ Δ𝑘 −1 compute  𝑝 𝑛 (𝐱 ) =
+
+∑ 𝜃 𝑛 ,𝑗  
+
+> 𝑘
+> 𝑗 =1
+
+𝑝 𝑐 𝑗 (𝐱 ).
+
+Decomposability : For every product node  𝑛  with children  𝑐 1, … , 𝑐 𝑘 , the scopes are pairwise 
+
+disjoint:  𝑆 𝑐 𝑖 ∩ 𝑆 𝑐 𝑗 = ∅ for  𝑖 ≠ 𝑗 .
+
+Smoothness : For every sum node  𝑛  with children  𝑐 1, … , 𝑐 𝑘 , all children have the same 
+
+scope:  𝑆 𝑐 1 = ⋯ = 𝑆 𝑐 𝑘  .
+
+Under these two properties, the circuit output  𝑝 𝒞 (𝐱 ) is computable in  𝑂 (|𝒞 |) time, where 
+
+|𝒞 | denotes the number of edges in the circuit. Marginal inference for any subset of 
+
+variables also runs in  𝑂 (|𝒞 |).
+
+A foundational observation [Darwiche 2003; Broadrick et al. 2024] is that  𝑝 𝒞 (𝐱 ), viewed as 
+
+a function of the sum -weight parameters  𝜽 , is a multilinear polynomial — each  𝜃 𝑛 ,𝑗 
+
+appears at most once in any monomial. This implies that partial derivatives  ∂𝑝 𝒞 (𝐱 )/ ∂𝜃 𝑛 ,𝑗 
+
+are computable exactly in  𝑂 (|𝒞 |) via a single forward -backward pass, and the Fisher 
+
+information matrix is block -diagonal with blocks indexed by sum nodes. 
+
+## 2.2 Structure Learning Baselines 
+
+LearnSPN [Gens & Domingos 2013] greedily partitions data by independence tests (G -test 
+
+or  𝜒 2) and recursively builds an SPN top -down. It is the standard benchmark for tractable 
+
+PC structure learning on density estimation benchmarks. 
+
+Strudel [Dang, Vergari & Van den Broeck 2020] learns structured -decomposable circuits by 
+
+sharing a single computational graph across mixture components for efficient ensemble 
+
+learning. It achieves strong results but is specific to the structured decomposability circuit 
+
+class. 4
+
+Both are one -shot, non -amortized procedures: given a dataset  𝒟 , they produce a single 
+
+circuit with no ability to express structural uncertainty. 
+
+## 2.3 RL as Inference 
+
+The connection between entropy -regularized RL and probabilistic inference has been 
+
+established in the control theory literature [Levine 2018; Rawlik et al. 2012; Ziebart et 
+
+al. 2008]. We adapt this framework to the discrete, combinatorial setting of PC structure 
+
+generation, where actions are token selections and the reward is data log -likelihood. 
+
+## 2.4 SymFormer and SymPlex 
+
+SymPlex [Park et al. 2026] demonstrated that a structure -aware Transformer with tree -
+
+relative attention and grammar -constrained generation can effectively search symbolic 
+
+spaces (PDEs) via curriculum RL. A universality theorem establishes that SymFormer can 
+
+represent any grammar -compatible generation policy over bounded -depth trees given 
+
+sufficient capacity. We adapt this architecture directly to the PC domain. 
+
+# 3. The SymCircuit Framework 
+
+## 3.1 Problem Formulation 
+
+Let  𝒢  be a context -free grammar over PC structures that enforces decomposability and 
+
+smoothness. Concretely,  𝒢  generates labeled ordered trees via productions of the form: 
+
+Scope (𝑆 ) → Sum 𝑘 (Scope (𝑆 )𝑘 ) | Prod (𝑆 1, … , 𝑆 𝑚 ) | Leaf (𝑣 )
+
+with the constraint that  ⨆𝑖 𝑆 𝑖 = 𝑆  for product rules and  𝑆 1 = ⋯ = 𝑆 𝑘 = 𝑆  for sum rules. 
+
+Every sentence generated by  𝒢  is a valid PC by construction. 
+
+We represent structures as sequences of tokens via depth -first (pre -order) traversal. The 
+
+token vocabulary consists of sum -arity tokens  {Sum 2, Sum 3}, fixed -arity product tokens 
+
+{Factorize 𝑘 : 𝑘 ∈ [2, 𝑑 ]}, and leaf tokens  {Leaf (𝑣 ): 𝑣 ∈ [𝑑 ]}. Fixed -arity tokens (rather than 
+
+dynamic -arity tokens) are essential for unambiguous parsing: the effective arity of 
+
+Factorize 𝑘  is baked into its type, eliminating scope -assignment ambiguities that arise with 
+
+a single dynamic -arity token (a lesson learned through implementation). 
+
+The structure learning problem is as follows : given i.i.d. training data  𝒟 = {𝐱 (1), … , 𝐱 (𝑁 )},
+
+find a policy  𝜋 𝜓  over  𝒢 -generated structures that maximizes expected data log -likelihood. 5
+
+## 3.2 SymFormer Architecture 
+
+SymFormer is an autoregressive Transformer  𝜋 𝜓 : 𝒱 ∗ → Δ|𝒱 | that generates token 
+
+sequences representing PC structures. Three design choices distinguish it from a standard 
+
+language model: 
+
+Tree -relative self -attention : Standard positional encodings (absolute or relative) encode 
+
+sequence position but not structural relationships. SymFormer augments the attention 
+
+bias term with a learned scalar offset  𝑏 𝑟 ,ℎ 
+
+> (tree )
+
+for each relation type  𝑟 ∈
+
+{parent, child, sibling, ancestor, other } and attention head  ℎ:
+
+𝐴 𝑖𝑗  
+
+> (ℎ)
+
+= (𝐪 𝑖 
+
+> (ℎ)
+
+)⊤𝐤 𝑗 
+
+> (ℎ)
+
+√𝑑 𝑘 
+
++ 𝑏 𝑟 (𝑖 ,𝑗 ),ℎ
+
+> (tree )
+
+where  𝑟 (𝑖 , 𝑗 ) denotes the tree relation between tokens at positions  𝑖  and  𝑗  in the partial 
+
+circuit. This is a scalar -per -relation -per -head rather than vector -per -relation design, 
+
+reducing memory from  𝑂 (|𝒱 | ⋅ 𝑇 2 ⋅ 𝑑 𝑘 ) to  𝑂 (𝐻 ⋅ |ℛ|) — a crucial efficiency gain when 
+
+sequences reach 200+ tokens. 
+
+Dynamic grammar masking : At each generation step, the grammar state  𝜎 𝑡  tracks the 
+
+current open scope and partial parse tree. The set of valid next tokens  𝒱 (𝜎 𝑡 ) ⊆ 𝒱  is 
+
+computed in  𝑂 (|𝒱 |). Logits for invalid tokens are set to  −∞ before softmax, enforcing 
+
+𝜋 𝜓 (𝑎 ∣ 𝑠 𝑡 ) = 0 for all  𝑎 ∉ 𝒱 (𝜎 𝑡 ). This guarantees that every sampled structure is a valid PC. 
+
+Traversal -aware positional encoding : A sinusoidal encoding of depth -in -tree (not 
+
+sequence position) is added to token embeddings, helping the model distinguish 
+
+structurally similar but contextually distinct nodes at different depths. 
+
+Theorem 4.1 of Park et al. (2026) establishes that SymFormer can realize any grammar -
+
+compatible generation policy over bounded -depth trees with sufficient parameters. The 
+
+implication for our setting is that the architecture is not a representational bottleneck: if a 
+
+good structure -generation policy exists within the grammar, SymFormer can approximate 
+
+it. 
+
+## 3.3 Entropy -Regularized RL as Bayesian Structure Inference 
+
+We train SymFormer by maximizing the entropy -regularized expected reward: 
+
+𝐽 (𝜓 ) = 𝔼 𝒮 ∼𝜋 𝜓 [1
+
+𝑁 ∑ log 
+
+> 𝑁
+> 𝑖 =1
+
+𝑝 𝒮 ,𝛉 ̂(𝒮 )(𝐱 (𝑖 ))] − 𝛼 ⋅ 𝐷 KL (𝜋 𝜓 ∥ 𝑃 0)
+
+where  𝛉 ̂ (𝒮 ) are parameters optimized for structure  𝒮  (via Anemone, Section 3.4),  𝑃 0 is a 
+
+prior policy over structures, and  𝛼 > 0 is a temperature parameter. 6
+
+Proposition 1 (Optimal policy as tempered posterior; instantiation of Levine 2018). Let 
+
+𝑅 (𝒮 ) ≜ 1 
+
+> 𝑁
+
+∑ log 𝑁  
+
+> 𝑖 =1
+
+𝑝 𝒮 ,𝛉 ̂(𝒮 )(𝐱 (𝑖 )) denote the empirical average log -likelihood. The unique 
+
+maximizer of  𝐽 (𝜓 ) over all distributions on  𝒢  is: 
+
+𝜋 ∗(𝒮 ) = 𝑃 0(𝒮 ) ⋅ exp (𝑅 (𝒮 )/𝛼 )
+
+𝑍 (𝛼 ) , 𝑍 (𝛼 ) = ∑ 𝑃 0
+
+> 𝒮 ∈𝒢
+
+(𝒮 ) ⋅ exp (𝑅 (𝒮 )/𝛼 ).
+
+Since  𝑅 (𝒮 ) = 1 
+
+> 𝑁
+
+log 𝑝 (𝒟 ∣ 𝒮 ), this can be written as: 
+
+𝜋 ∗(𝒮 ) ∝ 𝑃 0(𝒮 ) ⋅ 𝑝 (𝒟 ∣ 𝒮 )1/(𝑁𝛼 ),
+
+a tempered (annealed) Bayesian posterior with temperature  𝑁𝛼 . At  𝛼 = 1/𝑁 , the exponent 
+
+equals  1 and  𝜋 ∗ recovers the exact Bayesian posterior: 
+
+𝜋 ∗(𝒮 )|𝛼 =1/𝑁 = 𝑃 (𝒮 ∣ 𝒟 ) = 𝑃 0(𝒮 ) ⋅ 𝑝 (𝒟 ∣ 𝒮 )
+
+∑ 𝑃 0𝒮 ′ (𝒮 ′) ⋅ 𝑝 (𝒟 ∣ 𝒮 ′).
+
+For general  𝛼 , the optimal policy interpolates between the prior  𝑃 0 (as  𝛼 → ∞) and a 
+
+degenerate point mass on the MAP structure (as  𝛼 → 0). 
+
+Proof. The objective  𝐽 (𝜓 ) is: 
+
+𝐽 (𝜓 ) = ∑ 𝜋 𝜓 
+
+> 𝒮
+
+(𝒮 )𝑅 (𝒮 ) − 𝛼 ∑ 𝜋 𝜓 
+
+> 𝒮
+
+(𝒮 )log 𝜋 𝜓 (𝒮 )
+
+𝑃 0(𝒮 ) .
+
+Introducing Lagrange multiplier  𝜆  for the constraint ∑ 𝜋 𝜓 𝒮 (𝒮 ) = 1 and differentiating with 
+
+respect to  𝜋 𝜓 (𝒮 ):
+
+𝑅 (𝒮 ) − 𝛼 (log 𝜋 𝜓 (𝒮 )
+
+𝑃 0(𝒮 ) + 1) + 𝜆 = 0 ⟹ log 𝜋 𝜓  
+
+> ∗
+
+(𝒮 ) = 𝑅 (𝒮 )
+
+𝛼 + log 𝑃 0(𝒮 ) + 𝜆 − 𝛼 
+
+𝛼 .
+
+Normalizing over  𝒮  gives the stated form. The second variation is  −𝛼 /𝜋 𝜓 (𝒮 ) < 0,
+
+confirming a global maximum. Uniqueness follows from strict concavity of  −𝐷 KL (𝜋 𝜓 ∥ 𝑃 0)
+
+over the probability simplex. Substituting  𝑅 (𝒮 ) = 1 
+
+> 𝑁
+
+log 𝑝 (𝒟 |𝒮 ) gives the tempered posterior 
+
+form; setting  𝛼 = 1/𝑁  reduces the exponent to  1, recovering the exact Bayesian posterior 
+
+by Bayes’ theorem.  ▫
+
+Remark 1 (Amortization gap and temperature). In practice,  𝜋 𝜓  is a parameterized model 
+
+(SymFormer), not a free distribution over all of  𝒢 . The trained policy therefore approximates 
+
+𝜋 ∗ within the model’s capacity; the gap  𝐷 KL (𝜋 ∗ ∥ 𝜋 𝜓 ) is the amortization gap , analogous to 
+
+that in amortized variational inference. The gradient  ∇𝜓 𝐽 (𝜓 ) pushes  𝜋 𝜓  toward  𝜋 ∗ locally, 
+
+but convergence to the global maximizer is not guaranteed. Additionally, the experimental 
+
+𝛼 = 0.01  with  𝑁 = 16 ,181  gives  1/(𝑁𝛼 ) ≈ 0.006 , placing the trained policy in a regime 
+
+considerably warmer than the true posterior ( 1/(𝑁𝛼 ) = 1). The policy is thus a heavily 
+
+smoothed approximation to the posterior . I t spreads probability more broadly across 7
+
+structures than Bayes’ rule prescribes , which is appropriate for the exploration -
+
+exploitation tradeoff in RL training but means the structural variance estimator  𝑉 struct 
+
+underestimates the true posterior’s concentration. 
+
+Remark 2 (Prior and pretraining). We take  𝑃 0 to be the imitation -pretrained policy, obtained 
+
+by supervised learning on circuits generated by LearnSPN. The imitation loss (cross -
+
+entropy on LearnSPN token sequences) stabilizes early RL training and encodes a data -
+
+informed structural prior, interpreting the pretraining phase as prior construction. 
+
+We estimate s tructural uncertainty via model averaging. Given a test observation  𝐱 ∗ and  𝐾 
+
+independently sampled structures  𝒮 1, … , 𝒮 𝐾 ∼ 𝜋 𝜓  with fitted parameters  𝛉 ̂ 𝑘 :
+
+𝑝 ̂ (𝐱 ∗) = 1
+
+𝐾 ∑ 𝑝 𝒮 𝑘 ,𝛉 ̂𝑘 
+
+> 𝐾
+> 𝑘 =1
+
+(𝐱 ∗), 𝑉 struct (𝐱 ∗) = 1
+
+𝐾 − 1 ∑(𝑝 𝒮 𝑘 ,𝛉 ̂𝑘 (𝐱 ∗) − 𝑝 ̂ (𝐱 ∗))2
+
+> 𝐾
+> 𝑘 =1
+
+.
+
+The factor  1/(𝐾 − 1) gives the unbiased sample variance estimator (Bessel’s correction). 
+
+This estimator is consistent for the true inter -structural variance as  𝐾 → ∞.
+
+## 3.4 Option -Level REINFORCE 
+
+REINFORCE assigns a scalar reward  𝑅 (𝒮 ) to an entire token sequence of length  𝑇 
+
+(typically 50 –200 tokens for our circuits). The gradient estimator is: 
+
+𝑔 ̂tok = 1
+
+𝑇 ∑(
+
+> 𝑇
+> 𝑡 =1
+
+𝑅 (𝒮 ) − 𝑏 )∇𝜓 log 𝜋 𝜓 (𝑎 𝑡 ∣ 𝑠 𝑡 )
+
+The signal -to -noise ratio (SNR) of this estimator scales as  𝑂 (1/√𝑇 ) in the number of tokens 
+
+(by a standard argument: each term contributes independent noise proportional to the 
+
+variance of  (𝑅 − 𝑏 )∇log 𝜋 , while the signal averages over only  𝐷  meaningful structural 
+
+choices embedded among  𝑇  tokens). 
+
+The root cause is that most tokens are deterministic given the grammar state : leaf tokens 
+
+are fully determined by scope -coverage constraints, and product -node tokens are forced 
+
+once sum -node children are decided. Only sum -node arity decisions (tokens of type  Sum 𝑘 )
+
+constitute genuine policy choices. Let  𝐷 ≤ 𝑇  denote the number of sum -node selections in 
+
+a generated circuit. 
+
+Option -level estimator : Let  ℐ(𝒮 ) = {𝑡 : 𝑎 𝑡 ∈ {Sum 2, Sum 3}} be the index set of structural 
+
+decisions in the generated sequence  𝒮 , with  |ℐ(𝒮 )| = 𝐷 (𝒮 ). We define the option -level 
+
+REINFORCE gradient estimator as: 
+
+𝑔 ̂opt = 1
+
+𝐷 (𝒮 ) ∑ (
+
+> 𝑡 ∈ℐ(𝒮 )
+
+𝑅 (𝒮 ) − 𝑏 )∇𝜓 log 𝜋 𝜓 (𝑎 𝑡 ∣ 𝑠 𝑡 )8
+
+Proposition 2 (SNR improvement). Assume tokens are generated i.i.d. (a simplification), 
+
+that  Var [(𝑅 − 𝑏 )∇𝜓 log 𝜋 𝜓 (𝑎 𝑡 ∣ 𝑠 𝑡 )] = 𝜎 2 is constant across all positions  𝑡 , and that  𝔼 [(𝑅 −
+
+𝑏 )∇𝜓 log 𝜋 𝜓 (𝑎 𝑡 ∣ 𝑠 𝑡 )] = 0 at non -structural positions (since  𝜋 𝜓  is near -deterministic there). 
+
+Then: 
+
+SNR (𝑔 ̂opt )
+
+SNR (𝑔 ̂tok ) = √𝑇 
+
+𝐷 .
+
+The two estimators are proportional in expectation:  𝔼 [𝑔 ̂opt ] = 𝑇  
+
+> 𝐷
+
+𝔼 [𝑔 ̂tok ]. Both estimate the 
+
+same gradient direction; their scale difference by  𝑇 /𝐷  is absorbed into the effective 
+
+learning rate. 
+
+Proof. Let  𝜇 𝑡 = 𝔼 [(𝑅 − 𝑏 )∇𝜓 log 𝜋 𝜓 (𝑎 𝑡 ∣ 𝑠 𝑡 )]. By assumption  𝜇 𝑡 = 𝜇 ≠ 0 for  𝑡 ∈ ℐ and  𝜇 𝑡 = 0
+
+otherwise. Under i.i.d. variance  𝜎 2:
+
+𝔼 [𝑔 ̂tok ] = 1
+
+𝑇 ∑ 𝜇 𝑡 
+
+> 𝑇
+> 𝑡 =1
+
+= 𝐷𝜇 
+
+𝑇 , Var [𝑔 ̂tok ] = 𝑇 𝜎 2
+
+𝑇 2 = 𝜎 2
+
+𝑇 .
+
+𝔼 [𝑔 ̂opt ] = 1
+
+𝐷 ∑ 𝜇 𝑡 
+
+> 𝑡 ∈ℐ
+
+= 𝜇 , Var [𝑔 ̂opt ] = 𝐷 𝜎 2
+
+𝐷 2 = 𝜎 2
+
+𝐷 .
+
+Therefore  𝔼 [𝑔 ̂opt ] = (𝑇 /𝐷 ) 𝔼 [𝑔 ̂tok ], and: 
+
+SNR (𝑔 ̂opt )
+
+SNR (𝑔 ̂tok ) = 𝜇 /(𝜎 /√𝐷 )
+
+(𝐷𝜇 /𝑇 )/(𝜎 /√𝑇 ) = 𝜇 √𝐷 /𝜎 
+
+𝐷𝜇 /(𝜎 √𝑇 ) = √𝑇 
+
+𝐷 . ▫
+
+Empirically, NLTCS circuits have  𝑇 ≈ 50 –100  and  𝐷 ≈ 3–6, giving √𝑇 /𝐷 ≈ 3–5 in gradient 
+
+SNR. The 33× gain in sample efficiency (circuits to reach a target performance) compounds 
+
+this with reduced mode -collapse behavior observed in practice. 
+
+## 3.5 Hybrid Adam/Anemone Parameter Optimization 
+
+Given a fixed structure  𝒮 , we optimize parameters  𝛉 = (𝛉 sum , 𝛉 leaf ) using a hybrid scheme: 
+
+Sum weights via Anemone EM : Anemone [Liu & Van den Broeck 2025] is a mini -batch EM 
+
+algorithm for PC parameters. Each step computes top -down flow probabilities  𝑓 𝑛 (𝐱 ) (the 
+
+probability that node  𝑛  is activated on input  𝐱  under the current model), then updates sum 
+
+weights via flow -weighted sufficient statistics: 
+
+𝜃 𝑛 ,𝑐  
+
+> new
+
+∝ ∑ 𝑓 𝑛 
+
+> 𝐱 ∈ℬ
+
+(𝐱 ) ⋅ 𝜃 𝑛 ,𝑐 ⋅ 𝑝 𝑐 (𝐱 )
+
+𝑝 𝑛 (𝐱 )9
+
+This is an implicit adaptive learning rate that scales each component’s update by its 
+
+contribution to current batch likelihood. Anemone converges 8× faster than Adam on PC 
+
+parameters across benchmarks, exploiting the multilinear polynomial structure of  𝑝 𝒞 (𝐱 )
+
+that gradient -based methods cannot leverage. 
+
+Leaf parameters via Adam : Leaf parameters (Bernoulli logits for binary data) do not benefit 
+
+from the flow -weighted EM update — the EM update for leaves degenerates to batch 
+
+empirical means under uniform sum weights, destroying MLE initialization. We observed 
+
+empirically that pure Anemone EM for leaves causes log -likelihood degradation from −5.37 
+
+to −25.30 nats in early training. Adam with its momentum and adaptive learning rate 
+
+handles the curved leaf landscape correctly. 
+
+Let  ℓ(𝛉 ) = 1 
+
+> |ℬ|
+
+∑ log 𝐱 ∈ℬ 𝑝 𝒞 (𝐱 ). For exponential family mixture models, full -batch EM is 
+
+equivalent to a natural gradient step in the Fisher information metric [Amari 1998]. For 
+
+tree -structured PCs, the block -diagonal Fisher (Proposition 3) means this natural gradient 
+
+decomposes independently per sum node — exactly the structure Anemone exploits. In 
+
+the mini -batch setting Anemone approximates this natural gradient, with the KL 
+
+regularization in its objective controlling the distribution shift between updates. For leaf 
+
+parameters, the Fisher block structure mixes sum -weight and leaf contributions in a way 
+
+that is ill -conditioned under random sum -weight initialization, making natural gradient 
+
+steps unreliable; Adam’s diagonal preconditioning is a more robust choice, as confirmed 
+
+by the empirical degradation observed with pure EM on leaves. 
+
+# 4. Uncertainty Quantification Framework 
+
+We decompose predictive uncertainty into three additive layers, each with distinct formal 
+
+guarantees. 
+
+## 4.1 Structural Uncertainty 
+
+As derived in Section 3.3, structural uncertainty is estimated by Monte Carlo model 
+
+averaging with the unbiased sample variance: 
+
+𝑉 struct (𝐱 ∗) = 1
+
+𝐾 − 1 ∑(𝑝 𝒮 𝑘 (𝐱 ∗) − 𝑝 ̂ (𝐱 ∗))2
+
+> 𝐾
+> 𝑘 =1
+
+This term is nonzero if and only if different structural hypotheses assign different 
+
+probabilities to  𝐱 ∗, detecting genuine epistemic uncertainty about the data -generating 
+
+decomposition. It is a consistent estimator of the inter -structural variance under the 
+
+trained policy  𝜋 𝜓 ; how closely this reflects the true Bayesian posterior variance depends 
+
+on the amortization gap and the temperature  𝛼  (see Remark 1). 10 
+
+## 4.2 Parameter Uncertainty 
+
+Block -diagonal Fisher informatio n: By decomposability, different sum nodes’ weights 
+
+govern independent (in the probabilistic sense) aspects of the circuit’s computation. 
+
+Formally: 
+
+Proposition 3 (Block -diagonal Fisher; known result, included for completeness). For a 
+
+smooth and decomposable tree -structured PC  𝒞  (every internal node has exactly one 
+
+parent) with sum nodes  {𝑛 1, … , 𝑛 𝑀 }, the Fisher information matrix  ℐ(𝛉 sum ) is block -
+
+diagonal: 
+
+ℐ(𝛉 sum ) = ⨁𝑚 =1 
+
+> 𝑀
+
+ℐ𝑚 (𝛉 𝑛 𝑚 )
+
+where each block  ℐ𝑚  is a  (𝑘 𝑚 − 1) × (𝑘 𝑚 − 1) positive -definite matrix for a sum node with 
+
+𝑘 𝑚  children (the simplex constraint removes one degree of freedom). This follows from the 
+
+multilinear polynomial form of PCs [Darwiche 2003; Broadrick et al. 2024], which implies 
+
+that each sum weight appears in a disjoint subset of monomials. We include the proof for 
+
+completeness. 
+
+Proof. For distinct sum nodes  𝑛 𝑎 ≠ 𝑛 𝑏 , the cross -Fisher entry is  ℐ𝑎𝑏 = 𝔼 𝐱 [∂𝜃 𝑛 𝑎 log 𝑝 𝒞 (𝐱 ) ⋅
+
+∂𝜃 𝑛 𝑏 log 𝑝 𝒞 (𝐱 )]. By the chain rule,  ∂𝜃 𝑛 𝑎 log 𝑝 𝒞 = 𝑝 𝒞  
+
+> −1
+
+⋅ ∂𝜃 𝑛 𝑎 𝑝 𝒞  . The multilinear polynomial form 
+
+(Darwiche 2003) gives  ∂𝜃 𝑛 𝑎 𝑝 𝒞 (𝐱 ) = TD (𝑛 𝑎 ; 𝐱 ) ⋅ 𝑝 𝑐 𝑎 (𝐱 ), where  𝑐 𝑎  is the child indexed by  𝜃 𝑛 𝑎  .
+
+In a tree -structured PC,  𝑛 𝑎  and  𝑛 𝑏  lie on disjoint root -to -leaf paths (since there are no 
+
+shared subgraphs). Therefore  TD (𝑛 𝑎 ; 𝐱 ) ⋅ TD (𝑛 𝑏 ; 𝐱 ) factors into a product of probabilities 
+
+along non -overlapping paths, and the expectation  𝔼 𝐱 [TD (𝑛 𝑎 ) ⋅ 𝑝 𝑐 𝑎 ⋅ TD (𝑛 𝑏 ) ⋅ 𝑝 𝑐 𝑏 ]/𝔼 𝐱 [𝑝 𝒞 
+
+> 2
+
+]
+
+factors as a product of independent marginals over the disjoint scopes, giving  ℐ𝑎𝑏 = 0. ▫
+
+Delta -method varianc e: Given the block -diagonal Fisher  ℐ(𝛉 sum ) estimated from training 
+
+data and the multilinear polynomial gradient  ∇𝛉 sum 𝑝 𝒞 (𝐱 ∗), the delta -method approximation 
+
+to parameter uncertainty is: 
+
+𝑉 param (𝐱 ∗) ≈ 1
+
+𝑁 (∇𝛉 sum 𝑝 𝒞 (𝐱 ∗))⊤ℐ(𝛉 sum )−1(∇𝛉 sum 𝑝 𝒞 (𝐱 ∗)).
+
+The  1/𝑁  factor arises from the asymptotic MLE covariance:  Var [𝛉 ̂ ] ≈ 1 
+
+> 𝑁
+
+ℐ(𝛉 )−1 under 
+
+standard regularity conditions, so that  𝑉 param → 0 as  𝑁 → ∞ at rate  1/𝑁 .
+
+Using the identity  ∂𝑝 𝒞 (𝐱 )/ ∂𝜃 𝑛 ,𝑐 = TD (𝑛 ; 𝐱 ) ⋅ 𝑝 𝑐 (𝐱 ) [Darwiche 2003, Theorem 1] (where 
+
+TD (𝑛 ; 𝐱 ) is the top -down probability of node  𝑛  on input  𝐱 ), both the gradient and the Fisher 
+
+blocks are computable from Anemone’s flow statistics at  𝑂 (|𝒞 |) additional cost. With  𝑁 =
+
+16 ,181  training samples and  |𝛉 sum | ≈ 40  free parameters, the  1/𝑁  prefactor renders 
+
+𝑉 param  negligible — a consistency check on the framework. 
+
+The block Fisher matrices can be ill -conditioned (empirically, condition numbers up to 
+
+1000 in sparse circuits). We apply an eigenvalue -clamped pseudo -inverse, regularizing 11 
+
+only directions with eigenvalues below a threshold  𝜖 min  while preserving well -conditioned 
+
+directions exactly. 
+
+## 4.3 Leaf Uncertainty and Variance Propagation 
+
+Dirichlet –Categorical leaves : For binary data ( 𝐱 ∈ {0,1}𝑑 ), we model each leaf as Dirichlet –
+
+Categorical with concentration parameters  𝛂 ℓ = (𝛼 ℓ,0, 𝛼 ℓ,1). The predictive mean is  𝜇 ℓ =
+
+𝛼 ℓ,1/(𝛼 ℓ,0 + 𝛼 ℓ,1) and the predictive variance is: 
+
+𝑉 ℓ = 𝛼 ℓ,0𝛼 ℓ,1
+
+(𝛼 ℓ,0 + 𝛼 ℓ,1)2(𝛼 ℓ,0 + 𝛼 ℓ,1 + 1).
+
+Anemone compatibility : The conjugate update for Dirichlet concentration from a batch  ℬ
+
+with flow weights  𝑓 ℓ(𝐱 ) is: 
+
+𝛼 ℓ,𝑣  
+
+> new
+
+= 𝛼 ℓ,𝑣  
+
+> prior
+
++ 𝜂 ⋅ 𝑁 ̂ℓ,𝑣 , 𝑁 ̂ℓ,𝑣 = ∑ 𝑓 ℓ
+
+> 𝐱 ∈ℬ
+
+(𝐱 ) ⋅ 𝟏 [𝑥 𝑠 (ℓ) = 𝑣 ]
+
+where  𝑁 ̂ℓ,𝑣  is the flow -weighted count of label  𝑣  at leaf  ℓ. This is exactly the sufficient 
+
+statistic Anemone already computes, making the extension parameter -free. Importantly, 
+
+𝑁 ̂ℓ,𝑣  is bounded by batch size (since  𝑓 ℓ(𝐱 ) ≤ 1), preventing the evidence -inflation pathology 
+
+that afflicts gradient -based evidential learning. 
+
+Variance propagation through the circuit. 
+
+Product nodes (exact). Decomposability ensures that child circuits  𝑝 𝑐 𝑗 (𝐱 𝑆 𝑐 𝑗 ) are evaluated 
+
+on pairwise disjoint variable sets. In a tree -structured PC, the leaf parameters under each 
+
+child sub -tree are disjoint objects with independent Dirichlet concentrations. Therefore 
+
+𝑝 𝑐 𝑗 (𝐱 𝑆 𝑐 𝑗 ) and  𝑝 𝑐 𝑗 ′ (𝐱 𝑆 𝑐 𝑗 ′ ) are independent random variables (for  𝑗 ≠ 𝑗 ′). Taking logarithms 
+
+and applying variance additivity for independent variables: 
+
+Var [log 𝑝 𝑛 (𝐱 )] = ∑ Var 
+
+> 𝑘
+> 𝑗 =1
+
+[log 𝑝 𝑐 𝑗 (𝐱 𝑆 𝑐 𝑗 )]
+
+This is exact, not an approximation — it follows from the variance additivity for sums of 
+
+independent random variables. No linearization or delta method is applied at product 
+
+nodes. 
+
+Sum nodes. A sum node computes  𝑝 𝑛 (𝐱 ) = ∑ 𝜃 𝑛 ,𝑗  
+
+> 𝑘
+> 𝑗 =1
+
+𝑝 𝑐 𝑗 (𝐱 ) with fixed deterministic 
+
+weights  𝜽 𝑛 . In a tree -structured PC (which LearnSPN produces and which our grammar 
+
+generates), the children of each sum node have their own disjoint leaf nodes, so the 
+
+Dirichlet leaf uncertainties of different children are independent. Applying the variance 
+
+formula for a weighted sum of independent random variables: 12 
+
+Var [𝑝 𝑛 (𝐱 )] = ∑ 𝜃 𝑛 ,𝑗 
+
+> 2
+> 𝑘
+> 𝑗 =1
+
+𝑉 𝑐 𝑗 (𝐱 )
+
+where  𝑉 𝑐 𝑗 (𝐱 ) = Var [𝑝 𝑐 𝑗 (𝐱 )]. This is exact under the independence assumption. This 
+
+formula is computed in the same bottom -up pass as the forward evaluation. 
+
+Total uncertainty decomposition : For a fixed structure  𝒮 𝑘 , leaf uncertainty  𝑉 leaf ,𝑘 (𝐱 ∗) is 
+
+obtained via upward variance propagation from leaves. Aggregating over  𝐾  structural 
+
+samples: 
+
+𝑉 total (𝐱 ∗) = 𝑉 struct (𝐱 ∗) + 1
+
+𝐾 ∑ 𝑉 param ,𝑘 
+
+> 𝐾
+> 𝑘 =1
+
+(𝐱 ∗) + 1
+
+𝐾 ∑ 𝑉 leaf ,𝑘 
+
+> 𝐾
+> 𝑘 =1
+
+(𝐱 ∗)
+
+where  𝑉 param ,𝑘  is the delta -method parameter variance for structure  𝒮 𝑘 . The additive form 
+
+follows from the law of total variance applied hierarchically: the between -structure term 
+
+(𝑉 struct ) and the average within -structure term are orthogonal by construction, and within 
+
+each structure, parameter and leaf uncertainty are treated as additive under the 
+
+approximation that their cross -covariance is small relative to the dominant structural term. 
+
+# 5. Experiments 
+
+## 5.1 Setup 
+
+Datasets : We evaluate on two DEBD binary density estimation benchmarks: 
+
+- NLTCS (16 variables, 16,181 train / 2,157 test): a retirement survey dataset used as the 
+
+primary development testbed. 
+
+- Plants (69 variables, 17,412 train / 3,482 test): a plant co -occurrence dataset used for 
+
+preliminary scalability evaluation. 
+
+Baselines : The primary structural baseline is LearnSPN [Gens & Domingos 2013] with G -
+
+test independence scoring and default hyperparameters, evaluated using SPFlow 1.0. We 
+
+report test set average log -likelihood (nats, higher is better). LearnSPN achieves −6.093 on 
+
+NLTCS and approximately −12.98 on Plants. 
+
+Training protoco l: Phase 1 (supervised pretraining): SymFormer is trained by maximum 
+
+likelihood on token sequences generated by running LearnSPN on 60 training circuits, for 
+
+50 epochs. Phase 2 (RL fine -tuning): option -level REINFORCE with the pretrained policy as 
+
+𝑃 0, hybrid Adam/Anemone parameter optimization (30 Anemone steps per circuit for RL 
+
+rewards), epsilon -greedy exploration ( 𝜖 = 0.15  annealed to  0.05 ), and entropy 
+
+regularization with coefficient  𝛼 = 0.01 . A replay buffer of 200 circuits maintains diversity. 13 
+
+## 5.2 NLTCS Results 
+
+Table 1 summarizes performance across training phases. The supervised pretraining 
+
+baseline establishes the starting point for RL fine -tuning; option -level RL (Phase 2e) 
+
+dramatically outperforms token -level RL (Phase 2c/d) in sample efficiency. 
+
+Phase  Method  Test LL (nats)  Circuits Used  Gap to 
+
+LearnSPN 
+
+Pretraining  Supervised 
+
+(imitation)  −6.229  — 0.136 
+
+Phase 2b 
+
+Token -level 
+
+REINFORCE 
+
+(baseline) 
+
+−6.232  4,000+  0.139 
+
+Phase 2c 
+
+Token -level 
+
+REINFORCE + 
+
+vocab expansion 
+
+−6.159  4,000  0.066 
+
+Phase 2e  Option -level 
+
+REINFORCE  −6.105  120 (30ep) → 
+
+converged  0.011 
+
+LearnSPN  Greedy heuristic  −6.093  — 0
+
+Convergence and sample efficienc y: Option -level REINFORCE reaches −6.139 nats in 30 
+
+epochs (120 circuit evaluations), matching Phase 2c’s best performance (−6.159 nats after 
+
+500 epochs, 4,000 evaluations). The full Run D converges to −6.105 nats. This 33× 
+
+reduction in circuits -to -performance is consistent with Proposition 2’s SNR analysis, given 
+
+empirically measured  𝑇 /𝐷 ≈ 15 –30  for NLTCS circuits. 
+
+Value head ablation : Phase 2e added an actor -critic value head operating at the option 
+
+level to reduce gradient variance further. On NLTCS, the value head’s explained variance 
+
+remained near zero throughout training (EV ≈ 0), providing no benefit. We attribute this to 
+
+the small number of structural decisions per circuit ( 𝐷 ≈ 3–6) — insufficient for 
+
+meaningful credit assignment to a learned value function. The value head is a no -op on 
+
+NLTCS but may provide benefit on larger datasets with richer structure ( 𝐷 ≫ 10 ). 14 
+
+## 5.3 Uncertainty Quantification Analysis (NLTCS) 
+
+We evaluated the three -layer UQ decomposition on the NLTCS test set using  𝐾 = 10 
+
+structural samples from the trained policy. Table 2 shows the mean decomposition across 
+
+test points. 
+
+Layer  Mechanism  Mean Variance  Fraction of Total 
+
+Structural  MC model averaging ( 𝐾 = 10 ) 0.324  85.1% 
+
+Parameter  Block -diagonal Fisher + delta method  0.004  1.1% 
+
+Leaf  Dirichlet variance propagation  0.052  13.8% 
+
+Total  0.380  100% 
+
+This decomposition is physically sensible: with  𝑁 = 16 ,181  training samples and  |𝜽 sum | ≈
+
+40  free parameters, the asymptotic Cramér –Rao bound implies negligible parameter 
+
+uncertainty , as confirmed by  𝑉 param  accounting for just 1.1% of total variance. Structural 
+
+uncertainty dominates at 85.1%, indicating that the policy’s structural diversity (different 
+
+decomposition choices across samples) drives most of the predictive uncertainty on this 
+
+dataset. 
+
+Monte Carlo validation of leaf U Q: We validated the analytic variance propagation against 
+
+Monte Carlo estimation (5,000 samples per leaf parameter). The mean relative error across 
+
+test points was 3.8% with correlation 0.997, confirming that the analytic propagation 
+
+formulas are accurate. 
+
+Fisher matrix conditioning : Sum node Fisher blocks exhibited condition numbers ranging 
+
+from 2 to 1,200. Eigenvalue -clamped pseudo -inverse with  𝜖 min = 10 −4 was necessary to 
+
+prevent numerical blow -up; 18% of blocks required regularization. 
+
+## 5.4 Preliminary Scalability: Plants Dataset 
+
+We ran option -level REINFORCE on the Plants dataset (69 variables) for 25 epochs to 
+
+assess scalability. Key differences from NLTCS: 
+
+• Circuit size scales:  𝑇 ≈ 200 –400  tokens vs. 50 –100 on NLTCS. 
+
+• Anemone steps were reduced from 100 to 30 per circuit for RL reward computation 
+
+(sufficient since only relative circuit ranking matters for REINFORCE, not absolute 
+
+convergence). 
+
+• Training time was approximately 6 –12 minutes per epoch due to larger circuit 
+
+evaluation. 
+
+After 25 epochs, the best circuit achieved −15.77 nats, closing 19% of the 3.45 -nat gap 
+
+between the pretraining baseline (−16.43 nats) and LearnSPN (≈−12.98 nats). Training was 
+
+still improving; full convergence results are pending. 15 
+
+These preliminary results demonstrate that the framework scales beyond the 16 -variable 
+
+NLTCS setting, though the larger search space and longer circuits make convergence 
+
+slower. The value head, which provides no benefit on NLTCS, may be beneficial here given 
+
+the larger number of structural decisions per circuit. 
+
+# 6. Discussion 
+
+## 6.1 Connection to Program -Level Marginalization 
+
+Proposition 1 establishes that sampling from the trained policy  𝜋 𝜓  and averaging circuit 
+
+outputs implements (approximate) Bayesian model averaging over probabilistic circuit 
+
+structures. This can be viewed as program -level marginalization , averaging over complete 
+
+probabilistic programs (circuits) rather than over derivation paths within a fixed program 
+
+(as in ProbLog/DeepProbLog). Every circuit in our hypothesis space guarantees 
+
+polynomial -time inference by construction, ensuring that the marginalization is tractable 
+
+regardless of the number of structures sampled. 
+
+In contrast, proof -level marginalization in general logic programming involves summing 
+
+over derivation trees in a #P -hard computation. Our framework avoids this by restricting 
+
+the hypothesis space to tractable theories from the outset. 
+
+## 6.2 Limitations and Failure Modes 
+
+Amortization gap and temperatur e: The trained  𝜋 𝜓  approximates  𝜋 ∗ within the model’s 
+
+capacity. Two separate gaps separate it from the true Bayesian posterior: (1) the 
+
+amortization gap  𝐷 KL (𝜋 ∗ ∥ 𝜋 𝜓 ) from finite model capacity, and (2) the temperature 
+
+mismatch — the experimental  𝛼 = 0.01  with  𝑁 = 16 ,181  gives  1/(𝑁𝛼 ) ≈ 0.006 , meaning 
+
+the trained policy is considerably warmer (flatter) than the true posterior ( 1/(𝑁𝛼 ) = 1). 
+
+Neither gap is quantifiable without access to the intractable partition function  𝑍 (𝛼 ). For 
+
+the purposes of uncertainty quantification,  𝑉 struct  measures the diversity of the trained 
+
+policy, which reflects Bayesian structural uncertainty only approximately. 
+
+Grammar constraints as inductive bias : The grammar vocabulary  {Sum 2, Sum 3, Factorize 𝑘 }
+
+limits expressible structures. LearnSPN can generate arbitrary -arity sum nodes and 
+
+product decompositions; our grammar cannot. The 0.011 -nat residual gap on NLTCS after 
+
+convergence may be a grammar limitation rather than an optimization failure. Expanding 
+
+the vocabulary (e.g.,  Sum 4, Sum 5) is a straightforward extension but increases the action 
+
+space and may require more exploration. 
+
+Single dataset validation : Our full experimental results (UQ decomposition, ablation, 
+
+sample efficiency analysis) are validated on a single dataset (NLTCS). The Plants results 
+
+are preliminary. Rigorous claims about the framework’s generality require evaluation 
+
+across the full DEBD benchmark suite (20 datasets), which we leave as immediate future 
+
+work. 16 
+
+Value head on small circuits : The actor -critic value head ( Phase E) provides no benefit on 
+
+NLTCS because  𝐷 ≈ 3–6 structural decisions is too few for meaningful temporal credit 
+
+assignment. This is an important practical limitation: option -level REINFORCE alone is 
+
+sufficient when circuits are small, but larger datasets with richer structures may require 
+
+the value head for further efficiency gains. 
+
+Leaf uncertainty and log -likelihood : Dirichlet leaf refinement showed marginal log -
+
+likelihood improvement (gap of 0.033 nats relative to Bernoulli leaves), suggesting that leaf 
+
+evidential uncertainty is primarily a calibration feature rather than a likelihood -maximizing 
+
+one. This is expected: the Dirichlet prior reduces point estimates toward 0.5 for low -
+
+evidence leaves, slightly sacrificing MLE performance for better uncertainty representation. 
+
+## 6.3 Future Work 
+
+Immediate priorities include: (1) full DEBD benchmark evaluation across 20 datasets to 
+
+establish statistical significance; (2) vocabulary expansion to assess whether grammar 
+
+limitations explain the residual 0.011 -nat gap on NLTCS; (3) convergence of Plants training 
+
+and evaluation; (4) theoretical characterization of the amortization gap for autoregressive 
+
+policies on context -free grammars. Longer -term directions include extending to 
+
+continuous variable circuits (Normal -Inverse -Gamma leaves), first -order circuits, and 
+
+integration of the SVGP -KAN perception module for the full neuro -symbolic pipeline. 
+
+# 7. Conclusion 
+
+We have presented SymCircuit, a framework for learning probabilistic circuit structures via 
+
+entropy -regularized reinforcement learning. The central theoretical result — that the 
+
+optimal MaxEnt RL policy is a tempered posterior  𝜋 ∗(𝒮 ) ∝ 𝑃 0(𝒮 ) ⋅ 𝑝 (𝒟 |𝒮 )1/(𝑁𝛼 ), recovering 
+
+the exact Bayesian posterior at  𝛼 = 1/𝑁  — provides a principled foundation for 
+
+interpreting the trained policy as an amortized variational approximation to Bayesian 
+
+structure inference. The practical implementation combines SymFormer’s grammar -
+
+constrained generation with option -level REINFORCE (yielding 33× sample efficiency over 
+
+token -level alternatives on NLTCS, consistent with the derived √𝑇 /𝐷  SNR improvement), 
+
+hybrid Adam/Anemone optimization, and a three -layer uncertainty decomposition 
+
+grounded in the multilinear polynomial structure of PC output functions. On NLTCS, 
+
+SymCircuit closes 93% of the gap to the LearnSPN greedy baseline with dramatically fewer 
+
+circuit evaluations. We hope this work encourages further investigation of learned 
+
+generative policies as a principled alternative to greedy search in structured probabilistic 
+
+model families. 17 
+
+# References 
+
+Amari, S. (1998). Natural gradient works efficiently in learning. Neural Computation , 10(2), 
+
+251 –276. 
+
+Broadrick, O., Zhang, H., & Van den Broeck, G. (2024). Polynomial semantics of tractable 
+
+probabilistic circuits. Proceedings of the 40th Conference on Uncertainty in Artificial 
+
+Intelligence (UAI) , PMLR 244:418 –429. 
+
+Choi, Y., Vergari, A., & Van den Broeck, G. (2020). Probabilistic circuits: A unifying 
+
+framework for tractable probabilistic models. UCLA Technical Report .
+
+http://starai.cs.ucla.edu/papers/ProbCirc20.pdf 
+
+Dang, M., Vergari, A., & Van den Broeck, G. (2020). Strudel: Learning structured -
+
+decomposable probabilistic circuits. Proceedings of the 10th International Conference on 
+
+Probabilistic Graphical Models (PGM) , PMLR 138:137 –148. 
+
+Darwiche, A. (2003). A differential approach to inference in Bayesian networks. Journal of 
+
+the ACM , 50(3), 280 –305. 
+
+Gens, R., & Domingos, P. (2013). Learning the structure of sum -product networks. 
+
+Proceedings of the 30th International Conference on Machine Learning (ICML) , PMLR 
+
+28(3):873 –880. 
+
+Levine, S. (2018). Reinforcement learning and control as probabilistic inference: Tutorial 
+
+and review. arXiv:1805.00909 .
+
+Liu, A., & Van den Broeck, G. (2025). Rethinking probabilistic circuit parameter learning. 
+
+arXiv:2505.19982 [Anemone]. 
+
+Liu, A., Liu, X., Zhao, D., Niepert, M., Liang, Y., & Van den Broeck, G. (2025). Tractable 
+
+transformers for flexible conditional generation. Proceedings of the 42nd International 
+
+Conference on Machine Learning (ICML) . arXiv:2502.07616 [Tracformer]. 
+
+Park, Y., Lu, A. C., Huang, S. -C., Hu, Q., Ju, Y. S., & Osher, S. (2026). SymPlex: A structure -
+
+aware Transformer for symbolic PDE solving. arXiv:2602.03816 [SymPlex]. 
+
+Rawlik, K., Toussaint, M., & Vijayakumar, S. (2012). On stochastic optimal control and 
+
+reinforcement learning by approximate inference. Proceedings of Robotics: Science and 
+
+Systems VIII (RSS) , Sydney, Australia. DOI: 10.15607/RSS.2012.VIII.045. 
+
+Ziebart, B. D., Maas, A. L., Bagnell, J. A., & Dey, A. K. (2008). Maximum entropy inverse 
+
+reinforcement learning. Proceedings of the 23rd AAAI Conference on Artificial Intelligence ,
+
+1433 –1438.
