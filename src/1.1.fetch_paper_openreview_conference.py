@@ -139,6 +139,7 @@ def build_venue_id(conference: str, year: int) -> str:
         "nips": "NeurIPS.cc",
         "iclr": "ICLR.cc",
         "icml": "ICML.cc",
+        "aaai": "AAAI.org",
     }
     prefix = mapping.get(conf.lower(), conf)
     return f"{prefix}/{int(year)}/Conference"
@@ -288,8 +289,8 @@ def resolve_output_path(conference: str, year_end: int, year_count: int, output:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="抓取 OpenReview 会议提交（支持 NeurIPS / ICLR / ICML）。")
-    parser.add_argument("--conference", type=str, default="NeurIPS", help="会议名，例如 NeurIPS / ICLR / ICML。")
+    parser = argparse.ArgumentParser(description="抓取 OpenReview 会议提交（支持 NeurIPS / ICLR / ICML / AAAI）。")
+    parser.add_argument("--conference", type=str, default="NeurIPS", help="会议名，例如 NeurIPS / ICLR / ICML / AAAI。")
     parser.add_argument("--year-end", type=int, default=datetime.now(timezone.utc).year, help="结束年份，默认当前年。")
     parser.add_argument("--year-count", type=int, default=3, help="回溯几年，默认 3。")
     parser.add_argument("--username", type=str, default=os.getenv("OPENREVIEW_USERNAME", ""))

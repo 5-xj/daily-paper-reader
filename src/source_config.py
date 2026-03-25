@@ -11,7 +11,7 @@ except Exception:  # pragma: no cover
 
 
 ARXIV_SOURCE_KEY = "arxiv"
-DEFAULT_SUPPORTED_SOURCES = (ARXIV_SOURCE_KEY, "biorxiv", "neurips")
+DEFAULT_SUPPORTED_SOURCES = (ARXIV_SOURCE_KEY, "biorxiv", "neurips", "aaai")
 
 
 def _norm(value: Any) -> str:
@@ -101,6 +101,24 @@ def build_env_source_backend_overrides() -> Dict[str, Dict[str, Any]]:
         if _norm(os.getenv("DPR_NEURIPS_SCHEMA")):
             backend["schema"] = _norm(os.getenv("DPR_NEURIPS_SCHEMA"))
         out["neurips"] = backend
+
+    if _env_bool("DPR_ENABLE_AAAI_BACKEND", False):
+        backend = {
+            "enabled": _env_bool("DPR_AAAI_ENABLED", True),
+            "papers_table": _norm(os.getenv("DPR_AAAI_PAPERS_TABLE") or "aaai_papers"),
+            "use_vector_rpc": _env_bool("DPR_AAAI_USE_VECTOR_RPC", True),
+            "vector_rpc": _norm(os.getenv("DPR_AAAI_VECTOR_RPC") or "match_aaai_papers_exact"),
+            "vector_rpc_exact": _norm(os.getenv("DPR_AAAI_VECTOR_RPC_EXACT") or "match_aaai_papers_exact"),
+            "use_bm25_rpc": _env_bool("DPR_AAAI_USE_BM25_RPC", True),
+            "bm25_rpc": _norm(os.getenv("DPR_AAAI_BM25_RPC") or "match_aaai_papers_bm25"),
+        }
+        if _norm(os.getenv("DPR_AAAI_URL")):
+            backend["url"] = _norm(os.getenv("DPR_AAAI_URL"))
+        if _norm(os.getenv("DPR_AAAI_ANON_KEY")):
+            backend["anon_key"] = _norm(os.getenv("DPR_AAAI_ANON_KEY"))
+        if _norm(os.getenv("DPR_AAAI_SCHEMA")):
+            backend["schema"] = _norm(os.getenv("DPR_AAAI_SCHEMA"))
+        out["aaai"] = backend
 
     return out
 

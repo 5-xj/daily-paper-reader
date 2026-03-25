@@ -155,6 +155,30 @@ class SourceConfigMigrationTest(unittest.TestCase):
         self.assertEqual(backend["papers_table"], "neurips_openreview_papers")
         self.assertEqual(backend["vector_rpc_exact"], "match_neurips_openreview_papers_exact")
 
+    def test_resolve_source_backends_supports_env_aaai_backend(self):
+        cfg = {
+            "supabase_shared": {
+                "url": "https://shared.supabase.co",
+                "anon_key": "shared-key",
+                "schema": "public",
+            }
+        }
+        with patch.dict(
+            "os.environ",
+            {
+                "DPR_ENABLE_AAAI_BACKEND": "1",
+                "DPR_AAAI_ENABLED": "1",
+                "DPR_AAAI_PAPERS_TABLE": "aaai_papers",
+                "DPR_AAAI_VECTOR_RPC_EXACT": "match_aaai_papers_exact",
+                "DPR_AAAI_BM25_RPC": "match_aaai_papers_bm25",
+            },
+            clear=False,
+        ):
+            backend = get_source_backend(cfg, "aaai")
+        self.assertEqual(backend["url"], "https://shared.supabase.co")
+        self.assertEqual(backend["papers_table"], "aaai_papers")
+        self.assertEqual(backend["vector_rpc_exact"], "match_aaai_papers_exact")
+
 
 if __name__ == "__main__":
     unittest.main()

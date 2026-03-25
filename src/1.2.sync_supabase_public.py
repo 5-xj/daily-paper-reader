@@ -130,6 +130,8 @@ def resolve_default_raw_path(date_str: str, backend_key: str) -> str:
     prefix = "arxiv_papers"
     if safe_backend == "biorxiv":
         prefix = "biorxiv_papers"
+    elif safe_backend == "aaai":
+        prefix = "aaai_papers"
     return os.path.join(ROOT_DIR, "archive", date_str, "raw", f"{prefix}_{date_str}.json")
 
 
