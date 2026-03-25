@@ -9,10 +9,17 @@ import re
 import sys
 import time
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Iterable, List
+from typing import Any, Dict, List
 
 import requests
 from bs4 import BeautifulSoup
+from selenium import webdriver
+from selenium.common.exceptions import SessionNotCreatedException, TimeoutException, WebDriverException
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.support.ui import WebDriverWait
 
 SRC_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 if SRC_DIR not in sys.path:
@@ -32,6 +39,7 @@ SEEN_IDS_FILE = os.path.join(ROOT_DIR, "archive", "chemrxiv_seen.json")
 DATE_TOKEN_RE = re.compile(r"^\d{8}$")
 RANGE_TOKEN_RE = re.compile(r"^\d{8}-\d{8}$")
 CHEMRXIV_OFFICIAL_API_URL = "https://chemrxiv.org/engage/api-gateway/chemrxiv/assets/orp/resource/item"
+CHEMRXIV_PUBLIC_DASHBOARD_URL = "https://chemrxiv.org/engage/chemrxiv/public-dashboard"
 
 
 def log(message: str) -> None:
@@ -64,6 +72,113 @@ def _strip_html(value: Any) -> str:
     if "<" not in text and ">" not in text:
         return text
     return BeautifulSoup(text, "html.parser").get_text(" ", strip=True)
+
+
+def _chrome_binary_candidates() -> List[str]:
+    return [
+        _norm(os.getenv("GOOGLE_CHROME_BIN")),
+        _norm(os.getenv("CHROME_BIN")),
+        "/usr/bin/google-chrome",
+        "/usr/bin/google-chrome-stable",
+        "/usr/bin/chromium",
+        "/usr/bin/chromium-browser",
+    ]
+
+
+def _chromedriver_candidates() -> List[str]:
+    return [
+        _norm(os.getenv("CHROMEDRIVER")),
+        "/usr/bin/chromedriver",
+    ]
+
+
+def _first_existing(paths: List[str]) -> str:
+    for path in paths:
+        if path and os.path.exists(path):
+            return path
+    return ""
+
+
+def build_chrome_driver(*, headless: bool = True) -> webdriver.Chrome:
+    options = Options()
+    if headless:
+        options.add_argument("--headless=new")
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
+    options.add_argument("--disable-gpu")
+    options.add_argument("--window-size=1440,2000")
+    options.add_argument("--disable-blink-features=AutomationControlled")
+    options.add_argument("--lang=en-US")
+    options.add_argument(
+        "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
+    )
+    options.add_experimental_option("excludeSwitches", ["enable-automation"])
+    options.add_experimental_option("useAutomationExtension", False)
+
+    chrome_binary = _first_existing(_chrome_binary_candidates())
+    if chrome_binary:
+        options.binary_location = chrome_binary
+
+    driver_path = _first_existing(_chromedriver_candidates())
+    try:
+        if driver_path:
+            service = Service(executable_path=driver_path)
+            driver = webdriver.Chrome(service=service, options=options)
+        else:
+            driver = webdriver.Chrome(options=options)
+    except SessionNotCreatedException as exc:
+        log(f"[ChemRxiv] local chromedriver 不兼容，回退 Selenium Manager：{exc}")
+        from webdriver_manager.chrome import ChromeDriverManager
+        managed_driver = ChromeDriverManager().install()
+        driver = webdriver.Chrome(service=Service(managed_driver), options=options)
+
+    driver.execute_cdp_cmd(
+        "Page.addScriptToEvaluateOnNewDocument",
+        {
+            "source": """
+                Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+                Object.defineProperty(navigator, 'platform', {get: () => 'Win32'});
+                Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
+            """
+        },
+    )
+    return driver
+
+
+def wait_for_cloudflare_pass(driver: webdriver.Chrome, *, timeout: int = 45) -> None:
+    start = time.time()
+    while time.time() - start < max(int(timeout or 1), 1):
+        title = (driver.title or "").strip().lower()
+        page = (driver.page_source or "").lower()
+        if "just a moment" not in title and "cf-mitigated" not in page and "challenge-error-text" not in page:
+            return
+        time.sleep(1.0)
+    raise RuntimeError("ChemRxiv 官方站点 Cloudflare challenge 未在限定时间内通过。")
+
+
+def browser_fetch_json(driver: webdriver.Chrome, url: str, *, timeout: int = 45) -> Any:
+    script = """
+        const url = arguments[0];
+        const done = arguments[arguments.length - 1];
+        fetch(url, {credentials: 'include'})
+          .then(async (resp) => {
+            const text = await resp.text();
+            done({ok: resp.ok, status: resp.status, text});
+          })
+          .catch((err) => done({ok: false, status: 0, error: String(err)}));
+    """
+    result = driver.execute_async_script(script, url)
+    if not isinstance(result, dict):
+        raise RuntimeError(f"ChemRxiv browser fetch 返回异常：{result!r}")
+    if not result.get("ok"):
+        status = int(result.get("status") or 0)
+        err = _norm(result.get("error")) or _norm(result.get("text"))
+        raise RuntimeError(f"ChemRxiv browser fetch 失败：status={status} error={err[:200]}")
+    text = _norm(result.get("text"))
+    if not text:
+        return {}
+    return json.loads(text)
 
 
 def load_config() -> dict:
@@ -285,54 +400,56 @@ def _extract_api_items(payload: Any) -> List[Dict[str, Any]]:
 
 
 def fetch_chemrxiv_dataset(*, timeout: int = 120, retries: int = 3) -> Dict[str, Dict[str, Any]]:
-    last_error: Exception | None = None
     collected: Dict[str, Dict[str, Any]] = {}
     page_size = 100
     offset = 0
     max_pages = 200
-    headers = {"User-Agent": "Mozilla/5.0", "Accept": "application/json, text/plain, */*"}
+    driver = build_chrome_driver(headless=True)
+    try:
+        driver.set_page_load_timeout(max(int(timeout or 1), 1))
+        log(f"[ChemRxiv] open browser dashboard: {CHEMRXIV_PUBLIC_DASHBOARD_URL}")
+        driver.get(CHEMRXIV_PUBLIC_DASHBOARD_URL)
+        wait_for_cloudflare_pass(driver, timeout=min(max(int(timeout or 1), 1), 60))
 
-    for page in range(max_pages):
-        page_items: List[Dict[str, Any]] = []
-        for attempt in range(1, max(int(retries or 1), 1) + 1):
-            try:
-                resp = requests.get(
-                    CHEMRXIV_OFFICIAL_API_URL,
-                    params={
-                        "limit": page_size,
-                        "skip": offset,
-                        "sort": "publishedDate:desc",
-                    },
-                    headers=headers,
-                    timeout=max(int(timeout or 1), 1),
-                )
-                resp.raise_for_status()
-                payload = resp.json()
-                page_items = _extract_api_items(payload)
-                break
-            except Exception as exc:
-                last_error = exc
-                if attempt >= max(int(retries or 1), 1):
+        last_error: Exception | None = None
+        for _page in range(max_pages):
+            page_items: List[Dict[str, Any]] = []
+            url = (
+                f"{CHEMRXIV_OFFICIAL_API_URL}"
+                f"?limit={page_size}&skip={offset}&sort=publishedDate%3Adesc"
+            )
+            for attempt in range(1, max(int(retries or 1), 1) + 1):
+                try:
+                    payload = browser_fetch_json(driver, url, timeout=max(int(timeout or 1), 1))
+                    page_items = _extract_api_items(payload)
                     break
-                log(f"[ChemRxiv] api retry {attempt}/{retries} offset={offset} error={exc}")
-                time.sleep(float(attempt))
-        if not page_items:
-            break
-        for item in page_items:
-            item_id = _norm(item.get("id"))
-            if not item_id or item_id in collected:
-                continue
-            collected[item_id] = item
-        offset += page_size
-        if len(page_items) < page_size:
-            break
-    if last_error is not None:
-        # 若拿到过有效数据，则忽略最后一次翻页异常；否则抛出
-        if not collected:
+                except Exception as exc:
+                    last_error = exc
+                    if attempt >= max(int(retries or 1), 1):
+                        break
+                    log(f"[ChemRxiv] browser api retry {attempt}/{retries} offset={offset} error={exc}")
+                    time.sleep(float(attempt))
+            if not page_items:
+                break
+            for item in page_items:
+                item_id = _norm(item.get("id"))
+                if not item_id or item_id in collected:
+                    continue
+                collected[item_id] = item
+            offset += page_size
+            if len(page_items) < page_size:
+                break
+
+        if last_error is not None and not collected:
             raise last_error
-    if not collected:
-        raise RuntimeError("ChemRxiv 官方 API 未返回可用数据")
-    return collected
+        if not collected:
+            raise RuntimeError("ChemRxiv 官方 browser API 未返回可用数据")
+        return collected
+    finally:
+        try:
+            driver.quit()
+        except Exception:
+            pass
 
 
 def fetch_chemrxiv_metadata(
