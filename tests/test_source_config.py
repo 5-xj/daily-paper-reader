@@ -131,6 +131,54 @@ class SourceConfigMigrationTest(unittest.TestCase):
         self.assertEqual(backend["papers_table"], "biorxiv_papers")
         self.assertEqual(backend["vector_rpc_exact"], "match_biorxiv_papers_exact")
 
+    def test_resolve_source_backends_supports_env_medrxiv_backend(self):
+        cfg = {
+            "supabase_shared": {
+                "url": "https://shared.supabase.co",
+                "anon_key": "shared-key",
+                "schema": "public",
+            }
+        }
+        with patch.dict(
+            "os.environ",
+            {
+                "DPR_ENABLE_MEDRXIV_BACKEND": "1",
+                "DPR_MEDRXIV_ENABLED": "1",
+                "DPR_MEDRXIV_PAPERS_TABLE": "medrxiv_papers",
+                "DPR_MEDRXIV_VECTOR_RPC_EXACT": "match_medrxiv_papers_exact",
+                "DPR_MEDRXIV_BM25_RPC": "match_medrxiv_papers_bm25",
+            },
+            clear=False,
+        ):
+            backend = get_source_backend(cfg, "medrxiv")
+        self.assertEqual(backend["url"], "https://shared.supabase.co")
+        self.assertEqual(backend["papers_table"], "medrxiv_papers")
+        self.assertEqual(backend["vector_rpc_exact"], "match_medrxiv_papers_exact")
+
+    def test_resolve_source_backends_supports_env_chemrxiv_backend(self):
+        cfg = {
+            "supabase_shared": {
+                "url": "https://shared.supabase.co",
+                "anon_key": "shared-key",
+                "schema": "public",
+            }
+        }
+        with patch.dict(
+            "os.environ",
+            {
+                "DPR_ENABLE_CHEMRXIV_BACKEND": "1",
+                "DPR_CHEMRXIV_ENABLED": "1",
+                "DPR_CHEMRXIV_PAPERS_TABLE": "chemrxiv_papers",
+                "DPR_CHEMRXIV_VECTOR_RPC_EXACT": "match_chemrxiv_papers_exact",
+                "DPR_CHEMRXIV_BM25_RPC": "match_chemrxiv_papers_bm25",
+            },
+            clear=False,
+        ):
+            backend = get_source_backend(cfg, "chemrxiv")
+        self.assertEqual(backend["url"], "https://shared.supabase.co")
+        self.assertEqual(backend["papers_table"], "chemrxiv_papers")
+        self.assertEqual(backend["vector_rpc_exact"], "match_chemrxiv_papers_exact")
+
     def test_resolve_source_backends_supports_env_neurips_backend(self):
         cfg = {
             "supabase_shared": {
