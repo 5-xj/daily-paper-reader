@@ -70,6 +70,16 @@ def find_latest_raw_file(project_root: str) -> str:
     return best_path
 
 
+def count_raw_rows(path: str) -> int:
+    if not os.path.exists(path):
+        return 0
+    with open(path, "r", encoding="utf-8") as f:
+        data = json.load(f) or []
+    if not isinstance(data, list):
+        raise RuntimeError(f"raw json must be list: {path}")
+    return len(data)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="抓取近 N 天 arXiv 并初始化同步到 Supabase（含 embedding）。",
@@ -164,6 +174,8 @@ def main() -> None:
             str(max(int(args.days or 1), 1)),
             "--chunk-days",
             str(max(int(args.chunk_days or 1), 1)),
+            "--output",
+            raw_path,
             "--disable-supabase-read",
         ]
         if args.ignore_seen:
@@ -200,6 +212,12 @@ def main() -> None:
                     f"--skip-fetch 已指定，但未找到原始文件：{raw_path}"
                 )
         print(f"[INFO] Step 1 已跳过，复用原始文件：{raw_path}", flush=True)
+
+    fetch_count = count_raw_rows(raw_path)
+    print(f"[INFO] arXiv fetch 预检结果：count={fetch_count}，raw_path={raw_path}", flush=True)
+    if fetch_count <= 0:
+        print("[INFO] 本次 arXiv 抓取无新增论文，已跳过 Supabase 同步。", flush=True)
+        return
 
     sync_cmd = [
         python,
