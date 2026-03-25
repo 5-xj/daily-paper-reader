@@ -1,0 +1,1322 @@
+Title: ALMAB-DC: Active Learning, Multi-Armed Bandits, and Distributed Computing for Sequential Experimental Design and Black-Box Optimization
+
+URL Source: https://arxiv.org/pdf/2603.21180v1
+
+Published Time: Tue, 24 Mar 2026 01:16:26 GMT
+
+Number of Pages: 33
+
+Markdown Content:
+# ALMAB-DC: Active Learning, Multi-Armed Bandits, and Distributed Computing for Sequential Experimental Design and Black-Box Optimization 
+
+Foo Hui-Mean a Yuan-chin Ivan Chang a,∗
+
+aInstitute of Statistical Science Academia Sinica, Taipei 115, Taiwan 
+
+∗Corresponding author. E-mail: ycchang@as.edu.tw 
+
+Abstract 
+
+Sequential experimental design under expensive, gradient-free objectives is a central challenge in computational statistics: evaluation budgets are tightly constrained and infor-mation must be extracted efficiently from each observation. We propose ALMAB-DC ,a GP-based sequential design framework combining active learning, multi-armed bandits (MAB), and distributed asynchronous computing for expensive black-box experimenta-tion. A Gaussian process surrogate with uncertainty-aware acquisition identifies informa-tive query points; a UCB or Thompson-sampling bandit controller allocates evaluations across parallel workers; and an asynchronous scheduler handles heterogeneous runtimes. We present cumulative regret bounds for the bandit components and characterize parallel scalability via Amdahl’s Law. We validate ALMAB-DC on five benchmarks. On the two statistical experimental-design tasks, ALMAB-DC achieves lower simple regret than Equal Spacing, Random, and D-optimal designs in dose–response optimization, and in adaptive spatial field esti-mation matches the Greedy Max-Variance benchmark while outperforming Latin Hyper-cube Sampling; at K = 4 the distributed setting reaches target performance in one-quarter of sequential wall-clock rounds. On three ML/engineering tasks (CIFAR-10 HPO, CFD drag minimization, MuJoCo RL), ALMAB-DC achieves 93.4% CIFAR-10 accuracy (out-performing BOHB by 1.7 pp and Optuna by 1.1 pp), reduces airfoil drag to CD = 0.059 (36.9% below Grid Search), and improves RL return by 50% over Grid Search. All advan-tages over non-ALMAB baselines are statistically significant under Bonferroni-corrected Mann–Whitney U tests. Distributed execution achieves 7 .5× speedup at K = 16 agents, consistent with Amdahl’s Law. 
+
+Keywords: computational statistics; sequential experimental design; Bayesian optimization; multi-armed bandits; distributed computing; Gaussian process 
+
+# 1 Introduction 
+
+Sequential experimental design and black-box optimization share a fundamental difficulty: the objective function is a costly black-box that lacks closed-form gradients and returns only noisy, query-level feedback. In biomedical and environmental statistics, each observation corresponds 1 
+
+> arXiv:2603.21180v1 [cs.LG] 22 Mar 2026 ALMAB-DC for Sequential Experimental Design 2
+
+to an expensive physical or clinical experiment—a patient cohort exposure in a dose-finding trial, or a sensor deployment in a spatial field survey (Chaloner and Verdinelli, 1995). In compu-tational engineering, a single CFD simulation of an airfoil can take hours on a high-performance cluster (Kennedy and O’Hagan, 2001). In machine learning, hyperparameter tuning for deep neural networks may require substantial compute time per evaluation (Krizhevsky and Hin-ton, 2009). In all of these settings, traditional gradient-based or exhaustive-search methods are impractical, and the fundamental challenge is to extract maximum information from a limited evaluation budget. To address these challenges, we introduce ALMAB-DC , a GP-based sequential design framework for expensive black-box experimentation. ALMAB-DC combines three comple-mentary paradigms: (i) active learning , which uses a Gaussian process surrogate to identify the most informative next query via principled acquisition functions; (ii) multi-armed ban-dits , which dynamically reallocates the evaluation budget across parallel workers to minimize cumulative regret; and (iii) distributed asynchronous computing , which executes evaluations concurrently across a multi-agent cluster to maximize wall-clock throughput. The core ap-plication domain is sequential statistical experimentation—dose-finding, adaptive spatial field estimation, and related Bayesian optimal design problems; the same architecture extends with-out structural modification to ML and engineering optimization tasks. The remainder of this paper is organized as follows. Section 2 presents the ALMAB-DC framework, including regret analysis and scalability theory. Section 3 reports empirical results across five benchmarks: two statistically motivated tasks (Bayesian dose–response optimization and adaptive spatial field es-timation, Cases 4–5) and three ML/engineering tasks (CIFAR-10 hyperparameter optimization, CFD airfoil drag minimization, MuJoCo RL policy search, Cases 1–3), together with ablation, sensitivity, convergence, and noise-robustness analyses. Section 4 concludes with practical recommendations, limitations, and future directions. Several prior works have addressed subsets of the components considered here, yet none offers a fully unified framework. Joulani et al. (2013) investigated online learning under de-layed feedback in multi-armed bandit settings, but without incorporating active learning; Auer et al. (2002) established finite-time UCB regret bounds in the single-agent synchronous setting. Bachman et al. (2017) proposed active learning with limited labeled data; Landgren et al. (2016) examined decentralised cooperative bandits. Li et al. (2018) applied bandit algorithms to dis-tributed hyperparameter optimization, but without a GP surrogate or active-learning layer. In statistical experimental design, related ideas appear in optimal Bayesian design (Chaloner and Verdinelli, 1995) and response-surface methodology (Box and Draper, 2007), which sequen-tially choose experiment conditions to maximize information gain; however, these classical methods do not incorporate multi-armed bandit scheduling or distributed parallel execution. In contrast, ALMAB-DC integrates all three paradigms—active learning, multi-armed ban-dits, and distributed computing—into a principled framework for sequential statistical exper-imentation under expensive evaluations. It provides a regret decomposition across both the active-learning and bandit dimensions and demonstrates effective parallel scaling via Amdahl’s Law. To the best of our knowledge, such an end-to-end integration within a single unified framework is not available in prior work. The primary target domain is Bayesian sequential experimental design—clinical dose-finding, adaptive spatial monitoring, and related statisti-cal tasks—with the same framework, without modification, also operating across engineering design and ML hyperparameter optimization to demonstrate its generality. ALMAB-DC for Sequential Experimental Design 3
+
+# 2 Methodology 
+
+In contrast to batch-based approaches, ALMAB-DC treats optimization as a sequential decision-making process under uncertainty. Each decision—selecting the next configuration to evalu-ate—is guided by surrogate models that quantify uncertainty and expected utility, informed by statistical experimental design. At each step, ALMAB-DC selects the most informative candidate using acquisition functions such as entropy, expected improvement, or mutual infor-mation; these strategies embody the principles of Bayesian active learning and reduce sample complexity while maintaining high-quality solutions. To balance exploration and exploitation efficiently, the framework embeds multi-armed bandit (MAB) scheduling strategies. The deci-sion of which candidate configuration to evaluate is treated as a bandit arm selection problem, enabling principled regret minimization through algorithms such as UCB and Thompson Sam-pling. The system distributes evaluation tasks across a network of parallel agents, enabling asynchronous high-throughput evaluation. These components operate asynchronously to im-prove throughput, particularly in resource-constrained or heterogeneous environments. We begin with an overview of ALMAB-DC; a detailed description of each module follows. 
+
+2.1 ALMAB-DC Framework 
+
+ALMAB-DC is a modular framework that integrates Active Learning (AL), Multi-Armed Ban-dits (MAB), and Distributed Computing (DC) to efficiently solve expensive black-box opti-mization problems. It uses a Bayesian surrogate model as a probabilistic approximation of the objective function, guiding sample selection while minimizing redundant evaluations. The process begins with a pool of Candidate Experiments . The Active Learner selects informative samples using posterior mean/variance-based acquisition rules (e.g., UCB, expected improve-ment, or max-variance selection, depending on the task), forwarding them to the Bandit Con-troller , which balances exploration and exploitation using UCB or Thompson Sampling. The selected configuration is dispatched to the Query Dispatcher , which schedules asynchronous evaluation across parallel workers. The resulting performance metrics are then fed into the Sur-rogate Model Update module, refining the Bayesian model and closing the learning loop. We describe the role of each module below. Figure 1 provides a high-level conceptual view of the ALMAB-DC framework, illustrating how the three core components—Active Learning, Multi-Armed Bandits, and Distributed Computing—are unified through a shared Bayesian surrogate model. The arrows emphasize the closed feedback loop: surrogate predictions inform the Ac-tive Learner about where uncertainty is highest, and the Bandit Controller about which arms are most promising; their combined decisions determine which configurations are dispatched to distributed agents for evaluation. This integration is the defining architectural contribution of ALMAB-DC—no prior framework simultaneously addresses all three paradigms within a single optimization loop. Figure 2 complements this by detailing the full modular pipeline: the upper (decision) tier houses the Candidate Experiments pool, Active Learner, and Bandit Controller; the lower (evaluation) tier handles experiment evaluation and surrogate updates. To-gether, the two figures convey both the conceptual purpose—principled, budget-efficient black-box optimization—and the practical architecture that realizes it. A summary of key advanced features is provided in Table 1. 
+
+1. Candidate Experiments: This module maintains a dynamic buffer of candidate config-urations or design points. It may contain hyperparameter settings, simulation designs, or RL policy parameters. No labels (e.g., validation accuracy, drag coefficient, episodic return) are ALMAB-DC for Sequential Experimental Design 4ALMAB-DC: GP-Based Sequential Experimental Design Framework      
+
+> Active
+> Learning
+> Acquisition: UCB,
+> EI, max-variance
+> Multi-Armed
+> Bandit
+> Allocation: UCB,
+> Thompson Sampling
+> Parallel
+> Execution
+> K asynchronous
+> workers
+> Gaussian Process
+> Surrogate
+> Posterior (x), ²(x)
+> Sequential
+> Query
+> x= argmax U (x)
+> Uncertainty
+> Quantification
+> Posterior variance
+> ²(x) across design space
+> Cohort / Worker
+> Allocation
+> Distribute K parallel
+> experiment evaluations
+> Experiment
+> /
+> Evaluation
+> Posterior update (x , y ) refine GP
+
+Figure 1: ALMAB-DC framework overview. The three core paradigms—Active Learning (AL), Multi-Armed Bandits (MAB), and Distributed Computing (DC)—are unified through a central Gaussian Process surrogate model. The left column shows the statistical decision components: the Active Learner selects informative query points via acquisition functions (UCB, EI, or max-variance); the Multi-Armed Bandit allocates the evaluation budget across parallel agents using UCB or Thompson Sampling; and the Parallel Execution module dis-patches evaluations asynchronously. The right column reflects the surrogate’s outputs: sequen-tial queries ( xt+1 = argmax Ut (x)), posterior uncertainty quantification ( σ 2 
+
+> t
+
+(x)), and cohort al-location across K workers. The red feedback arc (top) represents the posterior update loop: each evaluation (xt , yt ) is returned to the GP surrogate to refine μt (x) and σ 2 
+
+> t
+
+(x), closing the sequential design cycle. known yet. 
+
+2. Active Learner: The Active Learner implements posterior mean/variance-based query strategies that prioritize candidate points expected to improve the current solution or reduce uncertainty. Depending on the application, this may take the form of UCB, expected improve-ment, or max-variance selection. The result is a refined subset of high-utility candidates, which are then passed to the MAB layer for resource allocation. 
+
+3. Bandit Controller: Each selected candidate is treated as an arm in a Multi-Armed Bandit setting. This layer governs the exploration–exploitation trade-off using the two policies studied empirically in the paper—UCB and Thompson Sampling—and outputs the next configuration for evaluation based on expected reward and uncertainty. 
+
+4. Query Dispatcher and Parallel Workers: The chosen configuration is dispatched to an available worker on a compute cluster. Agents operate asynchronously, so completed evalua-tions can be incorporated immediately without waiting for a full synchronous batch. ALMAB-DC for Sequential Experimental Design 5
+
+Table 1: Implemented components of ALMAB-DC Component Description GP Surrogate Modeling Probabilistic approximation of the unknown objective, providing posterior mean and uncertainty for sequential decision-making. Acquisition-Driven Querying Selection of informative configurations via task-appropriate acquisition rules such as UCB, expected improvement, or max-variance sampling. Bandit-Based Resource Allocation UCB or Thompson Sampling allocates evaluations toward promising candidate regions while preserving exploration. Asynchronous Distributed Execution Parallel workers evaluate configurations without global syn-chronization barriers, improving wall-clock throughput. 
+
+5. Experiment Oracle: This module handles the expensive task-specific evaluation of candi-date configurations. In the experiments reported in Section 3, those evaluations are represented by calibrated surrogate-simulation models for HPO, CFD, RL, dose-finding, and spatial sam-pling, allowing controlled and reproducible comparisons across 500 replicates. 
+
+6. GP Surrogate Update: The reward obtained from evaluation (e.g., validation accuracy, drag, return, or statistical utility) is used to update the Gaussian-process surrogate and the bandit statistics. The updated posterior is then fed back into the active learner, closing the loop and refining future query decisions. This closed-loop design enables ALMAB-DC to adaptively refine its probabilistic model of the objective, prioritize evaluations that matter, and dynamically allocate compute resources. Its modularity allows extensibility to new acquisition strategies, simulation tools, or parallel runtimes. 
+
+2.2 Active Learning with Sequential Sampling Strategies 
+
+Active learning selects the most informative samples and focuses computational effort on re-gions where the model is most uncertain. In high-dimensional or expensive-to-evaluate set-tings, such as simulation-based engineering or neural architecture search, this approach avoids the inefficiencies of random or grid-based sampling. In black-box optimization, active learn-ing in ALMAB-DC uses Bayesian surrogate models—such as Gaussian Processes or Bayesian neural networks—to approximate the unknown objective function. These models provide both predictions and uncertainty estimates, which are then used to guide sampling via acquisition functions. Common acquisition strategies, including expected improvement , entropy , and in-formation gain , prioritize query points expected to reduce uncertainty or improve model per-formance most effectively. The ALMAB-DC framework integrates active learning into a sequential, data-adaptive sam-pling process. Rather than evaluating large batches in advance, the model is updated after each query, and the posterior distribution is used to select the next best sample. This approach aligns with statistical experimental design principles and enables efficient learning under bud-get constraints. In practice, we focus on uncertainty-aware sequential querying rather than an ALMAB-DC for Sequential Experimental Design 6Decision Tier                   
+
+> Evaluation Tier
+> select allocate distribute
+> observations next query x
+> dispatch
+> ALMAB-DC Sequential Design Pipeline
+> Candidate
+> Experiments
+> Active
+> Learner
+> UCB ·EI ·max-variance
+> Bandit
+> Controller
+> UCB ·Thompson Sampling
+> Query
+> Dispatcher
+> dispatches to K workers
+> Evaluation
+> Workers
+> dose trial ·sensor ·simulation
+> Experiment
+> Oracle
+> evaluate f(x)+ , return y
+> GP Surrogate
+> Update
+> condition on (x , y )
+> refine (x), ²(x)
+> Posterior
+> update
+
+Figure 2: ALMAB-DC sequential design pipeline. The pipeline is organized into two tiers. The 
+
+decision tier (top) flows left to right: candidate experiments are ranked by the Active Learner (UCB, EI, max-variance acquisition), allocated by the Bandit Controller (UCB or Thompson Sampling), and dispatched by the Query Dispatcher to K parallel workers. The evaluation tier (bottom) flows right to left: parallel workers (representing dose trials, sensor readings, or simulation runs) return observations to the Experiment Oracle, which passes the result to the GP Surrogate Update module. The red vertical arrow denotes the posterior update loop— conditioning on (xt , yt ) to refine μt (x) and σ 2 
+
+> t
+
+(x)—which feeds back into the Active Learner in the decision tier, closing the sequential design cycle. This modular architecture allows task-specific acquisition rules and evaluation oracles to be substituted without altering the overall pipeline structure. exhaustive catalogue of active-learning heuristics. Candidate points are ranked by posterior utility, then handed to the bandit layer for exploration–exploitation control. To balance exploration and exploitation, ALMAB-DC integrates multi-armed bandit (MAB) strategies, treating each candidate configuration as an arm with a potential reward. Selection follows cumulative regret minimization, using UCB and Thompson Sampling to weigh uncer-tainty against empirical performance. This complements the Bayesian sampling strategy and is especially effective in asynchronous, noisy, or distributed environments. Its modular design allows integration with a range of surrogate models, acquisition func-tions, and agent strategies. Supporting both centralized and decentralized use cases across sci-entific and engineering domains, ALMAB-DC combines active learning, sequential Bayesian sampling, and adaptive resource allocation to achieve scalable and sample-efficient optimiza-tion. 
+
+2.3 Resource Allocation via Multi-Armed Bandits 
+
+We use multi-armed bandit (MAB) algorithms in ALMAB-DC to guide resource allocation, enabling efficient exploration and exploitation in black-box optimization tasks. Each “arm” corresponds to a candidate configuration, model fidelity level, or region of the parameter space. ALMAB-DC for Sequential Experimental Design 7
+
+Algorithms such as Upper Confidence Bound (UCB) and Thompson Sampling are used to balance the trade-off between trying new configurations (exploration) and exploiting those that have performed well historically. This setup helps to minimize cumulative regret by allocating fewer resources to poor configurations early on and prioritizing promising ones. In addition, ALMAB-DC adopts a distributed architecture where multiple agents operate concurrently. Each agent performs evaluations, updates local estimates of arm performance, and contributes to the global learning process through asynchronous communication. Let K
+
+denote the number of distributed agents. The empirical mean reward for arm i at time t is defined as: ˆμi(t) = 1
+
+|Si(t)| ∑
+
+> s∈Si(t)
+
+rs,
+
+where Si(t) represents the set of observed rewards for arm i up to time t. This decentralized structure enables scalable parallelism and robustness, as agents can continue operation under bandwidth constraints or partial system failures. ALMAB-DC also incorporates communication-efficient protocols to support this distributed operation in order to reduce synchronization costs. Agents may update shared arm statistics asynchronously, or synchronize periodically using buffered communication strategies. This approach is particularly beneficial in heterogeneous environments where evaluation times and agent capacities vary. Recent research in distributed and federated MAB algorithms further supports the scalability of such architectures in real-world applications (Liu et al., 2026; Zhang et al., 2024; He et al., 2024). 
+
+Algorithm 1: Sequential Distributed Optimization via ALMAB-DC 
+
+Input: Candidate experiments U, budget T , agents K
+
+Output: Optimal configuration(s)  
+
+> 1
+
+Initialize surrogate model M and MAB stats μi ← 0, ni ← 0 
+
+> 2
+
+for t ← 1 to T do  
+
+> 3
+
+Qt ← SelectCandidates (U, M ) 
+
+> 4
+
+foreach q ∈ Qt do  
+
+> 5
+
+sq ← MABController (q) 
+
+> 6
+
+qt ← arg max sq 
+
+> 7
+
+Assign qt to agent m ∈ { 1, . . . , K} 
+
+> 8
+
+Agent m: rt ← SimulateTrain (qt ) on available compute node  
+
+> 9
+
+Update model: M ← UpdateModel (qt , rt ) 
+
+> 10
+
+Update MAB stats: μqt ← weighted average, nqt ← nqt + 1 
+
+> 11
+
+return Best configuration(s) 
+
+2.4 Regret, Scalability, and Optimal Number of Agents 
+
+We extend classical multi-armed bandit (MAB) theory to analyze regret and scalability in the context of distributed and asynchronous environments. This reflects real-world parallel com-putation scenarios, such as multi-agent systems or parallel compute clusters, where evaluations are costly, coordination is imperfect, and communication is constrained. The aim is to derive formal bounds on regret under realistic operational assumptions, providing theoretical insights into the efficiency of ALMAB-DC. Table 2 summarizes the notation used throughout this anal-ysis. ALMAB-DC for Sequential Experimental Design 8
+
+Table 2: Key Notation Used in Regret and Scaling Analysis 
+
+Symbol Description 
+
+T Total number of optimization rounds 
+
+A Number of arms or candidate configurations 
+
+K Number of distributed computing agents 
+
+μi Expected reward of arm i
+
+μ∗ Expected reward of the optimal arm 
+
+∆i Suboptimality gap: μ∗ − μi
+
+RT Cumulative regret over T rounds 
+
+Rdist  
+
+> T
+
+Cumulative distributed regret 
+
+Reff  
+
+> T
+
+Effective regret including communication overhead 
+
+Ccomm (t) Communication cost at round twc Weighting coefficient for communication cost 
+
+p Serial fraction of workload (Amdahl’s Law) 
+
+η(K) Parallel efficiency as a function of agent count 
+
+α, β Parameters modeling communication overhead growth 
+
+σ 2 Variance of evaluation noise or task duration 
+
+τmax Maximum delay in asynchronous feedback 
+
+S(K) Speedup from using K agents 
+
+TK Total wall-clock time with K agents 
+
+qT Number of actively selected samples under AL 
+
+ε(qT ) Regret contribution from active learning approximation 
+
+Notation. Throughout the sequel, A denotes the number of arms or candidate configurations, 
+
+K the number of parallel agents, and N the total evaluation budget when an experiment is run under a fixed budget. 
+
+2.4.1 Regret 
+
+Let A = {1, . . . , A} denote a finite set of A possible actions (or arms). Each action a ∈ A is associated with a reward distribution Da with expected reward μa. The optimal action is 
+
+a∗ = arg max  
+
+> a∈A
+
+μa.
+
+Let K denote the number of distributed computing agents. At each round t, each agent j ∈{1, . . . , K} selects an action atj according to its policy πtj, which may use local experience or incorporate messages received from a dynamic communication graph G(t). The reward received is rtj(atj) ∼ Datj .The instantaneous distributed regret at round t is defined as the gap between the optimal expected reward and the average expected reward over all agents: 
+
+r∗ 
+
+> t
+
+− ¯rt = μa∗ − 1
+
+K
+
+> K
+
+# ∑
+
+> j=1
+
+μatj . (1) Summing over T rounds gives the cumulative distributed regret :
+
+Rdist  
+
+> T
+
+=
+
+> T
+
+# ∑
+
+> t=1
+
+μa∗ − 1
+
+K
+
+> K
+
+# ∑
+
+> j=1
+
+μatj
+
+!
+
+. (2) ALMAB-DC for Sequential Experimental Design 9
+
+To reflect the cost of coordination in distributed environments, we incorporate a commu-nication cost term Ccomm (t) capturing bandwidth, latency, or protocol overhead. The effective cumulative regret with communication overhead is Reff  
+
+> T
+
+= Rdist  
+
+> T
+
++ wc ∑Tt=1 Ccomm (t), where wc
+
+weighs reward loss versus communication overhead. 
+
+Asynchrony Modeling. Agents operate in asynchronous cycles, and feedback from arm pulls may be delayed. Let δ tj represent the feedback delay for agent j at time t. We assume a bounded delay setting: 
+
+δ tj ≤ τmax ,
+
+and analyze the performance degradation of bandit algorithms such as UCB and Thompson Sampling under increasing delay τmax . Our analysis shows that the regret grows sublinearly with τmax , provided the reward distributions remain stationary or slowly varying. 
+
+Theoretical Summary. The preceding analysis characterizes ALMAB-DC’s theoretical be-havior in distributed and asynchronous environments. Classical UCB and Thompson Sam-pling regret bounds (Section 2.4) extend to the multi-agent setting via the communication-cost decomposition presented above and the delay model of Joulani et al. (2013). Amdahl’s and Gustafson’s scaling laws bound the throughput gains from adding agents, and the optimal con-currency K∗ balances parallel speedup against coordination overhead. Together these results provide the theoretical grounding for the empirical scalability findings reported in Section 3. 
+
+2.4.2 Computational Throughput and Scaling Laws 
+
+Let K denote the number of distributed computing agents, N the total number of evaluation tasks, Ci the computational cost of task i, TK the total wall-clock time using K agents, η the parallel efficiency factor with 0 < η ≤ 1, p the proportion of serial (non-parallelizable) opera-tions, and σ 2 the variance of task durations. (In this subsection K indexes agents and N indexes tasks, following the convention used in Section 3 and the abstract; see the notation note in Section 2.4. )The computational throughput of ALMAB-DC can be modeled using Amdahl’s Law (Am-dahl, 1967; Paul and Meyer, 2007), which separates parallel and serial workload components: 
+
+TK = (1 − p) ∑Ni=1 Ci
+
+ηK + p
+
+> N
+
+# ∑
+
+> i=1
+
+Ci. (3) The corresponding speedup from parallelization is: 
+
+S(K) = T1
+
+TK
+
+= 1
+
+p + 1−p
+
+> ηK
+
+. (4) When the problem size scales with K, Gustafson’s Law (Gustafson, 1988) gives the more opti-mistic estimate SG(K) = p + ( 1 − p)K.
+
+2.4.3 Exploration–Exploitation Dynamics in Bandits 
+
+In ALMAB-DC, increasing K increases the number of concurrent evaluations dispatched per round. Larger K can accelerate exploration but may introduce redundancy or inefficient learn-ing if posterior updates lag. The cumulative regret under classical MAB theory with A arms ALMAB-DC for Sequential Experimental Design 10 
+
+grows sublinearly as RT = O(√AT log T ), as established by Sutton and Barto (2018) and Lat-timore and Szepesv´ ari (2020). The optimal number of agents K∗ should satisfy the marginal utility condition ∂ IG (K)  
+
+> ∂K
+
+= ∂ Cost (K)  
+
+> ∂K
+
+, where IG (K) represents information gain and Cost (K) in-cludes both evaluation and coordination costs. 
+
+2.4.4 Regret Bounds for UCB and Thompson Sampling 
+
+To evaluate the theoretical efficiency of ALMAB-DC, we analyze its regret under classical bandit strategies. The cumulative regret over T rounds is defined as: 
+
+RT =
+
+> T
+
+# ∑
+
+> t=1
+
+rt,a∗ −
+
+> T
+
+# ∑
+
+> t=1
+
+rt,at , (5) where a∗ = arg max i E[rt,i] denotes the optimal action, and at is the action selected at round t.Assuming bounded sub-Gaussian rewards, the regret of the Upper Confidence Bound (UCB) algorithm satisfies: 
+
+RUCB  
+
+> T
+
+≤ ∑
+
+> i:∆i>0
+
+8 log T
+
+∆i
+
++
+
+
+
+1 + π2
+
+3
+
+
+
+∆i
+
+
+
+, (6) where ∆i = μ∗ − μi is the suboptimality gap. For Thompson Sampling with Bernoulli rewards and Beta priors, the expected regret satisfies E[RTS  
+
+> T
+
+] = O
+
+
+
+∑i:∆i>0 log T
+
+> ∆i
+
+
+
+.These bounds, which follow from classical results of Auer et al. (2002) for UCB and Russo et al. (2018) for Thompson Sampling, demonstrate logarithmic regret growth over time, desir-able in long-horizon optimization. Extension to the surrogate-driven, asynchronous distributed setting is motivated by delayed-feedback arguments analogous to those in Joulani et al. (2013); throughout the paper we therefore use the classical bandit bounds as theoretical anchors rather than claiming a complete proof for the full combined setting. ALMAB-DC leverages these properties in its distributed setup to maintain low regret while supporting asynchronous execu-tion and delayed feedback. 
+
+2.4.5 Active Learning and Query-Efficient Regret 
+
+By leveraging active learning, ALMAB-DC selectively queries only the most informative con-figurations, reducing unnecessary evaluations. 
+
+Remark 1 (AL–MAB Regret Decomposition) . Let q T ≤ T denote the number of configura-tions queried under the active learning policy. The overall expected regret decomposes as 
+
+E[RALMAB T ] = E[RMAB T ] + ε(qT ), where E[RMAB T ] is the standard bandit regret over q T queries and ε(qT ) is the surrogate approximation error, which decreases sublinearly in q T under stan-dard GP concentration inequalities (Rasmussen and Williams, 2006). This decomposition mo-tivates the joint design of the AL and MAB components: improving surrogate quality (lower ε)directly reduces the regret budget needed from the bandit layer. 
+
+2.4.6 Communication Overhead and Parallel Efficiency 
+
+Communication cost scales as O(log K) in hierarchical architectures or O(K) in fully connected systems (Dean and Ghemawat, 2008; Li et al., 2014). Parallel multi-player bandit algorithms achieve near-optimal regret with significant throughput gains (Sz¨ or´ enyi et al., 2013). The ef-fective parallel efficiency is η(K) = 1/(1 + αKβ ), where α quantifies communication latency and β ∈ [0.5, 1] reflects topology characteristics (Moritz et al., 2018). ALMAB-DC for Sequential Experimental Design 11 
+
+2.4.7 Optimal Number of Agents 
+
+To balance the trade-off between parallel speedup and communication overhead, the optimal number of agents K∗ is derived by minimizing the total wall-clock time TK . Considering both computational and communication components, the optimal concurrency level satisfies: 
+
+dT K
+
+dK = 0 ⇒ K∗ =
+
+1 − p
+
+αβ p
+
+ 11+β
+
+, (7) where p denotes the serial fraction of the workload, α and β parameterize the communica-tion cost growth (e.g., αKβ ), and TK accounts for both compute and coordination time. This expression defines a concurrency threshold beyond which adding more agents offers diminish-ing returns, due to increasing communication cost or idle resource contention. 
+
+2.4.8 Practical Implications 
+
+When the serial fraction p is small (e.g., p < 0.1) and communication overhead remains low (i.e., αKβ ≪ 1), the system can scale nearly linearly with the number of agents. However, in practice, factors such as surrogate model update time, acquisition function optimization, or queue bottlenecks may reduce the benefit of additional agents. To maintain efficient scaling, an adaptive controller can monitor the parallel efficiency factor η(K) and task completion vari-ance σ 2, adjusting K dynamically to maintain optimal throughput and avoid underutilization or excessive coordination delays. 
+
+2.4.9 Delayed Feedback and Asynchronous Execution 
+
+In distributed systems, feedback is often delayed due to computational heterogeneity or com-munication lag. Assuming delay bounded by τmax , regret scales as Rdelay  
+
+> T
+
+= O
+
+p(T + τmax )K log T
+
+
+
+(Joulani et al., 2013). Asynchronous variants of UCB and Thompson Sampling preserve theo-retical guarantees when delays are sublinear in T (Zimmert and Seldin, 2019), supporting their use in ALMAB-DC under heterogeneous agent execution. 
+
+2.4.10 System-Level Runtime Implications 
+
+Under balanced load across K agents and negligible communication overhead, the per-query runtime reduces to O(( C +Ccomm )/K), with C representing compute time and Ccomm commu-nication time. Near-linear speedup is achievable when Ccomm ≪ C, but for tasks dominated by surrogate model updates, performance may saturate. An adaptive agent controller can monitor 
+
+η(K) and σ 2 to dynamically allocate agents and maintain high throughput. 
+
+2.5 Statistical Framework and Methodology 
+
+ALMAB-DC is grounded in surrogate-based statistical learning and sequential experimental design. Let f (x) denote the unknown objective, utility, or response surface. We model f with a Gaussian process prior, 
+
+f (x) ∼ G P (μ0(x), k(x, x′)) ,
+
+which yields posterior mean μt (x) and variance σ 2 
+
+> t
+
+(x) after t evaluations. These posterior summaries provide a common language across hyperparameter optimization, dose-finding, and adaptive spatial sampling. ALMAB-DC for Sequential Experimental Design 12 
+
+The query rule is formulated through standard Bayesian acquisition criteria. In generic black-box optimization tasks we use acquisition functions such as UCB or expected improve-ment; in statistically motivated design tasks the same machinery can be interpreted as sequential Bayesian experimental design, where new evaluations are chosen to reduce posterior uncer-tainty or improve task-specific expected utility: 
+
+xt+1 = arg max  
+
+> x∈X
+
+Ut
+
+ x; μt (x), σ 2 
+
+> t
+
+(x).
+
+Here Ut (·) denotes the task-specific acquisition utility, such as expected improvement, infor-mation gain, or reduction in posterior variance. Uncertainty in the reported Monte Carlo summaries is quantified across independent repli-cates. When interval estimates are needed, we use non-parametric bootstrap resampling of replicate-level summaries rather than relying on single-run Gaussian approximations. 
+
+Regret Bounds in Distributed Bandits Let A = {1, . . . , A} denote the action (arm) space. Each arm a ∈ A yields reward r ∼ Da with mean μa. The optimal action is: 
+
+a∗ = arg max  
+
+> a∈A
+
+μa.
+
+In distributed settings with K agents, the instantaneous regret at time t is: 
+
+r∗ 
+
+> t
+
+− ¯rt = μa∗ − 1
+
+K
+
+> K
+
+# ∑
+
+> j=1
+
+μatj ,
+
+and the cumulative regret becomes: 
+
+Rdist  
+
+> T
+
+=
+
+> T
+
+# ∑
+
+> t=1
+
+μa∗ − 1
+
+K
+
+> K
+
+# ∑
+
+> j=1
+
+μatj
+
+!
+
+.
+
+To reflect real-world systems, ALMAB-DC incorporates a communication overhead term: 
+
+Reff  
+
+> T
+
+= Rdist  
+
+> T
+
++ wcT
+
+# ∑
+
+> t=1
+
+Ccomm (t),
+
+where Ccomm (t) represents cost (e.g., latency, bandwidth), and wc balances accuracy and effi-ciency. 
+
+Delay-Tolerant Learning Agents often operate asynchronously, with bounded feedback de-lays δ tj ≤ τmax . Regret under delay scales as: 
+
+Rdelay  
+
+> T
+
+= O
+
+p (T + τmax )K log T
+
+
+
+,
+
+as shown in (Joulani et al., 2013). ALMAB-DC uses asynchronous variants of UCB and Thompson Sampling, which retain theoretical guarantees even with stale information (Zim-mert and Seldin, 2019). 
+
+Scaling and Agent Allocation Computational throughput is analyzed via Amdahl’s and Gustafson’s laws (see Section 2.4). Let K be the number of agents, p the serial fraction, and η the parallel efficiency. Wall-clock time and speedup follow the Amdahl’s Law formulas presented above, and with communication cost αKβ the effective efficiency is η(K) = 1/(1 + αKβ ).ALMAB-DC for Sequential Experimental Design 13 
+
+Optimal Number of Agents Minimizing total cost with respect to K gives the optimal con-currency K∗ =
+
+ 1−p 
+
+> αβ p
+
+1/(1+β )
+
+(derived in Section 2.4). 
+
+Summary Together, these theoretical insights and asymptotic regret bounds provide a statis-tical and computational foundation for ALMAB-DC. The framework is designed to scale under resource constraints, tolerate asynchronous feedback, and maintain query efficiency—making it suitable for real-world intelligent experimentation. 
+
+2.6 Illustrative Example: Non-Distributed vs. Distributed ALMAB-DC 
+
+To illustrate the core properties of ALMAB-DC in a controlled setting, we apply both non-distributed and distributed variants to a synthetic Gaussian mixture optimization task. 
+
+Mathematical Framework. The reward environment is modeled as a Gaussian mixture: 
+
+r(x) = 
+
+> G
+
+# ∑
+
+> i=1
+
+wi exp 
+
+
+
+−12 (x − μi)⊤Σ−1 
+
+> i
+
+(x − μi)
+
+
+
++ ε,
+
+where G is the number of mixture components, μi and Σi are the component mean and co-variance, wi are normalized weights ( ∑i wi = 1), and ε ∼ N (0, σ 2) is observation noise. This produces a smooth but non-convex landscape with multiple local optima. The search space X
+
+is discretized into A arms; at each iteration the UCB policy selects: 
+
+at = arg max 
+
+> i∈A
+
+"
+
+ˆμi(t) + c
+
+s
+
+log tni(t)
+
+#
+
+,
+
+and the empirical mean is updated as ˆ μi(t + 1) = ˆμi(t) + 1 
+
+> ni(t)+ 1
+
+(rt − ˆμi(t)) .In the distributed setting, K agents evaluate arm at in parallel and their rewards are averaged: ¯rt = 1
+
+K
+
+> K
+
+# ∑
+
+> j=1
+
+r( j) 
+
+> t
+
+, ˆμat (t + 1) = ˆμat (t) + 1
+
+nat (t) + 1(¯rt − ˆμat (t)) . (8) This averaging reduces estimation variance to Var [¯rt ] = σ 2/K, giving a linear reduction in uncertainty with the number of agents. 
+
+Quantitative Results. Table 3 compares the sequential (single-agent) and distributed (four-agent) configurations over 150 iterations with 15 arms. Table 3: Performance metrics comparing non-distributed and distributed ALMAB-DC simula-tions. 
+
+Metric Non-Distributed Distributed Gain / Ratio 
+
+Wall-clock Time (s) 2.137 0.548 3.90× faster 
+
+Cumulative Regret 4.812 2.347 ↓ 51.2% 
+
+Mean Reward 0.4182 0.5126 ↑ 22.5% 
+
+Speed-up Ratio – 3.90 –The distributed variant achieves a 3 .90 × speedup in wall-clock time, a 51 .2% decrease in cu-mulative regret, and a 22 .5% improvement in mean reward. These results confirm that parallel averaging simultaneously reduces variance and accelerates convergence without increasing the per-sample computational cost, consistent with the Var [¯rt ] = σ 2/K relationship derived above. ALMAB-DC for Sequential Experimental Design 14 
+
+# 3 Application Cases 
+
+Note on experimental methodology. The benchmark experiments in this section employ cali-brated surrogate-simulation models rather than live training runs or high-fidelity solvers. Eval-uation outcomes are generated by exponential saturation models (Cases 1 and 3) and a physics-inspired drag function (Case 2), each calibrated to match representative real-system perfor-mance ranges. This approach enables reproducible, controlled comparisons across n = 500 independent replicates at tractable computational cost. The choice of n = 500 is deliberate: it substantially exceeds the minimum sample size required for asymptotic validity of the Mann-Whitney U tests used throughout ( n ≥ 10 per group), delivers >99% power for even small effect sizes ( d ≥ 0.3) at α = 0.05, and reduces 95% confidence-interval half-widths to less than 4% of each reported mean. This large replicate count is made feasible by the surrogate-simulation framework, which completes all 500 runs for each case in under two minutes on a standard workstation. Larger-scale replication with live solvers remains an identified direc-tion for future work. All simulation parameters and generation scripts are included in the code repository. 
+
+3.1 Benchmark Suite 
+
+We evaluate ALMAB-DC on five benchmarks spanning two primary domains. The two statis-tically motivated cases are: (4) Dose–response (Case 4): Bayesian optimal dose-finding with binary efficacy/toxicity outcomes (Section 3.9). (5) Spatial sampling (Case 5): Sequential sensor placement on an 8 × 8 grid to minimize integrated posterior variance (Section 3.10). Three ML/engineering cases demonstrate generality: (1) HPO (Case 1): EfficientNet-B0 on CIFAR-10 (Krizhevsky and Hinton, 2009; Tan and Le, 2019); search over learning rate, batch size, dropout, weight decay, and width multiplier. (2) CFD (Case 2): Two-parameter airfoil drag minimization via OpenFOAM (Jasak et al., 2007); inputs are camber and thickness, output is CD. (3) RL (Case 3): MuJoCo HalfCheetah policy search (Todorov et al., 2012); metric is episodic return. All five cases use calibrated surrogate-simulation models, enabling n = 500 independent replicates at tractable cost. The ALMAB-DC codebase, surrogate scripts, baseline implementations (BOHB, Optuna, Grid/Random Search), and generation scripts are publicly available; see the Data Availability statement. 
+
+3.2 Evaluation Protocol 
+
+Four metrics are reported: (i) cumulative regret RT (reward loss relative to the oracle op-timum); (ii) sample efficiency (evaluations or rounds to reach a target performance level); (iii) wall-clock time ; and (iv) convergence rate (regret decay or task-specific loss). Budgets are case-specific and chosen to match the scale of each benchmark: N = 60 evaluations for Case 1, N = 50 evaluations for Cases 2–3, ten decision rounds after four initial observations for Case 4, and a total observation budget of N = 30 for Case 5. Statistical significance is assessed via two-sample Mann–Whitney U tests on 500-replicate final-evaluation vectors; Bonferroni correction is applied within each case. Significance at the 5% and 1% levels is denoted †
+
+and †† in Tables 4–6. Two core hypotheses are tested: H1 (Efficiency) ALMAB-DC achieves lower cumulative regret or loss than the main baselines; H2 (Scalability) near-linear wall-clock speedup holds as the number of parallel agents increases. ALMAB-DC for Sequential Experimental Design 15 
+
+3.3 Baselines and Comparison Methods 
+
+ALMAB-DC (UCB) is compared against five methods under identical evaluation budgets: 
+
+Grid Search and Random Search (non-adaptive lower-bound references); BOHB (Falkner et al., 2018) (Bayesian optimization with HyperBand early-stopping); Optuna (TPE) (Ak-iba et al., 2019; Bergstra et al., 2011) (Tree Parzen Estimator, state-of-the-art AutoML); and 
+
+ALMAB-DC (TS) (Thompson Sampling variant, included to verify gains are not policy-specific). 
+
+3.4 Experimental Settings and Infrastructure 
+
+Experiments run on two environments: a single-node CPU (serial baseline) and a multi-CPU distributed cluster with asynchronous worker coordination. Cases 1–3 use fixed evaluation budgets with a 12-hour runtime cap; Cases 4–5 use case-specific sequential-design budgets defined in the corresponding subsections. 
+
+3.4.1 Case 1: Deep Learning Hyperparameter Optimization Setup. Model: EfficientNet-B0 (Tan and Le, 2019) on CIFAR-10 (Krizhevsky and Hinton, 2009) (50 000 training / 10 000 test images, 10 classes). Search space: learning rate (10 −5–10 −1, log scale), batch size ∈ { 32 , 64 , 128 , 256 }, width multiplier, weight decay, and dropout (0–0 .5). Each configuration is represented by a calibrated emulator of a full training run, mak-ing each evaluation a controlled proxy for expensive HPO. ALMAB-DC uses a GP surrogate over validation accuracy with UCB acquisition and K ∈ { 1, 2, 4, 8, 16 } parallel agents. 
+
+3.4.2 Case 1 Results: CIFAR-10 Hyperparameter Optimization 
+
+Table 4 summarizes the comparative performance of six optimization methods on CIFAR-10 with EfficientNet-B0 over 500 independent replicates. All methods were given the same budget of N = 60 function evaluations. Table 4: Case 1 — CIFAR-10 HPO with EfficientNet-B0. Results are averaged over 500 inde-pendent runs ( ±1 std). Regret is cumulative over 60 evaluations. Best values in bold . Super-script † (†† ) denotes that ALMAB-DC (UCB) is significantly better at the 5% (1%) level after Bonferroni correction (two-sample Mann-Whitney U test, n = 500 independent replicates). 
+
+Method Val. Accuracy Std Cum. Regret Wall-clock (s) 
+
+Grid Search †† 0.8796 0.0081 13.5 168 Random Search †† 0.8954 0.0067 11.2 145 BOHB †† 0.9172 0.0048 8.8 120 Optuna (TPE) †† 0.9230 0.0042 8.2 122 ALMAB-DC (TS) † 0.9310 0.0036 7.1 112 
+
+ALMAB-DC (UCB) 0.9342 0.0036 6.9 108 
+
+ALMAB-DC (UCB) achieves the highest validation accuracy (0.9342) and the lowest cu-mulative regret (6.9), while completing in the shortest wall-clock time (108 s). The Thompson Sampling variant closely trails at 0.9310. Both ALMAB-DC variants significantly outperform classical baselines, with a gap of +5.5 percentage points over Grid Search and +1.7 percentage points over BOHB. ALMAB-DC for Sequential Experimental Design 16 
+
+Figure 3 shows convergence curves and cumulative regret trajectories for all six methods. ALMAB-DC converges to near-optimal accuracy within the first 30 evaluations, while Grid Search and Random Search continue to plateau well below 0.93. 10 20 30 40 50 60      
+
+> Number of Evaluations
+> 0.5
+> 0.6
+> 0.7
+> 0.8
+> 0.9
+> Best Validation Accuracy
+> Case 1: CIFAR-10 HPO Convergence
+> Grid Search
+> Random Search
+> BOHB
+> Optuna (TPE)
+> ALMAB-DC (TS)
+> ALMAB-DC (UCB)
+> 10 20 30 40 50 60
+> Number of Evaluations
+> 0
+> 2
+> 4
+> 6
+> 8
+> 10
+> 12
+> 14
+> Cumulative Regret
+> Case 1: Cumulative Regret
+> Grid Search
+> Random Search
+> BOHB
+> Optuna (TPE)
+> ALMAB-DC (TS)
+> ALMAB-DC (UCB)
+
+Figure 3: Case 1 — CIFAR-10 HPO. (Left) Best validation accuracy as a function of the number of function evaluations (mean ± 1 std over 500 runs). (Right) Cumulative regret vs. evaluation index, showing that ALMAB-DC (UCB) accumulates the least regret across the entire budget. 
+
+3.4.3 Case 2: Engineering Simulation Optimization Setup. Two-parameter airfoil shape optimization via a calibrated CFD surrogate (Jasak et al., 2007): camber ∈ [0.01 , 0.10 ] and thickness ∈ [0.05 , 0.20 ]; objective is to minimize drag coef-ficient CD. The surrogate emulates OpenFOAM/ANSYS Fluent (ANSYS, Inc., 2023) outputs with additive Gaussian noise. 
+
+Challenges and Approach. CFD simulations solve the Navier–Stokes equations on com-plex meshes, requiring minutes to hours per evaluation; high-fidelity runs with fine meshes and turbulence models such as k– ω SST are especially resource-intensive. Exhaustive param-eter sweeps are therefore impractical, and correlated outputs across neighboring designs make them sample-inefficient. To address this, ALMAB-DC combines three strategies: (i) design geometries are encoded with parameterized CAD models or B´ ezier curves for compact, dif-ferentiable shape representation; (ii) surrogate models trained on prior CFD results provide fast objective approximations; and (iii) uncertainty-aware active learning selects informative designs while the MAB layer dynamically allocates cluster resources across simulation config-urations to minimize drag coefficient CD.A detailed CPU scaling analysis with GP, RF, and MLP surrogates across 1–16 workers (100 runs per cell) is reported in Appendix C. The key finding is that MLP surrogates achieve 5.7× speedup at 16 CPUs owing to their low serial fraction ( p ≈ 0.08), while GP surrogates saturate at 2 .4× due to the O(n3) kernel-inversion step; drag minimization quality is statisti-cally indistinguishable across all CPU counts for all three models, confirming that the choice of worker count is a pure throughput decision with no accuracy trade-off. 
+
+3.4.4 Case 2 Results: CFD Airfoil Drag Minimization 
+
+Table 5 compares the six optimization methods on the CFD drag-minimization task over 500 replicates ( N = 50 evaluations each). Lower CD is better. ALMAB-DC for Sequential Experimental Design 17 
+
+Table 5: Case 2 — CFD Airfoil Drag Minimization. Results averaged over 500 independent runs ( ±1 std). Best values in bold . Superscript † (†† ) denotes that ALMAB-DC (UCB) is sig-nificantly better at the 5% (1%) level after Bonferroni correction (two-sample Mann-Whitney 
+
+U test, n = 500 independent replicates). 
+
+Method Best CD Std Wall-clock (s) 
+
+Grid Search †† 0.09304 0.00231 220 Random Search †† 0.08428 0.00164 185 BOHB †† 0.07094 0.00153 148 Optuna (TPE) †† 0.06750 0.00106 150 ALMAB-DC (TS) 0.06013 0.00108 137 
+
+ALMAB-DC (UCB) 0.05874 0.00108 132 
+
+ALMAB-DC (UCB) achieves the lowest drag ( CD = 0.059), representing a 36 .9% reduction relative to Grid Search and a 17 .2% improvement over BOHB. Optimization quality and wall-clock time improve together, confirming the framework’s effectiveness at sample-efficiently navigating the aerodynamic design space. Figure 4 shows the drag-convergence profiles of all six methods across 50 evaluations. Both ALMAB-DC variants converge below CD = 0.065 within 30 evaluations, while Grid Search stagnates above 0.09 throughout the entire budget. The widening gap between ALMAB-DC and the baselines after evaluation 20 reflects the surrogate’s accumulating knowledge of the drag landscape, enabling increasingly focused queries in the low-drag region. 
+
+3.4.5 Case 3: Reinforcement Learning Policy Optimization Setup. Hyperparameter search for a continuous-control RL agent on MuJoCo HalfCheetah (Todorov et al., 2012). Search space: policy learning rate, network depth and width, discount factor γ ∈ [0.90 , 0.999 ], entropy regularization, and replay buffer size. Each trial is represented through a calibrated emulator of noisy, expensive RL evaluation, preserving the sequential-search structure without requiring live MuJoCo training at every replicate. ALMAB-DC treats each configuration as a bandit arm with a GP posterior over expected return; distributed agents run trials asynchronously and share reward trajectories to update global statistics. 
+
+3.4.6 Case 3 Results: MuJoCo HalfCheetah Policy Optimization 
+
+Table 6 summarizes comparative results for the RL policy HPO task on MuJoCo HalfCheetah across 500 replicates ( N = 50 evaluations each). ALMAB-DC (UCB) attains the highest expected return (9,599), +50 .5% above Grid Search and +12 .5% above BOHB ( p < 0.01, Mann–Whitney U), and simultaneously achieves the lowest cumulative regret. The consistent advantage over Optuna (TPE) demonstrates that the MAB acquisition strategy provides additional benefit beyond standard surrogate-based methods in stochastic RL settings. Figure 5 shows convergence curves and cumulative regret for all six methods. ALMAB-DC (UCB) reaches near-peak return by evaluation 30, whereas Grid Search is still improving at evaluation 50; the cumulative-regret panel confirms that ALMAB-DC accumulates substan-tially less regret across the entire budget. Figure 6 presents the empirical speedup as a function of agent count (up to K = 16) across all three cases, validating the scalability hypothesis (H2). ALMAB-DC for Sequential Experimental Design 18 0 10 20 30 40 50 
+
+> Number of Evaluations
+> 0.06
+> 0.08
+> 0.10
+> 0.12
+> 0.14
+> 0.16
+> 0.18
+> Best Drag Coefficient  CD
+
+Case 2: CFD Drag Minimisation Baseline Comparison 
+
+> Grid Search
+> Random Search
+> BOHB
+> Optuna (TPE)
+> ALMAB-DC (TS)
+> ALMAB-DC (UCB)
+
+Figure 4: Case 2 — drag convergence comparison. Best CD found vs. evaluation index (mean 
+
+± 1 std over 500 runs). ALMAB-DC variants (UCB and TS) converge below CD = 0.065 within 30 evaluations, while Grid Search stagnates above 0.09 even at evaluation 50. The clear separation between ALMAB-DC and all baselines confirms superior sample efficiency on the aerodynamic design task. Near-linear scaling is sustained to K = 4 for all benchmarks, with Case 1 reaching 7 .5× at 
+
+K = 16, consistent with Amdahl’s Law predictions. An ablation study isolating the contribu-tion of each component is presented in Section 3.5. 
+
+3.5 Ablation Study: Contribution of AL and MAB Components 
+
+To isolate the contribution of each core component, we evaluate two reduced variants of ALMAB-DC alongside the full framework and the best single baseline (Optuna): • ALMAB-DC (no MAB): the active-learning surrogate and acquisition function are re-tained, but arm selection is replaced by uniform random scheduling. This measures the value added by bandit-based resource allocation. • ALMAB-DC (no AL): UCB scheduling is retained, but query selection is replaced by uniform random sampling (no GP surrogate or acquisition function). This measures the value added by surrogate-guided active learning. Table 7 and Figure 7 summarize the results across all three benchmarks. Three findings stand out. First , both AL and MAB components are independently benefi-cial: removing either one degrades performance across all three cases. Second , the AL com-ponent contributes more than the MAB component: “no MAB” consistently outperforms “no AL,” reflecting the greater impact of surrogate-guided sampling over bandit scheduling alone. ALMAB-DC for Sequential Experimental Design 19 
+
+Table 6: Case 3 — MuJoCo HalfCheetah HPO. Results averaged over 500 independent runs (±1 std). Regret ( ×10 3) is cumulative over 50 evaluations. Best values in bold . Superscript †
+
+(†† ) denotes that ALMAB-DC (UCB) is significantly better at the 5% (1%) level after Bonfer-roni correction (two-sample Mann-Whitney U test, n = 500 independent replicates). 
+
+Method Avg. Return Std Cum. Regret ( ×10 3) Wall-clock (s) 
+
+Grid Search †† 6,377 162 330.8 820 Random Search †† 7,247 140 285.5 750 BOHB †† 8,531 111 226.6 620 Optuna (TPE) †† 8,790 103 208.7 630 ALMAB-DC (TS) †† 9,402 89 177.3 580 
+
+ALMAB-DC (UCB) 9,599 82 165.1 560 10 20 30 40 50     
+
+> Number of Evaluations
+> 2000
+> 4000
+> 6000
+> 8000
+> 10000
+> Best Episodic Return
+> Case 3: HalfCheetah RL-HPO Convergence
+> Grid Search
+> Random Search
+> BOHB
+> Optuna (TPE)
+> ALMAB-DC (TS)
+> ALMAB-DC (UCB)
+> 10 20 30 40 50
+> Number of Evaluations
+> 0
+> 50
+> 100
+> 150
+> 200
+> 250
+> 300
+> Cumulative Regret  (×10³)
+> Case 3: Cumulative Regret
+> Grid Search
+> Random Search
+> BOHB
+> Optuna (TPE)
+> ALMAB-DC (TS)
+> ALMAB-DC (UCB)
+
+Figure 5: Case 3 — MuJoCo HalfCheetah HPO. (Left) Best average return vs. evaluation index (mean ± 1 std over 500 runs). ALMAB-DC (UCB) reaches near-peak performance by eval-uation 30, whereas Grid Search is still improving at evaluation 50. (Right) Cumulative regret over the evaluation budget. 
+
+Third , “no AL” (MAB only) performs at the level of Optuna (TPE), confirming that ALMAB-DC’s advantage over strong BO baselines is primarily driven by the active-learning layer, with the MAB layer providing an additional but complementary gain. 
+
+3.6 Budget Sensitivity Analysis 
+
+A natural question for any HPO framework is how strongly the performance advantage depends on the evaluation budget N. Figure 8 shows the best validation accuracy achieved by each method as N varies from 20 to 80 evaluations on Case 1 (CIFAR-10), using the same 500-replicate protocol. Three observations emerge. First , ALMAB-DC (UCB) maintains a consistent advantage over all baselines across the entire budget range, confirming that the benefit is not an ar-tifact of the specific budget N = 60 used in the main experiments. Second , the advantage over Optuna (TPE) peaks at N = 40 (+1.16 pp), the regime in which ALMAB-DC’s GP sur-rogate has accumulated enough observations to make high-quality acquisition decisions while non-surrogate baselines have not yet densely covered the search space. Third , all methods ap-proach their asymptotic accuracy by N = 80, with gaps narrowing but not vanishing, confirming that ALMAB-DC’s sample-efficiency advantage is most pronounced in the practically relevant ALMAB-DC for Sequential Experimental Design 20 1 2 4 8 16 
+
+> Number of Parallel Agents (CPUs)
+> 2
+> 4
+> 6
+> 8
+> 10
+> 12
+> 14
+> 16
+> Speedup  S(K)
+> 5.1×
+> 7.5×
+> 4.4×
+> 5.8×
+> 4.8×
+> 6.3×
+> Ideal
+> linear
+> Amdahl
+> bounds
+> (dashed)
+> ALMAB-DC Scalability: Empirical vs.\ Amdahl Upper Bound
+> Ideal linear
+> Case 1 (CIFAR-10)
+> Case 2 (CFD)
+> Case 3 (HalfCheetah)
+
+Figure 6: Empirical speedup vs. number of parallel agents ( K ∈ { 1, 2, 4, 8, 16 }) for all three application cases, compared against the ideal linear speedup and per-case Amdahl upper bounds (dashed, fitted to K ≤ 4 data). ALMAB-DC sustains near-linear scaling to K = 4 across all cases, with Case 1 (CIFAR-10, p = 0.08) reaching 7 .5× at K = 16 and Case 2 (CFD, p = 0.11) saturating earlier at 5 .8×, consistent with Amdahl’s Law predictions. Annotated values show observed speedup at K = 8 and K = 16. moderate-budget regime. 
+
+3.7 Convergence Rate Analysis 
+
+To quantify how quickly each method converges, we analyze three complementary metrics on the Case 1 (CIFAR-10) trajectories: (i) evaluations-to-threshold: the first t at which the mean best-so-far curve exceeds 0.880 or 0.910; (ii) normalized area under the best-so-far curve (AUC) over N = 60; and (iii) the convergence rate λ obtained by fitting the exponential gap model A − f (t) ≈ C e −λt via log-linear regression. Figure 9 displays all three metrics across the six methods. The results confirm a consistent ordering. ALMAB-DC (UCB) reaches the 0.880 threshold in 24 evaluations, compared with 29 for Optuna (TPE), 31 for BOHB, and 53 for Grid Search; the higher 0.910 threshold is reached by ALMAB-DC in 39 evaluations versus 47 for Optuna, while Grid Search and Random Search never reach it within N = 60. The fitted convergence rates ( λ , all R2 ≥ 0.998) place ALMAB-DC (UCB) at λ = 0.031, 10% faster than Optuna (λ = 0.028) and 31% faster than Grid Search ( λ = 0.024). These three metrics jointly confirm that ALMAB-DC achieves not only higher final accuracy but also materially faster convergence throughout the evaluation trajectory. 
+
+3.8 Robustness to Observation Noise 
+
+Real HPO evaluations are inherently noisy: runtime variability, mini-batch stochasticity, and random seeds all inject randomness into the reported objective value. To assess robustness, we ALMAB-DC for Sequential Experimental Design 21 
+
+Table 7: Ablation study — contribution of each ALMAB-DC component. Values are mean ±
+
+std over 500 independent runs. “No MAB” retains the GP surrogate with uniform arm selection; “No AL” retains UCB scheduling with random querying. Best values in bold .
+
+Variant Case 1 Val. Acc. Case 2 CD Case 3 Return ALMAB-DC (full) 0.9340 ± 0.0036 0.0587 ± 0.0011 9,596 ± 86 
+
+w/o MAB (AL only) 0.9324 ± 0.0042 0.06140 ± 0.00114 9,388 ± 97 w/o AL (MAB only) 0.9273 ± 0.0048 0.06877 ± 0.00110 8,992 ± 108 Optuna (best baseline) 0.9231 ± 0.0042 0.06753 ± 0.00106 8,791 ± 104 10 20 30 40 50 60             
+
+> Number of Evaluations
+> 0.5
+> 0.6
+> 0.7
+> 0.8
+> 0.9
+> Best Validation Accuracy
+> Case 1: CIFAR-10 HPO
+> 10 20 30 40 50
+> Number of Evaluations
+> 0.06
+> 0.08
+> 0.10
+> 0.12
+> 0.14
+> 0.16
+> 0.18
+> Best  CD (lower is better)
+> Case 2: CFD Airfoil
+> 10 20 30 40 50
+> Number of Evaluations
+> 2000
+> 3000
+> 4000
+> 5000
+> 6000
+> 7000
+> 8000
+> 9000
+> 10000
+> Best Average Return
+> Case 3: MuJoCo HalfCheetah
+> Grid Search Optuna (best baseline) ALMAB-DC (no AL) ALMAB-DC (no MAB) ALMAB-DC (full)
+
+Figure 7: Ablation convergence curves for all three benchmarks (mean ± 1 std over 500 runs). 
+
+ALMAB-DC (full) consistently dominates both ablated variants. No MAB (AL only, orange dashed) closely tracks the full framework in the early phase but plateaus sooner, confirming that bandit-based scheduling contributes the final performance gain. No AL (MAB only, teal dash-dot) performs comparably to the best baseline (Optuna), showing that MAB scheduling alone without surrogate guidance adds limited benefit over a strong BO baseline. inject additive i.i.d. Gaussian noise εt ∼ N (0, σ 2obs ) into each evaluation’s returned accuracy and measure the resulting degradation in final performance at N = 60 for Case 1 (CIFAR-10, 500 replicates). Noise levels σobs ∈ { 0, 0.01 , 0.02 , 0.04 } span clean observations to a hostile evaluation environment. As Figure 10 shows, non-surrogate methods are most sensitive to noise: Grid Search and Random Search lose 5.0 and 4.4 percentage points respectively at σobs = 0.04. Surrogate-based baselines (BOHB: −2.2 pp; Optuna: −1.8 pp) show intermediate robustness because their probabilistic models implicitly smooth observation noise across evaluations. ALMAB-DC (UCB and TS) is the most robust, degrading by only 0 .7–0 .8 pp at the highest noise level, because the GP posterior explicitly models observation variance and down-weights noisy ob-servations in its acquisition function. Crucially, ALMAB-DC’s advantage over Optuna grows 
+
+with noise—from +1.1 pp at σ = 0 to +2.1 pp at σ = 0.04—confirming that surrogate-guided active learning becomes more valuable, not less, in noisy evaluation regimes. 
+
+3.9 Case 4: Dose–Response Optimization via Bayesian Experimental De-sign 
+
+Problem setup. We consider a sequential dose-allocation problem motivated by Phase I/II clinical trial design. A drug is evaluated at candidate dose levels x ∈ { 0, 0.25 , . . . , 8.0} (33 levels). Each dose level has an associated efficacy probability peff (x) = σ (−1.5 + 0.9x) and ALMAB-DC for Sequential Experimental Design 22 
+
+Figure 8: Budget sensitivity on CIFAR-10 (Case 1, 500 replicates). (Left) Best validation ac-curacy vs. evaluation budget N for all six methods (mean ± 1 std). (Right) Accuracy advantage of ALMAB-DC (UCB) over Optuna (TPE) at each budget level. 
+
+Figure 9: Convergence rate analysis for Case 1 (CIFAR-10, 500 replicates). (a) Mean best-so-far curves (solid) with exponential gap fits (dotted). (b) Evaluations required to first exceed accuracy thresholds of 0.880 (solid bars) and 0.910 (hatched bars); bars at the budget limit (N = 60, red dashed) denote failure to reach the threshold. (c) Fitted convergence rate λ with 
+
+R2 annotation (all fits R2 ≥ 0.998). toxicity probability ptox (x) = σ (−5.0 + 1.2x), where σ (·) denotes the logistic function. The experimenter observes noisy binary outcomes (one Bernoulli trial per patient cohort) and aims to identify the dose x∗ maximizing the net clinical benefit f (x) = peff (x) − λ ptox (x) with λ =
+
+0.5. This benchmark is therefore a Bayesian dose-finding problem under binary outcomes, with a statistically meaningful sequential-design objective rather than a generic black-box search target. The true optimum is x∗ = 3.5, f ∗ = 0.684. Each cohort evaluation corresponds to one patient exposure and is modeled as an expensive black-box query. Under this framing, ALMAB-DC applies directly: the GP surrogate models the latent utility surface, the acquisition function selects the most informative next dose, the bandit controller allocates cohort budget across parallel evaluation arms, and distributed agents conduct parallel evaluations. 
+
+ALMAB-DC configuration. The GP surrogate uses an RBF kernel (length-scale 1.5, signal variance 0.9, noise σn = 0.18). Sequential UCB ( β = 2.0) drives the acquisition, and the distributed batch-selection layer uses Kriging believer updates with a diversity penalty to ensure parallel workers cover distinct dose regions. Runs start from four space-filling observations (x ∈ { 0, 2, 5.5, 8}) and proceed for ten wall-clock rounds. ALMAB-DC for Sequential Experimental Design 23 
+
+Figure 10: Noise robustness on CIFAR-10 (Case 1, 500 replicates). (Left) Best validation ac-curacy vs. observation noise σobs for all six methods (mean ± 1 std). (Right) Accuracy degra-dation relative to the clean ( σ = 0) baseline; smaller degradation indicates greater robustness. 
+
+Baselines. We compare against Equal Spacing (systematic dose cycling), Random (uniform random selection), D-optimal (sequential design maximizing the determinant of the Fisher information matrix for the logistic model), and Pure BO (GP-UCB without the MAB arm-diversity layer). D-optimal design is included as a classical statistical comparator: unlike the utility-based ALMAB-DC criterion, it targets parameter information in the underlying logistic dose– response curves rather than direct optimization of net clinical benefit. 
+
+Results. Figure 11 shows results over n = 500 independent replicates. Panel (a) displays the true dose–response landscape, confirming that x∗ lies in a region where both efficacy and tox-icity are active. Panel (b) shows simple regret rt = f ∗ − f (x+ 
+
+> t
+
+) versus evaluations for sequen-tial methods (K=1). ALMAB-DC (UCB, K=1) achieves the lowest median final simple re-gret (0.00263), significantly outperforming Equal Spacing (0.101, p < 0.001), Random (0.006, 
+
+p < 0.001), and D-optimal (0.006, p < 0.001) under Bonferroni-corrected Mann–Whitney U
+
+tests. Panel (c) demonstrates the distributed scaling advantage: increasing to K = 2 and K = 4parallel cohorts drives the median simple regret to zero within the same ten-round wall-clock budget, achieving up to 4 × effective speedup. At K = 8, the interquartile range collapses to zero, indicating near-certain identification of x∗ within ten rounds. These results confirm that ALMAB-DC is a natural and effective framework for Bayesian optimal experimental design in dose-finding contexts, combining a utility-targeting sequential design rule with parallel cohort allocation. 
+
+3.10 Case 5: Adaptive Spatial Sampling for Gaussian Process Field Esti-mation 
+
+Problem setup. We consider sequential design for spatial field estimation—a canonical prob-lem in geostatistics, environmental monitoring, and sensor placement. A latent spatial field 
+
+Z(s) over the unit square [0, 1]2 is drawn from a zero-mean Gaussian process with a Mat´ ern-32
+
+covariance kernel (length-scale ℓ = 0.35, marginal variance σ 2 
+
+> f
+
+= 1.0): 
+
+k(s, s′) = σ 2 
+
+> f
+
+1 +
+
+√3 r
+
+ℓ
+
+!
+
+exp −√3 r
+
+ℓ
+
+!
+
+, r = ∥s − s′∥2. (9) ALMAB-DC for Sequential Experimental Design 24 0 2 4 6 8                     
+
+> Dose level x
+> 0.0
+> 0.2
+> 0.4
+> 0.6
+> 0.8
+> 1.0
+> Probability / Net benefit
+> (a) Dose response landscape
+> Net benefit f(x)
+> peff (x)
+> ptox (x)
+> x*= 3.5, f*= 0.684
+> 246810
+> Rounds (wall-clock)
+> 0.000
+> 0.025
+> 0.050
+> 0.075
+> 0.100
+> 0.125
+> 0.150
+> 0.175
+> Simple regret  f * f(x +
+> t )
+> (b) Sequential methods (K=1)
+> Equal Spacing (K=1)
+> Random (K=1)
+> D-Optimal (K=1)
+> ALMAB-DC UCB (K=1)
+> 246810
+> Rounds (wall-clock)
+> 0.00
+> 0.02
+> 0.04
+> 0.06
+> 0.08
+> 0.10
+> 0.12
+> Simple regret  f * f(x +
+> t )
+> (c) Distributed ALMAB-DC (varying K)
+> Workers per round
+> K=1 (sequential)
+> K=2 workers
+> K=4 workers
+> K=8 workers
+> K=4 workers (TS)
+
+Figure 11: Case 4: Dose–response optimization via Bayesian experimental design ( n =
+
+500 independent replicates). (a) True dose–response landscape over 33 dose levels x ∈{0, 0.25 , . . . , 8.0}: net clinical benefit f (x) = peff (x) − 0.5 ptox (x) (solid black), efficacy prob-ability peff (x) = σ (−1.5 + 0.9x) (blue dashed), and toxicity probability ptox (x) = σ (−5.0 +
+
+1.2x) (red dashed); the green vertical line marks the true optimum x∗ = 3.5, f ∗ = 0.684. (b) 
+
+Median simple regret rt = f ∗ − f (x+
+
+t ) versus cumulative evaluations for sequential methods (K = 1); shaded bands show the interquartile range. ALMAB-DC (UCB) achieves the lowest final median regret (0.00263); all pairwise differences versus Equal Spacing (0.101), Random (0.006), D-optimal (0.006), and pure BO are statistically significant ( p < 0.001, Bonferroni-corrected Mann–Whitney U tests). (c) Median simple regret versus wall-clock rounds for dis-tributed ALMAB-DC ( K = 1, 2, 4, 8). Each doubling of parallel cohorts approximately halves the rounds to reach a given regret target: at K = 4, median regret reaches zero within ten rounds, and at K = 8 the interquartile range collapses to zero, indicating near-certain identification of 
+
+x∗.Observations are noisy: Y (s) = Z(s) + ε, ε ∼ N (0, σ 2
+
+n ), σn = 0.2. The experimenter selects sampling locations sequentially from an 8 × 8 candidate grid (64 locations) to minimize the 
+
+integrated posterior variance (IPV), IPV t = 1
+
+|S | ∑s∈S σ 2
+
+t (s), where σ 2
+
+t (s) is the GP posterior variance at location s after t observations. Each observation corresponds to an expensive sensor deployment or simulation query. 
+
+ALMAB-DC configuration. The GP surrogate uses the true Mat´ ern-32 kernel. The active-learning acquisition function combines posterior standard deviation and variance (UCB-type). For distributed batch selection ( K > 1), the MAB arm-diversity layer applies Kriging believer hallucinated updates with a spatial diversity penalty, allocating K workers to distinct grid re-gions per round. Experiments begin from four corner observations and run for ⌊(Nbudget −
+
+4)/K⌋ rounds. 
+
+Baselines. We compare against Latin Hypercube Sampling (LHS, a classical space-filling design), Random selection, and Greedy Max-Variance (sequential selection of the highest-variance candidate without the MAB layer). 
+
+Results. Figure 12 shows results over n = 500 replicates. Panel (a) visualizes a representative drawn field on the candidate grid. Panel (b) compares sequential methods ( K = 1) by IPV versus number of observations. ALMAB-DC (UCB) matches Greedy Max-Variance and significantly ALMAB-DC for Sequential Experimental Design 25 
+
+outperforms LHS (final median IPV 0 .061 vs 0 .093, p < 0.001) and Random (0 .106, p < 0.001) under Bonferroni-corrected Mann–Whitney tests. The parity with Greedy Max-Variance is expected: in the sequential case the ALMAB-DC acquisition reduces to the standard max-variance criterion; the MAB layer’s contribution emerges in the distributed setting. Panel (c) demonstrates this distributed advantage: K = 2 workers halve the rounds required to reach a target IPV (e.g., IPV ≤ 0.11 achieved at round 6 vs round 13 for K = 1); K = 4 workers achieve it at round 4. These results establish that ALMAB-DC provides statistically principled and computationally efficient sequential field estimation, a task of direct relevance to environmental monitoring, geostatistical surveys, and experimental design for spatial processes. 0.2 0.4 0.6 0.8             
+
+> s1
+> 0.2
+> 0.4
+> 0.6
+> 0.8
+> s2
+> (a) True latent spatial field
+> Initial (N=4)
+> 510 15 20 25 30
+> Number of observations
+> 0.1
+> 0.2
+> 0.3
+> 0.4
+> 0.5
+> 0.6
+> Integrated posterior variance (IPV)
+> (b) Sequential methods (K=1)
+> LHS (space-filling)
+> Random
+> Max-Variance (greedy)
+> ALMAB-DC UCB (K=1)
+> ALMAB-DC TS (K=1)
+> 0510 15 20 25
+> Rounds (wall-clock)
+> 0.1
+> 0.2
+> 0.3
+> 0.4
+> 0.5
+> 0.6
+> Integrated posterior variance (IPV)
+> (c) Distributed ALMAB-DC (varying K)
+> Workers per round
+> K=1 (sequential)
+> K=2 workers
+> K=4 workers
+> 2
+> 1
+> 0
+> 1
+> 2
+> Z(s)
+
+Figure 12: Case 5: Adaptive spatial sampling for Gaussian process field estimation ( n = 500 independent replicates). (a) One representative realization of the latent Mat´ ern-32 spatial field (length-scale ℓ = 0.35, marginal variance σ 2
+
+f = 1.0, noise σn = 0.2) on the 8 × 8 candidate grid; filled black squares mark the four fixed corner observations used to initialize every replicate. 
+
+(b) Median integrated posterior variance IPV t = 1
+
+|S | ∑s σ 2
+
+t (s) (lower is better) versus number of sequential observations ( K = 1, total budget N = 30); shaded bands show the interquar-tile range. ALMAB-DC (UCB) matches the Greedy Max-Variance oracle (final median IPV 
+
+= 0.061) and significantly outperforms Latin Hypercube Sampling (IPV = 0.093) and Ran-dom selection (IPV = 0.106) at p < 0.001 (Bonferroni-corrected Mann–Whitney U tests). (c) 
+
+Median IPV versus wall-clock rounds for distributed ALMAB-DC ( K = 1, 2, 4). Near-linear scaling is evident: the target IPV ≤ 0.11 is reached at round 13 for K = 1, round 6 for K = 2, and round 4 for K = 4, consistent with a K-fold reduction in rounds per additional doubling of parallel workers. 
+
+3.11 Practical Recommendations 
+
+The empirical results across Sections 3.5–3.8 collectively support the following practical guid-ance for practitioners considering ALMAB-DC. 
+
+When to choose ALMAB-DC over Bayesian optimization baselines. ALMAB-DC pro-vides the largest advantage over Optuna (TPE) and BOHB in three scenarios: (i) moderate evaluation budgets (N = 40–60), where the GP surrogate has enough data to make informative acquisition decisions but non-surrogate methods have not yet densely covered the search space (Section 3.6); (ii) noisy evaluation environments , where ALMAB-DC’s advantage over Optuna grows from +1.1 pp at σ = 0 to +2.1 pp at σ = 0.04 (Section 3.8); and (iii) high-dimensional or multi-modal search spaces , where the MAB layer dynamically reallocates the budget toward promising arms, preventing premature convergence. In contrast, when budgets are very small ALMAB-DC for Sequential Experimental Design 26 
+
+(N ≤ 20) and the search space is low-dimensional, Optuna (TPE) offers competitive perfor-mance at lower implementation overhead. 
+
+Component selection. The ablation study (Section 3.5) shows that the active-learning (AL) layer contributes more than the MAB layer : “no MAB” (AL only) consistently outperforms “no AL” (MAB only), and “no AL” performs comparably to Optuna. Practitioners with limited engineering capacity should therefore prioritize implementing the GP surrogate and acquisition function first, and add the MAB scheduling layer as a secondary enhancement. 
+
+Number of parallel agents. Near-linear speedup holds up to K = 4 agents across all three benchmarks. Beyond K = 4, returns diminish according to Amdahl’s Law with serial fractions of p = 0.08–0 .11; K = 8 provides roughly 5–6 × speedup while K = 16 provides 5 .8–7 .5×. For most laboratory-scale deployments in the current CPU-based setting (4–8 workers), K = 4–8 balances parallel efficiency with communication overhead. Very large clusters ( K > 16) offer diminishing returns unless the serial fraction can be reduced through asynchronous surrogate updates. 
+
+Convergence monitoring. ALMAB-DC (UCB) reaches the accuracy threshold 0.880 in 24 evaluations on CIFAR-10 — approximately 40% of the N = 60 budget (Section 3.7). Practi-tioners can use this as a rule of thumb: if the best-found value has not exceeded a meaningful threshold within the first 40% of the budget, it is worth re-examining the search space bounds or surrogate initialization rather than continuing to exhaustion. 
+
+Surrogate model choice. The GP surrogate used here scales as O(N3) and becomes com-putationally expensive for N > 150–200. For larger budgets, we recommend switching to a sparse GP (e.g., SGPR) or a random forest surrogate (as used by BOHB) with minimal loss of acquisition quality, while retaining the MAB scheduling layer unmodified. 
+
+3.12 Limitations and Open Challenges 
+
+ALMAB-DC has several limitations that merit discussion. First, the surrogate model (GP) scales cubically with the number of evaluations; for very large budgets ( N > 200) a sparse GP or neural surrogate may be required. Second, the current MAB formulation treats each worker arm as exchangeable; heterogeneous compute nodes with different throughput profiles would require an arm model that accounts for worker-specific latency. Third, the noise-robustness advantage of ALMAB-DC (Section 3.8) was quantified on Case 1 only; extending this anal-ysis to the CFD and RL settings is left for future work. Future extensions will address these challenges through scalable surrogate learning, more robust agent coordination policies, and broader live-system validation. 
+
+# 4 Conclusion and Future Directions 
+
+Summary of contributions. We introduced ALMAB-DC, a GP-based sequential design frame-work for expensive black-box experimentation that couples active learning, multi-armed bandit scheduling, and distributed asynchronous execution. The framework is grounded in Gaussian process surrogates with uncertainty-aware acquisition, UCB and Thompson-sampling bandit ALMAB-DC for Sequential Experimental Design 27 
+
+variants with classical bandit regret bounds as theoretical anchors, and a multi-agent architec-ture whose scalability is characterized by Amdahl’s Law. Its primary domain is sequential sta-tistical experimentation—dose-finding, adaptive spatial sampling, and related Bayesian optimal design problems—with the same architecture, without structural modification, also addressing ML and engineering optimization to demonstrate generality. 
+
+Empirical results: statistical benchmarks (Cases 4–5). The two statistically motivated case studies demonstrate that ALMAB-DC is a natural and competitive framework for sequen-tial experimental design. In dose–response optimization (Case 4, Section 3.9), ALMAB-DC is formulated as a Bayesian optimal experimental design problem in which the objective is the net clinical benefit f (x) = peff (x) − λ ptox (x). The sequential ALMAB-DC (UCB, K = 1) achieves median simple regret 0 .00263 at the true optimum x∗ = 3.5, significantly outperforming Equal Spacing (regret 0 .101), Random (0 .006), D-optimal design (0 .006), and pure BO ( p < 0.001, Bonferroni-corrected Mann–Whitney U). The distributed configuration ( K = 4) drives me-dian regret to zero within ten wall-clock rounds, demonstrating that parallel cohort evalua-tion provides a clinically meaningful speedup. In adaptive spatial field estimation (Case 5, Section 3.10), ALMAB-DC selects sensor locations sequentially to minimize the integrated posterior variance (IPV) of a Mat´ ern-32 GP field over a 64-point grid. With 30 sequential obser-vations ( K = 1), ALMAB-DC achieves IPV = 0.061, matching the greedy max-variance oracle and significantly outperforming LHS (IPV = 0.093) and Random (0 .106) at p < 0.001. The 
+
+K = 4 distributed configuration reaches the same IPV target in approximately one-quarter of the wall-clock rounds required by the sequential baseline. 
+
+Empirical results: ML and engineering benchmarks (Cases 1–3). On the three engi-neering and ML benchmarks, ALMAB-DC (UCB) achieves 93.4% CIFAR-10 accuracy (out-performing Optuna by 1.1 pp and BOHB by 1.7 pp), reduces airfoil drag to CD = 0.059 (36.9% below Grid Search), and improves MuJoCo RL policy return by 50% over Grid Search. Across Cases 1–3, pairwise advantages over the non-ALMAB baselines hold under Bonferroni-corrected Mann–Whitney U tests ( p < 0.001, n = 500 replicates). Component ablation (Section 3.5) confirms that the AL and MAB layers contribute independently: removing the MAB layer de-grades Case 1 accuracy by 0.18 pp, while removing the AL layer degrades it by 0.69 pp—the AL layer is the primary driver of advantage over Bayesian baselines such as Optuna. Budget sensitivity analysis (Section 3.6) shows a consistent advantage across N = 20–80 evaluations, peaking in the moderate-budget regime ( N = 40–60) most common in practice. Convergence rate analysis (Section 3.7) shows that ALMAB-DC (UCB) reaches the 0.880 accuracy thresh-old in 24 evaluations—17% fewer than Optuna and 55% fewer than Grid Search—with a fitted exponential rate λ = 0.031 ( R2 ≥ 0.998). Noise robustness analysis (Section 3.8) shows that ALMAB-DC’s GP surrogate limits accuracy degradation to 0.7–0.8 pp at σobs = 0.04, com-pared with 4.4–5.0 pp for non-surrogate methods, and that the advantage over Optuna grows under noise (from +1.1 pp at σ = 0 to +2.1 pp at σ = 0.04). Taken together, the five case studies should be interpreted as controlled surrogate-simulation validation of the methodology rather than as claims about full end-to-end deployment on live production systems; the strength of the evidence lies in reproducible comparisons of sequential-design efficiency, uncertainty-aware search, and distributed wall-clock gains. 
+
+Scalability. Distributed execution achieves 7 .5× speedup at K = 16 agents on CIFAR-10 (5 .8× on CFD), consistent with Amdahl’s Law using fitted serial fractions p = 0.08–0 .11. Near-linear scaling holds up to K = 4 agents across all five benchmarks. 
+
+Future directions. Three near-term directions are most pressing. Surrogate scaling : the GP surrogate currently scales as O(N3); sparse GP or deep kernel learning alternatives would en-able budgets N > 200 with minimal loss of acquisition quality. Heterogeneous workers : incor-ALMAB-DC for Sequential Experimental Design 28 
+
+porating worker-specific latency and throughput estimates would improve the MAB schedul-ing layer on heterogeneous clusters. Extending the benchmark suite to larger-scale tasks— ImageNet training with EfficientNet-B0, autonomous-driving policy optimization in CARLA, and multi-center adaptive clinical trials—is planned as follow-on work. Longer-term oppor-tunities include federated deployment for privacy-sensitive settings, causal bandit models for confounded evaluation environments, and transfer learning across related optimization tasks to warm-start surrogate initialization. 
+
+# Appendix A: Software Stack 
+
+ALMAB-DC is implemented in Python 3.10 and built on a compact CPU-based scientific-computing stack. PyTorch (Paszke et al., 2019) handles surrogate model training (Gaussian processes, deep ensembles, and Bayesian neural networks) and back-propagation-based acqui-sition optimization. Ray (Moritz et al., 2018) orchestrates distributed agents across nodes via its ray.remote actor model, supporting both shared-memory (single node) and MPI-style (multi-node) deployments. Optuna (Akiba et al., 2019) provides the TPE and ASHA base-lines used for comparison. Active-learning query strategies (BALD, Core-set, uncertainty sam-pling) and bandit policies (UCB1, Thompson Sampling, LinUCB) are implemented as mod-ular Python classes with a common select query(pool, budget) interface. Experi-ment metrics are logged in JSON/Parquet via a lightweight wrapper around TensorBoard; Mat-plotlib and Seaborn are used for all figures. Post-hoc statistical tests use an optional R bridge (reticulate (Allaire et al., 2018), rpy2 (rpy2 Development Team, 2023), ggplot2 (Wick-ham, 2016)) for Wilcoxon signed-rank tests and publication-ready visualizations. All code, ex-periment scripts, and containerised environment specifications (Docker/Singularity with pinned dependencies) will be released at https://github.com/almab-dc/almab-dc upon acceptance. 
+
+# Appendix B: GPU-Accelerated Extension as Future Study 
+
+While the current ALMAB-DC implementation operates entirely on CPU-based distributed infrastructure, GPU acceleration is a natural and high-impact planned extension. This appendix outlines the intended design and key engineering considerations. 
+
+Role of GPUs in the ALMAB-DC Pipeline. GPU acceleration would be integrated at three stages of the pipeline. First, surrogate model training —including deep neural networks, Bayesian neural nets, and Gaussian process regression—would be offloaded to GPUs using frameworks such as PyTorch (Paszke et al., 2019) and JAX, substantially reducing retraining latency af-ter each new observation. Second, acquisition function evaluation over large unlabeled pools (e.g., entropy, BALD, mutual information) is highly parallelizable and would benefit from GPU-vectorised scoring, enabling rapid query-selection cycles. Third, bandit arm scoring for Thompson Sampling and UCB across hundreds of candidate configurations can be computed in a single GPU batched operation, reducing per-round decision time. 
+
+Planned Libraries and Frameworks. The GPU extension would leverage CUDA-enabled data-processing and inference libraries, alongside XGBoost-GPU for gradient-boosted surro-gate models and TensorRT/ONNX Runtime for low-latency inference. These components in-tegrate naturally with the existing Ray-based distributed scheduler. ALMAB-DC for Sequential Experimental Design 29 
+
+Engineering Challenges. Large-scale surrogate models and high-volume batch evaluations can exceed GPU memory, necessitating memory-aware model distillation, dynamic batching, or mixed-precision inference. For small-scale problems, the overhead of launching GPU ker-nels may outweigh the benefits, suggesting adaptive fall-back to CPU execution. In distributed multi-GPU settings, inter-node communication latency can introduce synchronization bottle-necks that GPU-aware scheduling and kernel fusion strategies would help mitigate. Empirical validation across all three application cases is reserved for future experimental work. 
+
+# Appendix C: Extended CPU Scaling Analysis for Surrogate Models 
+
+To characterize how surrogate-model choice interacts with parallel worker count, we evalu-ated three models—Gaussian Process (GP, RBF kernel), Random Forest (RF), and Multi-layer Perceptron (MLP)—under the Case 2 CFD drag-minimization task across five CPU configura-tions (1, 2, 4, 8, 16 CPUs; 100 runs per cell). The optimization objective and design space are identical to Section 3. 
+
+Results. Table 8 reports mean drag coefficient and runtime for all 15 model–CPU combina-tions. Table 8: Drag coefficient and runtime by surrogate model and CPU count (100 runs per cell). Best runtime for each model in bold .
+
+Model CPUs Drag Mean Drag Std Runtime Mean (s) Runtime Std (s) 
+
+GP 1 0.0468 0.0044 42.055 0.903 GP 2 0.0471 0.0041 27.690 0.595 GP 4 0.0473 0.0038 20.464 0.451 GP 8 0.0472 0.0038 17.428 0.359 GP 16 0.0468 0.0035 17.316 0.398 MLP 1 0.0467 0.0034 40.042 0.542 MLP 2 0.0477 0.0040 22.476 0.371 MLP 4 0.0475 0.0035 13.463 0.216 MLP 8 0.0467 0.0040 9.041 0.147 MLP 16 0.0468 0.0042 6.982 0.112 RF 1 0.0476 0.0037 41.449 1.085 RF 2 0.0473 0.0039 25.945 0.720 RF 4 0.0475 0.0040 18.256 0.476 RF 8 0.0476 0.0039 14.734 0.364 RF 16 0.0474 0.0038 13.750 0.379 Table 9 summarizes empirical speedup S(K) = T1/TK and parallel efficiency η(K) = S(K)/K.
+
+Discussion. MLP achieves the best overall scaling (5 .74 × at 16 CPUs, serial fraction p ≈
+
+0.08), RF provides intermediate scaling (3 .01 ×), and GP saturates earliest (2 .43 ×) due to the O(n3) kernel-inversion step dominating beyond 4–8 CPUs. Crucially, drag minimization quality (mean CD) is statistically indistinguishable across all CPU counts for all three mod-els, so surrogate choice is a pure throughput decision. For GP-based surrogates—the default in ALMAB-DC for Sequential Experimental Design 30 
+
+Table 9: Empirical speedup and parallel efficiency by surrogate model and CPU count. 
+
+Model CPUs Speedup S(K) Efficiency η(K)
+
+GP 1 1.00 1.000 GP 2 1.52 0.759 GP 4 2.06 0.514 GP 8 2.41 0.302 GP 16 2.43 0.152 MLP 1 1.00 1.000 MLP 2 1.78 0.891 MLP 4 2.97 0.744 MLP 8 4.43 0.554 MLP 16 5.74 0.358 RF 1 1.00 1.000 RF 2 1.60 0.799 RF 4 2.27 0.568 RF 8 2.81 0.352 RF 16 3.01 0.188 ALMAB-DC—a practical ceiling of 4–8 workers balances parallel efficiency with coordination overhead. 
+
+# Acknowledgements 
+
+The authors thank the editor and reviewers in advance for their time and constructive feedback. The authors used Claude (Anthropic) as a language-editing tool for proofreading and improving the clarity of the manuscript. All scientific content, analyses, and conclusions are the sole responsibility of the authors. 
+
+# Data Availability 
+
+All benchmark datasets used in this study are publicly available: CIFAR-10 ( https://www. cs.toronto.edu/˜kriz/cifar.html ), MuJoCo HalfCheetah (OpenAI Gym, https: //gymnasium.farama.org/ ), and the NACA 0012 airfoil geometry (public domain). Full experiment code, scripts, and reproducibility artefacts will be deposited at https:// github.com/almab-dc/almab-dc upon acceptance. 
+
+# References 
+
+Akiba, T., Sano, S., Yanase, T., Ohta, T., and Koyama, M. (2019). Optuna: A next-generation hyperparameter optimization framework. In Proceedings of the 25th ACM SIGKDD Inter-national Conference on Knowledge Discovery & Data Mining , pages 2623–2631. Allaire, J., Ushey, K., and Tang, Y. (2018). reticulate: R Interface to Python .Amdahl, G. M. (1967). Validity of the single processor approach to achieving large scale computing capabilities. AFIPS Conference Proceedings , 30:483–485. ALMAB-DC for Sequential Experimental Design 31 1 2 4 8 16         
+
+> Number of CPUs
+> 10
+> 15
+> 20
+> 25
+> 30
+> 35
+> 40
+> Runtime (s)
+> (a) Runtime vs CPU Count
+> GP
+> MLP
+> RF
+> 124816
+> Number of CPUs
+> 2
+> 4
+> 6
+> 8
+> 10
+> 12
+> 14
+> 16
+> Speedup  S(K)
+> (b) Empirical Speedup
+> (dashed = Amdahl bound)
+> GP
+> MLP
+> RF
+> Ideal linear
+> 124816
+> Number of CPUs
+> 0.0400
+> 0.0425
+> 0.0450
+> 0.0475
+> 0.0500
+> 0.0525
+> 0.0550
+> 0.0575
+> 0.0600
+> Mean Drag  CD
+> (c) Drag Quality vs CPU Count
+> (quality maintained)
+> GP
+> MLP
+> RF
+
+Figure 13: Extended CPU scaling analysis for three surrogate models (100 runs per cell). 
+
+(a) Runtime vs. CPU count: MLP reduces from ∼40 s to ∼7 s (5 .7× at 16 CPUs), RF from 
+
+∼41 s to ∼14 s (3 .0×), and GP from ∼42 s to ∼17 s (2 .4×), reflecting its higher serial fraction from kernel-matrix computations. (b) Empirical speedup (solid markers) vs. Amdahl bound (dashed); MLP tracks near-Amdahl scaling to 8 CPUs while GP saturates beyond 4. (c) Mean drag coefficient CD across CPU counts, confirming that increased parallelism preserves opti-mization quality. Auer, P., Cesa-Bianchi, N., and Fischer, P. (2002). Finite-time analysis of the multiarmed bandit problem. In Machine Learning , volume 47, pages 235–256. Bachman, P., Sordoni, A., and Trischler, A. (2017). Learning with limited labeled data: Shrink-ing the hypothesis space. In Proceedings of the 34th International Conference on Machine Learning , pages 370–379. Bergstra, J., Bardenet, R., Bengio, Y., and K´ egl, B. (2011). Algorithms for hyper-parameter optimization. In Advances in Neural Information Processing Systems , volume 24. Chaloner, K. and Verdinelli, I. (1995). Bayesian experimental design: A review. Statistical Science , 10(3):273–304. Box, G. E. P. and Draper, N. R. (2007). Response Surfaces, Mixtures, and Ridge Analyses .Wiley, Hoboken, NJ, 2nd edition. Dean, J. and Ghemawat, S. (2008). Mapreduce: Simplified data processing on large clusters. 
+
+Communications of the ACM , 51(1):107–113. Falkner, S., Klein, A., and Hutter, F. (2018). Bohb: Robust and efficient hyperparameter opti-mization at scale. In Proceedings of the 35th International Conference on Machine Learning (ICML) , pages 1437–1446. Gustafson, J. L. (1988). Reevaluating amdahl’s law. Communications of the ACM , 31(5):532– 533. He, Q., Wang, M., Liu, X., Wang, Z., and Kong, F. (2024). Learning across the gap: Hybrid multi-armed bandits with heterogeneous offline and online data. OpenReview Preprint .ANSYS, Inc. (2023). ANSYS Fluent User’s Guide . Release 2023 R1. ALMAB-DC for Sequential Experimental Design 32 
+
+Jasak, H., Jemcov, A., and Tukovic, Z. (2007). Openfoam: A c++ library for complex physics simulations. In International Workshop on Coupled Methods in Numerical Dynamics . Uni-versity of Zagreb, Faculty of Mechanical Engineering and Naval Architecture. Joulani, P., Gy¨ orgy, A., and Szepesv´ ari, C. (2013). Online learning under delayed feedback. In 
+
+Advances in Neural Information Processing Systems (NeurIPS) , pages 1453–1461. Kennedy, M. C. and O’Hagan, A. (2001). Bayesian calibration of computer models. Journal of the Royal Statistical Society: Series B (Statistical Methodology) , 63(3):425–464. Krizhevsky, A. and Hinton, G. (2009). Learning multiple layers of features from tiny images. Technical Report 0, University of Toronto, Toronto, Ontario. Landgren, P., Srivastava, V., and Leonard, N. E. (2016). Distributed exploration in multi-armed bandits. In Advances in Neural Information Processing Systems , volume 29. Lattimore, T. and Szepesv´ ari, C. (2020). Bandit Algorithms . Cambridge University Press. Li, L., Jamieson, K., DeSalvo, G., Rostamizadeh, A., and Talwalkar, A. (2018). Massively parallel hyperparameter tuning. In Proceedings of the 34th International Conference on Machine Learning , pages 1725–1734. Li, M., Andersen, D. G., Park, J., Smola, A. J., Ahmed, A., Josifovski, V., Long, E. J., Shekita, E. J., and Su, B.-Y. (2014). Scaling distributed machine learning with the parameter server. 
+
+OSDI .Liu, L., Li, J., Wang, J., Zhao, S., and Duan, C. (2026). CoMB-CS: Contribution-aware and multi-armed bandit-based client selection in federated learning for DER forecasting. Ad-vanced Engineering Informatics . , 69:104083. Moritz, P., Nishihara, R., Wang, S., Tumanov, A., Liaw, R., Liang, E., Elibol, M., Yang, Z., Paul, W., Jordan, M. I., and Stoica, I. (2018). Ray: A distributed framework for emerging AI applications. In 13th USENIX Symposium on Operating Systems Design and Implementation (OSDI 18) , pages 561–577. Paszke, A., Gross, S., Massa, F., Lerer, A., Bradbury, J., Chanan, G., Killeen, T., Lin, Z., Gimelshein, N., Antiga, L., et al. (2019). Pytorch: An imperative style, high-performance deep learning library. Advances in Neural Information Processing Systems , 32. Paul, J. M. and Meyer, B. H. (2007). Amdahl’s law revisited for single chip systems. Interna-tional Journal of Parallel Programming , 35(2):101–123. Rasmussen, C. E. and Williams, C. K. (2006). Gaussian Processes for Machine Learning . MIT Press. rpy2 Development Team (2023). rpy2: R in Python .Russo, D., Van Roy, B., Kazerouni, A., Osband, I., and Wen, Z. (2018). A tutorial on thompson sampling. Foundations and Trends® in Machine Learning , 11(1):1–96. Sutton, R. S. and Barto, A. G. (2018). Reinforcement Learning: An Introduction . MIT Press, 2nd edition. ALMAB-DC for Sequential Experimental Design 33 
+
+Sz¨ or´ enyi, B., Busa-Fekete, R., Heged˝ us, I., and K´ egl, B. (2013). Distributed exploration and exploitation: Algorithms for multi-armed bandits with multiple players. arXiv preprint arXiv:1311.0800 .Tan, M. and Le, Q. V. (2019). Efficientnet: Rethinking model scaling for convolutional neural networks. In Proceedings of the International Conference on Machine Learning (ICML) .Todorov, E., Erez, T., and Tassa, Y. (2012). Mujoco: A physics engine for model-based con-trol. In IEEE/RSJ International Conference on Intelligent Robots and Systems (IROS) , pages 5026–5033. IEEE. Wickham, H. (2016). ggplot2: Elegant Graphics for Data Analysis . Springer. Zhang, H., Xu, Y., Wang, X., Chen, H., and Qiu, H. (2024). Federated multi-armed bandits with efficient bit-level communications. OpenReview Preprint .Zimmert, J. and Seldin, Y. (2019). An optimal algorithm for stochastic and adversarial bandits under delayed feedback. In Proceedings of the 36th International Conference on Machine Learning (ICML) , pages 7644–7653.
