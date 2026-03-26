@@ -1268,7 +1268,7 @@ def maybe_generate_paper_figures(
     pdf_url: str,
 ) -> List[Dict[str, Any]]:
     source_key = str(paper.get("source") or "").strip().lower()
-    if source_key != "arxiv":
+    if source_key not in {"arxiv", "biorxiv"}:
         return []
     if not str(pdf_url or "").strip():
         return []
@@ -1278,7 +1278,7 @@ def maybe_generate_paper_figures(
         return ensure_paper_figures(
             pdf_url=pdf_url,
             docs_dir=docs_dir,
-            source_key="arxiv",
+            source_key=source_key,
             asset_key=asset_key,
         )
     except Exception as e:

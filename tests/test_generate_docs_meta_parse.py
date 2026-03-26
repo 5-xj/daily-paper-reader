@@ -134,6 +134,31 @@ class GenerateDocsMetaParseTest(unittest.TestCase):
         self.assertEqual(len(figures), 1)
         self.assertEqual(figures[0]["url"], "assets/figures/arxiv/1234.5678/fig-001.webp")
 
+    def test_maybe_generate_paper_figures_accepts_biorxiv(self):
+        calls = []
+
+        def fake_ensure_paper_figures(**kwargs):
+            calls.append(kwargs)
+            return [{"url": "assets/figures/biorxiv/pid/fig-001.webp"}]
+
+        original = self.mod.ensure_paper_figures
+        self.mod.ensure_paper_figures = fake_ensure_paper_figures
+        try:
+            figures = self.mod.maybe_generate_paper_figures(
+                {
+                    "id": "biorxiv-abc",
+                    "source": "biorxiv",
+                },
+                docs_dir="docs",
+                paper_id="202603/26/biorxiv-abc",
+                pdf_url="https://www.biorxiv.org/content/test.full.pdf",
+            )
+        finally:
+            self.mod.ensure_paper_figures = original
+
+        self.assertEqual(len(figures), 1)
+        self.assertEqual(calls[0]["source_key"], "biorxiv")
+
 
 if __name__ == "__main__":
     unittest.main()
