@@ -1260,6 +1260,14 @@ def ensure_text_content(pdf_url: str, txt_path: str) -> str:
     return text_content or ""
 
 
+def yaml_escape_value(s: str) -> str:
+    if not s:
+        return '""'
+    if any(c in s for c in [':', '#', '"', "'", '\n', '[', ']', '{', '}', ',', '&', '*', '!', '|', '>', '%', '@', '`']):
+        return '"' + s.replace('\\', '\\\\').replace('"', '\\"').replace('\n', '\\n') + '"'
+    return s
+
+
 def maybe_generate_paper_figures(
     paper: Dict[str, Any],
     *,
@@ -1369,48 +1377,40 @@ def build_markdown_content(
     display_tldr = glance_tldr if glance_tldr else tldr
 
     # 辅助函数：转义 YAML 字符串中的特殊字符
-    def yaml_escape(s: str) -> str:
-        if not s:
-            return '""'
-        # 如果包含特殊字符，用双引号包裹并转义内部双引号
-        if any(c in s for c in [':', '#', '"', "'", '\n', '[', ']', '{', '}', ',', '&', '*', '!', '|', '>', '%', '@', '`']):
-            return '"' + s.replace('\\', '\\\\').replace('"', '\\"').replace('\n', '\\n') + '"'
-        return s
-
     # 构建 YAML front matter
     lines = ["---"]
-    lines.append(f"title: {yaml_escape(title)}")
+    lines.append(f"title: {yaml_escape_value(title)}")
     if zh_title:
-        lines.append(f"title_zh: {yaml_escape(zh_title)}")
-    lines.append(f"authors: {yaml_escape(', '.join(authors) if authors else 'Unknown')}")
-    lines.append(f"date: {yaml_escape(published or 'Unknown')}")
+        lines.append(f"title_zh: {yaml_escape_value(zh_title)}")
+    lines.append(f"authors: {yaml_escape_value(', '.join(authors) if authors else 'Unknown')}")
+    lines.append(f"date: {yaml_escape_value(published or 'Unknown')}")
     if pdf_url:
-        lines.append(f"pdf: {yaml_escape(pdf_url)}")
+        lines.append(f"pdf: {yaml_escape_value(pdf_url)}")
     if tags_list:
         # 保留完整的 kind:label 格式，前端渲染时再处理
-        lines.append(f"tags: [{', '.join(yaml_escape(t) for t in tags_list)}]")
+        lines.append(f"tags: [{', '.join(yaml_escape_value(t) for t in tags_list)}]")
     if score is not None:
         lines.append(f"score: {score}")
     if evidence:
-        lines.append(f"evidence: {yaml_escape(evidence)}")
+        lines.append(f"evidence: {yaml_escape_value(evidence)}")
     if display_tldr:
-        lines.append(f"tldr: {yaml_escape(display_tldr)}")
+        lines.append(f"tldr: {yaml_escape_value(display_tldr)}")
     if paper_source:
-        lines.append(f"source: {yaml_escape(paper_source)}")
+        lines.append(f"source: {yaml_escape_value(paper_source)}")
     if selection_source:
-        lines.append(f"selection_source: {yaml_escape(selection_source)}")
+        lines.append(f"selection_source: {yaml_escape_value(selection_source)}")
     if figure_assets:
-        lines.append(f"figures_json: {yaml_escape(json.dumps(figure_assets, ensure_ascii=False))}")
+        lines.append(f"figures_json: {yaml_escape_value(json.dumps(figure_assets, ensure_ascii=False))}")
 
     # 速览字段
     if glance_motivation:
-        lines.append(f"motivation: {yaml_escape(glance_motivation)}")
+        lines.append(f"motivation: {yaml_escape_value(glance_motivation)}")
     if glance_method:
-        lines.append(f"method: {yaml_escape(glance_method)}")
+        lines.append(f"method: {yaml_escape_value(glance_method)}")
     if glance_result:
-        lines.append(f"result: {yaml_escape(glance_result)}")
+        lines.append(f"result: {yaml_escape_value(glance_result)}")
     if glance_conclusion:
-        lines.append(f"conclusion: {yaml_escape(glance_conclusion)}")
+        lines.append(f"conclusion: {yaml_escape_value(glance_conclusion)}")
 
     lines.append("---")
     lines.append("")
@@ -1496,7 +1496,7 @@ def process_paper(
                 updated, changed = upsert_front_matter_field(
                     existing,
                     "figures_json",
-                    yaml_escape(json.dumps(figures, ensure_ascii=False)),
+                    yaml_escape_value(json.dumps(figures, ensure_ascii=False)),
                 )
                 if changed:
                     with open(md_path, "w", encoding="utf-8") as f:
@@ -2504,6 +2504,8 @@ def main() -> None:
         log_substep("6.p", "单篇论文生成", "START")
         try:
             paper = fetch_arxiv_paper_meta(args.paper_id)
+            if not str(paper.get("source") or "").strip():
+                paper["source"] = "arxiv"
             if args.paper_title:
                 paper["title"] = args.paper_title.strip()
             single_date = (args.paper_date or "").strip()

@@ -16,5 +16,8 @@
 ## 速读区
 - 本次无速读推荐。
 
+## 历史补齐论文
+1. [polynomial speedup in diffusion models with the multilevel euler maruyama method](/202603/26/2603.24594v1-polynomial-speedup-in-diffusion-models-with-the-multilevel-euler-maruyama-method)
+
 ---
 使用键盘方向键可在日报/论文之间快速切换。

@@ -1,6 +1,9 @@
 * <a class="dpr-sidebar-root-link" href="#/">首页</a>
 * <a class="dpr-sidebar-root-link dpr-sidebar-noactive-link" href="javascript:void(0)" data-dpr-hash="#/tutorial/README">使用教程</a>
 * Daily Papers
+  * 2026-03-26 <!--dpr-date:20260326-->
+    * 速读区
+      * <a class="dpr-sidebar-item-link dpr-sidebar-item-structured" href="#/202603/26/2603.24594v1-polynomial-speedup-in-diffusion-models-with-the-multilevel-euler-maruyama-method" data-sidebar-item="{&quot;title&quot;: &quot;Polynomial Speedup in Diffusion Models with the Multilevel Euler-Maruyama Method&quot;, &quot;link&quot;: &quot;https://arxiv.org/abs/2603.24594v1&quot;, &quot;score&quot;: &quot;-&quot;, &quot;tags&quot;: [{&quot;kind&quot;: &quot;query&quot;, &quot;label&quot;: &quot;transformer&quot;}, {&quot;kind&quot;: &quot;query&quot;, &quot;label&quot;: &quot;attention&quot;}], &quot;evidence&quot;: &quot;用于验证论文插图轮播效果的 arXiv 样本&quot;}">Polynomial Speedup in Diffusion Models with the Multilevel Euler-Maruyama Method</a>
   * 2026-03-25 <!--dpr-date:20260325-->
     * 精读区
       * <a class="dpr-sidebar-item-link dpr-sidebar-item-structured" href="#/202603/25/2603.22363v1-early-discoveries-of-algorithmist-i-promise-of-provable-algorithm-synthesis-at-scale" data-sidebar-item="{&quot;title&quot;: &quot;Early Discoveries of Algorithmist I: Promise of Provable Algorithm Synthesis at Scale&quot;, &quot;link&quot;: &quot;https://arxiv.org/abs/2603.22363v1-early-discoveries-of-algorithmist-i-promise-of-provable-algorithm-synthesis-at-scale&quot;, &quot;score&quot;: &quot;10.0&quot;, &quot;tags&quot;: [{&quot;kind&quot;: &quot;query&quot;, &quot;label&quot;: &quot;llm-ec&quot;}], &quot;evidence&quot;: &quot;利用LLM进行可证明算法合成的自主研究智能体&quot;}">Early Discoveries of Algorithmist I: Promise of Provable Algorithm Synthesis at Scale</a>
