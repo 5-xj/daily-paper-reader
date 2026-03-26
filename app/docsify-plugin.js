@@ -3631,8 +3631,7 @@ window.$docsify = {
 
         return [
           '<div class="paper-figure-section" data-paper-figure-carousel>',
-          '<div class="paper-figure-head">',
-          '<h2 class="paper-figure-title">插图</h2>',
+          '<div class="paper-figure-toolbar">',
           `<div class="paper-figure-counter"><span data-figure-current>1</span> / ${figures.length}</div>`,
           '</div>',
           '<div class="paper-figure-stage">',
@@ -3760,7 +3759,6 @@ window.$docsify = {
         // 速览区域
         if (meta.motivation || meta.method || meta.result || meta.conclusion) {
           lines.push('<div class="paper-glance-section">');
-          lines.push('<h2 class="paper-glance-title">速览</h2>');
           lines.push('<div class="paper-glance-row">');
 
           lines.push('<div class="paper-glance-col">');
