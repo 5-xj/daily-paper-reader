@@ -1,4 +1,5 @@
 import importlib.util
+import json
 import sys
 import tempfile
 import unittest
@@ -106,6 +107,32 @@ class GenerateDocsMetaParseTest(unittest.TestCase):
         self.assertIn(("query", "equation-discovery"), tags)
         self.assertNotIn(("query", "sr:composite"), tags)
         self.assertEqual(tags.count(("query", "sr")), 1)
+
+    def test_build_markdown_content_writes_figures_json_front_matter(self):
+        paper = {
+            "title": "Figure Test",
+            "authors": ["Ada Lovelace"],
+            "published": "2026-03-26T00:00:00+00:00",
+            "link": "https://arxiv.org/pdf/1234.5678",
+            "abstract": "abstract body",
+            "source": "arxiv",
+            "_figure_assets": [
+                {
+                    "url": "assets/figures/arxiv/1234.5678/fig-001.webp",
+                    "caption": "",
+                    "page": 2,
+                    "index": 1,
+                    "width": 1280,
+                    "height": 720,
+                }
+            ],
+        }
+        md = self.mod.build_markdown_content(paper, "quick", "", "", [])
+        meta = self.mod._parse_front_matter(md)
+        self.assertIn("figures_json", meta)
+        figures = json.loads(meta["figures_json"])
+        self.assertEqual(len(figures), 1)
+        self.assertEqual(figures[0]["url"], "assets/figures/arxiv/1234.5678/fig-001.webp")
 
 
 if __name__ == "__main__":

@@ -3562,14 +3562,137 @@ window.$docsify = {
         return { meta, body };
       };
 
+      const escapePaperHtml = (s) => {
+        if (!s) return '';
+        return String(s)
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;');
+      };
+
+      const parseFiguresMeta = (meta) => {
+        const raw = meta && typeof meta.figures_json === 'string' ? meta.figures_json.trim() : '';
+        if (!raw) return [];
+        try {
+          const parsed = JSON.parse(raw);
+          if (!Array.isArray(parsed)) return [];
+          return parsed
+            .filter((item) => item && typeof item === 'object')
+            .map((item, index) => ({
+              url: String(item.url || '').trim(),
+              caption: String(item.caption || '').trim(),
+              page: Number(item.page || 0),
+              index: Number(item.index || index + 1),
+              width: Number(item.width || 0),
+              height: Number(item.height || 0),
+            }))
+            .filter((item) => item.url);
+        } catch (_err) {
+          return [];
+        }
+      };
+
+      const resolveDocsAssetUrl = (value) => {
+        const url = String(value || '').trim();
+        if (!url) return '';
+        if (/^(https?:)?\/\//i.test(url) || url.startsWith('data:')) return url;
+        const basePath = (window.$docsify && window.$docsify.basePath) || 'docs/';
+        const safeBase = /\/$/.test(basePath) ? basePath : `${basePath}/`;
+        if (url.startsWith('docs/')) return url;
+        return `${safeBase}${url.replace(/^\/+/, '')}`;
+      };
+
+      const renderFigureCarousel = (figures) => {
+        if (!figures || !figures.length) return '';
+        const slides = figures.map((figure, index) => {
+          const pageText = figure.page ? `第 ${figure.page} 页` : '';
+          const caption = figure.caption ? `<div class="paper-figure-caption">${escapePaperHtml(figure.caption)}</div>` : '';
+          return [
+            `<div class="paper-figure-slide${index === 0 ? ' is-active' : ''}" data-figure-slide="${index}">`,
+            `<img class="paper-figure-image" src="${escapePaperHtml(resolveDocsAssetUrl(figure.url))}" alt="Paper Figure ${index + 1}" loading="lazy">`,
+            '<div class="paper-figure-meta">',
+            `<div class="paper-figure-badge">Figure ${index + 1}${pageText ? ` · ${escapePaperHtml(pageText)}` : ''}</div>`,
+            caption,
+            '</div>',
+            '</div>',
+          ].join('');
+        }).join('');
+
+        const dots = figures.map((_, index) => (
+          `<button class="paper-figure-dot${index === 0 ? ' is-active' : ''}" type="button" data-figure-dot="${index}" aria-label="切换到第 ${index + 1} 张插图"></button>`
+        )).join('');
+
+        return [
+          '<div class="paper-figure-section" data-paper-figure-carousel>',
+          '<div class="paper-figure-head">',
+          '<h2 class="paper-figure-title">插图</h2>',
+          `<div class="paper-figure-counter"><span data-figure-current>1</span> / ${figures.length}</div>`,
+          '</div>',
+          '<div class="paper-figure-stage">',
+          figures.length > 1 ? '<button class="paper-figure-nav paper-figure-nav-prev" type="button" data-figure-prev aria-label="上一张">‹</button>' : '',
+          `<div class="paper-figure-viewport">${slides}</div>`,
+          figures.length > 1 ? '<button class="paper-figure-nav paper-figure-nav-next" type="button" data-figure-next aria-label="下一张">›</button>' : '',
+          '</div>',
+          figures.length > 1 ? `<div class="paper-figure-dots">${dots}</div>` : '',
+          '</div>',
+          '',
+        ].join('');
+      };
+
+      const bindPaperFigureCarousels = () => {
+        document.querySelectorAll('[data-paper-figure-carousel]').forEach((root) => {
+          if (root.dataset.bound === '1') return;
+          root.dataset.bound = '1';
+
+          const slides = Array.from(root.querySelectorAll('[data-figure-slide]'));
+          const dots = Array.from(root.querySelectorAll('[data-figure-dot]'));
+          const prevBtn = root.querySelector('[data-figure-prev]');
+          const nextBtn = root.querySelector('[data-figure-next]');
+          const counter = root.querySelector('[data-figure-current]');
+          if (!slides.length) return;
+
+          let current = 0;
+          const render = () => {
+            slides.forEach((slide, index) => {
+              slide.classList.toggle('is-active', index === current);
+            });
+            dots.forEach((dot, index) => {
+              dot.classList.toggle('is-active', index === current);
+            });
+            if (counter) {
+              counter.textContent = String(current + 1);
+            }
+            if (prevBtn) prevBtn.disabled = slides.length <= 1;
+            if (nextBtn) nextBtn.disabled = slides.length <= 1;
+          };
+
+          if (prevBtn) {
+            prevBtn.addEventListener('click', () => {
+              current = (current - 1 + slides.length) % slides.length;
+              render();
+            });
+          }
+          if (nextBtn) {
+            nextBtn.addEventListener('click', () => {
+              current = (current + 1) % slides.length;
+              render();
+            });
+          }
+          dots.forEach((dot, index) => {
+            dot.addEventListener('click', () => {
+              current = index;
+              render();
+            });
+          });
+
+          render();
+        });
+      };
+
       // 根据 front matter 生成论文页面 HTML
       const renderPaperFromMeta = (meta) => {
         if (!meta) return '';
-
-        const escapeHtml = (s) => {
-          if (!s) return '';
-          return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-        };
 
         // 解析标签，生成带颜色的 HTML
         const renderTags = (tags) => {
@@ -3659,6 +3782,11 @@ window.$docsify = {
           lines.push('');
         }
 
+        const figures = parseFiguresMeta(meta);
+        if (figures.length) {
+          lines.push(renderFigureCarousel(figures));
+        }
+
         // 注意：在 Markdown 中插入 HTML block（如 <hr>）后，需要一个“空行”才能让后续的 `##` 等 Markdown 正常解析。
         // 这里通过追加两个空行，确保最终输出以 `<hr>\n\n` 结尾。
         lines.push('<hr>');
@@ -3743,7 +3871,7 @@ window.$docsify = {
             'dpr-page-exit',
             'dpr-page-exit-left',
             'dpr-page-exit-right',
-          );
+              );
           const enter = DPR_TRANSITION.pendingEnter;
           DPR_TRANSITION.pendingEnter = '';
           if (enter && !prefersReducedMotion()) {
@@ -3766,6 +3894,8 @@ window.$docsify = {
         if (!isLandingLikePage && window.PrivateDiscussionChat) {
           window.PrivateDiscussionChat.initForPage(paperId);
         }
+
+        bindPaperFigureCarousels();
 
         // ----------------------------------------------------
         // E. 小屏点击侧边栏条目后自动收起

@@ -6,6 +6,7 @@ import html
 import json
 import math
 import os
+import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import re
 import tempfile
@@ -21,6 +22,14 @@ from llm import BltClient
 
 SCRIPT_DIR = os.path.dirname(__file__)
 ROOT_DIR = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
+if SCRIPT_DIR not in sys.path:
+    sys.path.insert(0, SCRIPT_DIR)
+
+try:
+    from paper_figures import ensure_paper_figures
+except Exception:  # pragma: no cover
+    from src.paper_figures import ensure_paper_figures
+
 CONFIG_FILE = os.path.join(ROOT_DIR, "config.yaml")
 TODAY_STR = str(os.getenv("DPR_RUN_DATE") or "").strip() or datetime.now(timezone.utc).strftime("%Y%m%d")
 RANGE_DATE_RE = re.compile(r"^(\d{8})-(\d{8})$")
@@ -1251,6 +1260,57 @@ def ensure_text_content(pdf_url: str, txt_path: str) -> str:
     return text_content or ""
 
 
+def maybe_generate_paper_figures(
+    paper: Dict[str, Any],
+    *,
+    docs_dir: str,
+    paper_id: str,
+    pdf_url: str,
+) -> List[Dict[str, Any]]:
+    source_key = str(paper.get("source") or "").strip().lower()
+    if source_key != "arxiv":
+        return []
+    if not str(pdf_url or "").strip():
+        return []
+
+    asset_key = str(paper.get("id") or paper_id.replace("/", "-")).strip()
+    try:
+        return ensure_paper_figures(
+            pdf_url=pdf_url,
+            docs_dir=docs_dir,
+            source_key="arxiv",
+            asset_key=asset_key,
+        )
+    except Exception as e:
+        log(f"[WARN] 论文插图提取失败：{asset_key}: {e}")
+        return []
+
+
+def upsert_front_matter_field(md_text: str, key: str, value: str) -> Tuple[str, bool]:
+    text = str(md_text or "")
+    if not text.startswith("---\n") and not text.startswith("---\r\n"):
+        return text, False
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+    end_idx = normalized.find("\n---", 3)
+    if end_idx == -1:
+        return text, False
+
+    block = normalized[4:end_idx]
+    lines = block.split("\n") if block else []
+    updated_lines: List[str] = []
+    replaced = False
+    for line in lines:
+        if line.startswith(f"{key}:"):
+            updated_lines.append(f"{key}: {value}")
+            replaced = True
+        else:
+            updated_lines.append(line)
+    if not replaced:
+        updated_lines.append(f"{key}: {value}")
+    updated = "---\n" + "\n".join(updated_lines).rstrip() + "\n---" + normalized[end_idx + 4 :]
+    return updated, updated != normalized
+
+
 def build_markdown_content(
     paper: Dict[str, Any],
     section: str,
@@ -1281,6 +1341,7 @@ def build_markdown_content(
         abstract_en = "arXiv did not provide an abstract for this paper."
     paper_source = str(paper.get("source") or "").strip()
     selection_source = str(paper.get("selection_source") or "").strip()
+    figure_assets = paper.get("_figure_assets") if isinstance(paper.get("_figure_assets"), list) else []
 
     # 解析速览内容
     glance = paper.get("_glance_overview", "").strip()
@@ -1338,6 +1399,8 @@ def build_markdown_content(
         lines.append(f"source: {yaml_escape(paper_source)}")
     if selection_source:
         lines.append(f"selection_source: {yaml_escape(selection_source)}")
+    if figure_assets:
+        lines.append(f"figures_json: {yaml_escape(json.dumps(figure_assets, ensure_ascii=False))}")
 
     # 速览字段
     if glance_motivation:
@@ -1413,13 +1476,34 @@ def process_paper(
                 # 不阻塞文档生成流程：txt 拉取失败时继续（避免因为网络/源站问题导致整批中断）
                 pass
 
-        # 修复模式：若自动总结/速览存在“被截断”的迹象，则仅重生成该段落，不改动前面正文
         try:
             with open(md_path, "r", encoding="utf-8") as f:
                 existing = f.read()
         except Exception:
             existing = ""
 
+        existing_meta = _parse_front_matter(existing)
+        has_figures_json = bool(str(existing_meta.get("figures_json") or "").strip()) if existing_meta else False
+        if not has_figures_json:
+            figures = maybe_generate_paper_figures(
+                paper,
+                docs_dir=docs_dir,
+                paper_id=paper_id,
+                pdf_url=pdf_url,
+            )
+            if figures:
+                paper["_figure_assets"] = figures
+                updated, changed = upsert_front_matter_field(
+                    existing,
+                    "figures_json",
+                    yaml_escape(json.dumps(figures, ensure_ascii=False)),
+                )
+                if changed:
+                    with open(md_path, "w", encoding="utf-8") as f:
+                        f.write(updated + ("\n" if not updated.endswith("\n") else ""))
+                    existing = updated
+
+        # 修复模式：若自动总结/速览存在“被截断”的迹象，则仅重生成该段落，不改动前面正文
         # 若已存在 Markdown，但缺少中文标题/中文摘要，则在“重新跑 Step6”时自动补齐
         # （历史上 --glance-only 或部分修复流程不会写入中文标题/摘要）
         if not glance_only and existing:
@@ -1560,6 +1644,14 @@ def process_paper(
                 ensure_text_content(pdf_url, txt_path)
             except Exception:
                 pass
+        figures = maybe_generate_paper_figures(
+            paper,
+            docs_dir=docs_dir,
+            paper_id=paper_id,
+            pdf_url=pdf_url,
+        )
+        if figures:
+            paper["_figure_assets"] = figures
         glance = generate_glance_overview(title, abstract_en) or build_glance_fallback(paper)
         if glance:
             paper["_glance_overview"] = glance
@@ -1573,6 +1665,14 @@ def process_paper(
     # 新文件：生成完整内容
     pdf_url = str(paper.get("link") or paper.get("pdf_url") or "").strip()
     ensure_text_content(pdf_url, txt_path)
+    figures = maybe_generate_paper_figures(
+        paper,
+        docs_dir=docs_dir,
+        paper_id=paper_id,
+        pdf_url=pdf_url,
+    )
+    if figures:
+        paper["_figure_assets"] = figures
 
     zh_title, zh_abstract = translate_title_and_abstract_to_zh(title, abstract_en)
     tags_list = build_tags_list(section, paper.get("llm_tags") or [])
