@@ -1222,13 +1222,6 @@ def main() -> None:
     log("[ERROR] 未能从订阅配置中解析到 Embedding 查询，退出。")
     return
 
-  query_groups = group_queries_by_source(queries)
-  for source_key in query_groups:
-    if source_key == ARXIV_SOURCE_KEY:
-      continue
-    if not get_source_backend(config, source_key):
-      log(f"[ERROR] 词条引用了论文源「{source_key}」，但未配置 source_backends.{source_key}。")
-      return
   multi_source_backend = resolve_multi_source_vector_backend(config, queries) if multi_source_rpc_enabled() else None
 
   # 使用 EmbeddingCoarseFilter 类进行粗筛（模型只加载一次）
@@ -1261,6 +1254,15 @@ def main() -> None:
     f"misses={cache_stats.get('misses', 0)} "
     f"written={cache_stats.get('written', 0)}"
   )
+  # 注意：分组会复制 query dict。必须在 embedding hydrate 之后再分组，
+  # 否则 source_queries 会拿到不含 query_embedding 的旧副本。
+  query_groups = group_queries_by_source(queries)
+  for source_key in query_groups:
+    if source_key == ARXIV_SOURCE_KEY:
+      continue
+    if not get_source_backend(config, source_key):
+      log(f"[ERROR] 词条引用了论文源「{source_key}」，但未配置 source_backends.{source_key}。")
+      return
 
   def run_supabase_vector_recall_for_source(
     output_path: str,
