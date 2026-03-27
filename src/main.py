@@ -560,6 +560,11 @@ def main() -> None:
         help="Force fetch-run mode: auto(按阈值), standard(非skims), skims(强制skims).",
     )
     parser.add_argument(
+        "--profile-tag",
+        default="",
+        help="仅运行指定 tag 对应的词条；大小写不敏感，支持空格。",
+    )
+    parser.add_argument(
         "--trace-arxiv-id",
         action="append",
         default=None,
@@ -586,6 +591,12 @@ def main() -> None:
     run_date_token = resolve_run_date_token(args.fetch_days)
     os.environ["DPR_RUN_DATE"] = run_date_token
     print(f"[INFO] DPR_RUN_DATE={run_date_token}", flush=True)
+    profile_tag = str(args.profile_tag or os.getenv("DPR_FILTER_PROFILE_TAG") or "").strip()
+    if profile_tag:
+        os.environ["DPR_FILTER_PROFILE_TAG"] = profile_tag
+        print(f"[INFO] profile_tag={profile_tag}", flush=True)
+    else:
+        os.environ.pop("DPR_FILTER_PROFILE_TAG", None)
     fetch_mode = (args.fetch_mode or "auto").strip().lower()
     if fetch_mode == "skims":
         use_skims_mode = True

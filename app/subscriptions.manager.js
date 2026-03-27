@@ -404,27 +404,65 @@ window.SubscriptionsManager = (function () {
     }
   };
 
+  const setQuickRunMessage = (text, color) => {
+    if (quickRunMsgEl) {
+      quickRunMsgEl.textContent = text || '';
+      quickRunMsgEl.style.color = color || '#666';
+    }
+    if (msgEl && msgEl !== quickRunMsgEl) {
+      msgEl.textContent = text || '';
+      msgEl.style.color = color || '#666';
+    }
+  };
+
   const runQuickFetch = (days, msgEl, tipText, runOptions) => {
     if (hasUnsavedChanges) {
+      const text = '检测到未保存修改，请先点击“保存”后再发起快速抓取。';
       if (msgEl) {
-        msgEl.textContent = '检测到未保存修改，请先点击“保存”后再发起快速抓取。';
+        msgEl.textContent = text;
         msgEl.style.color = '#c00';
       }
-      return;
+      setQuickRunMessage(text, '#c00');
+      return false;
     }
     if (!window.DPRWorkflowRunner || typeof window.DPRWorkflowRunner.runQuickFetchByDays !== 'function') {
+      const text = '工作流触发器未加载到当前页面。';
       if (msgEl) {
-        msgEl.textContent = '工作流触发器未加载到当前页面。';
+        msgEl.textContent = text;
         msgEl.style.color = '#c00';
       }
-      return;
+      setQuickRunMessage(text, '#c00');
+      return false;
     }
     const options = runOptions && typeof runOptions === 'object' ? runOptions : {};
     window.DPRWorkflowRunner.runQuickFetchByDays(days, options);
+    const finalTip = (typeof tipText === 'string' ? tipText : null) || `已发起 ${days} 天内抓取任务。`;
     if (msgEl) {
-      msgEl.textContent = (typeof tipText === 'string' ? tipText : null) || `已发起 ${days} 天内抓取任务。`;
+      msgEl.textContent = finalTip;
       msgEl.style.color = '#080';
     }
+    setQuickRunMessage(finalTip, '#080');
+    return true;
+  };
+
+  const runProfileQuickFetch = (profileTag, days, runOptions) => {
+    const normalizedTag = normalizeText(profileTag);
+    if (!normalizedTag) {
+      setQuickRunMessage('词条标签为空，无法发起单词条抓取。', '#c00');
+      return false;
+    }
+    const options = runOptions && typeof runOptions === 'object' ? cloneDeep(runOptions) : {};
+    const dispatchInputs = isPlainObject(options.dispatchInputs) ? options.dispatchInputs : {};
+    options.dispatchInputs = {
+      ...dispatchInputs,
+      profile_tag: normalizedTag,
+    };
+    const fetchMode = normalizeText(options.fetchMode).toLowerCase();
+    const modeText = fetchMode === 'standard'
+      ? '30 天标准抓取任务'
+      : (fetchMode === 'skims' ? '30 天速览抓取任务' : `${days} 天抓取任务`);
+    const tip = `已发起词条「${normalizedTag}」的${modeText}。`;
+    return runQuickFetch(days, quickRunMsgEl || msgEl, tip, options);
   };
 
   const runQuickConferencePlaceholder = (yearSelectEl, confSelectEl, msgEl) => {
@@ -1046,6 +1084,7 @@ window.SubscriptionsManager = (function () {
     },
     getDraftConfig: () => cloneDeep(draftConfig || {}),
     validateDraftConfig: () => validateIntentProfiles(draftConfig || {}),
+    runProfileQuickFetch: (profileTag, days, runOptions) => runProfileQuickFetch(profileTag, days, runOptions),
     __test: {
       normalizeSubscriptions: (config) => normalizeSubscriptions(config),
       ensureSourceBackendsForProfiles: (config) => ensureSourceBackendsForProfiles(cloneDeep(config || {})),

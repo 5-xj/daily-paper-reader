@@ -459,6 +459,10 @@ window.SubscriptionsSmartQuery = (function () {
     return profile;
   };
 
+  const findCurrentProfile = (profileId) => (
+    (currentProfiles || []).find((profile) => getProfileKey(profile) === getProfileKey(profileId))
+  );
+
   const loadLlmConfig = () => {
     const secret = window.decoded_secret_private || {};
     const summarized = secret.summarizedLLM || {};
@@ -1624,12 +1628,15 @@ window.SubscriptionsSmartQuery = (function () {
     displayListEl.innerHTML = currentProfiles
       .map((p) => {
         const isPaused = !!p.paused;
+        const isQuickRunOpen = !!p._quickRunOpen;
         const pauseLabel = isPaused ? '恢复' : '暂停';
         const pauseBtnClass = isPaused ? 'dpr-entry-resume-btn' : 'dpr-entry-pause-btn';
         const cardClass = 'dpr-entry-card' + (isPaused ? ' dpr-entry-card--paused' : '');
         const pausedBadge = isPaused ? '<span class="dpr-entry-paused-badge">已暂停</span>' : '';
+        const profileId = escapeHtml(getProfileKey(p) || '');
+        const runPanelClass = `dpr-entry-run-panel${isQuickRunOpen ? ' is-open' : ''}`;
         return `
-          <div class="${cardClass}" data-profile-id="${escapeHtml(getProfileKey(p) || '')}">
+          <div class="${cardClass}" data-profile-id="${profileId}">
             <div class="dpr-entry-top">
               <div class="dpr-entry-headline">
                 <span class="dpr-entry-title">${escapeHtml(p.tag || '')}</span>
@@ -1638,10 +1645,16 @@ window.SubscriptionsSmartQuery = (function () {
                 <span class="dpr-entry-source-inline">${renderProfileSourceChips(p.paper_sources)}</span>
               </div>
               <div class="dpr-entry-actions">
-                <button class="arxiv-tool-btn ${pauseBtnClass}" data-action="pause-profile" data-profile-id="${escapeHtml(getProfileKey(p) || '')}">${pauseLabel}</button>
-                <button class="arxiv-tool-btn dpr-entry-edit-btn" data-action="edit-profile" data-profile-id="${escapeHtml(getProfileKey(p) || '')}">修改</button>
-                <button class="arxiv-tool-btn dpr-entry-delete-btn" data-action="delete-profile" data-profile-id="${escapeHtml(getProfileKey(p) || '')}">删除</button>
+                <button class="arxiv-tool-btn dpr-entry-run-toggle-btn" data-action="toggle-profile-runs" data-profile-id="${profileId}">${isQuickRunOpen ? '收起运行' : '运行'}</button>
+                <button class="arxiv-tool-btn ${pauseBtnClass}" data-action="pause-profile" data-profile-id="${profileId}">${pauseLabel}</button>
+                <button class="arxiv-tool-btn dpr-entry-edit-btn" data-action="edit-profile" data-profile-id="${profileId}">修改</button>
+                <button class="arxiv-tool-btn dpr-entry-delete-btn" data-action="delete-profile" data-profile-id="${profileId}">删除</button>
               </div>
+            </div>
+            <div class="${runPanelClass}">
+              <button class="arxiv-tool-btn dpr-entry-run-btn" data-action="run-profile-10d" data-profile-id="${profileId}">10 天</button>
+              <button class="arxiv-tool-btn dpr-entry-run-btn" data-action="run-profile-30d-skims" data-profile-id="${profileId}">30 天速览</button>
+              <button class="arxiv-tool-btn dpr-entry-run-btn" data-action="run-profile-30d-standard" data-profile-id="${profileId}">30 天标准</button>
             </div>
           </div>
         `;
@@ -2351,12 +2364,42 @@ window.SubscriptionsSmartQuery = (function () {
     const profileId = actionEl.getAttribute('data-profile-id');
     if (!profileId) return;
     const action = actionEl.getAttribute('data-action');
+    if (action === 'toggle-profile-runs') {
+      currentProfiles = (currentProfiles || []).map((profile) => {
+        if (!profile || typeof profile !== 'object') return profile;
+        const sameProfile = getProfileKey(profile) === getProfileKey(profileId);
+        return {
+          ...profile,
+          _quickRunOpen: sameProfile ? !profile._quickRunOpen : false,
+        };
+      });
+      renderMain();
+      return;
+    }
+    if (action === 'run-profile-10d' || action === 'run-profile-30d-skims' || action === 'run-profile-30d-standard') {
+      const profile = findCurrentProfile(profileId);
+      if (!profile) return;
+      if (!window.SubscriptionsManager || typeof window.SubscriptionsManager.runProfileQuickFetch !== 'function') {
+        setMessage('后台管理运行器未加载，无法发起单词条抓取。', '#c00');
+        return;
+      }
+      if (action === 'run-profile-10d') {
+        window.SubscriptionsManager.runProfileQuickFetch(profile.tag || '', 10);
+        return;
+      }
+      if (action === 'run-profile-30d-skims') {
+        window.SubscriptionsManager.runProfileQuickFetch(profile.tag || '', 30, { fetchMode: 'skims' });
+        return;
+      }
+      window.SubscriptionsManager.runProfileQuickFetch(profile.tag || '', 30, { fetchMode: 'standard' });
+      return;
+    }
     if (action === 'edit-profile') {
       openEditModal(profileId);
       return;
     }
     if (action === 'pause-profile') {
-      const profile = (currentProfiles || []).find((p) => getProfileKey(p) === getProfileKey(profileId));
+      const profile = findCurrentProfile(profileId);
       if (!profile) return;
       const isPaused = !!profile.paused;
       const nextPaused = !isPaused;
@@ -2382,7 +2425,7 @@ window.SubscriptionsSmartQuery = (function () {
       return;
     }
     if (action === 'delete-profile') {
-      const profile = (currentProfiles || []).find((p) => getProfileKey(p) === getProfileKey(profileId));
+      const profile = findCurrentProfile(profileId);
       const tag = normalizeText(profile && profile.tag) || '该词条';
       const desc = normalizeText(profile && profile.description);
       const keywordCount = Array.isArray(profile && profile.keywords) ? profile.keywords.length : 0;

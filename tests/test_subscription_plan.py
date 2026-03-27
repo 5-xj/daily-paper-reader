@@ -220,6 +220,52 @@ class SubscriptionPlanTest(unittest.TestCase):
             plan = build_pipeline_inputs(cfg)
         self.assertEqual(plan['profiles'][0].get('paper_sources'), ['arxiv', 'biorxiv'])
 
+    def test_build_pipeline_inputs_can_filter_runtime_profile_tag(self):
+        cfg = {
+            'source_backends': {
+                'arxiv': {'enabled': True},
+                'biorxiv': {'enabled': True},
+            },
+            'subscriptions': {
+                'intent_profiles': [
+                    {
+                        'tag': 'AHD',
+                        'enabled': True,
+                        'keywords': [{'keyword': 'algo', 'query': 'algo'}],
+                    },
+                    {
+                        'tag': 'GENE',
+                        'enabled': True,
+                        'paper_sources': ['biorxiv'],
+                        'keywords': [{'keyword': 'genetics', 'query': 'genetics'}],
+                    },
+                ],
+            },
+        }
+        with patch.dict('os.environ', {'DPR_FILTER_PROFILE_TAG': 'GENE'}, clear=False):
+            plan = build_pipeline_inputs(cfg)
+        self.assertEqual([item.get('tag') for item in plan['profiles']], ['GENE'])
+        self.assertEqual([item.get('tag') for item in plan['bm25_queries']], ['GENE'])
+        self.assertEqual(plan['bm25_queries'][0].get('paper_sources'), ['biorxiv'])
+
+    def test_runtime_profile_tag_filter_can_run_paused_profile(self):
+        cfg = {
+            'subscriptions': {
+                'intent_profiles': [
+                    {
+                        'tag': 'PausedOnly',
+                        'enabled': True,
+                        'paused': True,
+                        'keywords': [{'keyword': 'paused keyword', 'query': 'paused keyword'}],
+                    },
+                ],
+            },
+        }
+        with patch.dict('os.environ', {'DPR_FILTER_PROFILE_TAG': 'PausedOnly'}, clear=False):
+            plan = build_pipeline_inputs(cfg)
+        self.assertEqual([item.get('tag') for item in plan['profiles']], ['PausedOnly'])
+        self.assertEqual([item.get('tag') for item in plan['bm25_queries']], ['PausedOnly'])
+
     def test_count_tags(self):
         cfg = {
             'subscriptions': {

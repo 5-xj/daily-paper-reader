@@ -99,7 +99,27 @@ function testNormalizeSubscriptionsPreservesCustomBiorxivBackendFields() {
   assert.equal(backend.vector_rpc_exact, 'match_biorxiv_papers_exact');
 }
 
+function testRunProfileQuickFetchPassesProfileTagToWorkflow() {
+  const calls = [];
+  global.window.DPRWorkflowRunner = {
+    runQuickFetchByDays(days, options) {
+      calls.push({ days, options });
+    },
+  };
+
+  const ok = global.window.SubscriptionsManager.runProfileQuickFetch('GENE', 30, {
+    fetchMode: 'skims',
+  });
+
+  assert.equal(ok, true);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].days, 30);
+  assert.equal(calls[0].options.fetchMode, 'skims');
+  assert.equal(calls[0].options.dispatchInputs.profile_tag, 'GENE');
+}
+
 testNormalizeSubscriptionsAddsBiorxivBackend();
 testNormalizeSubscriptionsPreservesCustomBiorxivBackendFields();
+testRunProfileQuickFetchPassesProfileTagToWorkflow();
 
 console.log('subscriptions manager tests passed');

@@ -97,6 +97,43 @@ def _runtime_source_override(paper_sources: List[str]) -> List[str]:
   return list(paper_sources or [])
 
 
+def _runtime_profile_tag_filters() -> List[str]:
+  raw = (
+    str(os.getenv("DPR_FILTER_PROFILE_TAG") or "").strip()
+    or str(os.getenv("DPR_PROFILE_TAG") or "").strip()
+  )
+  if not raw:
+    return []
+  parts = re.split(r"[,\n]+", raw)
+  out: List[str] = []
+  seen = set()
+  for item in parts:
+    text = _norm_text(item)
+    if not text:
+      continue
+    key = text.lower()
+    slug = _slug(text)
+    if key in seen or slug in seen:
+      continue
+    seen.add(key)
+    seen.add(slug)
+    out.append(text)
+  return out
+
+
+def _profile_matches_runtime_filter(tag: str, filters: List[str]) -> bool:
+  if not filters:
+    return True
+  normalized_tag = _norm_text(tag).lower()
+  tag_slug = _slug(tag)
+  for item in filters:
+    if normalized_tag == _norm_text(item).lower():
+      return True
+    if tag_slug == _slug(item):
+      return True
+  return False
+
+
 def _normalize_text_item(item: Any) -> str:
   if isinstance(item, str):
     return _norm_text(item)
@@ -287,12 +324,16 @@ def _normalize_profile(profile: Dict[str, Any], idx: int, known_sources: List[st
 
 def _build_from_profiles(subs: Dict[str, Any], known_sources: List[str]) -> Dict[str, Any]:
   raw_profiles = subs.get("intent_profiles") or []
+  runtime_tag_filters = _runtime_profile_tag_filters()
   profiles: List[Dict[str, Any]] = []
   if isinstance(raw_profiles, list):
     for idx, p in enumerate(raw_profiles):
       if not isinstance(p, dict):
         continue
-      profiles.append(_normalize_profile(p, idx, known_sources))
+      normalized_profile = _normalize_profile(p, idx, known_sources)
+      if runtime_tag_filters and not _profile_matches_runtime_filter(normalized_profile.get("tag") or "", runtime_tag_filters):
+        continue
+      profiles.append(normalized_profile)
 
   bm25_queries: List[Dict[str, Any]] = []
   embedding_queries: List[Dict[str, Any]] = []
@@ -303,7 +344,7 @@ def _build_from_profiles(subs: Dict[str, Any], known_sources: List[str]) -> Dict
   for profile in profiles:
     if not profile.get("enabled", True):
       continue
-    if _as_bool(profile.get("paused"), False):
+    if not runtime_tag_filters and _as_bool(profile.get("paused"), False):
       continue
     tag = _norm_text(profile.get("tag") or "")
     if not tag:
