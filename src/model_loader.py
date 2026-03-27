@@ -63,6 +63,8 @@ class RemoteSentenceTransformer:
     self.local_providers = local_providers
     self._local_model = None
     self._log = log
+    self._remote_available = True
+    self._remote_disabled_reason = ""
 
   @staticmethod
   def _normalize_endpoint(endpoint: str) -> str:
@@ -101,6 +103,36 @@ class RemoteSentenceTransformer:
           pass
     return self._local_model
 
+  def _disable_remote(self, reason: Exception | str) -> None:
+    self._remote_available = False
+    self._remote_disabled_reason = str(reason or "").strip()
+
+  def _encode_via_local(
+    self,
+    texts,
+    *,
+    convert_to_numpy: bool,
+    normalize_embeddings: bool,
+    batch_size: int,
+    show_progress_bar: bool,
+    **kwargs,
+  ):
+    local_model = self._get_local_model()
+    result = local_model.encode(
+      texts,
+      convert_to_numpy=convert_to_numpy,
+      normalize_embeddings=normalize_embeddings,
+      batch_size=batch_size,
+      show_progress_bar=show_progress_bar,
+      **kwargs,
+    )
+    if convert_to_numpy and not isinstance(result, np.ndarray):
+      try:
+        result = np.asarray(result, dtype=np.float32)
+      except Exception:
+        pass
+    return result
+
   def encode(
     self,
     texts,
@@ -119,6 +151,15 @@ class RemoteSentenceTransformer:
       return empty if convert_to_numpy else empty.tolist()
 
     safe_batch_size = max(int(batch_size or self.default_batch_size), 1)
+    if not self._remote_available:
+      return self._encode_via_local(
+        texts,
+        convert_to_numpy=convert_to_numpy,
+        normalize_embeddings=normalize_embeddings,
+        batch_size=safe_batch_size,
+        show_progress_bar=show_progress_bar,
+        **kwargs,
+      )
     try:
       chunks = [texts[i : i + safe_batch_size] for i in range(0, len(texts), safe_batch_size)]
       outputs: list[np.ndarray] = []
@@ -176,8 +217,8 @@ class RemoteSentenceTransformer:
       return merged if convert_to_numpy else merged.tolist()
     except Exception as exc:
       self._log(f"[WARN] 远程 embedding 请求失败，将自动回退本地模型：{exc}")
-      local_model = self._get_local_model()
-      result = local_model.encode(
+      self._disable_remote(exc)
+      return self._encode_via_local(
         texts,
         convert_to_numpy=convert_to_numpy,
         normalize_embeddings=normalize_embeddings,
@@ -185,12 +226,6 @@ class RemoteSentenceTransformer:
         show_progress_bar=show_progress_bar,
         **kwargs,
       )
-      if convert_to_numpy and not isinstance(result, np.ndarray):
-        try:
-          result = np.asarray(result, dtype=np.float32)
-        except Exception:
-          pass
-      return result
 
   def start_multi_process_pool(self, target_devices=None):
     del target_devices
