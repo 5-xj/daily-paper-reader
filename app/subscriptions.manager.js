@@ -102,6 +102,8 @@ window.SubscriptionsManager = (function () {
     }
   };
 
+  const isPlainObject = (value) => !!value && typeof value === 'object' && !Array.isArray(value);
+
   const PAPER_SOURCE_ORDER = [
     'arxiv',
     'biorxiv',
@@ -115,6 +117,28 @@ window.SubscriptionsManager = (function () {
     'aaai',
   ];
   const VISIBLE_PAPER_SOURCES = ['arxiv', 'biorxiv'];
+  const SOURCE_BACKEND_DEFAULTS = {
+    arxiv: {
+      papers_table: 'arxiv_papers',
+      use_vector_rpc: true,
+      vector_rpc: 'match_arxiv_papers_exact',
+      vector_rpc_exact: 'match_arxiv_papers_exact',
+      use_bm25_rpc: true,
+      bm25_rpc: 'match_arxiv_papers_bm25',
+      sync_table: 'arxiv_sync_status',
+      sync_success_value: 'success',
+      schema: 'public',
+    },
+    biorxiv: {
+      papers_table: 'biorxiv_papers',
+      use_vector_rpc: true,
+      vector_rpc: 'match_biorxiv_papers_exact',
+      vector_rpc_exact: 'match_biorxiv_papers_exact',
+      use_bm25_rpc: true,
+      bm25_rpc: 'match_biorxiv_papers_bm25',
+      schema: 'public',
+    },
+  };
 
   const filterVisiblePaperSources = (values) => {
     const visible = new Set(VISIBLE_PAPER_SOURCES);
@@ -168,6 +192,83 @@ window.SubscriptionsManager = (function () {
       return ['arxiv'];
     }
     return visibleOut;
+  };
+
+  const mergeDefinedFields = (base, override) => {
+    const next = { ...(isPlainObject(base) ? base : {}) };
+    if (!isPlainObject(override)) return next;
+    Object.keys(override).forEach((key) => {
+      const value = override[key];
+      if (value === undefined) return;
+      next[key] = value;
+    });
+    return next;
+  };
+
+  const buildDefaultSourceBackend = (sourceKey, config) => {
+    const normalizedKey = normalizeSourceKey(sourceKey);
+    const defaults = SOURCE_BACKEND_DEFAULTS[normalizedKey];
+    if (!defaults) return null;
+
+    const cfg = isPlainObject(config) ? config : {};
+    const shared = isPlainObject(cfg.supabase_shared) ? cfg.supabase_shared : {};
+    const legacy = isPlainObject(cfg.supabase) ? cfg.supabase : {};
+
+    let base = {
+      kind: normalizeText(shared.kind || legacy.kind || 'supabase') || 'supabase',
+      enabled: shared.enabled !== false && legacy.enabled !== false,
+      url: normalizeText(shared.url || legacy.url || ''),
+      anon_key: normalizeText(shared.anon_key || legacy.anon_key || ''),
+      schema: normalizeText(shared.schema || legacy.schema || defaults.schema || 'public') || 'public',
+    };
+
+    if (normalizedKey === 'arxiv') {
+      base = mergeDefinedFields(base, {
+        enabled: Object.prototype.hasOwnProperty.call(legacy, 'enabled') ? legacy.enabled !== false : undefined,
+        papers_table: normalizeText(legacy.papers_table || ''),
+        use_vector_rpc: Object.prototype.hasOwnProperty.call(legacy, 'use_vector_rpc') ? legacy.use_vector_rpc !== false : undefined,
+        vector_rpc: normalizeText(legacy.vector_rpc || ''),
+        vector_rpc_exact: normalizeText(legacy.vector_rpc_exact || legacy.vector_rpc || ''),
+        use_bm25_rpc: Object.prototype.hasOwnProperty.call(legacy, 'use_bm25_rpc') ? legacy.use_bm25_rpc !== false : undefined,
+        bm25_rpc: normalizeText(legacy.bm25_rpc || ''),
+        sync_table: normalizeText(legacy.sync_table || ''),
+        sync_success_value: normalizeText(legacy.sync_success_value || ''),
+      });
+    }
+
+    return mergeDefinedFields(defaults, base);
+  };
+
+  const ensureSourceBackendsForProfiles = (config) => {
+    const next = isPlainObject(config) ? config : {};
+    const subs = isPlainObject(next.subscriptions) ? next.subscriptions : {};
+    const profiles = Array.isArray(subs.intent_profiles) ? subs.intent_profiles : [];
+    const existingBackends = isPlainObject(next.source_backends) ? next.source_backends : {};
+    const mergedBackends = cloneDeep(existingBackends);
+    let changed = !isPlainObject(next.source_backends);
+
+    profiles.forEach((profile) => {
+      if (!isPlainObject(profile)) return;
+      const fallbackToArxiv = !Object.prototype.hasOwnProperty.call(profile, 'paper_sources');
+      const paperSources = normalizePaperSources(profile.paper_sources, { fallbackToArxiv });
+      paperSources.forEach((sourceKey) => {
+        const template = buildDefaultSourceBackend(sourceKey, next);
+        if (!template) return;
+        const current = isPlainObject(mergedBackends[sourceKey]) ? mergedBackends[sourceKey] : {};
+        const merged = mergeDefinedFields(template, current);
+        const before = JSON.stringify(current);
+        const after = JSON.stringify(merged);
+        if (before !== after) {
+          mergedBackends[sourceKey] = merged;
+          changed = true;
+        }
+      });
+    });
+
+    if (changed) {
+      next.source_backends = mergedBackends;
+    }
+    return next;
   };
 
   const normalizeKeywordItem = (item) => {
@@ -412,7 +513,7 @@ window.SubscriptionsManager = (function () {
   };
 
   const validateIntentProfiles = (config) => {
-    const cfg = cloneDeep(config || {});
+    const cfg = ensureSourceBackendsForProfiles(cloneDeep(config || {}));
     const subs = (cfg && cfg.subscriptions) || {};
     const availableSources = getAvailablePaperSources(cfg);
     const profiles = Array.isArray(subs.intent_profiles) ? subs.intent_profiles : [];
@@ -527,6 +628,7 @@ window.SubscriptionsManager = (function () {
     }
 
     next.subscriptions = subs;
+    ensureSourceBackendsForProfiles(next);
     return stripIntentProfileIds(next);
   };
 
@@ -944,5 +1046,11 @@ window.SubscriptionsManager = (function () {
     },
     getDraftConfig: () => cloneDeep(draftConfig || {}),
     validateDraftConfig: () => validateIntentProfiles(draftConfig || {}),
+    __test: {
+      normalizeSubscriptions: (config) => normalizeSubscriptions(config),
+      ensureSourceBackendsForProfiles: (config) => ensureSourceBackendsForProfiles(cloneDeep(config || {})),
+      buildDefaultSourceBackend: (sourceKey, config) => buildDefaultSourceBackend(sourceKey, cloneDeep(config || {})),
+      normalizePaperSources: (values, options) => normalizePaperSources(values, options),
+    },
   };
 })();
