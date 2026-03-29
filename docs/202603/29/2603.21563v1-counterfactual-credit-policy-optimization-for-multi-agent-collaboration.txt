@@ -1,0 +1,1531 @@
+Title: Counterfactual Credit Policy Optimization for Multi-Agent Collaboration
+
+URL Source: https://arxiv.org/pdf/2603.21563v1
+
+Published Time: Tue, 24 Mar 2026 02:09:18 GMT
+
+Number of Pages: 18
+
+Markdown Content:
+# Counterfactual Credit Policy Optimization for Multi-Agent Collaboration 
+
+Zhongyi Li * 1 Wan Tian * 2 Yikun Ban † 1 Jinju Chen 3 Huiming Zhang 1 Yang Liu 2 Fuzhen Zhuang † 1
+
+## Abstract 
+
+Collaborative multi-agent large language models (LLMs) can solve complex reasoning tasks by decomposing roles and aggregating diverse hy-potheses. Yet, reinforcement learning (RL) for such systems is often undermined by credit as-signment: a shared global reward obscures in-dividual contributions, inflating update variance and encouraging free-riding. We introduce Coun-terfactual Credit Policy Optimization (CCPO), a framework that assigns agent-specific learning sig-nals by estimating each agent’s marginal contri-bution through counterfactual trajectories. CCPO builds dynamic counterfactual baselines that sim-ulate outcomes with an agent’s contribution re-moved, yielding role-sensitive advantages for pol-icy optimization. To further improve stability un-der heterogeneous tasks and data distributions, we propose a global-history-aware normalization scheme that calibrates advantages using global rollout statistics. We evaluate CCPO on two col-laboration topologies: a sequential Think–Reason dyad and multi-agent voting. Across mathemati-cal and logical reasoning benchmarks, CCPO mit-igates free-riding and outperforms strong multi-agent RL baselines, yielding finer-grained and more effective credit assignment for collabora-tive LLM training. Our code is available at https://github.com/bhai114/ccpo. 
+
+## 1. Introduction 
+
+LLMs have made rapid progress on complex reasoning, math problem solving, and code generation (Li et al., 2025; Duan et al., 2025; Lyu et al., 2025; Yang et al., 2026; He et al., 2025). Yet even strong single models often strug-gle on long-horizon, multi-step problems due to limited exploration, brittle intermediate reasoning, and imperfect 
+
+> *
+
+Equal contribution 
+
+> †
+
+Corresponding authors 1Beihang University 2Peking University 
+
+> 3
+
+Beijing University of Posts and Telecommunications. Correspon-dence to: Yikun Ban <> , Fuzhen Zhuang <> .
+
+Preprint. March 24, 2026. 
+
+self-correction. Multi-agent collaboration offers a natural remedy: assigning complementary roles (e.g., a Reasoner 
+
+proposing solution sketches and a Solver producing final answers), or aggregating independent attempts via voting, can substantially improve reliability at inference time and may unlock stronger behaviors when trained jointly (Tran et al., 2025). Despite this promise, RL for collaborative LLM agents is bottlenecked by credit assignment (Chen et al., 2025c; Lin et al., 2025b; Nagpal et al., 2025): how should a sparse, de-layed team outcome (typically a terminal 0/1 reward on rea-soning benchmarks) be attributed to heterogeneous agents and their long, discrete generation trajectories? Most multi-agent RL practice relies on shared global rewards or value-decomposition surrogates developed primarily for small-scale continuous-control settings (Wan et al., 2025; Jiang et al., 2025). In LLM reasoning, shared rewards are espe-cially problematic for three reasons. First, rewards are often terminal and sparse, making it hard to infer which agent improved (or harmed) the final outcome. Second, naive re-ward sharing induces free-riding: agents can receive positive updates even when their outputs are redundant or detrimen-tal, yielding noisy and biased gradients. Third, collabora-tion is inherently role- and mode-dependent: a sequential 
+
+Reason →Solve pipeline is asymmetric, whereas voting is symmetric but still depends on each agent’s marginal influence on the final aggregation. These issues are not merely conceptual. Figure 1 reveals a striking phenomenon on both MATH500 (Lightman et al., 2023) and LogiQA (Liu et al., 2020): even under the same collaboration scheme, an agent’s marginal contribution can vary dramatically with model scale; moreover, marginal contributions differ across collaboration schemes. More crit-ically, for certain model pairings, the Solver’s standalone ac-curacy can even exceed the joint accuracy achieved through collaboration, implying that its partner may contribute nega-tively. However, under a training setup that shares only the final team reward, both agents would still receive the same team reward despite their unequal (and potentially harmful) contributions, which is clearly unreasonable.Together, these results highlight that effective multi-agent RL for LLM rea-soning requires: (i) counterfactual attribution of marginal contributions, (ii) computational scalability in long discrete generation spaces, and (iii) role-sensitive learning signals 1
+
+> arXiv:2603.21563v1 [cs.AI] 23 Mar 2026 Counterfactual Credit Policy Optimization for Multi-Agent Systems
+
+aligned with the collaboration mechanism. Counterfactual credit assignment has a long history in multi-agent RL, including counterfactual baselines (e.g., COMA) and Shapley-style marginalization. While theoretically ap-pealing, directly deploying these ideas for LLM agents is challenging: defining “trajectories” over multi-turn text is nontrivial, and estimating counterfactual outcomes often requires expensive re-sampling and repeated reward evalua-tion, which becomes prohibitive for long sequences. This motivates a key question: 
+
+Can we obtain accurate, stable, and role-sensitive counterfactual credit for multi-agent LLM reason-ing under tight compute budgets? 
+
+We propose CCPO (Counterfactual Credit Policy 
+
+Optimization), a multi-agent RL framework tailored for collaborative LLM reasoning. CCPO builds counterfactual baselines that answer: “How would the team perform if a specific agent’s contribution were removed while keeping the others fixed?” By comparing the realized team out-come with these baselines, CCPO estimates each agent’s marginal contribution and converts it into agent-specific ad-vantages suitable for GRPO-style (Shao et al., 2024) policy optimization. Crucially, CCPO is cost-aware for discrete generation: for common collaboration patterns, counterfac-tual rewards can be computed within the same sampling instance (or with minimal additional decoding), avoiding expensive re-rollouts. We instantiate CCPO in two representative collaboration mechanisms: (1) Sequential Reason–Solve, where Agent1 generates intermediate reasoning and Agent2 produces the final answer; and (2) multi-Agent Voting, where multiple agents independently propose answers and a voting rule determines the final decision. In both cases, CCPO explic-itly measures each agent’s marginal effect on correctness, discouraging harmful or redundant behaviors and mitigating free-riding. Empirically, CCPO consistently improves collaborative training on math reasoning and logical inference bench-marks. Across multiple base models and both in-distribution and out-of-distribution evaluations, CCPO yields higher ac-curacy and more stable optimization than joint-reward base-lines and recent multi-agent RL fine-tuning methods. Our main contributions are summarized as follows. • We developed CCPO, a multi-agent RL method for collab-orative LLM reasoning that assigns counterfactual credit by decomposing a team-level reward into agent-specific advantage signals, reducing free-riding during joint train-ing. • We designed an efficient counterfactual baseline for long, discrete generation and introduced a global-history-aware normalization to stabilize advantage estimates under het-erogeneous data distributions. • We validated CCPO on heterogeneous (Think–Reason) and homogeneous (voting) collaboration topologies, achieving consistent improvements in accuracy and train-ing stability on MATH (Lightman et al., 2023) and LogiQA (Liu et al., 2020) over strong baselines, such as ReMA (Wan et al., 2025). 
+
+## 2. Related Work 
+
+2.1. Counterfactual Credit Allocation 
+
+Credit assignment is a core challenge in multi-agent RL, particularly with sparse or delayed team rewards where agent behaviors are tightly coupled (Wang et al., 2025; Fu et al., 2024). A standard paradigm is centralized train-ing with decentralized execution (CTDE), which leverages global information during learning while maintaining in-dependent policies at deployment (Li et al., 2021). Prior methods largely fall into two lines. Value decomposition approaches, e.g., QMIX (Rashid et al., 2020),learn struc-tured mappings that combine per-agent utilities into a team value, but they typically rely on monotonicity or factoriza-tion assumptions that are hard to justify for language collab-oration, where an agent’s message can have non-monotone and highly context-dependent effects. Counterfactual ap-proaches estimate marginal contributions by comparing re-alized outcomes to hypothetical alternatives. Shapley-value formulations are principled (Li et al., 2021) but often compu-tationally prohibitive due to coalitional evaluation. Related directions—such as reward redistribution across agents and time (Kapoor et al., 2024) or curriculum-based counterfac-tual advantages (Jin et al., 2025)—are not tailored to long, discrete LLM generation trajectories and typically require extra rollouts or repeated reward evaluations. These limitations motivate a practical tension in collabo-rative LLM training: counterfactual credit is desirable for resolving free-riding, yet naive counterfactual estimation is too expensive for long-sequence generation. CCPO resolves this tension by constructing lightweight, role- and topology-aware counterfactual baselines that can often be computed within the same sampling instance (or with minimal addi-tional decoding), making counterfactual credit allocation feasible under strict generation budgets. 
+
+2.2. Reinforcement Learning for LLMs 
+
+RL has become a standard paradigm for aligning LLMs on reasoning, generation, and preference tasks(Zhang et al., 2026; Huang et al., 2026a; 2025; Lu et al., 2026; Huang et al., 2026b). Classic policy-gradient methods (e.g., RE-INFORCE (Williams, 1992) and Actor–Critic) optimize expected return but can suffer from high variance, while 2Counterfactual Credit Policy Optimization for Multi-Agent Systems S-S L-L S-L L-S               
+
+> 0
+> 20
+> 40
+> 60
+> 80
+> 100
+> Accuracy (%)
+> 76.6
+> 74.6
+> 2.0
+> 83.0
+> 82.2
+> 0.8
+> 77.8 82.4
+> -4.6
+> 82.6
+> 74.6
+> 8.0
+> Think-Reason
+> S-S L-L S-L L-S
+> 0
+> 20
+> 40
+> 60
+> 80
+> 100
+> Accuracy (%)
+> 77.4
+> 74.6
+> 2.8
+> 83.4
+> 82.2
+> 1.2
+> 79.2
+> 82.4
+> -3.2
+> 83.8
+> 74.6
+> 9.2
+> Reason-Rewrite
+> S-S-S L-L-L S-S-L L-L-S
+> 40
+> 50
+> 60
+> 70
+> 80
+> Accuracy (%)
+> 51.8
+> 51.0
+> 51.1
+> 50.7  60.2
+> 59.1
+> 58.7
+> 58.5
+> 52.2
+> 50.8
+> 44.5
+> 44.7
+> 60.2
+> 58.7
+> 44.9
+> 44.5
+> Vote
+> S-S-S L-L-L S-S-L L-L-S
+> 40
+> 50
+> 60
+> 70
+> 80
+> Accuracy (%)
+> 53.0
+> 53.6
+> 53.8
+> 49.8
+> 65.9
+> 65.9
+> 66.5
+> 60.5
+> 57.5
+> 54.8 58.1
+> 58.4  67.4
+> 67.7
+> 67.0
+> 55.9
+> Think-Reason-ReView
+> Dual-Agent:
+> Triple-Agent:
+> Joint Acc Agent2 Solo Acc Agent1 Contribution
+> Joint Acc Agent1&2 Agent1&3 Agent2&3
+
+Figure 1. The above picture shows the accuracy rates of the two Agents on the MATH500 dataset under different collaboration modes; the following picture shows the accuracy rates of the three Agents on the LogiQA dataset under different collaboration modes.(S: 
+
+qwen2.5-7b-instruct ; L: qwen2.5-72b-instruct ). 
+
+trust-region methods such as TRPO (Schulman et al., 2017a) and PPO (Schulman et al., 2017b) stabilize training via con-strained updates. For LLM fine-tuning, training an explicit critic is often costly and unstable, motivating critic-free ap-proaches. GRPO estimates advantages from group statistics over multiple sampled responses, eliminating the need for a value network. HA-DWYang et al. (2026) provides a principled theoretical analysis of group-based advantage es-timation. Several extensions further improve robustness and efficiency, including GSPO (Zheng et al., 2025), DAPO (Yu et al., 2025), FSPO (Mao et al., 2025), and REINFORCE++ (Hu et al., 2025), which refine importance weighting, clip-ping, or normalization for sequence-level optimization. Most of this literature focuses on single-policy optimiza-tion, where advantage estimation is the primary concern. In contrast, collaborative LLMs introduce an additional struc-tural challenge: the reward is shared by a team , but learn-ing should be driven by agent-specific signals that reflect marginal influence. Building on GRPO-style optimization, CCPO targets this missing piece by transforming a shared team reward into counterfactually grounded, agent-specific advantages, enabling stable updates without requiring ex-pensive critics or repeated re-rollouts. 
+
+2.3. Multi-Agent Collaboration and Training for LLMs 
+
+Multi-agent collaboration has been shown to improve LLM reasoning via test-time interaction mechanisms such as debate, critique, role assignment, and iterative refinement (Chen et al., 2025a; Zou et al., 2025; He et al., 2025; Tran et al., 2025). While effective at inference, these methods typ-ically do not internalize collaborative behaviors into model parameters. Recent work has shifted toward training-time multi-agent learning (Chen et al., 2026; 2025b). ILR (Lin et al., 2025a), MAPoRL (Park et al., 2025), MAGRPO (Liu et al., 2025), and ReMA (Wan et al., 2025) propose multi-agent RL objectives to encourage cooperation, often relying on shared rewards or hierarchically structured signals. MARFT (Liao et al., 2025) generalizes multi-agent fine-tuning via parameter-efficient adaptation. In parallel, structured role-based systems such as MALT (Motwani et al., 2024) and CORY (Ma et al., 2024) design explicit pipelines or role-rotation schemes to improve coordination. Despite these advances, many existing approaches still adopt implicit credit sharing: agents are updated from a common team signal or from task-specific heuristics that do not ex-plicitly isolate marginal causality, leaving free-riding and negative contributions largely unresolved. The perspective taken in CCPO is to treat credit assignment as the first-class bottleneck for collaborative LLM training: by explic-itly estimating each agent’s marginal contribution through counterfactual baselines, CCPO provides a general, scalable mechanism that applies across heterogeneous sequential pipelines and homogeneous voting-based collaboration. 
+
+## 3. Problem Definition 
+
+We consider a cooperative system with K LLM agents 
+
+U = {u1, . . . , u K }, where agent ui follows a stochastic policy πθi . Given a prompt x ∼ D , agents generate tex-tual outputs; depending on the collaboration topology, an agent’s generation may condition on other agents’ outputs. 3Counterfactual Credit Policy Optimization for Multi-Agent Systems Core Principle: Counterfactual Credit Allocation (CCA)              
+
+> Joint
+> Reward
+> ��=�joint−�¬�
+> Counterfactual
+> Reward
+> Agent1
+> (Think)
+> Agent2
+> (Reason)
+> J oint Tr ajector y
+> Final
+> Answer Joint Reward
+> (�joint)
+> Agent2
+> (Independent)
+> Counter factual Tr ajector y
+> Counterfactual
+> Reward
+> (�¬1)
+> CCA
+> Contribution
+> Policy
+> Networks
+> �1,�2
+> Scenario1: Dual-Agent “Think-Reason ”Collaboration
+> Process
+> Agent1
+> Agent2
+> Agent3
+> Voting
+> Mechanism
+> Joint Reward
+> (�joint)
+> CCA
+> Contribution
+> CounterFactual
+> Voting
+> Mechanism
+> (No Agent1)
+> Counterfactual
+> Reward
+> (�¬1)Policy
+> Networks
+> �1,�2,�3
+> Scenario2: Multi-Agent “Vote ”Collaboration
+
+Figure 2. Overview of CCPO for collaborative LLM training. The top panel illustrates the counterfactual principle, which assesses team performance in the absence of a specific agent. The two panels below instantiate this idea in two-agent and three-agent collaboration settings, respectively, and are used to quantify each agent’s marginal contribution to the final outcome. 
+
+A task-specific evaluator returns a bounded scalar reward 
+
+R(·) ∈ [0 , 1] (e.g., exact-match correctness on math and logic benchmarks). For each prompt x, we sample N joint rollouts. The j-th rollout is denoted by τ (j) =  y(j)1 , . . . , y (j)
+
+> K
+
+, R (j)team := 
+
+R τ (j). Our goal is to optimize each πθi using agent-specific learning signals (e.g., advantages) that reflect agent 
+
+ui’s marginal contribution to the team reward Rteam .In sequential collaboration, agents act in a fixed order and pass intermediate text forward. Given x, the first agent gen-erates y1 ∼ πθ1 (· | x), and for i = 2 , . . . , K , agent ui gen-erates conditioned on the prompt and all previous outputs, 
+
+yi ∼ πθi
+
+ · | x, y 1: i−1
+
+, where y1: i−1 := ( y1, . . . , y i−1).
+
+The final team output is taken to be the last agent’s out-put, by := yK , and the team reward is computed as 
+
+Rteam = R(x, by) (or more generally Rteam = R(x, y 1: K )
+
+if the evaluator uses the full transcript). In parallel collaboration, agents generate independently conditioned only on the prompt: yi ∼ πθi (· | x), i =1, . . . , K. An aggregation rule A combines the set of agent outputs into a single team decision, by := A y1: K
+
+, e.g., majority vote over extracted final answers, weighted vot-ing by confidence, or a learned aggregator. The team re-ward is then computed as Rteam = R(x, by) (or Rteam =
+
+R(x, y 1: K ) if the evaluator uses all outputs). 
+
+## 4. Counterfactual Credit Policy Optimization 
+
+Collaborative LLM systems are typically trained with a 
+
+team-level reward (e.g., final correctness), while the individ-ual reward of each agent is inherently unobserved. Unlike standard single-agent RL, we cannot directly label an agent’s generation as “good” or “bad” in isolation, because its utility depends on (i) other agents’ outputs, (ii) the collaboration topology (sequential vs. parallel), and (iii) the aggregation rule. As a result, naively sharing the same terminal reward across agents leads to noisy updates and free-riding: an agent may be rewarded even when its contribution is re-dundant or even harmful. To obtain agent-specific learning signals without requiring access to per-agent ground-truth rewards, CCPO attributes credit counterfactually by asking: 
+
+How would the team perform if agent i’s contribution were removed while keeping the other agents fixed? 
+
+CCPO (i) defines a counterfactual signal that isolates each agent’s marginal contribution, (ii) stabilizes it with global-history statistics, and (iii) converts it into within-prompt advantages for GRPO-style optimization. 
+
+Counterfactual marginal contribution. For agent i
+
+and rollout j, let the realized joint trajectory be τ (j) =(y(j)1 , . . . , y (j) 
+
+> K
+
+) with team reward R(j)team := R(τ (j)). We construct a counterfactual trajectory τ (j),¬i by removing 
+
+agent i’s contribution while keeping all other agents fixed under the same sampling instance, and evaluate 
+
+R(j) 
+
+> ¬i
+
+:= R
+
+
+
+τ (j),¬i
+
+.
+
+4Counterfactual Credit Policy Optimization for Multi-Agent Systems 
+
+The marginal contribution of agent i on rollout j is then defined as 
+
+∆(j) 
+
+> i
+
+= R(j)team − R(j) 
+
+> ¬i
+
+. (1) This assigns positive credit only when agent i improves the team outcome, and yields non-positive credit when the agent is redundant or harmful. Because the scale of ∆(j) 
+
+> i
+
+may drift across prompts and throughout training, we stabilize the signal using exponen-tial moving averages (EMA) of the mean and variance of each agent’s marginal contributions. At training step t, we update 
+
+μ(t)∆i = λ μ (t−1) ∆i + (1 − λ) bμ(t)∆i , (2) 
+
+ σ2∆i
+
+(t) = λ  σ2∆i
+
+(t−1) + (1 − λ) bσ2,(t)∆i , (3) where bμ(t)∆i and bσ2,(t)∆i are the empirical mean and variance of {∆(j) 
+
+> i
+
+}Nj=1 computed on the current batch (aggregated over prompts in the batch). We then form a standardized score and a bounded shaped reward: 
+
+z(j)∆i = ∆(j) 
+
+> i
+
+− μ(t)∆i
+
+σ(t)∆i + ε , r(j) 
+
+> i
+
+= tanh  α z (j)∆i
+
+, (4) where ε > 0 ensures numerical stability and α controls sen-sitivity. This shaping keeps the learning signal comparable across training stages while preventing rare outliers from dominating updates. Given shaped rewards {r(j) 
+
+> i
+
+}Nj=1 for a fixed prompt, we compute within-prompt group-relative advantages by nor-malizing across the N rollouts: 
+
+A(j) 
+
+> i
+
+= r(j) 
+
+> i
+
+− ri
+
+std( ri) + ε , ri = 1
+
+N
+
+> N
+
+X
+
+> j=1
+
+r(j) 
+
+> i
+
+, (5) where std( ri) is the sample standard deviation of {r(j) 
+
+> i
+
+}Nj=1 .This reduces variance by leveraging multiple samples per prompt, while the EMA-based shaping in Eq. (4) improves stability across batches. Finally, each agent is updated with a clipped policy-gradient objective using its own advantages: 
+
+LCCPO (θi) = 
+
+− E
+
+h
+
+min 
+
+
+
+ρi,t Ai,t , clip( ρi,t , 1 − ϵc, 1 + ϵc) Ai,t 
+
+i 
+
+,
+
+(6) where ρi,t = πθi (at | st)πold  
+
+> θi
+
+(at | st) is the importance ra-tio (token-level or sequence-level, consistent with the GRPO implementation). We assign a rollout-level advantage to all tokens in rollout j, i.e., Ai,t = A(j) 
+
+> i
+
+for tokens t that belong to rollout j. Agents can be updated synchronously or with an alternating schedule; details are deferred to Appendix B. 
+
+4.1. Instantiations 
+
+We now specify how the counterfactual trajectory τ (j),¬i
+
+and reward R(j) 
+
+> ¬i
+
+:= R(τ (j),¬i) are instantiated for the two collaboration topologies used in our experiments. 
+
+Sequential: Think–Solve (handoff). We consider a two-agent pipeline where Agent 1 ( Thinker ) generates an inter-mediate reasoning trace y1, and Agent 2 ( Solver ) generates the final answer y2 conditioned on (x, y 1):
+
+y(j)1 ∼ πθ1 (· | x), y(j)2 ∼ πθ2 (· | x, y (j)1 ).
+
+The realized joint trajectory is τ (j) = ( y(j)1 , y (j)2 ) with team reward 
+
+R(j)team := R x, y (j)1 , y (j)2
+
+.
+
+To remove Agent 1’s contribution, we construct the counter-factual trajectory τ (j),¬1 = ( ∅, y (j)2,solo ) by letting Agent 2 answer directly from the prompt without the reasoning trace: 
+
+y(j)2,solo ∼ πθ2 (· | x), R(j) 
+
+> ¬1
+
+:= R x, ∅, y (j)2,solo 
+
+.
+
+Agent 1 then uses the marginal contribution 
+
+∆(j)1 = R(j)team − R(j)
+
+> ¬1
+
+in Eq. (1) . For Agent 2, we additionally support an adap-tive trade-off between collaborative performance (condition-ing on y1) and independent robustness (answering from x
+
+alone); the full formulation is provided in Appendix B.2. 
+
+Parallel: Voting (aggregation). In K-agent voting, agents independently generate responses 
+
+y(j) 
+
+> i
+
+∼ πθi (· | x), i = 1 , . . . , K, 
+
+and an aggregation rule A produces the team decision 
+
+by(j) = A(y(j)1: K ), which is evaluated to obtain R(j)team . To compute the counterfactual reward for agent i, we re-apply the same voting rule after removing y(j) 
+
+> i
+
+:
+
+by(j) 
+
+> ¬i
+
+= A y(j)1: K \ { y(j) 
+
+> i
+
+}, R(j) 
+
+> ¬i
+
+:= R x, by(j)
+
+> ¬i
+
+,
+
+which requires no additional decoding . The marginal con-tribution ∆(j) 
+
+> i
+
+= R(j)team − R(j) 
+
+> ¬i
+
+then follows directly from Eq. (1) , yielding a symmetric and compute-efficient credit signal for homogeneous collaboration. Complete algorithms, voting-specific advantage allocation, the dual-agent gating design, and complexity analysis are provided in Appendix B. 
+
+## 5. Theoretcial Analysis 
+
+We train each agent with GRPO, which uses clipped impor-tance ratios (and optionally KL monitoring) to keep each pol-icy update conservative. This can be interpreted as enforcing 5Counterfactual Credit Policy Optimization for Multi-Agent Systems 
+
+an effective trust region (Wan et al., 2025) in practice. Ac-cordingly, we present an idealized monotonic-improvement characterization under a KL trust-region condition; the proof is deferred to Appendix A. 
+
+Theorem 5.1. Consider alternating updates where one agent k is updated while the other agents are fixed at θt
+
+> −k
+
+.Let πold := πθtk and πnew := πθt+1 
+
+> k
+
+be the policies before and after one GRPO update for agent k. Assume the GRPO update is conservative in the sense that it satisfies an effec-tive KL trust-region bound 
+
+Dmax KL (πold , π new ) ≤ δ, (7) 
+
+which can be enforced in practice by clipping and KL monitoring/early stopping. Assume further that the up-date improves a TRPO-style surrogate objective by at least 
+
+∆L > 0 in the induced stationary MDP with other agents fixed, and that the old-policy advantage is bounded by 
+
+ϵ = max s,a |Aπold (s, a )|. Then 
+
+J(θt+1  
+
+> k
+
+, θ t
+
+> −k
+
+) − J(θtk, θ t
+
+> −k
+
+) ≥ ∆L − C(γ) ϵ √δ, (8) 
+
+where C(γ) = 2γ√2(1 −γ)2 . In particular, if ∆L ≥ C(γ)ϵ√δ
+
+for each block update, then J is non-decreasing and, since 
+
+J ∈ [0 , 1] , the sequence of objective values converges. Remark 5.2 . Theorem 5.1 is an idealized characterization: it assumes a KL-bounded (effective) trust region and a positive surrogate improvement for each block update. GRPO im-plements conservative updates via ratio clipping (often with KL monitoring/early stopping), which empirically keeps policy shifts small but does not guarantee strict monotonic improvement in general. A formal derivation under the KL trust-region condition is also provided in Appendix A. We next clarify why counterfactual credit is preferable to shared terminal rewards from a gradient-estimation perspec-tive. Fix an active agent k and hold the other agents θ−k
+
+fixed. Let R(τ ) ∈ [0 , 1] be the terminal team reward for a joint rollout τ , and let R¬k be the counterfactual reward obtained by removing agent k while keeping the remaining agents and the collaboration protocol unchanged. Define 
+
+∆k := R(τ ) − R¬k. Let 
+
+gk(τk) := X
+
+> t
+
+∇θk log πθk (ak,t | sk,t )
+
+denote agent k’s score-function term, where (sk,t , a k,t ) are token- or turn-level states/actions. Under the shared-reward baseline, agent k is trained with an estimator proportional to gk(τk) R(τ ). In contrast, CCPO employs gk(τk) ∆ k, which can be interpreted as subtracting an action-independent baseline R¬k from the return. Theo-rem 5.3 below formalizes that such counterfactual baselines preserve unbiasedness while potentially reducing the esti-mator variance. 
+
+Theorem 5.3. Assume that conditioned on (x, θ −k), the random variable R¬k does not depend on agent k’s sampled actions in the joint rollout τ . Then replacing R(τ ) by ∆k =
+
+R(τ ) − R¬k does not change ∇θk J(θ) (no gradient bias). Moreover, consider the family of unbiased estimators of the form 
+
+bGb = gk(τk)  R(τ ) − b,
+
+where b is any scalar baseline measurable with respect to 
+
+(x, θ −k) and independent of agent k’s sampled actions in 
+
+τ (conditioned on (x, θ −k)). Among all such baselines, the conditional variance Var( bGb | x, θ −k) is minimized by 
+
+b⋆(x, θ −k) = E∥gk(τk)∥22 R(τ ) x, θ −k
+
+
+
+E[∥gk(τk)∥22 | x, θ −k] . (9) 
+
+Consequently, the shared-reward estimator corresponds to the special case b ≡ 0, which is generally suboptimal unless 
+
+b⋆ ≡ 0. If R¬k is closer to b⋆ than 0 in the weighted mean-square sense, i.e., E∥gk(τk)∥22 (R¬k − b⋆)2 x, θ −k
+
+ ≤
+
+E∥gk(τk)∥22 (0 − b⋆)2 x, θ −k
+
+, then 
+
+Var( gk(τk)∆ k | x, θ −k) ≤ Var( gk(τk)R(τ ) | x, θ −k) .
+
+In addition to variance reduction, ∆k also provides a direc-tional credit signal that discourages free-riding: whenever agent k is redundant on a rollout so that R(τ ) = R¬k,CCPO assigns ∆k = 0 and thus removes the spurious posi-tive update that would arise under shared rewards. Formal statements and proofs for Theorem 5.3 are deferred to Ap-pendix A. 
+
+Table 1. Performance on math benchmarks (Accuracy %)                                                                                                                                
+
+> Model Dataset Single-agent Dual-Agent
+> Untrained GRPO Untrained ReMA Ours qwen2.5-1.5b instruct MATH500 35.80 56.80 51.60 60.00 61.00
+> AIME24 -6.670 6.670 6.670 -AIME25 --6.670 --AMC23 30.00 17.50 22.50 20.00 35.00
+> Gaokao2023en 23.50 42.82 42.08 43.90 41.60 MinervaMath 5.150 13.24 9.930 13.60 14.70
+> llama3.1-8b instruct MATH500 32.60 48.60 46.20 51.80 53.40
+> AIME24 -6.670 6.670 13.33 6.670 AIME25 -----AMC23 5.000 10.00 22.50 25.00 35.00
+> Gaokao2023en 3.390 10.97 36.10 38.70 39.48
+> MinervaMath 7.350 8.090 20.96 16.54 20.22 qwen2.5-7b instruct MATH500 68.00 75.20 74.40 75.40 77.60
+> AIME24 6.670 13.33 16.67 16.70 13.33 AIME25 10.00 6.670 6.670 13.30 10.00 AMC23 37.50 50.00 55.00 57.50 45.00 Gaokao2023en 42.04 60.31 57.40 57.70 59.74 MinervaMath 18.38 28.31 25.74 24.60 26.10 qwen3-4b base MATH500 24.60 75.00 46.40 78.00 79.40
+> AIME24 --10.00 20.00 10.00 AIME25 -6.670 6.670 13.33 6.670 AMC23 10.00 35.00 25.00 42.50 52.50
+> Gaokao2023en 3.660 51.06 22.08 58.70 57.40 MinervaMath 4.410 24.63 5.510 26.84 27.94
+
+6Counterfactual Credit Policy Optimization for Multi-Agent Systems 
+
+Table 2. Performance on LogiQA dataset (Accuracy %) 
+
+model solo agent Untrained Shared Counterfactuals 
+
+qwen2.5-1.5b instruct 31.64 37.02 43.47 45.01 
+
+Table 3. The effectiveness of the collaboration between Agent1 and Agent2 
+
+model experiment-1 experiment-2 
+
+qwen2.5-1.5b-instruct 61.00 56.40 llama3.1-8b-instruct 53.40 52.00 qwen2.5-7b-instruct 77.60 76.00 
+
+## 6. Experiments 
+
+6.1. Experimental Setup 
+
+To validate the effectiveness and versatility of the coun-terfactual credit allocation method proposed in this pa-per, two multi-agent collaboration models were designed: a two-agent “Think-Reason” collaboration model and a three-agent voting collaboration model. For the two-agent “Think-Reason” collaboration model, we configured two agents: one to generate the thinking process and another to infer the final answer. We employed distinct parame-ters for these agents, initializing them with LLMs such as qwen2.5-1.5b-instruct and llama3.1-8b-instruct to val-idate the algorithm’s effectiveness across different frame-works and parameter scales. For the dataset, we selected the Data Reasoning Dataset. We used MATH 7.5k (Hendrycks et al., 2021) as the training set, with MATH500 (Lightman et al., 2023) serving as in-distribution test samples, and AMC23, Gaokao2023en (Zhang et al., 2024), and Minerva-Math (Lewkowycz et al., 2022) as out-of-distribution test samples. This dataset configuration was employed to vali-date the reasoning and generalization capabilities of the RL model. For the three-agent “voting” collaboration mode, we con-REMA CCPO   
+
+> 0
+> 5
+> 10
+> 15
+> 20
+> Runtime (hours)
+> 11.57
+> 15.24
+> +31.7%
+> (a) Runtime
+> 0200 400
+> Training Steps
+> 0.50
+> 0.55
+> 0.60
+> Validation Accuracy
+> (b) Validation Accuracy
+> REMA
+> CCPO
+
+Figure 3. Training Comparison between CCPO and ReMA. The left panel shows that CCPO incurs a slightly longer overall training time. The right panel plots validation accuracy throughout training, demonstrating that CCPO achieves a higher final accuracy than ReMA. 
+
+figured three agents that independently reason and output answers to questions. Each agent uses distinct parameters, initialized with LLMs such as qwen2.5-1.5b-instruct and llama3.1-8b-instruct. We trained on the LogiQA dataset and evaluated performance on LogiQA-test. 
+
+6.2. Experimental Results for the “Thinking-Reason” Collaboration Model with Two Agents 
+
+For testing on the mathematical reasoning dataset, as shown in Table 1 the proposed method achieved the best perfor-mance on both in-distribution and out-of-distribution sam-ples. When both agents employed qwen2.5-1.5b-instruct, the average score improved by 4.6% compared to dual agents using the CoT strategy. Compared to the ReMA algorithm in the same field, the average score increased by 
+
+1.8% . This demonstrates the effectiveness of our counter-factual information allocation algorithm in multi-agent RL. For out-of-distribution samples, our algorithm outperformed the dual-agent setup using the CoT policy and the ReMA algorithm by 3.0% and 2.1% , respectively. 6.2.1. E FFECTIVENESS OF THE COOPERATIVE 
+
+MECHANISM 
+
+Experimental question: Does Agent 2 truly leverage the reasoning provided by Agent 1, or is Agent 2 inherently strong and simply learns to ignore Agent 1 (i.e., the Lazy Agent problem)? We use two agent models trained with qwen2.5-1.5b-instruct and design two comparative experiments. In Experiment 1, the two trained agents collaboratively perform reasoning on the dataset: Agent 1 provides the reasoning process, and Agent 2 produces the final answer. In Experiment 2, the out-put of Agent 1 is replaced with empty content, and Agent 2 produces the answer independently. This setup allows us to verify the effectiveness of the cooperative mechanism. According to the experimental results (Table 3), Experi-ment 1 achieves higher accuracy than Experiment 2, which demonstrates that the cooperative mechanism is indeed ef-fective. 6.2.2. C OMPUTATIONAL OVERHEAD ANALYSIS 
+
+Experimental question: Does the proposed counterfac-tual credit assignment algorithm incur significantly higher computational overhead compared to baseline methods? The counterfactual credit assignment method proposed in this paper introduces additional counterfactual trajectory computations. In theory, this leads to higher time con-sumption compared to directly using joint rewards, such as in ReMA. Although CCPO may require longer training time than standard GRPO, it is able to achieve a higher performance upper bound. To evaluate the computational 7Counterfactual Credit Policy Optimization for Multi-Agent Systems Shared Ours 
+
+-0.2 
+
+-0.1 
+
+0.0 
+
+0.1  
+
+> Reward
+> Q1
+> (J=0,S=0)
+> Shared Ours
+
+0.8 
+
+0.9 
+
+1.0 
+
+1.1  
+
+> Q2
+> (J=1,S=0)
+> Shared Ours
+
+0.0 
+
+0.5 
+
+1.0  
+
+> Q3
+> (J=1,S=1)
+> Shared Ours
+
+-1.0 
+
+-0.5 
+
+0.0  
+
+> Q4
+> (J=0,S=1)
+> Shared Ours
+
+-1.0 
+
+-0.5 
+
+0.0  
+
+> Reward
+> Q1
+> (J=0,S=0)
+> Shared Ours
+
+0.0 
+
+0.5 
+
+1.0  
+
+> Q2
+> (J=1,S=0)
+> Shared Ours
+
+1.0 
+
+1.2 
+
+1.4  
+
+> Q3
+> (J=1,S=1)
+> Shared Ours
+
+0.0 
+
+0.2   
+
+> Q4
+> (J=0,S=1)
+> Agent 1
+> (Think)
+> Agent 2
+> (Reason)
+> Shared Reward Ours
+> Figure 4. Reward Distribution Comparison between Counterfactual and Shared Rewards. The first row shows the reward distributions for Agent 1, and the second row shows those for Agent 2. Overall, the counterfactual reward exhibits a distribution that better aligns with human intuition (J: the score of the two agents’ joint answer, S: the score of Agent2’s solo answer).
+
+overhead, we conduct a comparative experiment in which both ReMA and CCPO are trained for one epoch, and we measure their time consumption and GPU resource usage. 6.2.3. I NTUITIVE ANALYSIS OF COUNTERFACTUAL 
+
+REWARDS 
+
+Research question: Are counterfactual rewards truly more reasonable than shared rewards? To examine whether counterfactual rewards provide more faithful credit than shared outcome rewards, we visualize the training-time reward distributions for Agent 1 and Agent 2 using box plots (Figure 4). Under a shared reward, when-ever the joint answer is correct—especially when Agent 2’s solo answer is also correct—both agents receive reward 1,implicitly attributing equal contribution. This can encour-age free-riding: Agent 1 may contribute weak reasoning yet benefit from Agent 2’s capability. In contrast, counterfactual rewards avoid this assumption and assign higher credit to Agent 2 in such cases, better matching human intuition. 
+
+6.3. Experimental Results for Three-Agent “Voting” Collaboration Mode 
+
+For the logical reasoning dataset (Table 2), the pro-posed method achieved the best performance on both in-distribution and out-of-distribution samples. When all three agents were configured with qwen2.5-1.5b-instruct, the pro-posed method achieved a 1.5% higher accuracy compared to the baseline method using only joint rewards. 
+
+## 7. Conclusion 
+
+This paper tackles a central challenge in training collabora-tive LLMs: assigning credit under sparse and delayed team rewards. We propose CCPO, a multi-agent RL framework that estimates each agent’s marginal contribution via coun-terfactual baselines, converting a global team outcome into agent-specific advantages. This design mitigates free-riding and yields role-sensitive learning signals that better align with heterogeneous collaboration dynamics. We instantiate CCPO in both asymmetric sequential col-laboration (Think–Reason) and symmetric multi-agent vot-ing, and integrate counterfactual credit with global-history-aware normalization to stabilize training across prompts and stages while remaining computationally efficient. Experi-ments on mathematical and logical reasoning benchmarks show consistent gains over joint-reward baselines and recent multi-agent RL methods, with higher accuracy and more stable convergence. These results highlight scalable counter-factual attribution as a key primitive for training collabora-tive LLM systems beyond test-time heuristics, and motivate extensions to richer interaction graphs, process-level re-wards, and robustness under heterogeneous or unreliable collaborators. 8Counterfactual Credit Policy Optimization for Multi-Agent Systems 
+
+## Impact Statement 
+
+This paper presents work whose goal is to advance the field of machine learning by developing counterfactual credit assignment methods for stable and scalable multi-agent rein-forcement learning with collaborative LLMs. We do not feel any potential societal consequences of this work necessary to be discussed here. 
+
+## References 
+
+Chen, Z., Ai, T., Li, Y., Li, G., Wei, Y., Zhou, W., Li, G., Yu, B., Chen, Z., Sun, H., Zhuang, F., Li, J., Wang, D., and Ban, Y. Llmboost: Make large language models stronger with boosting, 2025a. URL https://arxiv.org/ abs/2512.22309 .Chen, Z., Ji, Z., Mao, Q., Wu, H., Cheng, J., Qin, B., Li, Z., Li, J., Sun, K., Wang, Z., et al. Scoring, reasoning, and selecting the best! ensembling large language models via a peer-review process. arXiv preprint arXiv:2512.23213 ,2025b. Chen, Z., Li, J., Chen, P., Li, Z., Sun, K., Luo, Y., Mao, Q., Li, M., Xiao, L., Yang, D., et al. Harnessing multiple large language models: A survey on llm ensemble. arXiv preprint arXiv:2502.18036 , 2025c. Chen, Z., Li, G., Ai, T., Li, Y., Huang, Z., Zhou, W., Zhuang, F., Liu, X., Li, J., Wang, D., et al. Weak-driven learning: How weak agents make strong agents stronger. arXiv preprint arXiv:2602.08222 , 2026. Duan, C., Sun, K., Fang, R., Zhang, M., Feng, Y., Luo, Y., Liu, Y., Wang, K., Pei, P., Cai, X., et al. Codeplot-cot: Mathematical visual reasoning by thinking with code-driven images. arXiv preprint arXiv:2510.11718 , 2025. Fu, H., You, M., Zhou, H., and He, B. Closely cooperative multi-agent reinforcement learning based on intention sharing and credit assignment. IEEE Robotics and Au-tomation Letters , 2024. He, X., Ban, Y., Zou, J., Wei, T., Cook, C., and He, J. Llm-forest: Ensemble learning of llms with graph-augmented prompts for data imputation. In Findings of the Asso-ciation for Computational Linguistics: ACL 2025 , pp. 6921–6936, 2025. Hendrycks, D., Burns, C., Kadavath, S., Arora, A., Basart, S., Tang, E., Song, D., and Steinhardt, J. Measuring math-ematical problem solving with the math dataset, 2021. URL https://arxiv.org/abs/2103.03874 .Hu, J., Liu, J. K., Xu, H., and Shen, W. Reinforce++: Stabilizing critic-free policy optimization with global ad-vantage normalization, 2025. URL https://arxiv. org/abs/2501.03262 .Huang, Z., Ban, Y., Fu, L., Li, X., Dai, Z., Li, J., and deqing wang. Adaptive batch-wise sample scheduling for direct preference optimization. In The Thirty-ninth Annual Conference on Neural Information Processing Systems , 2025. URL https://openreview.net/ forum?id=8FN25PlktS .Huang, Z., Xia, X., Ren, Y., Zheng, J., Wang, X., Zhang, Z., Xie, H., Liang, S., Chen, Z., Xiao, X., et al. Does your reasoning model implicitly know when to stop thinking? 
+
+arXiv preprint arXiv:2602.08354 , 2026a. Huang, Z., Xia, X., Ren, Y., Zheng, J., Xiao, X., Xie, H., Huaqiu, L., Liang, S., Dai, Z., Zhuang, F., et al. Real-time aligned reward model beyond semantics. arXiv preprint arXiv:2601.22664 , 2026b. Jiang, Z., Zhang, B., Li, Y., and Xu, Z. Qllm: Do we really need a mixing network for credit assignment in multi-agent reinforcement learning? arXiv preprint arXiv:2504.12961 , 2025. Jin, W., Du, H., Liu, G., and Kim, D. I. Curriculum learn-ing with counterfactual group relative policy advantage for multi-agent reinforcement learning. arXiv preprint arXiv:2506.07548 , 2025. Kapoor, A., Swamy, S., Tessera, K.-a., Baranwal, M., Sun, M., Khadilkar, H., and Albrecht, S. V. Agent-temporal credit assignment for optimal policy preserva-tion in sparse multi-agent reinforcement learning. arXiv preprint arXiv:2412.14779 , 2024. Lewkowycz, A., Andreassen, A., Dohan, D., Dyer, E., Michalewski, H., Ramasesh, V., Slone, A., Anil, C., Schlag, I., Gutman-Solo, T., Wu, Y., Neyshabur, B., Gur-Ari, G., and Misra, V. Solving quantitative rea-soning problems with language models, 2022. URL 
+
+https://arxiv.org/abs/2206.14858 .Li, J., Kuang, K., Wang, B., Liu, F., Chen, L., Wu, F., and Xiao, J. Shapley counterfactual credits for multi-agent reinforcement learning. In Proceedings of the 27th ACM SIGKDD Conference on Knowledge Discovery & Data Mining , pp. 934–942, 2021. Li, Z.-Z., Zhang, D., Zhang, M.-L., Zhang, J., Liu, Z., Yao, Y., Xu, H., Zheng, J., Wang, P.-J., Chen, X., et al. From system 1 to system 2: A survey of reasoning large lan-guage models. arXiv preprint arXiv:2502.17419 , 2025. Liao, J., Wen, M., Wang, J., and Zhang, W. Marft: Multi-agent reinforcement fine-tuning. arXiv preprint arXiv:2504.16129 , 2025. Lightman, H., Kosaraju, V., Burda, Y., Edwards, H., Baker, B., Lee, T., Leike, J., Schulman, J., Sutskever, I., and Cobbe, K. Let’s verify step by step, 2023. URL https: //arxiv.org/abs/2305.20050 .9Counterfactual Credit Policy Optimization for Multi-Agent Systems 
+
+Lin, H., Cao, S., Wang, S., Wu, H., Li, M., Yang, L., Zheng, J., and Qin, C. Interactive learning for llm reasoning. 
+
+arXiv preprint arXiv:2509.26306 , 2025a. Lin, M., Shi, S., Guo, Y., Tadiparthi, V., Chalaki, B., Pari, E. M., Stepputtis, S., Kim, W., Campbell, J., and Sycara, K. Speaking the language of teamwork: Llm-guided credit assignment in multi-agent reinforcement learning. 
+
+arXiv preprint arXiv:2502.03723 , 2025b. Liu, J., Cui, L., Liu, H., Huang, D., Wang, Y., and Zhang, Y. Logiqa: A challenge dataset for machine reading comprehension with logical reasoning, 2020. URL 
+
+https://arxiv.org/abs/2007.08124 .Liu, S., Chen, T., Liang, Z., Lyu, X., and Amato, C. Llm collaboration with multi-agent reinforcement learning. 
+
+arXiv preprint arXiv:2508.04652 , 2025. Lu, X., Wang, X., Chai, J., Yin, G., Lin, W., Chen, Z., Luo, Y., Zhuang, F., Ban, Y., and Wang, D. Contextual rollout bandits for reinforcement learning with verifiable rewards. 
+
+arXiv preprint arXiv:2602.08499 , 2026. Lyu, M. R., Ray, B., Roychoudhury, A., Tan, S. H., and Thongtanunam, P. Automatic programming: Large lan-guage models and beyond. ACM Transactions on Soft-ware Engineering and Methodology , 34(5):1–33, 2025. Ma, H., Hu, T., Pu, Z., Boyin, L., Ai, X., Liang, Y., and Chen, M. Coevolving with the other you: Fine-tuning llm with sequential cooperative multi-agent reinforcement learning. Advances in Neural Information Processing Systems , 37:15497–15525, 2024. Mao, H., Xiao, Q., Pang, L., and Liu, H. Clip your se-quences fairly: Enforcing length fairness for sequence-level rl, 2025. URL https://arxiv.org/abs/ 2509.09177 .Motwani, S. R., Smith, C., Das, R. J., Rafailov, R., Laptev, I., Torr, P. H., Pizzati, F., Clark, R., and de Witt, C. S. Malt: Improving reasoning with multi-agent llm training. 
+
+arXiv preprint arXiv:2412.01928 , 2024. Nagpal, K., Dong, D., Bouvier, J.-B., and Mehr, N. Lever-aging large language models for effective and explain-able multi-agent credit assignment. arXiv preprint arXiv:2502.16863 , 2025. Park, C., Han, S., Guo, X., Ozdaglar, A. E., Zhang, K., and Kim, J.-K. Maporl: Multi-agent post-co-training for collaborative large language models with reinforcement learning. In Proceedings of the 63rd Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers) , pp. 30215–30248, 2025. Rashid, T., Farquhar, G., Peng, B., and Whiteson, S. Weighted qmix: Expanding monotonic value function factorisation for deep multi-agent reinforcement learning. 
+
+Advances in neural information processing systems , 33: 10199–10210, 2020. Schulman, J., Levine, S., Moritz, P., Jordan, M. I., and Abbeel, P. Trust region policy optimization, 2017a. URL 
+
+https://arxiv.org/abs/1502.05477 .Schulman, J., Wolski, F., Dhariwal, P., Radford, A., and Klimov, O. Proximal policy optimization algorithms, 2017b. URL https://arxiv.org/abs/1707. 06347 .Shao, Z., Wang, P., Zhu, Q., Xu, R., Song, J., Bi, X., Zhang, H., Zhang, M., Li, Y. K., Wu, Y., and Guo, D. Deepseekmath: Pushing the limits of mathemat-ical reasoning in open language models, 2024. URL 
+
+https://arxiv.org/abs/2402.03300 .Tran, K.-T., Dao, D., Nguyen, M.-D., Pham, Q.-V., O’Sullivan, B., and Nguyen, H. D. Multi-agent collab-oration mechanisms: A survey of llms. arXiv preprint arXiv:2501.06322 , 2025. Wan, Z., LI, Y., Wen, X., Song, Y., Wang, H., Yang, L., Schmidt, M., Wang, J., Zhang, W., Hu, S., and Wen, Y. ReMA: Learning to meta-think for LLMs with multi-agent reinforcement learning. In The Thirty-ninth Annual Conference on Neural Information Processing Systems ,2025. URL https://openreview.net/forum? id=ur295YVtmt .Wang, S., Ji, W., Gui, H., Zhang, K., Wang, L., and Pang, S. Xmix: Graph-based temporal credit assignment and attention-augmented value decomposition for multi-agent cooperative reinforcement learning. Neurocomputing , pp. 131471, 2025. Williams, R. J. Simple statistical gradient-following algo-rithms for connectionist reinforcement learning. Machine learning , 8(3):229–256, 1992. Yang, F., Chen, Z., Wang, X., Lu, X., Chai, J., Yin, G., Lin, W., Ma, S., Zhuang, F., Wang, D., et al. Your group-relative advantage is biased. arXiv preprint arXiv:2601.08521 , 2026. Yu, Q., Zhang, Z., Zhu, R., Yuan, Y., Zuo, X., Yue, Y., Dai, W., Fan, T., Liu, G., Liu, L., et al. Dapo: An open-source llm reinforcement learning system at scale. arXiv preprint arXiv:2503.14476 , 2025. Zhang, X., Li, C., Zong, Y., Ying, Z., He, L., and Qiu, X. Evaluating the performance of large language models on gaokao benchmark, 2024. URL https://arxiv. org/abs/2305.12474 .10 Counterfactual Credit Policy Optimization for Multi-Agent Systems 
+
+Zhang, Z., Huang, Z., Xia, X., Wang, D., Zhuang, F., Ma, S., Ding, N., Yang, Y., Li, J., and Ban, Y. Heteroge-neous agent collaborative reinforcement learning. arXiv preprint arXiv:2603.02604 , 2026. Zheng, C., Liu, S., Li, M., Chen, X.-H., Yu, B., Gao, C., Dang, K., Liu, Y., Men, R., Yang, A., et al. Group sequence policy optimization. arXiv preprint arXiv:2507.18071 , 2025. Zou, J., Ban, Y., Li, Z., Qi, Y., Qiu, R., Yang, L., and He, J. Transformer copilot: Learning from the mistake log in LLM fine-tuning. In The Thirty-ninth Annual Conference on Neural Information Processing Systems ,2025. URL https://openreview.net/forum? id=MRvxlTlkNQ .11 Counterfactual Credit Policy Optimization for Multi-Agent Systems 
+
+## A. Convergence and stability analysis of CCPO 
+
+This section formalizes two properties used to justify the idealized monotonicity discussion in the main text. We first show that counterfactual credit can be viewed as an action-independent baseline for the active agent, and then state a TRPO-style lower bound for conservative block updates. As in prior work, PPO/GRPO are practical approximations to trust-region methods and do not guarantee strict monotonic improvement in general. Let x ∼ D be a prompt and let θ = ( θ1, . . . , θ K ) denote the parameters of K agents with policies {πθk }Kk=1 under a fixed collaboration protocol C. Let τ ∼ πθ (· | x) be the joint rollout and let R(τ ) ∈ [0 , 1] be a terminal reward (e.g., 0/1
+
+correctness). The joint objective is 
+
+J(θ) = Ex∼D Eτ ∼πθ (·| x)
+
+R(τ ). (10) For each agent k, define a counterfactual rollout τ ¬k constructed by removing agent k while keeping the other agents and protocol C unchanged, and define the counterfactual reward 
+
+R¬k := R(τ ¬k). (11) The counterfactual margin is 
+
+∆k := R(τ ) − R¬k. (12) 
+
+A.1. Counterfactual credit as an action-independent baseline 
+
+The following Lemma A.1 shows that, under a mild conditional-independence assumption, using the counterfactual baseline 
+
+R¬k yields an unbiased policy-gradient estimator for agent k, i.e., replacing R(τ ) with R(τ ) − R¬k does not introduce gradient bias. 
+
+Lemma A.1. Fix an agent k and hold θ−k fixed. Assume that conditioned on (x, θ −k), the random variable R¬k is independent of agent k’s sampled actions in the joint rollout τ (equivalently, R¬k is measurable with respect to randomness external to agent k in the current rollout). Then 
+
+∇θk J(θ) = E
+
+"X
+
+> t
+
+∇θk log πθk (ak,t | sk,t ) ∆ k
+
+#
+
+, (13) 
+
+where ak,t and sk,t denote the (token-level or turn-level) action and state of agent k. Consequently, replacing R(τ ) by 
+
+R(τ ) − R¬k does not introduce gradient bias for agent k.Proof. Write b(x, θ −k) := R¬k. By assumption, b does not depend on agent k’s sampled actions in the current rollout. Using the log-derivative trick, 
+
+∇θk J(θ) = E
+
+"X
+
+> t
+
+∇θk log πθk (ak,t | sk,t ) R(τ )
+
+#
+
+.
+
+It remains to show that subtracting b does not change the expectation. Conditioning on (x, θ −k, b ) and using that b is independent of τk,
+
+E
+
+"X
+
+> t
+
+∇θk log πθk (ak,t | sk,t ) b
+
+#
+
+= E[b · E[∇θk log pθk (τk | x, θ −k) | x, θ −k, b ]] = E[b · 0] = 0 ,
+
+since the conditional expectation of the score ∇θk log pθk (τk | x, θ −k) is zero. Therefore, 
+
+E
+
+"X
+
+> t
+
+∇θk log πθk (ak,t | sk,t ) R(τ )
+
+#
+
+= E
+
+"X
+
+> t
+
+∇θk log πθk (ak,t | sk,t ) ( R(τ ) − b)
+
+#
+
+,
+
+which yields Eq. (13). 12 Counterfactual Credit Policy Optimization for Multi-Agent Systems 
+
+A.2. From clipping to an effective trust region 
+
+In practice, CCPO updates each agent using GRPO with clipped importance ratios, and we optionally monitor the empirical KL divergence to avoid overly large policy shifts. These mechanisms can be interpreted as enforcing an effective trust region. The following Lemma A.2 provides a sufficient condition linking uniform ratio bounds to a per-state KL upper bound. 
+
+Lemma A.2. Fix a state s and two policies πold (· | s) and πnew (· | s). Assume the likelihood ratio is uniformly bounded: 
+
+1 − ϵc ≤ πnew (a | s)
+
+πold (a | s) ≤ 1 + ϵc for all a with πold (a | s) > 0, (14) 
+
+where ϵc ∈ (0 , 1) . Then 
+
+DKL 
+
+ πold (· | s) ∥ πnew (· | s) ≤ − log(1 − ϵc), (15) 
+
+and consequently Dmax KL (πold , π new ) ≤ − log(1 − ϵc).
+
+Proof. By definition, DKL (πold ∥πnew ) = Ea∼πold (·| s)
+
+h
+
+log πold (a|s)
+
+> πnew (a|s)
+
+i
+
+= Ea∼πold (·| s)[− log r(a)] , where r(a) = πnew (a |
+
+s)/π old (a | s). Using r(a) ≥ 1 − ϵc gives − log r(a) ≤ − log(1 − ϵc) for all a, hence the bound. 
+
+A.3. Idealized monotonic improvement under block updates 
+
+We now state a TRPO-style monotonic improvement bound for a single block update. We present the result for a discounted MDP with γ ∈ (0 , 1) ; the episodic finite-horizon analogue follows similarly. 
+
+Theorem A.3. Fix an iteration t and an active agent k. Holding θt 
+
+> −k
+
+fixed induces a stationary MDP for agent k. Let 
+
+πold := πθtk and let π be a candidate new policy for agent k in this induced MDP. Let Aπold (s, a ) be the advantage of πold 
+
+and assume it is bounded: 
+
+ϵt := max  
+
+> s,a
+
+Aπold (s, a ) < ∞. (16) 
+
+Define the TRPO surrogate objective 
+
+Lπold (π) := J(θtk, θ t
+
+> −k
+
+) + 11 − γ Es∼dπold , a ∼π(·| s)[Aπold (s, a )] , (17) 
+
+where dπold is the discounted state visitation distribution of πold . Let 
+
+Dmax KL (πold , π ) := max  
+
+> s
+
+DKL 
+
+ πold (· | s) ∥ π(· | s). (18) 
+
+Suppose the block update outputs πnew such that 
+
+Dmax KL (πold , π new ) ≤ δt (19) 
+
+and 
+
+Lπold (πnew ) ≥ Lπold (πold ) + ∆ t. (20) 
+
+Then 
+
+J(θt+1  
+
+> k
+
+, θ t
+
+> −k
+
+) − J(θtk, θ t
+
+> −k
+
+) ≥ ∆t − C(γ) ϵt
+
+pδt, C(γ) := 2γ√2(1 − γ)2 . (21) 
+
+In particular, if ∆t ≥ C(γ)ϵt
+
+√δt, then J(θt+1  
+
+> k
+
+, θ t
+
+> −k
+
+) ≥ J(θtk, θ t
+
+> −k
+
+). If additionally J(θ) ∈ [0 , 1] , then under such idealized block updates the sequence {J(θt)}t≥0 is non-decreasing and convergent. Proof. A standard TRPO analysis yields the lower bound (via the performance-difference lemma plus occupancy perturbation control) 
+
+J(θk, θ t
+
+> −k
+
+) ≥ Lπold (πθk ) − 4γ
+
+(1 − γ)2 ϵt Dmax TV (πold , π θk ), (22) 13 Counterfactual Credit Policy Optimization for Multi-Agent Systems 
+
+where Dmax TV (πold , π ) = max s DTV (πold (· | s), π (· | s)) . By Pinsker’s inequality, DTV (p, q ) ≤
+
+q 12 DKL (p∥q), we have 
+
+Dmax TV (πold , π new ) ≤
+
+q 12 Dmax KL (πold , π new ) ≤
+
+q 12 δt.
+
+Substituting into Eq. (22) gives 
+
+J(θt+1  
+
+> k
+
+, θ t
+
+> −k
+
+) ≥ Lπold (πnew ) − C(γ)ϵt
+
+pδt.
+
+Using Eq. (20) and the identity Lπold (πold ) = J(θtk, θ t
+
+> −k
+
+) yields Eq. (21). 
+
+Proof of Theorem 5.1. Fix an iteration t and the active agent k. During this block update, the other agents are fixed at 
+
+θt 
+
+> −k
+
+and the protocol C is fixed, so the interaction defines an induced stationary MDP for agent k. Let πold := πθtk and 
+
+πnew := πθt+1 
+
+> k
+
+be the policy before and after the block update. The conditions in Theorem 5.1 correspond to Eqs. (19) –(20) (with δt = δ and ∆t = ∆ L), and Theorem A.3 implies 
+
+J(θt+1  
+
+> k
+
+, θ t
+
+> −k
+
+) − J(θtk, θ t
+
+> −k
+
+) ≥ ∆L − C(γ) ϵ √δ, 
+
+which matches Eq. (8) . If ∆L ≥ C(γ)ϵ√δ then the block update is non-decreasing. Since R(τ ) ∈ [0 , 1] implies 
+
+J(θ) ∈ [0 , 1] , any non-decreasing sequence of objective values is bounded above and thus convergent. Finally, Lemma A.1 applies to the CCPO instantiations in Appendix B as long as, for the active agent k, the counterfactual term R¬k (and any shaping terms used to compute its advantage, such as running statistics and normalizers) is conditionally independent of agent k’s sampled actions in the current rollout. Under Think–Solve, Rsolo depends only on (x, θ 2) and independent sampling from πθ2 (· | x); under Voting, Rwithout i depends only on the other agents’ proposals and the deterministic voting rule. In both cases, the counterfactual term acts as an action-independent baseline for the active agent within the current rollout. 
+
+A.4. Counterfactual credit versus shared terminal rewards 
+
+This subsection provides a complete proof of Theorem 5.3 in the main text by decomposing it into three standard steps: (i) unbiasedness under action-independent baselines, (ii) the variance-optimal scalar baseline, and (iii) a sufficient condition under which a counterfactual baseline improves upon shared rewards. Throughout, fix an active agent k and hold θ−k fixed. Let R(τ ) ∈ [0 , 1] be the terminal reward for a joint rollout τ , and define the joint objective J as in Eq. (10) . Let ak,t and 
+
+sk,t denote the (token-level or turn-level) action and state of agent k, and define 
+
+gk(τk) := X
+
+> t
+
+∇θk log πθk (ak,t | sk,t )
+
+as agent k’s score-function term. 
+
+Lemma A.4 (Action-independent baselines do not change the policy gradient) . Let b = b(x, θ −k) be any random variable that is measurable with respect to (x, θ −k) and independent of agent k’s sampled actions in the current rollout (conditioned on (x, θ −k)). Then 
+
+E[gk(τk) b] = 0 , (23) 
+
+and hence 
+
+∇θk J(θ) = Egk(τk)  R(τ ) − b . (24) 
+
+Proof. Condition on (x, θ −k, b ). By the assumed action-independence, b is constant with respect to the randomness of τk
+
+under πθk , so 
+
+E[gk(τk) b | x, θ −k, b ] = b · E[gk(τk) | x, θ −k, b ] = b · E[∇θk log pθk (τk | x, θ −k) | x, θ −k, b ] = 0 ,
+
+since the conditional expectation of the score is zero. Taking expectation over (x, θ −k, b ) yields Eq. (23). We now characterize the variance-optimal scalar baseline within this unbiased family. 14 Counterfactual Credit Policy Optimization for Multi-Agent Systems 
+
+Lemma A.5 (Optimal scalar baseline for variance reduction) . Fix (x, θ −k) and consider estimators bGb = gk(τk) ( R(τ ) − b)
+
+where b is any scalar baseline measurable w.r.t. (x, θ −k) and action-independent for agent k. Then the conditional variance 
+
+Var( bGb | x, θ −k) is minimized by 
+
+b⋆(x, θ −k) = E∥gk(τk)∥22 R(τ ) x, θ −k
+
+
+
+E[∥gk(τk)∥22 | x, θ −k] . (25) 
+
+Moreover, for any two baselines b1, b 2 in this class, 
+
+Var( bGb1 | x, θ −k) − Var( bGb2 | x, θ −k) = E
+
+h
+
+∥gk(τk)∥22
+
+
+
+(b1 − b⋆)2 − (b2 − b⋆)2
+
+x, θ −k
+
+i
+
+. (26) 
+
+Proof. For fixed (x, θ −k), expand the conditional second moment: 
+
+E
+
+h
+
+∥ bGb∥22 x, θ −k
+
+i
+
+= E∥gk(τk)∥22 (R(τ ) − b)2 x, θ −k
+
+ .
+
+This is a convex quadratic function of b with derivative 
+
+∂∂b E∥gk(τk)∥22 (R(τ ) − b)2 x, θ −k
+
+ = −2 E∥gk(τk)∥22 (R(τ ) − b) x, θ −k
+
+ .
+
+Setting the derivative to zero yields Eq. (25) . To obtain Eq. (26) , write (R − b)2 = ( R − b⋆)2 + ( b − b⋆)2 − 2( R − b⋆)( b − b⋆)
+
+and use the optimality condition E[∥gk∥22(R − b⋆) | x, θ −k] = 0 .Lemma A.5 yields an immediate comparison between shared rewards and counterfactual credit. 
+
+Corollary A.6 (Shared rewards as a suboptimal baseline; sufficient condition for improvement) . The shared-reward estimator corresponds to b ≡ 0. If a counterfactual term R¬k is action-independent for agent k and satisfies 
+
+E∥gk(τk)∥22 (R¬k − b⋆)2 x, θ −k
+
+ ≤ E∥gk(τk)∥22 (0 − b⋆)2 x, θ −k
+
+ ,
+
+then 
+
+Var( gk(τk) ( R(τ ) − R¬k) | x, θ −k) ≤ Var( gk(τk) R(τ ) | x, θ −k) .
+
+Proof of Theorem 5.3. Fix agent k and hold θ−k fixed. Under the assumption of Theorem 5.3, the counterfactual term 
+
+R¬k is measurable w.r.t. (x, θ −k) and is independent of agent k’s sampled actions in the current rollout (conditioned on 
+
+(x, θ −k)). Applying Lemma A.4 with b = R¬k yields E[gk(τk)R¬k] = 0 and hence ∇θk J(θ) = E[gk(τk)( R(τ ) − R¬k)] = 
+
+E[gk(τk)∆ k], which proves the “no gradient bias” claim. Next, consider the family of estimators bGb = gk(τk)( R(τ ) − b) where b is any scalar baseline measurable w.r.t. (x, θ −k)
+
+and action-independent for agent k. Lemma A.5 shows that, among this unbiased family, the conditional variance 
+
+Var( bGb | x, θ −k) is minimized by b⋆ given in Eq. (25), which coincides with Eq. (9) in the main text. Finally, the shared-reward estimator corresponds to b ≡ 0, while the counterfactual-credit estimator corresponds to b = R¬k.By Corollary A.6, if R¬k is closer to b⋆ than 0 in the weighted mean-square sense (the condition stated in Theorem 5.3), then Var( gk(τk)∆ k | x, θ −k) ≤ Var( gk(τk)R(τ ) | x, θ −k). This concludes the proof. □
+
+In the CCPO instantiations used in this paper, the action-independence condition holds for the active agent. Under Voting, 
+
+R¬k depends only on the other agents’ proposals and the deterministic voting rule, hence is independent of agent k’s sampled actions in the current rollout. Under Think–Solve, the counterfactual Rsolo is obtained by independently sampling Agent 2 from πθ2 (· | x) without conditioning on Agent 1’s output, which is likewise independent of Agent 1’s sampled actions in the joint rollout. Therefore, the counterfactual credit ∆k = R − R¬k can be viewed as an action-independent baseline subtraction for the active agent, preserving unbiasedness and enabling variance reduction relative to shared rewards whenever R¬k is closer to the optimal baseline than 0.
+
+## B. Detailed Methodology of CCPO 
+
+B.1. Unified Trajectory View and Counterfactual Construction 
+
+For each prompt x ∼ D , a collaboration topology induces a joint generation process over K agents. We denote the j-th joint rollout by τ (j) = ( y(j)1 , . . . , y (j) 
+
+> K
+
+) with reward R(j) 
+
+> all
+
+:= R(τ (j)).15 Counterfactual Credit Policy Optimization for Multi-Agent Systems 
+
+CCPO associates each agent i with a counterfactual trajectory τ (j),¬i, which removes agent i’s contribution while keeping the remaining agents fixed under the same sampling instance. Evaluating this trajectory yields the counterfactual reward 
+
+R(j)  
+
+> without i
+
+:= R(τ (j),¬i). The marginal contribution is then 
+
+∆(j) 
+
+> i
+
+= R(j) 
+
+> all
+
+− R(j) 
+
+> without i
+
+.
+
+The remainder of the appendix instantiates τ (j),¬i and R(j)  
+
+> without i
+
+for the two collaboration topologies used in the paper, and specifies the resulting shaped rewards and advantages. 
+
+B.2. Two-Agent Think–Solve 
+
+We consider K = 2 agents. For each prompt x, we first sample N cooperative rollouts: 
+
+y(j)1 ∼ πθ1 (· | x), y(j)2 ∼ πθ2 (· | x, y (j)1 ), j = 1 , . . . , N. 
+
+The cooperative reward is 
+
+R(j) 
+
+> joint
+
+:= R(x, y (j)1 , y (j)2 ).
+
+To construct the counterfactual for Agent 1, we additionally sample N rollouts where Agent 2 answers without access to y1:
+
+y(j)2,solo ∼ πθ2 (· | x), R(j) 
+
+> solo
+
+:= R(x, ∅, y (j)2,solo ). (27) The marginal contribution attributed to Agent 1 is 
+
+∆(j) := R(j) 
+
+> joint
+
+− R(j)
+
+> solo
+
+,
+
+where we use ∆(j) = ∆ (j)1 to match the main-text notation. Next we convert ∆(j) into a bounded shaped reward and a within-prompt advantage. We maintain EMA statistics for ∆:
+
+μ(t)∆ = λ μ (t−1) ∆ + (1 − λ) μbatch  
+
+> ∆
+
+, (σ2∆)(t) = λ (σ2∆)(t−1) + (1 − λ) ( σ2∆)batch .
+
+We then normalize and shape 
+
+z(j)∆ = ∆(j) − μ∆
+
+σ∆ + ϵ , r(j)1 = tanh  α z (j)∆
+
+,
+
+and compute the within-prompt advantage 
+
+A(j)1 = r(j)1 − r1
+
+std( r1) + ϵ , r1 = 1
+
+N
+
+> N
+
+X
+
+> j=1
+
+r(j)1 .
+
+For Agent 2, we use a fused signal that balances cooperative performance with independent robustness. We maintain EMA statistics for Rjoint and Rsolo :
+
+μ(t) 
+
+> joint
+
+= λ μ (t−1)  
+
+> joint
+
++ (1 − λ) μbatch joint , (σ2
+
+> joint
+
+)(t) = λ (σ2
+
+> joint
+
+)(t−1) + (1 − λ) ( σ2
+
+> joint
+
+)batch ,μ(t) 
+
+> solo
+
+= λ μ (t−1)  
+
+> solo
+
++ (1 − λ) μbatch solo , (σ2
+
+> solo
+
+)(t) = λ (σ2
+
+> solo
+
+)(t−1) + (1 − λ) ( σ2
+
+> solo
+
+)batch .
+
+We normalize each reward stream as 
+
+z(j) 
+
+> joint
+
+= R(j) 
+
+> joint
+
+− μjoint 
+
+σjoint + ϵ , z(j) 
+
+> solo
+
+= R(j) 
+
+> solo
+
+− μsolo 
+
+σsolo + ϵ .
+
+We then define a trust coefficient g ∈ (0 , 1) from the historical marginal contribution, so that the update relies more on Rjoint 
+
+when Agent 1 has been helpful and falls back toward Rsolo otherwise: 
+
+g = σ
+
+
+
+η · μ∆
+
+σ∆ + ϵ
+
+
+
+, σ(u) = 11 + e−u .
+
+16 Counterfactual Credit Policy Optimization for Multi-Agent Systems 
+
+Finally, Agent 2 uses the fused score and within-prompt advantage 
+
+r(j)2 = g · z(j) 
+
+> joint
+
++ (1 − g) · z(j)
+
+> solo
+
+, A(j)2 = r(j)2 − r2
+
+std( r2) + ϵ , r2 = 1
+
+N
+
+> N
+
+X
+
+> j=1
+
+r(j)2 .
+
+B.3. Three-Agent Voting Collaboration 
+
+For each prompt x, three agents independently sample answers: 
+
+y(j) 
+
+> i
+
+∼ πθi (· | x), i ∈ { 1, 2, 3}, j = 1 , . . . , N. 
+
+Let Vote( ·) be a deterministic voting rule applied to the three candidates (e.g., majority vote). The joint reward is 
+
+R(j) 
+
+> all
+
+:= R
+
+
+
+Vote( y(j)1 , y (j)2 , y (j)3 )
+
+
+
+.
+
+To compute counterfactual rewards without extra decoding, we remove y(j) 
+
+> i
+
+and re-apply the same voting rule to the remaining candidates: 
+
+R(j)  
+
+> without i
+
+:= R
+
+
+
+Vote( {y(j) 
+
+> k
+
+}k̸ =i)
+
+
+
+, ∆(j) 
+
+> i
+
+= R(j) 
+
+> all
+
+− R(j) 
+
+> without i
+
+.
+
+This computation is performed within the same sampling instance and adds negligible overhead. We consider two ways to translate ∆(j) 
+
+> i
+
+into per-agent advantages. A direct option applies the unified shaping and within-prompt normalization from the main text (Eqs. (3) – (5) ) using per-agent EMA statistics. An alternative mirrors GRPO’s within-prompt ranking on the joint outcome and then allocates the resulting advantage according to non-negative marginal weights. Specifically, we first compute a joint advantage for prompt x:
+
+A(j) 
+
+> joint
+
+= R(j) 
+
+> all
+
+− μx
+
+σx + ϵ , μx = 1
+
+N
+
+> N
+
+X
+
+> j=1
+
+R(j) 
+
+> all
+
+, σx = std( R(1: N ) 
+
+> all
+
+).
+
+We then allocate it using normalized, non-negative marginal contributions: 
+
+Σ(j) 
+
+> x
+
+=
+
+> 3
+
+X
+
+> k=1
+
+max 
+
+
+
+0, ∆(j)
+
+> k
+
+
+
+, w(j) 
+
+> i
+
+=max 
+
+
+
+0, ∆(j)
+
+> i
+
+
+
+Σ(j) 
+
+> x
+
++ ϵ , A(j) 
+
+> i
+
+= w(j) 
+
+> i
+
+· A(j)
+
+> joint
+
+.
+
+This allocation ensures that an agent with negative marginal impact does not receive positive credit, while preserving the within-prompt relative scaling induced by A(j)
+
+> joint
+
+.
+
+## C. Hyperparameter Settings for The Experiments 
+
+We conducted experiments on 8 A800 graphics cards with the following hyperparameter settings Table 4. 17 Counterfactual Credit Policy Optimization for Multi-Agent Systems  
+
+> Table 4. Hyperparameters for GRPO and Reward Shaping
+
+Category Hyperparameter Value 
+
+Policy Optimization Learning rate 1 × 10 −6
+
+Batch size 64 Samples per prompt ( n) 4Clip ratio ( ϵ) 0.2 Gradient clip 1.0 Reward Shaping Contribution sensitivity ( α) 1.0 Gate sharpness ( η) 1.0 EMA decay ( λ) 0.99 Min samples for normalization 50 18
