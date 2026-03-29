@@ -23,6 +23,7 @@ SCRIPT_DIR = os.path.dirname(__file__)
 TODAY_STR = datetime.now(timezone.utc).strftime("%Y%m%d")
 LONG_RANGE_DAYS_THRESHOLD = 7
 RANGE_TOKEN_RE = re.compile(r"^(\d{8})-(\d{8})$")
+DEFAULT_FETCH_DAYS = 9
 DEFAULT_EMBED_BATCH_SIZE = 8
 DEFAULT_EMBED_CHUNK_SIZE = 512
 LOCAL_MAINTAIN_EMBED_BATCH_SIZE = 64
@@ -88,7 +89,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="抓取近 N 天 arXiv 并初始化同步到 Supabase（含 embedding）。",
     )
-    parser.add_argument("--days", type=int, default=30, help="回溯抓取天数，默认 30。")
+    parser.add_argument("--days", type=int, default=DEFAULT_FETCH_DAYS, help="回溯抓取天数，默认 9。")
     parser.add_argument("--chunk-days", type=int, default=7, help="抓取分片窗口天数，默认 7。")
     parser.add_argument(
         "--ignore-seen",
