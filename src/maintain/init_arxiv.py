@@ -6,13 +6,17 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import re
 import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
 
-import torch
+try:
+    import torch
+except Exception:  # pragma: no cover
+    torch = None
 
 
 SCRIPT_DIR = os.path.dirname(__file__)
@@ -147,8 +151,11 @@ def main() -> None:
     if args.local_maintain:
         args.embed_local_only = True
     if not str(args.embed_device or "").strip() and not str(args.embed_devices or "").strip():
-        if args.local_maintain and torch.cuda.is_available() and int(torch.cuda.device_count() or 0) > 0:
-            args.embed_devices = ",".join(f"cuda:{idx}" for idx in range(int(torch.cuda.device_count() or 0)))
+        cuda_mod = getattr(torch, "cuda", None)
+        cuda_available = bool(cuda_mod and getattr(cuda_mod, "is_available", lambda: False)())
+        cuda_count = int(getattr(cuda_mod, "device_count", lambda: 0)() or 0) if cuda_mod else 0
+        if args.local_maintain and cuda_available and cuda_count > 0:
+            args.embed_devices = ",".join(f"cuda:{idx}" for idx in range(cuda_count))
         else:
             args.embed_device = "cpu"
     raw_input = str(args.raw_input or "").strip()

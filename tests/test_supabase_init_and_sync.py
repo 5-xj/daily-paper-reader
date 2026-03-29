@@ -1,4 +1,5 @@
 import importlib.util
+import json
 import os
 import pathlib
 import tempfile
@@ -58,6 +59,15 @@ class SupabaseInitAndSyncTest(unittest.TestCase):
             os.utime(f2, (f2_ts, f2_ts))
             latest = self.init_mod.find_latest_raw_file(str(root))
             self.assertTrue(latest.endswith("arxiv_papers_20260201-20260207.json"))
+
+    def test_count_raw_rows(self):
+        with tempfile.NamedTemporaryFile("w+", suffix=".json", delete=False) as f:
+            json.dump([{"id": "1"}, {"id": "2"}], f)
+            path = f.name
+        try:
+            self.assertEqual(self.init_mod.count_raw_rows(path), 2)
+        finally:
+            os.unlink(path)
 
     def test_deduplicate_rows_by_id(self):
         rows = [
