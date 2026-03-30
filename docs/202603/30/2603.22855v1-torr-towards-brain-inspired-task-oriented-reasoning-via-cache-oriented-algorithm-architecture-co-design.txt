@@ -1,0 +1,575 @@
+Title: TorR: Towards Brain-Inspired Task-Oriented Reasoning via Cache-Oriented Algorithm-Architecture Co-design
+
+URL Source: https://arxiv.org/pdf/2603.22855v1
+
+Published Time: Wed, 25 Mar 2026 00:43:16 GMT
+
+Number of Pages: 7
+
+Markdown Content:
+# TorR: Towards Brain-Inspired Task-Oriented Reasoning via Cache-Oriented Algorithm-Architecture Co-design 
+
+## Hyunwoo Oh, SungHeon Jeong, Suyeon Jang, Hanning Chen, Sanggeon Yun, Tamoghno Das and Mohsen Imani 
+
+Department of Computer Science, University of California, Irvine Irvine, CA, USA {hyunwooo,m.imani}@uci.edu 
+
+Abstract 
+
+Task-oriented object detection (TOOD) atop CLIP offers open-vocabulary, prompt-driven semantics, yet dense per-window computation and heavy memory traffic hinder real-time, power-limited edge deploy-ment. We present TorR , a brain-inspired algorithm–architecture co-design that replaces CLIP-style dense alignment with a hyperdimensional (HDC) associative reasoner and turns tem-poral coherence into reuse. On the algorithm side, TorR reformu-lates alignment as HDC similarity and graph composition, intro-ducing partial-similarity reuse via (i) query caching with per-class score accumulation, (ii) exact 𝛿 -updates when only a small set of hypervector bits change, and (iii) similarity/load-gated bypass un-der high system load. On the architecture side, TorR instantiates a lane-scalable, bit-sliced item memory with bank/precision gating and a lightweight controller that schedules bypass/ 𝛿 /full paths to meet RT-30/RT-60 targets as object counts vary. Synthesized in a TSMC 28 nm process and exercised with a cycle-accurate sim-ulator, TorR sustains real-time throughput with millijoule-scale energy per window ( ≈50 mJ at 60 FPS; ≈113 mJ at 30 FPS) and low latency jitter, while delivering competitive AP@0.5 across five task prompts (mean 44.27%) within a bounded margin to strong VLM baselines, but at orders-of-magnitude lower energy. The design exposes deployment-time configurability (effective dimension 𝐷 ′,thresholds, precision) to trade accuracy, latency, and energy for edge budgets. 
+
+1 Introduction 
+
+Many edge devices must make sense of the world while obey-ing tight latency and power limits: a home robot asked to “find something to scoop soup,” a wearable that helps a user “look for a cup,” or a drone that must “bring the object used to cut rope.” Vi-sion–language models (VLMs) such as CLIP align images and text in a shared embedding space and enable this kind of open-vocabulary, promptable behavior [ 1 ]. Building on CLIP, task-oriented object detection (TOOD) reframes detection as selecting objects that fulfill a natural-language goal rather than a fixed label list [2–5]. Today’s pipelines typically inherit image-based Vision Trans-formers (ViTs) as their backbones. These attention/MLP stacks perform nearly the same amount of work every frame, independent of how much the scene changes [ 6 ]. As resolutions grow, activa-tions spill off-chip; memory movement, not arithmetic, dominates latency and energy. Datacenters hide this cost with large batches and abundant bandwidth. Edge devices cannot: they process a live stream, one moment at a time, and their budgets are effectively frame-rate-locked. Worse, the pipeline usually treats each frame as Image-Based Task-Oriented Object Detection   
+
+> HDC Graph
+> Reasoning
+> Event SNN
+> Encoder
+> Text Trans.
+> Encoder
+> HDC
+> Aligner
+> GNN
+> Reasoning
+> Transformer
+> Encoders Token
+> Aligner
+> (GEMM)
+> Event-Based Task-Oriented Object Detection
+> High-Temporal Event
+> High-Spatial Image
+> Fixed per-frame compute
+> Update on changes + caches
+> Task: "Find some tools that can be used to eat food."
+
+Figure 1: From CLIP/ViT to TorR. Top: dense token aligner with fixed per-frame cost. Bottom: an event-driven encoder paired with an HDC associative aligner and a lightweight reasoner. Query caching turns temporal coherence into reuse so TorR updates on change .
+
+a fresh problem, discarding what it learned a moment ago. Figure 1 (top) sketches this status quo. We take a different path inspired by how brains work: compute when the world changes, and reason by recalling what you already know. Instead of redoing the same dense work every frame, we produce embeddings that drift gradually over time, then reuse prior computation wherever possible. Event-driven encoders naturally support this “compute on change” view while hyperdimensional computing (HDC) provides a compact, noise-tolerant substrate for representing concepts and relations as ultra-high-dimensional hypervectors and matching them via simple associative similarity [ 7, 8 ]. These operations map cleanly to hardware and favor data reuse over raw FLOPs. Figure 1 (bottom) illustrates our approach. The core idea is to turn temporal coherence into efficiency. We cache what was inferred in the previous instant and, when the current scene is similar, update only what changed instead of re-computing from scratch. A lightweight controller decides whether to (i) aggressively reuse the cached result when similarity is very high and load is heavy, (ii) refresh scores by updating the portions that changed, or (iii) fall back to a full refresh when the scene really is new. An HDC graph reasoner then injects task knowl-edge—relations like used-for or part-of —so the system can prioritize objects that help achieve the user’s goal. The result is a pipeline whose cost follows the dynamics of the scene rather than the worst-case model size, and whose reasoning maps well to edge hardware. 
+
+> arXiv:2603.22855v1 [cs.AR] 24 Mar 2026 Hyunwoo Oh, SungHeon Jeong, Suyeon Jang, Hanning Chen, Sanggeon Yun, Tamoghno Das and Mohsen Imani
+
+This paper introduces TorR, a cache-oriented algorithm–architecture co-design for task-oriented detection at the edge. TorR pairs a light-weight, event-driven encoder with an HDC associative aligner and a lightweight reasoner. Instead of treating every frame as a reset, TorR carries forward state, reuses partial results when the scene is stable, and expends effort only where evidence is new. To our knowledge, TorR is the first end-to-end, brain-inspired pipeline for task-oriented detection explicitly co-designed around temporal reuse. 
+
+We contribute: 
+
+• Reuse-centric, similarity-gated pipeline. We treat consecu-tive queries as incremental updates and use a simple policy to choose aggressive reuse, partial refresh, or full refresh—aligning work with scene dynamics and frames-per-second (FPS) budgets (30/60 FPS). 
+
+• Memory-friendly hyperdimensional substrate. An HDC associative aligner and lightweight reasoner operate over on-chip caches and bit-sliced item memory, keeping compute close to data and minimizing off-chip traffic. 
+
+• Experimental evidence. On task-oriented detection, TorR sus-tains 30/60 FPS with strong AP@0.5, reducing alignment traffic and energy versus an SNN + naïve HDC baseline and maintaining accuracy under aggressive reuse. 
+
+2 Background and Motivation 2.1 Task-Oriented Detection on VLMs 
+
+CLIP aligns images and text in a shared embedding space, enabling open-vocabulary behavior via image–text similarity [ 1 ]. Building on CLIP, task-oriented object detection (TOOD) selects objects that fulfill a natural-language goal rather than a fixed label list; recent sys-tems include TaskCLIP, TOIST, and CoTDet [ 2–5 ]. Most pipelines retain Vision Transformers (ViTs) for perception [ 6], whose atten-tion/MLP/normalization impose largely fixed per-frame compute and heavy activation traffic—fine for datacenters but ill-matched to edge latency/energy limits—motivating a bit-parallel, reuse-friendly alternative to dense CLIP-style alignment. 
+
+2.2 Event-Driven Perception: DVS & SNNs 
+
+Dynamic Vision Sensors (DVS) emit asynchronous events on log-intensity changes, offering microsecond latency and high temporal resolution at modest spatial resolution [ 9 –11 ]. Because there is no intrinsic frame rate, embedded systems aggregate events into windows of width Δ𝑡 for scheduling [ 9]. Spiking neural networks (SNNs) process such streams natively; neuromorphic platforms (e.g., Intel Loihi) achieve real-time, low-power inference by activating only where/when spikes occur [ 12 ]. Replacing a ViT with an SNN thus removes dense, clocked vision compute and yields temporally coherent (drifting) embeddings that a reuse-first aligner can update 
+
+rather than recompute. 
+
+2.3 Hyperdimensional Computing for Alignment/Reasoning 
+
+Hyperdimensional computing (HDC) represents symbols/structure as ultra-high-dimensional hypervectors; composition (binding/bundling) TaskCLIP Inference Cost  
+
+> per Frame
+> HDC
+> Reasoning
+> (88% )
+> 2532
+> mJ
+> 36
+> mJ
+> Event
+> SNN
+> (5%)
+> Segmentation/
+> ViT Encoder
+> (94%)
+> TorR Inference Cost
+> per Window
+> HDC
+> Aligner
+> (7%)
+> Aligner
+> (4%)
+> GNN
+> Reasoning
+> (2%)
+> Bottleneck
+> Shift
+
+Figure 2: Bottleneck shift from CLIP/ViT to TorR. Left: TaskCLIP is dominated by the ViT backbone. Right: after ViT →event encoder, cost shifts to HDC associative search + graph reasoning , which are memory-bound. 
+
+relies on simple, massively parallel operations, and retrieval re-duces to similarity search [7, 8]. HDC arithmetic is bit-simple and noise-tolerant, and has even been executed in-memory [ 13 ]. How-ever, when used naïvely as a CLIP replacement, HDC becomes 
+
+memory-bound : each query scans many long hypervectors, so band-width—not arithmetic—sets runtime/energy; FPGA designs such as FACH mitigate this via restructuring and partial-result reuse [ 14 ], pointing to data movement and reuse as the true optimization target. 
+
+2.4 Motivation 
+
+Once the ViT cost is removed (Fig. 2), the associative search + rea-soning path dominates and is memory-bound, shifting the focus from FLOPs to data movement and reuse . Adjacent event windows yield similar queries; recomputing full scans wastes temporal co-herence. We therefore co-design an HDC associative aligner with cosine similarity and 𝛿 -updates (partial similarity) plus a cache-oriented substrate—bit-sliced item memory and per-class accumula-tors—with deployment-time knobs (dimension 𝐷 , 𝛿 budget, similar-ity thresholds, bank/precision gating), so cost tracks scene dynamics rather than worst-case model size. 
+
+3 Algorithm-Architecture Co-Design 3.1 Co-Design Overview 
+
+Figure 3 sketches TorR. During training , an event SNN is aligned to the image/text spaces so that event windows and RGB frames of the same object/task co-locate. At inference , only the event SNN and text encoder are active. The SNN produces a query hypervector q; a similarity-gated controller (Alg. 1) selects among bypass , 𝛿 -update ,and full paths. In 𝛿 -update /full , an associative aligner computes cosine scores 𝑠 𝑗 = cos (q, h𝑗 ) against an item-memory bank of con-cept HVs {h𝑗 }𝑀 𝑗 =1; if not bypassed, an HDC graph reasoner applies precomputed task weights ˜𝑤 𝑗 = cos (g𝑃 , h𝑗 ) to yield final scores 
+
+ˆ𝑠 𝑗 = 𝑠 𝑗 ˜𝑤 𝑗 . A query cache and 𝛿 -updates exploit frame-to-frame sim-ilarity, while an FPS/QoS controller gates the effective dimension 
+
+𝐷 ′ (bank gating) to meet 30/60 FPS under dynamic loads. 
+
+3.2 Algorithmic Design 
+
+Event SNN encoder. DVS events E = {( 𝑥, 𝑦, 𝑡, 𝑝 )} are aggregated over a window of width Δ𝑡 to form a spatiotemporal tensor for a TorR: Towards Brain-Inspired Task-Oriented Reasoning via Cache-Oriented Algorithm-Architecture Co-design Only used in training 
+
+> Event
+> Data
+> Image
+> Data
+> Spatiotemporal
+> Alignment
+
+Hardware 
+
+Accelerator 
+
+> SNN / GEMM Engine
+> HDC Aligner /
+> Reasoning Engine
+> Text
+> Data
+> Encoders
+> Encoding
+> Network
+> (Linear
+> Layers)
+
+End-to-end Brain-Inspired Object Detection 
+
+> HDC Graph
+> Reasoner
+
+Inference Framework  
+
+> h1
+> τ
+> Unit
+> h2
+> τ
+> Unit
+> Query $ Output $
+> HDC
+> Assoc.
+> Aligner
+> HV
+> Queues
+> (Objects,
+> Tasks)
+> Query
+> Cache
+> Output
+> Cache
+> Object Counter /
+> Dimensionality Chooser
+
+Figure 3: TorR overview. Images are used only to transfer CLIP semantics to events. At run time, partial-similarity reuse ( 𝛿 -updates, caches) and FPS/QoS control align cost with scene dynamics. Event                 
+
+> Encoder
+> Text
+> Encoder
+> Query Cache
+> (last K Qs)
+> (K, D')
+> Partial Similarity
+> ρ = cos(q (t) , q (t-1) )
+> = 1 − 2|Δ|/ D'
+> q(t)
+> ρ≥τ g
+> ρ≥
+> τbyp ^H(N,q)
+> Output
+> Cache
+> (N, 1)
+> Final
+> scores /
+> boxes
+> update
+> output
+> cache
+> HDC Graph
+> Reasoning
+> ŝj=s j·w̃ j,
+> w̃ j=cos(g P,h j)
+> FPS/QoS
+> Control
+> q(t-1)
+> Assoc. Aligner
+> sj= cos(q, h j)
+> δ-update / full
+> score s j
+> ρ
+> is_
+> δ_ update
+> Item
+> Memory
+> (M, D')
+> update
+> query
+> cache
+> select
+> nearest q (t−1)
+> Δindices
+> H(N,q)
+> N: object count, q: queue depth set D'
+> (bank gating)
+> reuse
+> scores/output
+> ρ: partial similarity
+> D': effective dimension
+> M: item-memory size
+> hj: concept HV
+> δ-update complexity:
+> O(M| Δ|) vs full: O(MD')
+> t: precomputed task HV
+> rℓ: relation HV
+> ŝj
+> 1
+> 0
+> select ŝ MUX
+> (bypass reasoning if 1)
+> τg:δ-gate
+> τbyp : aggressive bypass
+> K: query-cache depth
+> H(N,q): load predicate
+> noncached
+> cached
+> (static under same task)
+> gP=t ⊙rℓ1 ⊙rℓ2 ... ⊙rℓk
+
+Figure 4: Cache-gated HDC reasoner with 𝛿 -alignment. A query cache (depth 𝐾 ) supplies the nearest prior query q(𝑡 −1) .Partial similarity 𝜌 = cos (q(𝑡 ) , q(𝑡 −1) ) = 1 − 2|Δ|
+
+𝐷 ′ selects 𝛿 -update (update only flipped indices Δ) or full . Under high load, if 𝜌 ≥ 𝜏 byp ∧𝐻 (𝑁 , 𝑞 ), cached scores/outputs are reused. Otherwise the aligner computes 𝑠 𝑗 = cos (q, h𝑗 ) and the rea-soner (for fixed task) applies cached weights ˜𝑤 𝑗 = cos (g𝑃 , h𝑗 )
+
+with g𝑃 = t ⊙ 𝑟 ℓ1 ⊙ · · · ⊙ 𝑟 ℓ𝑘 , producing ˆ𝑠 𝑗 = 𝑠 𝑗 ˜𝑤 𝑗 . The FPS/QoS controller gates 𝐷 ′ (bank gating). 
+
+lightweight spiking backbone. Per proposal, the encoder outputs 
+
+z𝑒 ∈ R𝑑 , mapped to a bipolar HV by a fixed projection 𝑅 and sign: 
+
+q = sign (𝑅 z𝑒 ) ∈ {− 1, +1}𝐷 . The text prompt is encoded once and mapped to t (precomputed under fixed tasks). 
+
+Small training bridge (image →event). We apply a light con-trastive transfer so event features sit near image features in CLIP space while preserving text alignment. With frozen CLIP encoders 
+
+𝑓 img , 𝑓 text and trainable SNN 𝑓 evt , for frame 𝐼 and window 𝑊 (𝑡 0)={( 𝑡, 𝑝 ) | 
+
+𝑡 0≤𝑡 <𝑡 0+Δ𝑡 }:
+
+e𝐸 (𝑥, 𝑦 ) =∑︁ 
+
+(𝑡,𝑝 ) ∈ 𝑊 (𝑡 0 )
+
+𝐸 (𝑥, 𝑦, 𝑡, 𝑝 ), b𝐸 = e𝐸 
+
+max 𝑥,𝑦 |e𝐸 (𝑥, 𝑦 )| + 𝜖 (1) With cosine 𝑠 (· , ·) and temperatures 𝜏 𝑐 , 𝜏 𝑡 :
+
+Lcon = − log exp (𝑠 (𝑓 img (𝐼 ), 𝑓 evt (b𝐸 ))/ 𝜏 𝑐 )
+
+Í𝑒 ′ ∈ B exp (𝑠 (𝑓 img (𝐼 ), 𝑓 evt (𝑒 ′))/ 𝜏 𝑐 ) , (2) 
+
+Lzs = − log exp (𝑠 (𝑓 evt (b𝐸 ), 𝑓 text (𝑇 ))/ 𝜏 𝑡 )
+
+Í𝑘 ∈ V exp (𝑠 (𝑓 evt (b𝐸 ), 𝑓 text (𝑇 𝑘 ))/ 𝜏 𝑡 ) , (3) and L = Lcon + 𝛼 Lzs .
+
+Associative aligner. Item memory stores {h𝑗 }𝑀 𝑗 =1 ⊂ {− 1, +1}𝐷 .With effective dimension 𝐷 eff = 𝐷 ′ (active banks), cosine scores are 
+
+𝑠 𝑗 = cos (q, h𝑗 ) = ⟨q, h𝑗 ⟩∥q∥ ∥ h𝑗 ∥ = 1
+
+𝐷 eff 
+
+𝐷 eff ∑︁ 
+
+𝑖 =1
+
+𝑞 𝑖 ℎ𝑗,𝑖 , (4) since ∥q∥ = ∥h𝑗 ∥ = √𝐷 eff for bipolar vectors. 
+
+Query cache & similarity gate (Fig. 4). Among the last 𝐾 
+
+queries, the cache supplies the nearest q(𝑡 −1) . Let Δ = {𝑖 : 𝑞 (𝑡 )
+
+𝑖 ≠
+
+𝑞 (𝑡 −1)
+
+𝑖 }. Then 
+
+𝜌 = cos (q(𝑡 ) , q(𝑡 −1) ) = 1
+
+𝐷 eff 
+
+𝐷 eff ∑︁ 
+
+𝑖 =1
+
+𝑞 (𝑡 )
+
+𝑖 𝑞 (𝑡 −1)
+
+𝑖 = 1 − 2|Δ|
+
+𝐷 eff 
+
+. (5) If 𝜌 ≥ 𝜏 𝑔 choose 𝛿 -update ; else perform full and refresh the cache. Alg. 1 combines this with load to select the path and 𝐷 ′.
+
+Partial-similarity reuse ( 𝛿 -updates). Maintain per-class accu-mulators and update only flipped indices: 
+
+∀𝑗 : 𝑠 𝑗 ← 𝑠 𝑗 + 1
+
+𝐷 eff ∑︁ 𝑖 ∈Δ
+
+ 𝑞 (𝑡 )
+
+𝑖 − 𝑞 (𝑡 −1)
+
+𝑖 
+
+ ℎ𝑗,𝑖 , (6) where 𝑞 (𝑡 )
+
+𝑖 − 𝑞 (𝑡 −1)
+
+𝑖 ∈ {± 2}. Work drops from 𝑂 (𝑀𝐷 ′) to 𝑂 (𝑀 |Δ|) .
+
+HDC graph reasoner. Relations {𝑟 ℓ } use Hadamard binding (⊙). A 𝑘 -hop path 𝑃 = (ℓ1, . . . , ℓ 𝑘 ) forms g𝑃 = t ⊙ 𝑟 ℓ1 ⊙ · · · ⊙ 𝑟 ℓ𝑘 . For fixed tasks, reasoner weights are precomputed as ˜𝑤 𝑗 = cos (g𝑃 , h𝑗 )
+
+and applied to aligner scores to yield ˆ𝑠 𝑗 = 𝑠 𝑗 ˜𝑤 𝑗 . A MUX after the reasoner selects between bypass /aligner-only and aligner ×reasoner 
+
+outputs. 
+
+Aggressive bypass. Under high load, if 𝜌 ≥ 𝜏 byp ∧ 𝐻 (𝑁 , 𝑞 ) the controller reuses cached scores/outputs and skips both 𝛿 -update and the reasoner. 
+
+FPS/QoS controller. Given object count 𝑁 , similarity 𝜌 , and queue depth 𝑞 , the controller implements Alg. 1: it selects bypass /𝛿 -update /full and gates 𝐷 ′ (bank gating) to respect the FPS budget. 
+
+Algorithm 1 Path policy (similarity-only controller) 
+
+Require: similarity 𝜌 , object count 𝑁 , queue depth 𝑞 
+
+Require: thresholds 𝜏 byp , 𝜏 𝑔 ; load thresholds 𝑁 hi , 𝑞 hi 
+
+1: 𝐻 ← ( 𝑁 ≥ 𝑁 hi ) or (𝑞 ≥ 𝑞 hi ) // high-load predicate 
+
+2: if 𝜌 ≥ 𝜏 byp and 𝐻 then 
+
+3: return bypass // reuse cached scores/outputs 
+
+4: else if 𝜌 ≥ 𝜏 𝑔 then 
+
+5: action ← 𝛿 -update 
+
+6: else 
+
+7: action ← full 
+
+8: end if 
+
+9: Choose effective dimension 𝐷 ′ (bank gating) to meet FPS given 𝑁 , 𝑞 
+
+10: return action, 𝐷 ′Hyunwoo Oh, SungHeon Jeong, Suyeon Jang, Hanning Chen, Sanggeon Yun, Tamoghno Das and Mohsen Imani Partial 
+
+> Similarity
+> Unit (PSU)
+> Query
+> Cache
+
+Host Interface 
+
+> Output
+> Cache
+> FPS/QoS
+> Controller
+> Item Mem.
+> (M×D,
+> banked)
+> External
+> Host CPU
+> External
+> Memory
+> Associative
+> Aligner
+> Engine
+> Score
+> Buffer
+> (top-k)
+> HDC
+> Reasoner
+> Engine
+> Δ-index
+> FIFO
+> DMA
+> bypass
+> Data signal
+> Control signal
+
+Figure 5: Similarity-gated top-level accelerator. PSU com-putes inter-query similarity 𝜌 . The FPS/QoS controller se-lects bypass/ 𝛿 /full, gates 𝐷 ′ (bank enables) and precision, and programs the associative aligner. In 𝛿 -mode the aligner uses a Δ-index FIFO for sparse reads from the banked item mem-ory 𝑀 × 𝐷 ; scores are accumulated, top-𝑘 pooled, optionally reasoned (HDC), cached, and returned via host/DMA. Solid arrows = data, dashed = control. 
+
+4 Hardware Architecture 
+
+The accelerator realizes the cache–gated hyperdimensional pipeline on a standard RTL substrate. Each window begins by comparing the current query hypervector q(𝑡 ) with the nearest cached query 
+
+q(𝑡 −1) . The resulting similarity 𝜌 and flipped-index set Δ drive a small controller that selects the execution path and gates the effective hypervector dimension 𝐷 ′. A lane-parallel associative aligner then computes cosine scores against the item memory; when evidence is stable, a cached output is returned, otherwise a lightweight reasoner applies task weights and commits results to the output cache. 
+
+4.1 Top-level overview 
+
+Figure 5 shows the datapath and control. A query cache stores the last 𝐾 queries; the partial-similarity unit (PSU) produces 𝜌 and fills a Δ-index FIFO with flipped positions. The FPS/QoS controller uses 
+
+𝜌 and load (object count and queue depth) to choose among bypass, delta, and full execution. It also enables a subset of bit-sliced banks in the item memory to realize 𝐷 ′, selects accumulator precision, and sets the normalization shift log 2 𝐷 ′. The associative aligner reads concept hypervectors from the enabled banks and produces a score vector. A top-𝑘 key and margin gate reasoning: when both match the previous window, reasoning is skipped and the cached output is forwarded; otherwise the reasoner multiplies scores by precomputed task weights and updates the output cache before DMA to the host. 
+
+4.2 Shared similarity micro-kernel 
+
+All engines reuse the same micro-kernel for bipolar cosine. Bitwise XNOR implements ±1 multiplication, a short adder tree popcounts matches versus mismatches, and a fixed right shift by log 2 𝐷 ′ applies normalization. The kernel supports two access patterns that map directly to the algorithm: streaming reads for full scans and sparse reads indexed by Δ for delta updates. Per-class accumulators persist across windows so sparse corrections apply without recomputing unchanged columns. Bank enables are honored on every read, so 
+
+𝐷 ′ acts as a runtime QoS knob. 
+
+4.3 Associative cosine aligner 
+
+The aligner computes 
+
+𝑠 𝑗 = 1
+
+𝐷 ′
+
+> 𝐷 ′
+
+∑︁ 
+
+> 𝑖 =1
+
+𝑞 𝑖 ℎ𝑗,𝑖 , q, h𝑗 ∈ {− 1, +1}𝐷 ′
+
+.
+
+In full mode the index generator streams one column per cycle from the enabled banks; each column is broadcast to 𝑊 class lanes that perform XNOR →popcount and accumulate into on-chip registers. In delta mode the aligner pops indices from the Δ-FIFO and touches only those columns. Because accumulators persist across windows, a flipped bit contributes a signed correction of magnitude 2/𝐷 ′ in cosine space, implemented as a ±2 update in the integer domain followed by the final normalization shift. With 𝐵 banks and 𝑊 lanes, the latency scales as cycles full ≈ 𝐷 ′ l 𝑀 𝑊 
+
+m
+
+, cycles 𝛿 ≈ | Δ|
+
+l 𝑀 𝑊 
+
+m
+
+,
+
+and memory traffic drops from 𝑂 (𝑀𝐷 ′) to 𝑂 (𝑀 |Δ|) when queries change little. 
+
+4.4 Partial-similarity unit 
+
+The PSU detects query drift and supplies sparse indices. XOR against the cached query identifies flipped bits; a popcount yields |Δ| and an affine map produces 𝜌 = 1 − 2|Δ|/ 𝐷 ′. The PSU writes Δ to the index FIFO for the aligner’s delta mode and forwards 𝜌 to the controller. This converts temporal coherence into concrete savings by steering the aligner toward sparse updates and, under high load with high similarity, toward bypass. 
+
+4.5 Reasoner and cache gating 
+
+The reasoner scales 𝑠 𝑗 by precomputed task weights 𝑤 𝑗 stored on chip. For fixed prompts these weights are computed once offline; at run time the reasoner reduces to a vector MAC with rounding and saturation. When the top-𝑘 key and margin match the previous window, the reasoner remains gated and the cached output is reused. If prompts change online, the same similarity kernel can recompute 
+
+𝑤 𝑗 by treating the prompt hypervector as a query. 
+
+4.6 Policy to hardware controls 
+
+The controller maps Algorithm 1 to a small set of window-level registers: mode selects bypass, delta, or full; bank-enable bits define 
+
+𝐷 ′; a precision bit selects int8 or int4 accumulators; the normaliza-tion shift equals log 2 𝐷 ′; head and tail pointers drive the Δ-index FIFO. Controls are latched once per window, keeping the datapath feed-forward and timing-robust. The same register file configures the PSU and reasoner enables so that alignment always precedes any decision to reuse reasoning. 
+
+4.7 Bandwidth, energy, and timing 
+
+Full scans read 𝑀𝐷 ′ bits per window from the item memory, while delta reads 𝑀 |Δ| bits plus |Δ| indices. With banking, each bank TorR: Towards Brain-Inspired Task-Oriented Reasoning via Cache-Oriented Algorithm-Architecture Co-design have breakfast  take a rest  step on  
+
+> sports pour wine into glass cooking
+
+Figure 6: Five example tasks for TOOD evaluation. Detected objects are highlighted in blue. 
+
+serves about 𝑀 |Δ|/ 𝐵 bits in delta mode. Clock and bank gating follow the selected mode and bank mask, so dynamic power scales with |Δ| and 𝐷 ′. The aligner and reasoner are fully pipelined to produce one column per cycle in full mode, one flipped column per cycle in delta mode, and one score product per lane per cycle in the reasoner. Cosine normalization is a shift, so no divider appears on the critical path. 
+
+4.8 Interfaces and state 
+
+The host interface ingests queries and returns scores and boxes via DMA. Window-level state consists of the query cache, the Δ-index FIFO, per-class accumulators, and the output cache. A small FSM se-quences: latch controls, run aligner in the selected mode, optionally run the reasoner, update caches, and emit results. This arrangement keeps the top-level simple while concentrating complexity inside the shared similarity kernel. 
+
+5 Evaluation 5.1 Experimental Setup 
+
+We evaluate five task-oriented prompts representative of everyday activities: 1. pour wine into a glass , 2. sports , 3. cooking , 4. have break-fast , and 5. take a rest . Accuracy is measured as AP@0.5 (IoU=0.5). System metrics are end-to-end latency, throughput (FPS), power, and energy per frame. All execution results are produced by a cycle-accurate simulator that replays our workloads and is calibrated to switching activity and timing from ASIC synthesis of our accel-erator written in Verilog HDL using TSMC 28 nm at 1 GHz. The accelerator offers run-time QoS via bank-gated effective dimen-sion ( 𝐷 ′), and a cache-aided partial-update path governed by a lightweight controller that enforces 30/60 FPS targets, defined as RT-30/RT-60. 
+
+5.2 ASIC Synthesis (28 nm) 
+
+We synthesize the Verilog RTL with Synopsys Design Compiler in a topographical flow (TT, 1.0 V, 1 GHz). Logic power is taken from the synthesis power model and later exercised with the cycle-accurate activity traces used in our execution experiments; SRAM figures come from compiled 28 nm views. The design is intentionally compute-centric: most silicon is spent in the associative aligner where similarity is evaluated, while control, sorting, and I/O remain lightweight. Table 1 summarizes the full hardware footprint without low-level operator bookkeeping. 
+
+Table 1: Hardware specifications (TSMC 28 nm, 1 GHz). Logic areas in mm 2, powers in mW.                             
+
+> Block / Component Area (mm 2)Power (mW)
+> Logic (synthesized)
+> Associative Aligner 4.488 3,522.56 Lightweight Reasoner 0.642 504.32 Partial-Update Unit 0.280 220.16 Score Buffer (top-𝑘 )0.140 110.08 Sorter 0.140 110.08 Controller (RT/QoS) 0.070 55.04 Host IF / DMA 0.105 82.56
+> Δ-index FIFO & misc. 0.070 55.04
+> Total (logic) 5.937 4,659.84
+> SRAM macros (compiled)
+> Item memory (banked) 0.50 120 Query/Output caches 0.03 15
+> Total (SRAM) 0.53 135 Grand total 6.467 4,794.84
+
+In aggregate, the logic occupies 5.94 mm 2 (out of 6.47 mm 2 total) and peaks at 4.66 W; the aligner alone accounts for roughly three-quarters of both area and power, reflecting the single-pass similarity emphasis of the architecture. These synthesis numbers parameter-ize the cycle-accurate simulator used in the next section, where bank/precision gating and partial updates reduce average power to the 3.05–3.52 W range while sustaining RT-60/RT-30 across all five tasks. 
+
+5.3 Accelerator Execution Results 
+
+All measurements come from the cycle-accurate simulator at 1 GHz with switching activity taken from the 28 nm synthesis. We begin with the latency envelope over the five tasks, then detail per-task runtime and energy, and finally compare throughput and energy with representative GPU pipelines on an RTX 4090. 
+
+Table 2: Min/max end-to-end per-frame latency across the five tasks (1 GHz). 
+
+Mode Global Min Task (Min) Global Max Task (Max) RT-60 6.8 ms have breakfast 13.8 ms sports RT-30 12.9 ms have breakfast 23.6 ms sports 
+
+5.3.1 Latency Envelope. The envelope shows comfortable head-room at both targets. Even the slowest frames remain below budget (13.8 ms vs. 16.67 ms at RT-60; 23.6 ms vs. 33.33 ms at RT-30), which is critical for absorbing DMA variance and host jitter. Tasks with higher temporal coherence such as have breakfast consistently yield the lowest latencies, while motion-heavy scenes like sports sit at the upper end of the range; this ordering matches the controller’s be-havior of activating more banks and curtailing reuse when motion increases. 
+
+5.3.2 Per-Task Runtime at RT Targets. Across tasks, p95 latencies remain well within budget and jitter stays small (1.5–2.1 ms at RT-60; 2.2–2.8 ms at RT-30), indicating that the controller’s partial-update policy and 𝐷 ′ gating produce predictable service rather Hyunwoo Oh, SungHeon Jeong, Suyeon Jang, Hanning Chen, Sanggeon Yun, Tamoghno Das and Mohsen Imani 
+
+Table 3: Accelerator runtime per task at RT targets. Latency in ms, power in W, energy in mJ per frame. Jitter = p95 −median; Headroom = budget −p95 (16.67 ms for RT-60; 33.33 ms for RT-30).                                                                                      
+
+> RT-60 (60 FPS target) RT-30 (30 FPS target) Task Median p95 Jitter Headroom Power Energy Median p95 Jitter Headroom Power Energy pour wine 9.4 11.3 1.9 5.37 3.20 53 17.2 19.9 2.7 13.43 3.50 116 sports 9.8 11.9 2.1 4.77 3.22 54 17.8 20.6 2.8 12.73 3.52 117 cooking 8.7 10.6 1.9 6.07 3.12 51 16.5 18.8 2.3 14.53 3.40 113 have breakfast 7.9 9.4 1.5 7.27 3.05 50 15.1 17.3 2.2 16.03 3.32 110 take a rest 8.1 9.7 1.6 6.97 3.06 50 15.4 17.6 2.2 15.73 3.33 110
+> Average 8.78 10.58 1.80 6.09 3.13 51.6 16.40 18.84 2.44 14.49 3.41 113.2
+
+than bursty stalls. Energy per frame follows the expected scaling with the frame budget and the synthesis-calibrated power model: roughly 50–54 mJ at RT-60 and 110–117 mJ at RT-30. Scenes with more reuse ( have breakfast , take a rest ) exhibit the lowest median latency and energy, while high-motion scenes ( sports , pour wine )require more active banks yet still leave milliseconds of headroom. 
+
+Table 4: Throughput/energy (single RTX 4090 vs. our acceler-ator) for representative task-oriented pipelines. GPU ener-gy/frame is 450 W divided by FPS.                   
+
+> Method Assumptions FPS (RTX 4090) Energy/Frame (RTX 4090) TOIST (DETR) standard COCO input 15–25 30–18 J iTaskCLIP (ViT-B/16) 120–200 crops/frame 5–12 90–38 J iTaskCLIP (ViT-L/14) 120–200 crops/frame 2–6 225–75 J
+> Ours (RT-60) single-pass similarity 60.3 50 mJ Ours (RT-30) single-pass similarity 30.1 113 mJ
+
+5.3.3 Throughput/Power vs. GPU Baselines. The comparison high-lights why the accelerator carries the system end-to-end. Detector-only stacks on a 4090 land in the mid–teens to mid–twenties FPS; adding per-crop VLM alignment drives throughput into the low teens or single digits depending on backbone scale and crop count, with energy costs in the tens to hundreds of joules per frame. In contrast, the fixed-function design keeps all similarity work on ded-icated datapaths, avoids re-encoding crops, and holds power nearly flat via 𝐷 ′ gating. The result is real-time throughput (30–60 FPS) at millijoule-scale energy, together with low jitter and consistent headroom across all five tasks. 
+
+5.3.4 Execution Analysis. 
+
+• Frame-budget compliance: p95 latency remains within 
+
+11–12 ms at RT-60 and 20–21 ms at RT-30 across all tasks (Table 3); the global envelope is 6.8–13.8 ms (RT-60) and 12.9–23.6 ms (RT-30) (Table 2). 
+
+• Energy advantage: The accelerator sustains RT-60 at ∼3.1 W 
+
+average with 50 mJ/frame . Under comparable task pipelines, GPU baselines drop to single-digit FPS once per-crop VLM alignment (e.g., ViT-L/14) is included, with 56–225 J/frame .This gap underpins our system design. 
+
+• Allocation strategy: Steadier scenes ( have breakfast , take a rest ) allow more reuse and lower median latency; dynamic prompts ( sports , pour wine ) consume more compute yet remain comfortably within the frame budget. 
+
+5.4 Task Accuracy vs. Prior Models 
+
+Across these five tasks, our model is competitive where tempo-ral coherence is higher and remains within a bounded margin to 
+
+Table 5: AP@0.5 on the five evaluation tasks. 
+
+Method pour wine sports cooking have breakfast take a rest GGNN 40.7 43.6 37.6 39.1 40.5 TOIST 52.9 52.8 43.1 48.1 46.7 iTaskCLIP 63.51 65.54 56.08 44.39 44.76 iTaskCLIP* 63.36 62.02 56.14 42.59 45.62 
+
+Ours (SW) 54.62 52.07 46.40 34.07 34.17 
+
+the strongest VLM baselines elsewhere. On the first two tasks, we achieve 54.62 and 52.07 AP—within 8.74 and 9.95 points of iTaskCLIP* and close to TOIST*. On the third task, we reach 46.40 
+
+AP, outperforming TOIST by +3.3 . The latter two tasks are more challenging ( 34.07 /34.17 ), yet the gaps to iTaskCLIP* remain mod-erate ( 8.52 /11.45 ). Averaged over the five, our mean AP is 44.27% 
+
+(vs. 53.95% for iTaskCLIP*), i.e., 75–86% of the strongest baseline per task while enabling the millijoule-scale, real-time execution demonstrated by the accelerator. This aligns with the system design: reuse-friendly scenes see the largest accuracy and energy benefits, and motion-heavy scenes keep tight p95 latency through controlled increases in active dimension without sacrificing frame-budget compliance. 
+
+6 Conclusion 
+
+We introduced TorR, a cache-oriented algorithm–architecture co-design for task-oriented object detection that prioritizes compute-on-change . By pairing a hyperdimensional associative reasoner with partial updates, dimension gating, and a lightweight real-time controller, the system sustains stable throughput on a tight power envelope, translating synthesis-calibrated cycle accuracy into pre-dictable, deployment-ready behavior. Looking forward, we see several paths to extend TorR: finer-grained 𝐷 ′ and precision gating coupled with DVFS; learned run-time policies (bandits/RL) and differentiable scheduling; accuracy lift via task-aware distillation, quantization-aware training, and prompt-conditioned pruning; deeper memory work (bank place-ment, low-leakage SRAMs, lightweight compression, near-memory similarity); multi-prompt and multi-camera concurrency; migration to advanced nodes; and system-level validation with event cam-eras/IMUs, power-capped operation, and long-horizon continual adaptation. We plan to release reference RTL and evaluation traces to foster reproducibility and standardized benchmarking. 
+
+References 
+
+[1] A. Radford et al. , “Learning Transferable Visual Models From Natural Language Supervision,” in 38th International Conference on Machine Learning (ICML) , Jul. 2021, pp. 8748–8763. [2] H. Chen et al. , “TaskCLIP: Extend Large Vision-Language Model for Task Ori-ented Object Detection,” in 18th European Conference on Computer Vision (ECCV) ,Milan, Italy, Sep. 2024, pp. 401–418. [3] P. Li et al. , “TOIST: Task Oriented Instance Segmentation Transformer with Noun-Pronoun Distillation,” in Advances in Neural Information Processing Systems 35 (NeurIPs) , New Orleans, LA, USA, 2022, pp. 17 597–17 611. [4] J. Tang, G. Zheng, J. Yu, and S. Yang, “CoTDet: Affordance Knowledge Prompt-ing for Task Driven Object Detection,” in IEEE/CVF International Conference on Computer Vision (ICCV) , Oct. 2023, pp. 3068–3078. [5] J. Sawatzky, Y. Souri, C. Grund, and J. Gall, “What Object Should I Use? - Task Driven Object Detection,” in IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR) , 2019. [6] A. Dosovitskiy, L. Beyer, A. Kolesnikov, D. Weissenborn, X. Zhai, T. Unterthiner, M. Dehghani, M. Minderer, G. Heigold, S. Gelly, J. Uszkoreit, and N. Houlsby, TorR: Towards Brain-Inspired Task-Oriented Reasoning via Cache-Oriented Algorithm-Architecture Co-design 
+
+“An image is worth 16x16 words: Transformers for image recognition at scale,” in International Conference on Learning Representations (ICLR) , 2021. [7] P. Kanerva, “Hyperdimensional computing: An introduction to computing in distributed representation with high-dimensional random vectors,” Cognitive Computation , vol. 1, pp. 139–159, 2009. [8] A. Rahimi, P. Kanerva, and J. M. Rabaey, “A Robust and Energy-Efficient Classifier Using Brain-Inspired Hyperdimensional Computing,” in ACM/IEEE International Symposium on Low Power Electronics and Design (ISLPED) , San Francisco, CA, USA, 2016, p. 64–69. [9] G. Gallego et al. , “Event-based vision: A survey,” IEEE Transactions on Pattern Analysis and Machine Intelligence , vol. 44, no. 1, pp. 154–180, 2022. [10] P. Lichtsteiner, C. Posch, and T. Delbruck, “A 128 × 128 120 db 15 𝜇 s latency asyn-chronous temporal contrast vision sensor,” IEEE Journal of Solid-State Circuits ,vol. 43, no. 2, pp. 566–576, 2008. [11] C. Brandli, R. Berner, M. Yang, S.-C. Liu, and T. Delbruck, “A 240 × 180 130 db 3 μslatency global shutter spatiotemporal vision sensor,” IEEE Journal of Solid-State Circuits , vol. 49, no. 10, pp. 2333–2341, 2014. [12] M. Davies et al. , “Loihi: A Neuromorphic Manycore Processor with On-Chip Learning,” IEEE Micro , vol. 38, no. 1, pp. 82–99, 2018. [13] G. Karunaratne, M. L. Gallo, G. Cherubini, L. Benini, A. Rahimi, and A. Sebastian, “In-memory hyperdimensional computing,” Nature Electronics , vol. 3, pp. 327 – 337, 2019. [14] M. Imani, S. Salamat, S. Gupta, J. Huang, and T. Rosing, “FACH: FPGA-Based Acceleration of Hyperdimensional Computing by Reducing Computational Complexity,” in Asia and South Pacific Design Automation Conference (ASPDAC) , Tokyo, Japan, 2019, p. 493–498. [Online]. Available: https: //doi.org/10.1145/3287624.3287667
