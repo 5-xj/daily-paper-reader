@@ -6,85 +6,124 @@
 </div>
 
 ## 每次日报
-- 最新运行日期：2026-03-30
-- 运行时间：2026-03-30 20:22:58 UTC
+- 最新运行日期：2026-03-31
+- 运行时间：2026-03-31 19:49:52 UTC
 - 运行状态：成功
-- 本次总论文数：21
-- 精读区：8
+- 本次总论文数：34
+- 精读区：21
 - 速读区：13
 
 ### 今日简报（AI）
-今日深度解析 21 篇前沿成果，量子算法自动化发现与基因组修饰量化技术取得突破性进展。
-重点关注满分论文提出的分子基态量子算法搜索框架，以及低覆盖度测序在表观遗传学中的高精度应用。
-建议科研人员探索量子计算与生物信息的跨界融合，并关注 Agent 架构在推荐系统中的落地潜力。
-- 详情：[/202603/30/README](/202603/30/README)
+今日深度研读 34 篇论文，聚焦 LLM 在组合优化与工业实时调度领域的突破性进展。
+重点关注 LLM 与图神经求解器及启发式策略的融合，两项满分研究展示了其在复杂决策中的卓越性能。
+建议普通读者优先了解大模型如何赋能传统运筹学，探索其在工业自动化中的落地潜力。
+- 详情：[/202603/31/README](/202603/31/README)
 
 ### 精读区论文标签
-1. [Automated near-term quantum algorithm discovery for molecular ground states](/202603/30/2603.26359v1-automated-near-term-quantum-algorithm-discovery-for-molecular-ground-states)  
+1. [Aligning LLMs with Graph Neural Solvers for Combinatorial Optimization](/202603/31/2603.27169v1-aligning-llms-with-graph-neural-solvers-for-combinatorial-optimization)  
    标签：评分：10.0/10、query:llm-ec
-   evidence：利用大语言模型驱动演化过程来发现新的量子启发式算法
-2. [A theoretical and experimental framework enables low-coverage sequencing for accurate quantification of genome-wide cytosine modification levels](/202603/30/biorxiv-10-1101-2025-01-08-631958-v3-a-theoretical-and-experimental-framework-enables-low-coverage-sequencing-for-accurate-quantification-of-genome-wide-cytosine-modification-levels)  
+   evidence：将LLM与图神经求解器对齐以解决组合优化问题
+2. [DSevolve: Enabling Real-Time Adaptive Scheduling on Dynamic Shop Floor with LLM-Evolved Heuristic Portfolios](/202603/31/2603.27628v1-dsevolve-enabling-real-time-adaptive-scheduling-on-dynamic-shop-floor-with-llm-evolved-heuristic-portfolios)  
+   标签：评分：10.0/10、query:llm-ec
+   evidence：LLM演化的启发式组合用于自适应调度
+3. [Evolutionary Discovery of Reinforcement Learning Algorithms via Large Language Models](/202603/31/2603.28416v1-evolutionary-discovery-of-reinforcement-learning-algorithms-via-large-language-models)  
+   标签：评分：10.0/10、query:llm-ec
+   evidence：通过LLM发现强化学习算法的演化框架
+4. [Can LLMs Beat Classical Hyperparameter Optimization Algorithms? A Study on autoresearch](/202603/31/2603.24647v2-can-llms-beat-classical-hyperparameter-optimization-algorithms-a-study-on-autoresearch)  
+   标签：评分：9.0/10、query:llm-ec
+   evidence：用于超参数优化和代码编辑的LLM智能体
+5. [AutoPDR: Circuit-Aware Solver Configuration Prediction for Hardware Model Checking](/202603/31/2603.25048v2-autopdr-circuit-aware-solver-configuration-prediction-for-hardware-model-checking)  
+   标签：评分：9.0/10、query:ahd
+   evidence：自动求解器配置与智能启发式选择
+6. [A Canceling Heuristic for the Directed Traveling Salesman Problem](/202603/31/2603.26564v1-a-canceling-heuristic-for-the-directed-traveling-salesman-problem)  
+   标签：评分：9.0/10、query:llm-ec
+   evidence：针对有向旅行商问题的新启发式算法
+7. [AutoMS: Multi-Agent Evolutionary Search for Cross-Physics Inverse Microstructure Design](/202603/31/2603.27195v1-automs-multi-agent-evolutionary-search-for-cross-physics-inverse-microstructure-design)  
+   标签：评分：9.0/10、query:llm-ec
+   evidence：LLM驱动的演化搜索用于微结构逆向设计
+8. [Greedy Is a Strong Default: Agents as Iterative Optimizers](/202603/31/2603.27415v1-greedy-is-a-strong-default-agents-as-iterative-optimizers)  
+   标签：评分：9.0/10、query:llm-ec
+   evidence：LLM 智能体取代经典优化中的随机扰动
+9. [GEAKG: Generative Executable Algorithm Knowledge Graphs](/202603/31/2603.27922v1-geakg-generative-executable-algorithm-knowledge-graphs)  
+   标签：评分：9.0/10、query:llm-ec
+   evidence：LLM 合成可执行算子和算法组合模式
+10. [Beyond the Answer: Decoding the Behavior of LLMs as Scientific Reasoners](/202603/31/2603.28038v1-beyond-the-answer-decoding-the-behavior-of-llms-as-scientific-reasoners)  
+   标签：评分：9.0/10、query:llm-ec
+   evidence：使用遗传帕累托(GEPA)优化提示词
+11. [Kernel-Smith: A Unified Recipe for Evolutionary Kernel Optimization](/202603/31/2603.28342v1-kernel-smith-a-unified-recipe-for-evolutionary-kernel-optimization)  
+   标签：评分：9.0/10、query:llm-ec
+   evidence：演化内核优化与算子生成的框架
+12. [COvolve: Adversarial Co-Evolution of Large-Language-Model-Generated Policies and Environments via Two-Player Zero-Sum Game](/202603/31/2603.28386v1-covolve-adversarial-co-evolution-of-large-language-model-generated-policies-and-environments-via-two-player-zero-sum-game)  
+   标签：评分：9.0/10、query:llm-ec
+   evidence：使用大语言模型生成策略和环境的协同演化框架
+13. [BACE: LLM-based Code Generation through Bayesian Anchored Co-Evolution of Code and Test Populations](/202603/31/2603.28653v1-bace-llm-based-code-generation-through-bayesian-anchored-co-evolution-of-code-and-test-populations)  
+   标签：评分：9.0/10、query:llm-ec
+   evidence：利用LLM进行代码和测试种群的协同演化
+14. [See it to Place it: Evolving Macro Placements with Vision-Language Models](/202603/31/2603.28733v1-see-it-to-place-it-evolving-macro-placements-with-vision-language-models)  
+   标签：评分：9.0/10、query:llm-ec
+   evidence：通过演化搜索优化VLM建议以进行芯片布局
+15. [Beyond Fixation: Persistent Genetic Variation Under Intense Selection](/202603/31/biorxiv-10-64898-2026-03-02-706684-v2-beyond-fixation-persistent-genetic-variation-under-intense-selection)  
    标签：评分：9.0/10、query:gene
-   evidence：全基因组胞嘧啶修饰水平量化框架
-3. [Brieflow: An Integrated Computational Pipeline for High-Throughput Analysis of Optical Pooled Screening Data](/202603/30/biorxiv-10-1101-2025-05-26-656231-v2-brieflow-an-integrated-computational-pipeline-for-high-throughput-analysis-of-optical-pooled-screening-data)  
+   evidence：遗传变异与进化遗传学研究
+16. [A haplotype-resolved bluethroat (Luscinia s. svecica) genome assembly uncovers the complex MHC region](/202603/31/biorxiv-10-64898-2026-03-26-714473-v1-a-haplotype-resolved-bluethroat-luscinia-s-svecica-genome-assembly-uncovers-the-complex-mhc-region)  
    标签：评分：9.0/10、query:gene
-   evidence：用于功能基因组学和CRISPR-Cas9筛选分析的计算流水线
-4. [KLinterSel: Intersection among candidates of different selective sweep detection methods](/202603/30/biorxiv-10-1101-2025-08-21-671449-v4-klintersel-intersection-among-candidates-of-different-selective-sweep-detection-methods)  
+   evidence：染色体级基因组组装和复杂区域的遗传图谱
+17. [Haplotype-resolved Genome Assemblies of Hybrid Wheatgrass and Bluebunch Wheatgrass Reveal the Stepwise Polyploid Origin and Biased Subgenome Dominance](/202603/31/biorxiv-10-64898-2026-03-27-714782-v1-haplotype-resolved-genome-assemblies-of-hybrid-wheatgrass-and-bluebunch-wheatgrass-reveal-the-stepwise-polyploid-origin-and-biased-subgenome-dominance)  
    标签：评分：9.0/10、query:gene
-   evidence：检测基因组数据中的自然选择信号
-5. [Dynamic optimization of extrachromosomal DNA copy number drives tumour evolution](/202603/30/biorxiv-10-64898-2026-03-20-713026-v1-dynamic-optimization-of-extrachromosomal-dna-copy-number-drives-tumour-evolution)  
+   evidence：单倍型解析基因组组装
+18. [Complementary constraints in germ and immune cells shape evolution of gene regulation and phenotype](/202603/31/biorxiv-10-64898-2026-03-27-714809-v1-complementary-constraints-in-germ-and-immune-cells-shape-evolution-of-gene-regulation-and-phenotype)  
    标签：评分：9.0/10、query:gene
-   evidence：遗传异质性、ecDNA继承与肿瘤演化
-6. [Impacts of genome architecture on the repeatability of polygenic adaptation](/202603/30/biorxiv-10-64898-2026-03-26-714499-v1-impacts-of-genome-architecture-on-the-repeatability-of-polygenic-adaptation)  
+   evidence：生殖细胞中基因调节与表型的演化
+19. [Haplotype-resolved centromeric chromatin organization from a complete diploid human genome](/202603/31/biorxiv-10-64898-2026-03-27-714900-v1-haplotype-resolved-centromeric-chromatin-organization-from-a-complete-diploid-human-genome)  
    标签：评分：9.0/10、query:gene
-   evidence：基因组架构与多基因适应
-7. [ABSTRAL: Automatic Design of Multi-Agent Systems Through Iterative Refinement and Topology Optimization](/202603/30/2603.22791v1-abstral-automatic-design-of-multi-agent-systems-through-iterative-refinement-and-topology-optimization)  
-   标签：评分：8.0/10、query:ahd
-   evidence：通过拓扑优化自动设计多智能体系统
-8. [Development and assessment of tailored illustrations to enhance community understandings of genetics topics](/202603/30/biorxiv-10-64898-2026-03-17-711941-v1-development-and-assessment-of-tailored-illustrations-to-enhance-community-understandings-of-genetics-topics)  
-   标签：评分：8.0/10、query:gene
-   evidence：增强社区对遗传学概念和遗传规律的理解
+   evidence：人类基因组中着丝粒序列和染色质结构的研究
+20. [Natural and breeding selection converge on overlapping haplotypes with divergent directions and outcomes in wheat](/202603/31/biorxiv-10-64898-2026-03-28-714077-v1-natural-and-breeding-selection-converge-on-overlapping-haplotypes-with-divergent-directions-and-outcomes-in-wheat)  
+   标签：评分：9.0/10、query:gene
+   evidence：小麦全基因组重测序数据的单倍型分配方法
+21. [Identifying Inheritance Patterns of Allelic Imbalance, using Integrative Modeling and Bayesian Inference](/202603/31/biorxiv-10-64898-2026-03-28-714974-v1-identifying-inheritance-patterns-of-allelic-imbalance-using-integrative-modeling-and-bayesian-inference)  
+   标签：评分：9.0/10、query:gene
+   evidence：使用贝叶斯推断识别等位基因失衡的遗传模式
 
 ### 速读区论文标签
-1. [L2O-CCG: Adversarial Learning with Set Generalization for Adaptive Robust Optimization](/202603/30/2603.22548v1-l2o-ccg-adversarial-learning-with-set-generalization-for-adaptive-robust-optimization)  
-   标签：评分：8.0/10、query:ahd
-   evidence：用于自适应鲁棒优化子问题的学习优化(L2O)框架
-2. [Improved Local Computation Algorithms for Greedy Set Cover via Retroactive Updates](/202603/30/2603.23715v1-improved-local-computation-algorithms-for-greedy-set-cover-via-retroactive-updates)  
+1. [Non-Exclusive Notifications for Ride-Hailing at Lyft I: Single-Cycle Approximation Algorithms](/202603/31/2603.21533v2-non-exclusive-notifications-for-ride-hailing-at-lyft-i-single-cycle-approximation-algorithms)  
    标签：评分：8.0/10、query:llm-ec
-   evidence：集合覆盖组合优化问题的高效算法
-3. [AgenticRS-Architecture: System Design for Agentic Recommender Systems](/202603/30/2603.26085v1-agenticrs-architecture-system-design-for-agentic-recommender-systems)  
+   evidence：将网约车通知建模为组合优化问题
+2. [Transformers in the Dark: Navigating Unknown Search Spaces via Bandit Feedback](/202603/31/2603.24780v1-transformers-in-the-dark-navigating-unknown-search-spaces-via-bandit-feedback)  
    标签：评分：8.0/10、query:llm-ec
-   evidence：用于模型设计和特征演化的交互演化智能体
-4. [FEMA-Long: Modeling unstructured covariances for discovery of time-dependent effects in large-scale longitudinal datasets](/202603/30/biorxiv-10-1101-2025-05-09-653146-v2-fema-long-modeling-unstructured-covariances-for-discovery-of-time-dependent-effects-in-large-scale-longitudinal-datasets)  
-   标签：评分：8.0/10、query:gene
-   evidence：纵向全基因组关联研究与遗传映射
-5. [NOHIC: A PIPELINE FOR PLANT CONTIG SCAFFOLDING USING PERSONALIZED REFERENCES FROM PANGENOME GRAPHS](/202603/30/biorxiv-10-64898-2026-03-17-712436-v1-nohic-a-pipeline-for-plant-contig-scaffolding-using-personalized-references-from-pangenome-graphs)  
-   标签：评分：8.0/10、query:gene
-   evidence：利用泛基因组图进行植物重叠群脚手架搭建
-6. [Demystifying Reinforcement Learning for Long-Horizon Tool-Using Agents: A Comprehensive Recipe](/202603/30/2603.21972v1-demystifying-reinforcement-learning-for-long-horizon-tool-using-agents-a-comprehensive-recipe)  
+   evidence：研究大语言模型是否可以近似搜索算法以解决问题
+3. [AIRA_2: Overcoming Bottlenecks in AI Research Agents](/202603/31/2603.26499v1-aira2-overcoming-bottlenecks-in-ai-research-agents)  
+   标签：评分：8.0/10、query:llm-ec
+   evidence：用于自动实验搜索和优化的 AI 研究智能体
+4. [Evolutionary Warm-Starts for Reinforcement Learning in Industrial Continuous Control](/202603/31/2603.26750v1-evolutionary-warm-starts-for-reinforcement-learning-in-industrial-continuous-control)  
+   标签：评分：8.0/10、query:llm-ec
+   evidence：用于强化学习的进化策略
+5. [GUIDE: Guided Updates for In-context Decision Evolution in LLM-Driven Spacecraft Operations](/202603/31/2603.27306v1-guide-guided-updates-for-in-context-decision-evolution-in-llm-driven-spacecraft-operations)  
+   标签：评分：8.0/10、query:llm-ec
+   evidence：使用大语言模型演化结构化的自然语言决策规则手册
+6. [Non-Exclusive Notifications for Ride-Hailing at Lyft I: Single-Cycle Approximation Algorithms](/202603/31/2603.21533v1-non-exclusive-notifications-for-ride-hailing-at-lyft-i-single-cycle-approximation-algorithms)  
    标签：评分：7.0/10、query:llm-ec
-   evidence：将LLM演化为具备长程规划和工具使用能力的自主代理
-7. [Think 360°: Evaluating the Width-centric Reasoning Capability of MLLMs Beyond Depth](/202603/30/2603.22689v1-think-360-evaluating-the-width-centric-reasoning-capability-of-mllms-beyond-depth)  
+   evidence：对网约车中的组合优化问题进行建模和求解
+7. [A Learning Method with Gap-Aware Generation for Heterogeneous DAG Scheduling](/202603/31/2603.23249v1-a-learning-method-with-gap-aware-generation-for-heterogeneous-dag-scheduling)  
    标签：评分：7.0/10、query:llm-ec
-   evidence：多模态大模型中的多约束优化和试错搜索
-8. [Why Database Manuals Are Not Enough: Efficient and Reliable Configuration Tuning for DBMSs via Code-Driven LLM Agents](/202603/30/2603.22708v1-why-database-manuals-are-not-enough-efficient-and-reliable-configuration-tuning-for-dbmss-via-code-driven-llm-agents)  
+   evidence：异构环境下的DAG调度
+8. [LLMLOOP: Improving LLM-Generated Code and Tests through Automated Iterative Feedback Loops](/202603/31/2603.23613v1-llmloop-improving-llm-generated-code-and-tests-through-automated-iterative-feedback-loops)  
    标签：评分：7.0/10、query:llm-ec
-   evidence：通过代码驱动的LLM智能体进行自动调优
-9. [Accelerating Maximum Common Subgraph Computation by Exploiting Symmetries](/202603/30/2603.23031v1-accelerating-maximum-common-subgraph-computation-by-exploiting-symmetries)  
+   evidence：LLM生成代码的自动化迭代反馈循环与变异分析
+9. [Language Model Planners do not Scale, but do Formalizers?](/202603/31/2603.23844v1-language-model-planners-do-not-scale-but-do-formalizers)  
    标签：评分：7.0/10、query:llm-ec
-   evidence：最大公共子图组合优化中的对称性利用
-10. [LLM-Powered Workflow Optimization for Multidisciplinary Software Development: An Automotive Industry Case Study](/202603/30/2603.21439v3-llm-powered-workflow-optimization-for-multidisciplinary-software-development-an-automotive-industry-case-study)  
-   标签：评分：6.0/10、query:llm-ec
-   evidence：大语言模型驱动的软件开发工作流优化
-11. [Cognitive Training for Language Models: Towards General Capabilities via Cross-Entropy Games](/202603/30/2603.22479v1-cognitive-training-for-language-models-towards-general-capabilities-via-cross-entropy-games)  
+   evidence：LLM形式化器生成面向求解器的程序
+10. [Stabilizing Iterative Self-Training with Verified Reasoning via Symbolic Recursive Self-Alignment](/202603/31/2603.21558v1-stabilizing-iterative-self-training-with-verified-reasoning-via-symbolic-recursive-self-alignment)  
    标签：评分：6.0/10、query:ahd
-   evidence：通过贪婪优化算法自动构建能力的自动化方式
-12. [Cognitive Training for Language Models: Towards General Capabilities via Cross-Entropy Games](/202603/30/2603.22479v2-cognitive-training-for-language-models-towards-general-capabilities-via-cross-entropy-games)  
+   evidence：用于推理能力增长的神经符号递归自我改进
+11. [mSFT: Addressing Dataset Mixtures Overfiting Heterogeneously in Multi-task SFT](/202603/31/2603.21606v1-msft-addressing-dataset-mixtures-overfiting-heterogeneously-in-multi-task-sft)  
    标签：评分：6.0/10、query:ahd
-   evidence：通过贪婪优化算法自动构建能力的自动化方式
-13. [TorR: Towards Brain-Inspired Task-Oriented Reasoning via Cache-Oriented Algorithm-Architecture Co-design](/202603/30/2603.22855v1-torr-towards-brain-inspired-task-oriented-reasoning-via-cache-oriented-algorithm-architecture-co-design)  
+   evidence：模型训练中多任务数据混合的迭代搜索算法
+12. [mSFT: Addressing Dataset Mixtures Overfitting Heterogeneously in Multi-task SFT](/202603/31/2603.21606v2-msft-addressing-dataset-mixtures-overfitting-heterogeneously-in-multi-task-sft)  
    标签：评分：6.0/10、query:ahd
-   evidence：面向任务推理的算法-架构协同设计
+   evidence：多任务数据混合的迭代搜索算法
+13. [mSFT: Addressing Dataset Mixtures Overfitting Heterogeneously in Multi-task SFT](/202603/31/2603.21606v3-msft-addressing-dataset-mixtures-overfitting-heterogeneously-in-multi-task-sft)  
+   标签：评分：6.0/10、query:ahd
+   evidence：数据混合的迭代搜索算法
 
 
 <div class="dpr-home-promo-card">
