@@ -1,0 +1,24 @@
+---
+title: LATTE for locus-specific quantification of transposable element expression across species
+title_zh: LATTE：用于跨物种转座元件表达位点特异性定量的工具
+authors: "He, J., Peng, C., Zhang, Y., Wang, Z., Zhang, H., Fang, L., Zhao, P."
+date: 2026-03-31
+pdf: "https://www.biorxiv.org/content/10.64898/2026.03.28.714964v1.full.pdf"
+tags: ["query:gene"]
+score: 9.0
+evidence: 基因组中转座因子表达的定量分析
+tldr: 转座因子（TEs）在基因组演化中至关重要，但因序列同源性难以准确定位表达。本研究开发了LATTE计算框架，利用创新的多指标期望最大化（EM）算法实现跨物种的TE位点特异性定量。通过对人、牛、鸡的大规模转录组分析，LATTE在准确性上显著优于现有工具，揭示了TE与宿主基因不同的调控图谱，并证明TE在复杂性状遗传架构中具有独立且关键的贡献。
+source: biorxiv
+selection_source: fresh_fetch
+figures_json: "[{\"url\": \"assets/figures/biorxiv/biorxiv-10-64898-2026-03-28-714964-v1/fig-001.webp\", \"caption\": \"\", \"page\": 28, \"index\": 1, \"width\": 1359, \"height\": 1831}, {\"url\": \"assets/figures/biorxiv/biorxiv-10-64898-2026-03-28-714964-v1/fig-002.webp\", \"caption\": \"\", \"page\": 29, \"index\": 2, \"width\": 1772, \"height\": 1536}, {\"url\": \"assets/figures/biorxiv/biorxiv-10-64898-2026-03-28-714964-v1/fig-003.webp\", \"caption\": \"\", \"page\": 30, \"index\": 3, \"width\": 1890, \"height\": 2038}, {\"url\": \"assets/figures/biorxiv/biorxiv-10-64898-2026-03-28-714964-v1/fig-004.webp\", \"caption\": \"\", \"page\": 31, \"index\": 4, \"width\": 1831, \"height\": 2185}, {\"url\": \"assets/figures/biorxiv/biorxiv-10-64898-2026-03-28-714964-v1/fig-005.webp\", \"caption\": \"\", \"page\": 32, \"index\": 5, \"width\": 2067, \"height\": 1949}, {\"url\": \"assets/figures/biorxiv/biorxiv-10-64898-2026-03-28-714964-v1/fig-006.webp\", \"caption\": \"\", \"page\": 33, \"index\": 6, \"width\": 1595, \"height\": 1949}, {\"url\": \"assets/figures/biorxiv/biorxiv-10-64898-2026-03-28-714964-v1/fig-007.webp\", \"caption\": \"\", \"page\": 34, \"index\": 7, \"width\": 1630, \"height\": 2185}, {\"url\": \"assets/figures/biorxiv/biorxiv-10-64898-2026-03-28-714964-v1/fig-008.webp\", \"caption\": \"\", \"page\": 35, \"index\": 8, \"width\": 1654, \"height\": 1506}, {\"url\": \"assets/figures/biorxiv/biorxiv-10-64898-2026-03-28-714964-v1/fig-009.webp\", \"caption\": \"\", \"page\": 36, \"index\": 9, \"width\": 1240, \"height\": 1240}]"
+motivation: 针对转座因子因高序列同源性和多重比对导致的表达定量难题，开发一种高精度的位点特异性分析工具。
+method: 提出LATTE框架，采用创新的多指标期望最大化（EM）算法，实现对TE表达的精确定义与定量。
+result: "LATTE在位点特异性定量准确率上达到0.839，并发现TE-eQTL与基因-eQTL的低重合率，额外解释了8.7%的复杂性状关联。"
+conclusion: LATTE为跨物种TE研究提供了高效工具，强调了TE在解析复杂表型遗传机制中的核心作用。
+---
+
+## 摘要
+转座元件（TEs）是真核生物基因组进化和表型多样性的关键驱动因素。然而，由于高序列同源性和多重比对歧义带来的表达定量挑战，它们对复杂性状的功能贡献在很大程度上仍不清楚。在此，我们提出了 LATTE，这是一个高效的计算框架，通过利用创新的多指标期望最大化（EM）算法，在位点特异性分辨率下定义和定量 TE 表达。对模拟数据集的广泛基准测试表明，LATTE 的性能显著优于现有的先进工具，在亚家族水平上的准确率达到 0.998，在位点特异性水平上达到 0.839。将 LATTE 应用于人类、牛和鸡的 813 个 RNA-seq 数据集，我们定量了 2,703 个 TE 的表达谱，并随后进行了 TE 表达数量性状位点（TE-eQTL）定位。TE-eQTL 与宿主基因 eQTL 之间的共定位率较低，揭示了 TE 表达独特的调控图谱。TE 与宿主基因之间这种解耦的相关性可能由可变剪接转录本的差异表达所介导。通过对三个物种的 3,746 个复杂性状进行 TE-eQTL 和全基因组关联研究的整合分析，我们证明了在基因 eQTL 之外，TE 构成了 204 个（8.7%）额外的复杂性状关联。具体而言，与干燥综合征相关的变异 rs10954213 作为一个 TE-eQTL，改变了 IRF5 的剪接图谱，在下调经典转录本的同时上调了含有 TE 的转录本。总之，LATTE 为跨物种研究 TE 表达提供了一个高效的框架，我们的发现强调了 TE 在理解复杂表型遗传结构中的关键作用。
+
+## Abstract
+Transposable elements (TEs) are pivotal drivers of eukaryotic genome evolution and phenotypic diversity. However, their functional contributions to complex traits remain largely obscured by expression quantification challenges arising from high sequence homology and multi-mapping ambiguities. Here, we present LATTE, an efficient computational framework for defining and quantifying TE expression at locus-specific resolution by leveraging an innovative multi-indicator Expectation-Maximization (EM) algorithm. Extensive benchmarking against simulated datasets demonstrated that LATTE significantly outperformed existing state-of-the-art tools, achieving an accuracy of 0.998 at the subfamily level and 0.839 at the locus-specific level. Applying LATTE to 813 RNA-seq datasets across humans, cattle, and chickens, we quantified expression profiles of 2,703 TEs, followed by TE-expression quantitative trait loci (TE-eQTL) mapping. The colocalization rates between TE-eQTL and host gene-eQTL was low, revealing a distinct regulatory landscape of TE expression. This decoupled correlation between TEs and host genes are likely mediated by the differential expression of alternative transcripts. Through integrated TE-eQTL and genome-wide association studies on 3,746 complex traits across three species, we demonstrated that TEs constitute 204 (8.7%) additional associations with complex traits beyond gene-eQTL. More specifically, the Sjogrens syndrome-associated variant rs10954213 acts as a TE-eQTL that shifts the splicing landscape of IRF5, upregulating TE-containing transcripts while simultaneously suppressing canonical ones. Collectively, LATTE provides an efficient framework for studying TE expression across species, and our findings highlight the key role of TEs in understanding the genetic architecture of complex phenotypes.
