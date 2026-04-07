@@ -522,7 +522,7 @@
         { name: secretNameSkipRerank, value: skipRerank ? 'true' : 'false' },
       ];
 
-      if (!skipRerank && providerType === 'plato' && rerankerApiKey && rerankerBaseUrl && rerankerModel) {
+      if (!skipRerank && rerankerApiKey && rerankerBaseUrl && rerankerModel) {
         secrets.push(
           { name: secretNameRerankKey, value: rerankerApiKey },
           { name: secretNameRerankUrl, value: rerankerBaseUrl },
@@ -902,21 +902,23 @@
         currentSecret.github && currentSecret.github.token,
       );
       const initialApiKey = normalizeText(currentSummaryLLM.apiKey || '');
-      const initialBaseUrl = normalizeBaseUrlForStorage(
-        currentSummaryLLM.baseUrl || currentChatEntry.baseUrl || '',
+      const initialCustomApiKey = normalizeText(currentChatEntry.apiKey || '');
+      const initialCustomBaseUrl = normalizeBaseUrlForStorage(
+        currentChatEntry.baseUrl || '',
       );
       const initialPlatoModel =
         normalizeText(currentSummaryLLM.model || '') || platoSummaryModels[0].value;
       const initialCustomModels = sanitizeModelList(
-        currentChatEntry.models || [currentSummaryLLM.model || ''],
+        currentProviderType === 'openai-compatible'
+          ? (currentChatEntry.models || [])
+          : [],
         3,
       );
 
       modal.innerHTML = `
         <h2 style="margin-top:0;">🛡️ 新配置指引 · 第二步</h2>
         <p style="font-size:13px; color:#555; margin-bottom:8px;">
-          配置 GitHub Token 与聊天 / 论文概述模型。你可以继续使用柏拉图，
-          也可以切换到 OpenAI-compatible 接口。
+          配置 GitHub Token、工作流所需的 BLT 模型，以及聊天区可选的 OpenAI-compatible 模型。
         </p>
         <div style="border-top:1px solid #eee; padding-top:8px; margin-top:4px; font-size:13px;">
           <div style="font-weight:500; margin-bottom:4px;">GitHub Token（必填）</div>
@@ -937,24 +939,24 @@
           <div style="font-weight:500; margin-bottom:6px;">聊天 / 论文概述模型来源</div>
           <label style="display:flex; align-items:center; gap:6px; margin-bottom:4px;">
             <input type="radio" name="secret-setup-provider" value="plato" />
-            <span><strong>使用柏拉图（BLTCY）API</strong>：沿用当前推荐链路，聊天区可直接复用官方模型列表。</span>
+            <span><strong>聊天区也使用 BLT</strong>：工作流总结、过滤、reranker 与聊天区统一使用柏拉图（BLTCY）模型。</span>
           </label>
           <label style="display:flex; align-items:center; gap:6px; margin-bottom:6px;">
             <input type="radio" name="secret-setup-provider" value="openai-compatible" />
-            <span><strong>使用 OpenAI-compatible API</strong>：模型 1 用于 GitHub workflow 论文概述，最多 3 个模型都可用于聊天区。</span>
+            <span><strong>聊天区使用 OpenAI-compatible</strong>：工作流总结与 reranker 仍强制使用 BLT，最多 3 个自定义模型仅用于聊天区。</span>
           </label>
           <div style="font-size:12px; color:#666; margin-bottom:10px;">
-            说明：自定义 OpenAI-compatible 模式下，为避免不兼容的 <code>/rerank</code> 请求，
-            workflow 会自动跳过 rerank，后续步骤仍继续执行。
+            说明：当前版本中，<code>BLT</code> 是工作流必填项，用于 query enrich、LLM refine、总结与 reranker；
+            <code>OpenAI-compatible</code> 仅作为聊天区模型来源。
           </div>
 
           <div id="secret-setup-plato-section" style="border:1px solid #eee; border-radius:8px; padding:10px; margin-bottom:10px;">
-            <div style="font-weight:500; margin-bottom:4px;">柏拉图（BLTCY）API Key</div>
+            <div style="font-weight:500; margin-bottom:4px;">工作流 / Reranker 专用 BLT（必填）</div>
             <input
               id="secret-setup-plato"
               type="password"
               autocomplete="off"
-              placeholder="例如：sk-xxxx"
+              placeholder="BLT API Key，例如：sk-xxxx"
               style="width:100%; box-sizing:border-box; padding:6px 8px; margin-bottom:4px; font-size:13px;"
             />
             <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:4px;">
@@ -970,7 +972,7 @@
             </div>
 
             <div style="font-weight:500; margin-bottom:4px; display:flex; align-items:center; gap:4px;">
-              用于「总结整篇论文」的大模型（推荐选择 Gemini 3 Flash）
+              用于工作流总结 / 过滤的大模型（推荐选择 Gemini 3 Flash）
               <span class="secret-model-tip">!
                 <span class="secret-model-tip-popup">
                   按照 Thinking（思考模式）的高负载场景估算：<br/>
@@ -990,7 +992,7 @@
           </div>
 
           <div id="secret-setup-custom-section" style="border:1px solid #eee; border-radius:8px; padding:10px; margin-bottom:4px;">
-            <div style="font-weight:500; margin-bottom:4px;">OpenAI-compatible 配置</div>
+            <div style="font-weight:500; margin-bottom:4px;">OpenAI-compatible 聊天配置</div>
             <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:6px;">
               <button id="secret-setup-preset-deepseek" type="button" class="secret-gate-btn secondary">
                 填入 DeepSeek 预设
@@ -1000,7 +1002,7 @@
               </button>
             </div>
             <div style="font-size:12px; color:#666; margin-bottom:8px;">
-              预设会自动填写 <code>Base URL</code> 与推荐模型；API Key 仍需你自行输入。
+              预设会自动填写 <code>Base URL</code> 与推荐模型；API Key 仍需你自行输入。这里的模型仅供聊天区使用。
             </div>
             <input
               id="secret-setup-custom-api-key"
@@ -1020,28 +1022,28 @@
               id="secret-setup-custom-model-1"
               type="text"
               autocomplete="off"
-              placeholder="模型 1（workflow 概述 + 聊天）"
+              placeholder="聊天模型 1（默认）"
               style="width:100%; box-sizing:border-box; padding:6px 8px; margin-bottom:4px; font-size:13px;"
             />
             <input
               id="secret-setup-custom-model-2"
               type="text"
               autocomplete="off"
-              placeholder="模型 2（聊天可选）"
+              placeholder="聊天模型 2（可选）"
               style="width:100%; box-sizing:border-box; padding:6px 8px; margin-bottom:4px; font-size:13px;"
             />
             <input
               id="secret-setup-custom-model-3"
               type="text"
               autocomplete="off"
-              placeholder="模型 3（聊天可选）"
+              placeholder="聊天模型 3（可选）"
               style="width:100%; box-sizing:border-box; padding:6px 8px; margin-bottom:4px; font-size:13px;"
             />
             <button id="secret-setup-custom-test" type="button" class="secret-gate-btn secondary" style="margin-bottom:4px;">
               测试当前配置
             </button>
             <div id="secret-setup-custom-status" style="min-height:18px; font-size:12px; color:#999; margin-bottom:0;">
-              将依次用已填写模型发送 <code>hello world</code>，检查接口与模型是否可用。
+              将依次用已填写聊天模型发送 <code>hello world</code>，检查接口与模型是否可用。
             </div>
           </div>
         </div>
@@ -1134,10 +1136,13 @@
       );
 
       githubInput.value = initialGithubToken;
-      platoInput.value = currentProviderType === 'plato' ? initialApiKey : '';
-      customApiKeyInput.value = currentProviderType === 'openai-compatible' ? initialApiKey : '';
+      platoInput.value = initialApiKey;
+      customApiKeyInput.value =
+        currentProviderType === 'openai-compatible'
+        ? normalizeText(currentChatEntry.apiKey || '')
+        : '';
       customBaseUrlInput.value =
-        currentProviderType === 'openai-compatible' ? initialBaseUrl : '';
+        currentProviderType === 'openai-compatible' ? initialCustomBaseUrl : '';
       customModel1Input.value = initialCustomModels[0] || '';
       customModel2Input.value = initialCustomModels[1] || '';
       customModel3Input.value = initialCustomModels[2] || '';
@@ -1153,11 +1158,11 @@
       }
 
       let githubOk = !!initialGithubToken;
-      let platoOk = currentProviderType === 'plato' && !!initialApiKey;
+      let platoOk = !!initialApiKey;
       let customOk =
         currentProviderType === 'openai-compatible'
-        && !!initialApiKey
-        && !!initialBaseUrl
+        && !!initialCustomApiKey
+        && !!initialCustomBaseUrl
         && initialCustomModels.length > 0;
 
       const setErrorText = (text, color) => {
@@ -1178,7 +1183,7 @@
 
       const syncProviderSections = () => {
         const provider = selectedProvider();
-        platoSection.style.display = provider === 'plato' ? 'block' : 'none';
+        platoSection.style.display = 'block';
         customSection.style.display =
           provider === 'openai-compatible' ? 'block' : 'none';
       };
@@ -1254,15 +1259,15 @@
 
       const collectProviderDraft = () => {
         const provider = selectedProvider();
+        const apiKey = normalizeText(platoInput.value);
+        const model = selectedPlatoModel();
+        if (!apiKey) {
+          throw new Error('请先输入 BLT API Key。');
+        }
+        if (!model) {
+          throw new Error('请选择用于工作流总结的大模型。');
+        }
         if (provider === 'plato') {
-          const apiKey = normalizeText(platoInput.value);
-          const model = selectedPlatoModel();
-          if (!apiKey) {
-            throw new Error('请先输入柏拉图 API Key。');
-          }
-          if (!model) {
-            throw new Error('请选择用于总结论文的大模型。');
-          }
           return {
             providerType: 'plato',
             summaryApiKey: apiKey,
@@ -1283,14 +1288,20 @@
         const customDraft = validateCustomDraft();
         return {
           providerType: 'openai-compatible',
-          summaryApiKey: customDraft.apiKey,
-          summaryBaseUrl: customDraft.baseUrl,
-          summaryModel: customDraft.models[0],
+          summaryApiKey: apiKey,
+          summaryBaseUrl: getDefaultPlatoBaseUrl(),
+          summaryModel: model,
           chatModels: customDraft.models,
-          rewriteModel: customDraft.models[0],
-          filterModel: customDraft.models[0],
-          skipRerank: true,
-          reranker: null,
+          chatApiKey: customDraft.apiKey,
+          chatBaseUrl: customDraft.baseUrl,
+          rewriteModel: 'gemini-3-flash-preview',
+          filterModel: 'gemini-3-flash-preview-nothinking',
+          skipRerank: false,
+          reranker: {
+            apiKey,
+            baseUrl: getDefaultPlatoBaseUrl(),
+            model: 'qwen3-reranker-4b',
+          },
         };
       };
 
@@ -1331,11 +1342,11 @@
         githubStatusEl.textContent = '已载入当前加密配置；如更换 GitHub Token，保存前请重新验证。';
         githubStatusEl.style.color = '#666';
       }
-      if (currentProviderType === 'plato' && initialApiKey) {
+      if (initialApiKey) {
         platoStatusEl.textContent = '已载入当前加密配置；如更换 API Key 或模型，建议重新验证或点击测试按钮。';
         platoStatusEl.style.color = '#666';
       }
-      if (currentProviderType === 'openai-compatible' && initialApiKey && initialBaseUrl) {
+      if (currentProviderType === 'openai-compatible' && initialCustomApiKey && initialCustomBaseUrl) {
         customStatusEl.textContent = '已载入当前加密配置；如更换 Base URL / 模型，建议重新点击测试。';
         customStatusEl.style.color = '#666';
       }
@@ -1507,6 +1518,10 @@
           setErrorText('请先验证柏拉图 API Key，或点击“测试当前配置”。', '#c00');
           return;
         }
+        if (providerDraft.providerType === 'openai-compatible' && !platoOk) {
+          setErrorText('请先验证 BLT API Key，工作流总结与 reranker 必须使用 BLT。', '#c00');
+          return;
+        }
         if (providerDraft.providerType === 'openai-compatible' && !customOk) {
           setErrorText('请先点击“测试当前配置”，确认 OpenAI-compatible 配置可用。', '#c00');
           return;
@@ -1539,8 +1554,12 @@
               },
           chatLLMs: [
             {
-              apiKey: providerDraft.summaryApiKey,
-              baseUrl: providerDraft.summaryBaseUrl,
+              apiKey: providerDraft.providerType === 'openai-compatible'
+                ? providerDraft.chatApiKey
+                : providerDraft.summaryApiKey,
+              baseUrl: providerDraft.providerType === 'openai-compatible'
+                ? providerDraft.chatBaseUrl
+                : providerDraft.summaryBaseUrl,
               models: providerDraft.chatModels,
             },
           ],
