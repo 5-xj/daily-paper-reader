@@ -61,85 +61,40 @@ def call_blt_text(
     return (resp.get("content") or "").strip()
 
 
-def strip_json_wrappers(text: str) -> str:
-    cleaned = (text or "").strip()
-    cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned, flags=re.IGNORECASE)
-    cleaned = re.sub(r"\s*```$", "", cleaned)
-    return cleaned.strip()
-
-
-def repair_json_suffix(text: str) -> str:
-    if not text:
-        return text
-    stack: List[str] = []
-    in_str = False
-    escaped = False
-    for ch in text:
-        if in_str:
-            if escaped:
-                escaped = False
-                continue
-            if ch == "\\":
-                escaped = True
-                continue
-            if ch == '"':
-                in_str = False
-            continue
-        if ch == '"':
-            in_str = True
-        elif ch == '{':
-            stack.append("}")
-        elif ch == '[':
-            stack.append("]")
-        elif ch in ("}", "]"):
-            if stack and stack[-1] == ch:
-                stack.pop()
-    repaired = text
-    if in_str:
-        repaired += '"'
-    if stack:
-        repaired += "".join(reversed(stack))
-    repaired = re.sub(r",(\s*[}\]])", r"\1", repaired)
-    return repaired
-
-
-def parse_llm_json(content: str) -> Dict[str, Any] | list[Any] | None:
-    raw = strip_json_wrappers(content)
-    if not raw:
+def call_blt_structured_json(
+    client: BltClient,
+    messages: List[Dict[str, str]],
+    schema_name: str,
+    schema: Dict[str, Any],
+    temperature: float,
+    max_tokens: int,
+) -> Dict[str, Any] | None:
+    client.kwargs.update(
+        {
+            "temperature": float(temperature),
+            "max_tokens": int(max_tokens),
+        }
+    )
+    resp = client.chat_structured(
+        messages=messages,
+        schema_name=schema_name,
+        schema=schema,
+        strict=True,
+        allow_json_object_fallback=True,
+    )
+    if resp.get("refusal"):
+        log(f"[WARN] Structured output refusal: {resp.get('refusal')}")
         return None
-    candidates: List[str] = []
-    decoder = json.JSONDecoder()
-    start = raw.find("{")
-    end = raw.rfind("}")
-    if start != -1:
-        candidates.append(raw[start:])
-        if end != -1 and end > start:
-            candidates.append(raw[start : end + 1])
-    else:
-        candidates.append(raw)
-    seen = set()
-    last_exc: Exception | None = None
-    for candidate in candidates:
-        if candidate in seen:
-            continue
-        seen.add(candidate)
-        try:
-            obj, _idx = decoder.raw_decode(candidate)
-            if isinstance(obj, (dict, list)):
-                return obj
-        except Exception as exc:
-            last_exc = exc
-            repaired = repair_json_suffix(candidate)
-            if repaired != candidate:
-                try:
-                    obj = json.loads(repaired)
-                    if isinstance(obj, (dict, list)):
-                        return obj
-                except Exception as exc2:
-                    last_exc = exc2
-    if last_exc:
-        raise last_exc
-    return None
+    if resp.get("finish_reason") not in (None, "stop"):
+        log(f"[WARN] Structured output 未完成：finish_reason={resp.get('finish_reason')}")
+        return None
+    if resp.get("parse_error") is not None:
+        raise ValueError(f"模型未返回合法 JSON：{resp.get('content')}")
+
+    parsed = resp.get("parsed")
+    if not isinstance(parsed, dict):
+        return None
+    return parsed
 
 
 def log(message: str) -> None:
@@ -358,27 +313,18 @@ def translate_title_and_abstract_to_zh(title: str, abstract: str) -> Tuple[str, 
             "required": ["title_zh", "abstract_zh"],
             "additionalProperties": False,
         }
-        use_json_object = "gemini" in (getattr(LLM_CLIENT, "model", "") or "").lower()
-        if use_json_object:
-            response_format = {"type": "json_object"}
-        else:
-            response_format = {
-                "type": "json_schema",
-                "json_schema": {"name": "translate_zh", "schema": schema, "strict": True},
-            }
-
-        content = call_blt_text(
+        parsed = call_blt_structured_json(
             LLM_CLIENT,
             messages,
+            schema_name="translate_zh",
+            schema=schema,
             temperature=0.2,
             max_tokens=4000,
-            response_format=response_format,
         )
     except Exception:
         return "", ""
 
     try:
-        parsed = parse_llm_json(content)
         if not isinstance(parsed, dict):
             return "", ""
         obj = parsed
@@ -673,14 +619,6 @@ def generate_glance_overview(title: str, abstract: str, max_retries: int = 3) ->
         "required": ["tldr", "motivation", "method", "result", "conclusion"],
         "additionalProperties": False,
     }
-    use_json_object = "gemini" in (getattr(LLM_CLIENT, "model", "") or "").lower()
-    if use_json_object:
-        response_format = {"type": "json_object"}
-    else:
-        response_format = {
-            "type": "json_schema",
-            "json_schema": {"name": "glance_overview", "schema": schema, "strict": True},
-        }
 
     messages = [
         {"role": "system", "content": system_prompt},
@@ -690,14 +628,14 @@ def generate_glance_overview(title: str, abstract: str, max_retries: int = 3) ->
 
     for attempt in range(1, max_retries + 1):
         try:
-            content = call_blt_text(
+            parsed = call_blt_structured_json(
                 LLM_CLIENT,
                 messages,
+                schema_name="glance_overview",
+                schema=schema,
                 temperature=0.2,
                 max_tokens=2048,
-                response_format=response_format,
             )
-            parsed = parse_llm_json(content)
             if not isinstance(parsed, dict):
                 continue
             obj = parsed
