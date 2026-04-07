@@ -931,7 +931,7 @@
             验证 GitHub Token
           </button>
           <div id="secret-setup-github-status" style="min-height:18px; font-size:12px; color:#999; margin-bottom:10px;">
-            基础功能需要 <code>repo</code> 和 <code>workflow</code> 权限；如需 Gist 分享，请使用 <code>Classic PAT</code> 并额外勾选 <code>gist</code> 权限。
+            需要使用 <code>Classic PAT</code>，并同时具备 <code>repo</code>、<code>workflow</code> 和 <code>gist</code> 权限。
           </div>
 
           <div style="font-weight:500; margin-bottom:6px;">聊天 / 论文概述模型来源</div>
@@ -1185,7 +1185,7 @@
 
       const resetGithubStatus = () => {
         githubOk = false;
-        githubStatusEl.innerHTML = '基础功能需要 <code>repo</code> 和 <code>workflow</code> 权限；如需 Gist 分享，请使用 <code>Classic PAT</code> 并额外勾选 <code>gist</code> 权限。';
+        githubStatusEl.innerHTML = '需要使用 <code>Classic PAT</code>，并同时具备 <code>repo</code>、<code>workflow</code> 和 <code>gist</code> 权限。';
         githubStatusEl.style.color = '#999';
       };
 
@@ -1398,7 +1398,7 @@
             .split(',')
             .map((s) => s.trim())
             .filter(Boolean);
-          const requiredScopes = ['repo', 'workflow'];
+          const requiredScopes = ['repo', 'workflow', 'gist'];
           const missing = requiredScopes.filter((scope) => !scopeList.includes(scope));
           if (missing.length) {
             throw new Error(
@@ -1406,11 +1406,7 @@
             );
           }
           const userData = await res.json().catch(() => ({}));
-          const hasGist = scopeList.includes('gist');
-          const gistHint = hasGist
-            ? 'Gist 分享：已开启。'
-            : 'Gist 分享：未开启；如需分享，请改用 Classic PAT 并勾选 gist 权限。';
-          githubStatusEl.innerHTML = `✅ 验证成功：用户 ${userData.login || ''}，权限：${scopeList.join(', ')}<br>${gistHint}`;
+          githubStatusEl.innerHTML = `✅ 验证成功：用户 ${userData.login || ''}，权限：${scopeList.join(', ')}<br>Gist 分享：已开启。`;
           githubStatusEl.style.color = '#28a745';
           githubOk = true;
         } catch (e) {
@@ -1574,7 +1570,7 @@
           );
           if (!secretsOk) {
             setErrorText(
-              '❌ 写入 GitHub Secrets 失败，请检查网络、Token 权限（需 repo + workflow）或稍后重试。',
+              '❌ 写入 GitHub Secrets 失败，请检查网络、Token 权限（需 Classic PAT + repo/workflow/gist）或稍后重试。',
               '#c00',
             );
             return;

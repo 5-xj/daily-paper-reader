@@ -83,7 +83,7 @@ window.SubscriptionsGithubToken = (function () {
       const scopes = userRes.headers.get('X-OAuth-Scopes');
       const scopeList = scopes ? scopes.split(',').map((s) => s.trim()) : [];
 
-      const requiredScopes = requireWorkflow ? ['repo', 'workflow'] : ['repo'];
+      const requiredScopes = requireWorkflow ? ['repo', 'workflow', 'gist'] : ['repo', 'gist'];
       const missingScopes = requiredScopes.filter(
         (scope) => !scopeList.includes(scope),
       );
@@ -94,7 +94,7 @@ window.SubscriptionsGithubToken = (function () {
           valid: false,
           error: `Token 权限不足：缺少 ${missingScopes.join(
             ', ',
-          )}。请在 GitHub 中重新生成 Personal Access Token 并补充所示权限。`,
+          )}。请使用 Classic Personal Access Token，并补充所示权限。`,
           scopes: scopeList,
           login: userData.login,
         };
@@ -397,14 +397,13 @@ window.SubscriptionsGithubToken = (function () {
     const renderSuccessMessage = (data) => {
       if (!githubTokenMessage) return;
       const scopes = Array.isArray(data.scopes) ? data.scopes : [];
-      const hasGist = scopes.includes('gist');
       githubTokenMessage.innerHTML = `
         <div style="color:#28a745; font-size:12px; line-height:1.6;">
           <strong>✅ 验证成功！</strong><br>
           用户: ${data.login || ''}<br>
           仓库: ${data.repo || ''}<br>
           权限: ${scopes.join(', ')}<br>
-          Gist 分享: ${hasGist ? '已开启' : '未开启（需 Classic PAT + gist 权限）'}
+          Gist 分享: 已开启
         </div>
       `;
     };
@@ -522,7 +521,7 @@ window.SubscriptionsGithubToken = (function () {
             result.scopes && result.scopes.length
               ? `现有权限: ${result.scopes.join(', ')}<br>`
               : '现有权限: （无）<br>';
-          const gistHint = '如需 Gist 分享，请使用 Classic PAT 并额外勾选 gist 权限。<br>';
+          const gistHint = '当前配置要求使用 Classic PAT，并同时具备 repo、workflow、gist 权限。<br>';
           githubTokenMessage.innerHTML = `
             <div style="font-size:12px; line-height:1.6;">
               ${userText}${scopesText}${gistHint}
