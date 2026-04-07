@@ -1,4 +1,5 @@
 import os
+import re
 import time
 from typing import List, Dict, Tuple, Any, Optional
 
@@ -103,6 +104,17 @@ class LLMClient:
     def _iter_request_bases(self) -> List[str]:
         return self._normalize_base_urls(self._base_urls)
 
+    @staticmethod
+    def _build_chat_completions_url(base_url: str | None) -> str:
+        raw = str(base_url or "").strip().rstrip("/")
+        if not raw:
+            raise ValueError("缺少可用的 LLM base_url")
+        if raw.lower().endswith("/chat/completions"):
+            return raw
+        if re.search(r"/v\d+$", raw, re.IGNORECASE):
+            return f"{raw}/chat/completions"
+        return f"{raw}/v1/chat/completions"
+
     def _iter_retry_bases(self, total_attempts: int = 6) -> List[str]:
         bases = self._iter_request_bases()
         if total_attempts <= 0:
@@ -186,7 +198,7 @@ class LLMClient:
         request_bases = self._iter_retry_bases(total_attempts=6)
         last_error: Exception | None = None
         for attempt_idx, req_base in enumerate(request_bases, start=1):
-            request_url = f"{req_base.rstrip('/')}/chat/completions"
+            request_url = self._build_chat_completions_url(req_base)
             try:
                 response = requests.post(request_url, headers=headers, json=payload, timeout=120)
                 response.raise_for_status()
