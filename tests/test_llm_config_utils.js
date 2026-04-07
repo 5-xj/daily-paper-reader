@@ -7,6 +7,9 @@ const {
   resolveChatModels,
   resolveSummaryLLM,
   inferProviderType,
+  getOpenAICompatiblePreset,
+  inferChatApiProfile,
+  buildStreamingChatPayload,
 } = require('../app/llm-config-utils.js');
 
 function testNormalizeBaseUrlForStorage() {
@@ -89,10 +92,70 @@ function testInferProviderType() {
   );
 }
 
+function testGetOpenAICompatiblePreset() {
+  assert.deepEqual(
+    getOpenAICompatiblePreset('deepseek'),
+    {
+      key: 'deepseek',
+      label: 'DeepSeek 官方',
+      baseUrl: 'https://api.deepseek.com',
+      models: ['deepseek-chat', 'deepseek-reasoner'],
+    },
+  );
+}
+
+function testInferChatApiProfile() {
+  assert.equal(
+    inferChatApiProfile('https://api.deepseek.com', 'deepseek-chat'),
+    'deepseek',
+  );
+  assert.equal(
+    inferChatApiProfile('https://api.bltcy.ai/v1', 'gpt-5-chat'),
+    'plato',
+  );
+  assert.equal(
+    inferChatApiProfile('https://api.openai.com/v1', 'gpt-4.1-mini'),
+    'generic-openai',
+  );
+}
+
+function testBuildStreamingChatPayload() {
+  assert.deepEqual(
+    buildStreamingChatPayload({
+      baseUrl: 'https://api.deepseek.com',
+      model: 'deepseek-chat',
+      messages: [{ role: 'user', content: 'hi' }],
+    }),
+    {
+      model: 'deepseek-chat',
+      messages: [{ role: 'user', content: 'hi' }],
+      stream: true,
+    },
+  );
+
+  assert.deepEqual(
+    buildStreamingChatPayload({
+      baseUrl: 'https://api.bltcy.ai/v1',
+      model: 'gpt-5-chat',
+      messages: [{ role: 'user', content: 'hi' }],
+    }),
+    {
+      model: 'gpt-5-chat',
+      messages: [{ role: 'user', content: 'hi' }],
+      stream: true,
+      reasoning: { effort: 'medium' },
+      extra_body: { return_reasoning: true },
+    },
+  );
+}
+
 testNormalizeBaseUrlForStorage();
 testBuildChatCompletionsEndpoint();
 testSanitizeModelList();
 testResolveChatModelsAndSummary();
 testInferProviderType();
+testGetOpenAICompatiblePreset();
+testInferChatApiProfile();
+testBuildStreamingChatPayload();
 
 console.log('llm config utils tests passed');

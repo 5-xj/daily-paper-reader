@@ -14,6 +14,20 @@
     'gpt-5-chat',
     'gemini-3-pro-preview',
   ];
+  const OPENAI_COMPATIBLE_PRESETS = Object.freeze({
+    deepseek: Object.freeze({
+      key: 'deepseek',
+      label: 'DeepSeek 官方',
+      baseUrl: 'https://api.deepseek.com',
+      models: Object.freeze(['deepseek-chat', 'deepseek-reasoner']),
+    }),
+    openai: Object.freeze({
+      key: 'openai',
+      label: 'OpenAI 官方',
+      baseUrl: 'https://api.openai.com/v1',
+      models: Object.freeze(['gpt-4.1-mini', 'gpt-4.1']),
+    }),
+  });
 
   const normalizeText = (value) => String(value || '').trim();
 
@@ -117,9 +131,51 @@
     return 'openai-compatible';
   };
 
+  const getOpenAICompatiblePreset = (key) => {
+    const presetKey = normalizeText(key).toLowerCase();
+    const preset = OPENAI_COMPATIBLE_PRESETS[presetKey];
+    if (!preset) return null;
+    return {
+      key: preset.key,
+      label: preset.label,
+      baseUrl: preset.baseUrl,
+      models: [...preset.models],
+    };
+  };
+
+  const inferChatApiProfile = (baseUrl, model) => {
+    const normalizedBaseUrl = normalizeBaseUrlForStorage(baseUrl || '').toLowerCase();
+    const normalizedModel = normalizeText(model || '').toLowerCase();
+    if (
+      /(^|\/\/)(api\.)?deepseek\.com(?:$|\/)/i.test(normalizedBaseUrl)
+      || normalizedModel.startsWith('deepseek-')
+    ) {
+      return 'deepseek';
+    }
+    if (/bltcy\.ai|gptbest\.vip/i.test(normalizedBaseUrl)) {
+      return 'plato';
+    }
+    return 'generic-openai';
+  };
+
+  const buildStreamingChatPayload = ({ baseUrl, model, messages }) => {
+    const payload = {
+      model: normalizeText(model),
+      messages: Array.isArray(messages) ? messages : [],
+      stream: true,
+    };
+    const profile = inferChatApiProfile(baseUrl, model);
+    if (profile === 'plato') {
+      payload.reasoning = { effort: 'medium' };
+      payload.extra_body = { return_reasoning: true };
+    }
+    return payload;
+  };
+
   return {
     DEFAULT_PLATO_BASE_URL,
     DEFAULT_PLATO_CHAT_MODELS,
+    OPENAI_COMPATIBLE_PRESETS,
     normalizeText,
     normalizeBaseUrlForStorage,
     buildChatCompletionsEndpoint,
@@ -127,5 +183,8 @@
     resolveChatModels,
     resolveSummaryLLM,
     inferProviderType,
+    getOpenAICompatiblePreset,
+    inferChatApiProfile,
+    buildStreamingChatPayload,
   };
 });

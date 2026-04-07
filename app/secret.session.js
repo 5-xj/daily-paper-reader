@@ -208,6 +208,13 @@
           ];
     return sanitizeModelList(defaults, 99);
   };
+  const getOpenAICompatiblePreset = (key) => {
+    const utils = getLLMUtils();
+    if (typeof utils.getOpenAICompatiblePreset === 'function') {
+      return utils.getOpenAICompatiblePreset(key);
+    }
+    return null;
+  };
 
   const extractChatResponseText = (data) => {
     const normalizeContentPart = (part) => {
@@ -977,6 +984,17 @@
 
           <div id="secret-setup-custom-section" style="border:1px solid #eee; border-radius:8px; padding:10px; margin-bottom:4px;">
             <div style="font-weight:500; margin-bottom:4px;">OpenAI-compatible 配置</div>
+            <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:6px;">
+              <button id="secret-setup-preset-deepseek" type="button" class="secret-gate-btn secondary">
+                填入 DeepSeek 预设
+              </button>
+              <button id="secret-setup-preset-openai" type="button" class="secret-gate-btn secondary">
+                填入 OpenAI 预设
+              </button>
+            </div>
+            <div style="font-size:12px; color:#666; margin-bottom:8px;">
+              预设会自动填写 <code>Base URL</code> 与推荐模型；API Key 仍需你自行输入。
+            </div>
             <input
               id="secret-setup-custom-api-key"
               type="password"
@@ -1055,6 +1073,8 @@
       const customModel1Input = document.getElementById('secret-setup-custom-model-1');
       const customModel2Input = document.getElementById('secret-setup-custom-model-2');
       const customModel3Input = document.getElementById('secret-setup-custom-model-3');
+      const deepseekPresetBtn = document.getElementById('secret-setup-preset-deepseek');
+      const openaiPresetBtn = document.getElementById('secret-setup-preset-openai');
       const customTestBtn = document.getElementById('secret-setup-custom-test');
       const customStatusEl = document.getElementById('secret-setup-custom-status');
       const errorEl = document.getElementById('secret-setup-error');
@@ -1079,6 +1099,8 @@
         !customModel1Input ||
         !customModel2Input ||
         !customModel3Input ||
+        !deepseekPresetBtn ||
+        !openaiPresetBtn ||
         !customTestBtn ||
         !customStatusEl ||
         !errorEl ||
@@ -1172,6 +1194,24 @@
         customStatusEl.innerHTML =
           '将依次用已填写模型发送 <code>hello world</code>，检查接口与模型是否可用。';
         customStatusEl.style.color = '#999';
+      };
+
+      const applyOpenAICompatiblePreset = (presetKey) => {
+        const preset = getOpenAICompatiblePreset(presetKey);
+        if (!preset) return;
+        providerInputs.forEach((input) => {
+          input.checked = input.value === 'openai-compatible';
+        });
+        syncProviderSections();
+        customBaseUrlInput.value = preset.baseUrl || '';
+        customModel1Input.value = preset.models[0] || '';
+        customModel2Input.value = preset.models[1] || '';
+        customModel3Input.value = preset.models[2] || '';
+        resetCustomStatus();
+        setErrorText(
+          `已填入 ${preset.label} 预设，请补充 API Key 后点击“测试当前配置”。`,
+          '#666',
+        );
       };
 
       const validateCustomDraft = () => {
@@ -1309,6 +1349,12 @@
             '#999',
           );
         });
+      });
+      deepseekPresetBtn.addEventListener('click', () => {
+        applyOpenAICompatiblePreset('deepseek');
+      });
+      openaiPresetBtn.addEventListener('click', () => {
+        applyOpenAICompatiblePreset('openai');
       });
 
       backBtn.addEventListener('click', () => {
