@@ -168,6 +168,8 @@
     if (profile === 'plato') {
       payload.reasoning = { effort: 'medium' };
       payload.extra_body = { return_reasoning: true };
+    } else if (profile === 'deepseek' && normalizeText(model).toLowerCase() === 'deepseek-reasoner') {
+      payload.thinking = { type: 'enabled' };
     }
     return payload;
   };

@@ -1187,10 +1187,10 @@ window.PrivateDiscussionChat = (function () {
         if (
           resp
           && !resp.ok
-          && chatProfile === 'plato'
           && (
             JSON.stringify(primaryPayload).includes('"reasoning"')
             || JSON.stringify(primaryPayload).includes('"extra_body"')
+            || JSON.stringify(primaryPayload).includes('"thinking"')
           )
         ) {
           let retryText = '';
@@ -1199,7 +1199,10 @@ window.PrivateDiscussionChat = (function () {
           } catch {
             retryText = '';
           }
-          if (resp.status === 400 && /reasoning|extra_body|return_reasoning/i.test(retryText)) {
+          if (
+            resp.status === 400
+            && /reasoning|extra_body|return_reasoning|thinking/i.test(retryText)
+          ) {
             resp = await doChatFetch(fallbackPayload);
           } else {
             resp._dprErrorPreview = retryText;

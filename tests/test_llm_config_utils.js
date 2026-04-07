@@ -135,6 +135,20 @@ function testBuildStreamingChatPayload() {
 
   assert.deepEqual(
     buildStreamingChatPayload({
+      baseUrl: 'https://api.deepseek.com',
+      model: 'deepseek-reasoner',
+      messages: [{ role: 'user', content: 'hi' }],
+    }),
+    {
+      model: 'deepseek-reasoner',
+      messages: [{ role: 'user', content: 'hi' }],
+      stream: true,
+      thinking: { type: 'enabled' },
+    },
+  );
+
+  assert.deepEqual(
+    buildStreamingChatPayload({
       baseUrl: 'https://api.bltcy.ai/v1',
       model: 'gpt-5-chat',
       messages: [{ role: 'user', content: 'hi' }],
