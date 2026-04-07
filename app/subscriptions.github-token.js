@@ -397,12 +397,14 @@ window.SubscriptionsGithubToken = (function () {
     const renderSuccessMessage = (data) => {
       if (!githubTokenMessage) return;
       const scopes = Array.isArray(data.scopes) ? data.scopes : [];
+      const hasGist = scopes.includes('gist');
       githubTokenMessage.innerHTML = `
         <div style="color:#28a745; font-size:12px; line-height:1.6;">
           <strong>✅ 验证成功！</strong><br>
           用户: ${data.login || ''}<br>
           仓库: ${data.repo || ''}<br>
-          权限: ${scopes.join(', ')}
+          权限: ${scopes.join(', ')}<br>
+          Gist 分享: ${hasGist ? '已开启' : '未开启（需 Classic PAT + gist 权限）'}
         </div>
       `;
     };
@@ -520,9 +522,10 @@ window.SubscriptionsGithubToken = (function () {
             result.scopes && result.scopes.length
               ? `现有权限: ${result.scopes.join(', ')}<br>`
               : '现有权限: （无）<br>';
+          const gistHint = '如需 Gist 分享，请使用 Classic PAT 并额外勾选 gist 权限。<br>';
           githubTokenMessage.innerHTML = `
             <div style="font-size:12px; line-height:1.6;">
-              ${userText}${scopesText}
+              ${userText}${scopesText}${gistHint}
               <span style="color:#dc3545;">❌ ${result.error}</span>
             </div>
           `;

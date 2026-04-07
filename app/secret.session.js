@@ -931,7 +931,7 @@
             验证 GitHub Token
           </button>
           <div id="secret-setup-github-status" style="min-height:18px; font-size:12px; color:#999; margin-bottom:10px;">
-            需要具备 <code>repo</code> 和 <code>workflow</code> 权限。
+            基础功能需要 <code>repo</code> 和 <code>workflow</code> 权限；如需 Gist 分享，请使用 <code>Classic PAT</code> 并额外勾选 <code>gist</code> 权限。
           </div>
 
           <div style="font-weight:500; margin-bottom:6px;">聊天 / 论文概述模型来源</div>
@@ -1185,7 +1185,7 @@
 
       const resetGithubStatus = () => {
         githubOk = false;
-        githubStatusEl.innerHTML = '需要具备 <code>repo</code> 和 <code>workflow</code> 权限。';
+        githubStatusEl.innerHTML = '基础功能需要 <code>repo</code> 和 <code>workflow</code> 权限；如需 Gist 分享，请使用 <code>Classic PAT</code> 并额外勾选 <code>gist</code> 权限。';
         githubStatusEl.style.color = '#999';
       };
 
@@ -1406,7 +1406,11 @@
             );
           }
           const userData = await res.json().catch(() => ({}));
-          githubStatusEl.innerHTML = `✅ 验证成功：用户 ${userData.login || ''}，权限：${scopeList.join(', ')}`;
+          const hasGist = scopeList.includes('gist');
+          const gistHint = hasGist
+            ? 'Gist 分享：已开启。'
+            : 'Gist 分享：未开启；如需分享，请改用 Classic PAT 并勾选 gist 权限。';
+          githubStatusEl.innerHTML = `✅ 验证成功：用户 ${userData.login || ''}，权限：${scopeList.join(', ')}<br>${gistHint}`;
           githubStatusEl.style.color = '#28a745';
           githubOk = true;
         } catch (e) {
