@@ -293,6 +293,7 @@ class LLMClient:
             "response_format",
             "json_schema",
             "json object",
+            "json_object",
         ))
         has_signal = any(token in lowered for token in (
             "unsupported",
@@ -303,8 +304,18 @@ class LLMClient:
             "unrecognized",
             "extra inputs",
             "unexpected",
+            "must be one of",
+            "one of",
+            "allowed values",
+            "enum",
         ))
         if has_target and has_signal:
+            return True
+        if (
+            status_code in (400, 404, 415, 422)
+            and "response_format" in lowered
+            and any(token in lowered for token in ("json_object", "json_schema", "text"))
+        ):
             return True
         if status_code in (400, 404, 415, 422) and "response_format" in lowered:
             return True

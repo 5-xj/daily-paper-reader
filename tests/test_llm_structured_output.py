@@ -74,6 +74,38 @@ class LlmStructuredOutputTest(unittest.TestCase):
         )
 
     @patch("llm.requests.post")
+    def test_chat_structured_falls_back_for_deepseek_style_enum_error(self, mock_post):
+        mock_post.side_effect = [
+            self._mock_http_error_response(
+                '{"error":{"message":"response_format.type must be one of text or json_object"}}'
+            ),
+            self._mock_success_response({"content": '{"answer":"ok"}'}),
+        ]
+        client = LLMClient(
+            api_key="test-key",
+            model="deepseek-chat",
+            base_url="https://api.deepseek.com",
+        )
+
+        result = client.chat_structured(
+            messages=[{"role": "user", "content": "hello"}],
+            schema_name="answer_payload",
+            schema={
+                "type": "object",
+                "properties": {"answer": {"type": "string"}},
+                "required": ["answer"],
+                "additionalProperties": False,
+            },
+        )
+
+        self.assertEqual(result["response_format_used"], "json_object")
+        self.assertEqual(result["parsed"], {"answer": "ok"})
+        self.assertEqual(
+            [call.kwargs["json"]["response_format"]["type"] for call in mock_post.call_args_list],
+            ["json_schema", "json_object"],
+        )
+
+    @patch("llm.requests.post")
     def test_chat_structured_returns_refusal(self, mock_post):
         mock_post.return_value = self._mock_success_response(
             {"refusal": "I'm sorry, I cannot assist with that request."}
