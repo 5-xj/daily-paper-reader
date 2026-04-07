@@ -763,6 +763,9 @@
     const hide = () => {
       closeSecretOverlay(overlay);
     };
+    const setModalVariant = (variant) => {
+      modal.classList.toggle('secret-gate-modal-wizard', variant === 'wizard');
+    };
 
     if (overlay && !overlay._secretBound) {
       overlay._secretBound = true;
@@ -775,31 +778,42 @@
 
     // 已有 secret.private 时的解锁界面渲染逻辑
     const renderUnlockUI = () => {
+      setModalVariant('compact');
       modal.innerHTML = `
-        <h2 style="margin-top:0;">🔐 解锁密钥</h2>
-        <p style="font-size:13px; color:#555; margin-bottom:8px;">
-          检测到已存在密钥文件 <code>secret.private</code>。请输入解锁密码，
-          或选择以游客身份访问（仅支持阅读论文，无法使用后台大模型能力）。
-        </p>
-        <label for="secret-gate-password" style="font-size:13px; color:#333; display:block; margin-bottom:4px;">
-          解锁密码（至少 8 位，包含数字、小写字母、大写字母和特殊符号）：
-        </label>
-        <input
-          id="secret-gate-password"
-          type="password"
-          autocomplete="off"
-          style="width:100%; box-sizing:border-box; padding:6px 8px; margin-bottom:6px; font-size:13px;"
-        />
-        <div id="secret-gate-error" style="min-height:18px; font-size:12px; color:#999; margin-bottom:8px;">
-          密码仅在本地用于解密，不会上传到服务器。
-        </div>
-        <div class="secret-gate-actions">
-          <button id="secret-gate-guest" type="button" class="secret-gate-btn secondary">
-            以游客身份访问
-          </button>
-          <button id="secret-gate-unlock" type="button" class="secret-gate-btn primary">
-            解锁密钥
-          </button>
+        <div class="secret-gate-panel">
+          <div class="secret-gate-header">
+            <h2 class="secret-gate-title">🔐 解锁密钥</h2>
+            <p class="secret-gate-subtitle">
+              检测到已存在密钥文件 <code>secret.private</code>。请输入解锁密码，
+              或选择以游客身份访问（仅支持阅读论文，无法使用后台大模型能力）。
+            </p>
+          </div>
+          <div class="secret-gate-body">
+            <label for="secret-gate-password" class="secret-form-label">
+              解锁密码（至少 8 位，包含数字、小写字母、大写字母和特殊符号）
+            </label>
+            <div class="secret-form-stack">
+              <input
+                id="secret-gate-password"
+                type="password"
+                autocomplete="off"
+                class="secret-form-input"
+              />
+            </div>
+          </div>
+          <div class="secret-gate-footer">
+            <div id="secret-gate-error" class="secret-form-status">
+              密码仅在本地用于解密，不会上传到服务器。
+            </div>
+            <div class="secret-gate-actions">
+              <button id="secret-gate-guest" type="button" class="secret-gate-btn secondary">
+                以游客身份访问
+              </button>
+              <button id="secret-gate-unlock" type="button" class="secret-gate-btn primary">
+                解锁密钥
+              </button>
+            </div>
+          </div>
         </div>
       `;
 
@@ -915,152 +929,185 @@
         3,
       );
 
+      setModalVariant('wizard');
       modal.innerHTML = `
-        <h2 style="margin-top:0;">🛡️ 新配置指引 · 第二步</h2>
-        <p style="font-size:13px; color:#555; margin-bottom:8px;">
-          配置 GitHub Token、工作流所需的 BLT 模型，以及聊天区可选的 OpenAI-compatible 模型。
-        </p>
-        <div style="border-top:1px solid #eee; padding-top:8px; margin-top:4px; font-size:13px;">
-          <div style="font-weight:500; margin-bottom:4px;">GitHub Token（必填）</div>
-          <input
-            id="secret-setup-github-token"
-            type="password"
-            autocomplete="off"
-            placeholder="用于读写 config.yaml 与触发 workflow 的 GitHub PAT"
-            style="width:100%; box-sizing:border-box; padding:6px 8px; margin-bottom:4px; font-size:13px;"
-          />
-          <button id="secret-setup-github-verify" type="button" class="secret-gate-btn secondary" style="margin-bottom:4px;">
-            验证 GitHub Token
-          </button>
-          <div id="secret-setup-github-status" style="min-height:18px; font-size:12px; color:#999; margin-bottom:10px;">
-            需要使用 <code>Classic PAT</code>，并同时具备 <code>repo</code>、<code>workflow</code> 和 <code>gist</code> 权限。
+        <div class="secret-gate-panel">
+          <div class="secret-gate-header">
+            <h2 class="secret-gate-title">🛡️ 新配置指引 · 第二步</h2>
+            <p class="secret-gate-subtitle">
+              配置 GitHub Token、工作流所需的 BLT 模型，以及聊天区可选的 OpenAI-compatible 模型。
+            </p>
           </div>
+          <div class="secret-gate-body">
+            <div class="secret-setup-grid">
+              <section class="secret-setup-card">
+                <h3 class="secret-setup-card-title">GitHub Token（必填）</h3>
+                <p class="secret-setup-card-desc">
+                  当前配置要求使用 <code>Classic PAT</code>，并同时具备 <code>repo</code>、<code>workflow</code> 和 <code>gist</code> 权限。
+                </p>
+                <div class="secret-form-stack">
+                  <input
+                    id="secret-setup-github-token"
+                    type="password"
+                    autocomplete="off"
+                    placeholder="用于读写 config.yaml、触发 workflow 与 Gist 分享的 GitHub PAT"
+                    class="secret-form-input"
+                  />
+                  <div class="secret-inline-actions">
+                    <button id="secret-setup-github-verify" type="button" class="secret-gate-btn secondary">
+                      验证 GitHub Token
+                    </button>
+                  </div>
+                  <div id="secret-setup-github-status" class="secret-form-status">
+                    需要使用 <code>Classic PAT</code>，并同时具备 <code>repo</code>、<code>workflow</code> 和 <code>gist</code> 权限。
+                  </div>
+                </div>
+              </section>
 
-          <div style="font-weight:500; margin-bottom:6px;">聊天 / 论文概述模型来源</div>
-          <label style="display:flex; align-items:center; gap:6px; margin-bottom:4px;">
-            <input type="radio" name="secret-setup-provider" value="plato" />
-            <span><strong>聊天区也使用 BLT</strong>：工作流总结、过滤、reranker 与聊天区统一使用柏拉图（BLTCY）模型。</span>
-          </label>
-          <label style="display:flex; align-items:center; gap:6px; margin-bottom:6px;">
-            <input type="radio" name="secret-setup-provider" value="openai-compatible" />
-            <span><strong>聊天区使用 OpenAI-compatible</strong>：工作流总结与 reranker 仍强制使用 BLT，最多 3 个自定义模型仅用于聊天区。</span>
-          </label>
-          <div style="font-size:12px; color:#666; margin-bottom:10px;">
-            说明：当前版本中，<code>BLT</code> 是工作流必填项，用于 query enrich、LLM refine、总结与 reranker；
-            <code>OpenAI-compatible</code> 仅作为聊天区模型来源。
+              <section id="secret-setup-plato-section" class="secret-setup-card">
+                <h3 class="secret-setup-card-title">工作流 / Reranker 专用 BLT（必填）</h3>
+                <p class="secret-setup-card-desc">
+                  BLT 用于 query enrich、LLM refine、总结与 reranker，是工作流硬依赖。
+                </p>
+                <div class="secret-form-stack">
+                  <input
+                    id="secret-setup-plato"
+                    type="password"
+                    autocomplete="off"
+                    placeholder="BLT API Key，例如：sk-xxxx"
+                    class="secret-form-input"
+                  />
+                  <div class="secret-inline-actions">
+                    <button id="secret-setup-plato-verify" type="button" class="secret-gate-btn secondary">
+                      验证柏拉图 API Key
+                    </button>
+                    <button id="secret-setup-plato-test" type="button" class="secret-gate-btn secondary">
+                      测试当前配置
+                    </button>
+                  </div>
+                  <div id="secret-setup-plato-status" class="secret-form-status">
+                    将通过 <code>/v1/token/quota</code> 和一次 <code>hello world</code> 请求检查配置可用性。
+                  </div>
+                  <div>
+                    <label class="secret-form-label" style="display:flex; align-items:center; gap:6px; margin-bottom:8px;">
+                      <span>用于工作流总结 / 过滤的大模型（推荐选择 Gemini 3 Flash）</span>
+                      <span class="secret-model-tip">!
+                        <span class="secret-model-tip-popup">
+                          按照 Thinking（思考模式）的高负载场景估算：<br/>
+                          <br/>
+                          总结：15k 输入 + 4k 输出（含思考）<br/>
+                          提问：16.1k 输入 + 2k 输出（含思考）<br/>
+                          <br/>
+                          模型 · 约价（单次）：<br/>
+                          - Gemini 3 Flash：总结 ¥0.0195，提问 ¥0.0141（不到 2 分钱，100 篇论文约 2 元）<br/>
+                          - DeepSeek V3：总结 ¥0.0294，提问 ¥0.0267（不到 3 分钱，长输出性价比极高）<br/>
+                          - GPT-5：总结 ¥0.0588，提问 ¥0.0401（约 6 分钱）<br/>
+                          - Gemini 3 Pro：总结 ¥0.0780，提问 ¥0.0562（约 8 分钱，一篇论文不到 1 毛钱）
+                        </span>
+                      </span>
+                    </label>
+                    <div id="secret-setup-plato-models" style="font-size:13px;"></div>
+                  </div>
+                </div>
+              </section>
+
+              <section class="secret-setup-card wide">
+                <h3 class="secret-setup-card-title">聊天模型来源</h3>
+                <p class="secret-setup-card-desc">
+                  你可以让聊天区继续使用 BLT，也可以切换到 OpenAI-compatible 模型。无论选择哪种模式，工作流总结与 reranker 仍强制使用 BLT。
+                </p>
+                <div class="secret-provider-options">
+                  <label class="secret-provider-option">
+                    <input type="radio" name="secret-setup-provider" value="plato" />
+                    <span><strong>聊天区也使用 BLT</strong><br>工作流总结、过滤、reranker 与聊天区统一使用柏拉图（BLTCY）模型。</span>
+                  </label>
+                  <label class="secret-provider-option">
+                    <input type="radio" name="secret-setup-provider" value="openai-compatible" />
+                    <span><strong>聊天区使用 OpenAI-compatible</strong><br>工作流总结与 reranker 仍强制使用 BLT，最多 3 个自定义模型仅用于聊天区。</span>
+                  </label>
+                </div>
+                <p class="secret-divider-note">
+                  当前版本中，<code>BLT</code> 是工作流必填项；<code>OpenAI-compatible</code> 仅作为聊天区模型来源。
+                </p>
+
+                <div id="secret-setup-custom-section" class="secret-setup-card" style="margin:0; padding:14px;">
+                  <h4 class="secret-setup-card-title" style="font-size:13px; margin-bottom:4px;">OpenAI-compatible 聊天配置</h4>
+                  <p class="secret-setup-card-desc" style="margin-bottom:10px;">
+                    预设会自动填写 <code>Base URL</code> 与推荐模型；API Key 仍需你自行输入。这里的模型仅供聊天区使用。
+                  </p>
+                  <div class="secret-provider-inline">
+                    <button id="secret-setup-preset-deepseek" type="button" class="secret-gate-btn secondary">
+                      填入 DeepSeek 预设
+                    </button>
+                    <button id="secret-setup-preset-openai" type="button" class="secret-gate-btn secondary">
+                      填入 OpenAI 预设
+                    </button>
+                  </div>
+                  <div class="secret-form-stack">
+                    <input
+                      id="secret-setup-custom-api-key"
+                      type="password"
+                      autocomplete="off"
+                      placeholder="聊天 API Key"
+                      class="secret-form-input"
+                    />
+                    <input
+                      id="secret-setup-custom-base-url"
+                      type="text"
+                      autocomplete="off"
+                      placeholder="聊天 Base URL，例如 https://api.openai.com/v1"
+                      class="secret-form-input"
+                    />
+                    <input
+                      id="secret-setup-custom-model-1"
+                      type="text"
+                      autocomplete="off"
+                      placeholder="聊天模型 1（默认）"
+                      class="secret-form-input"
+                    />
+                    <input
+                      id="secret-setup-custom-model-2"
+                      type="text"
+                      autocomplete="off"
+                      placeholder="聊天模型 2（可选）"
+                      class="secret-form-input"
+                    />
+                    <input
+                      id="secret-setup-custom-model-3"
+                      type="text"
+                      autocomplete="off"
+                      placeholder="聊天模型 3（可选）"
+                      class="secret-form-input"
+                    />
+                    <div class="secret-inline-actions">
+                      <button id="secret-setup-custom-test" type="button" class="secret-gate-btn secondary">
+                        测试当前配置
+                      </button>
+                    </div>
+                    <div id="secret-setup-custom-status" class="secret-form-status">
+                      将依次用已填写聊天模型发送 <code>hello world</code>，检查接口与模型是否可用。
+                    </div>
+                  </div>
+                </div>
+              </section>
+            </div>
           </div>
-
-          <div id="secret-setup-plato-section" style="border:1px solid #eee; border-radius:8px; padding:10px; margin-bottom:10px;">
-            <div style="font-weight:500; margin-bottom:4px;">工作流 / Reranker 专用 BLT（必填）</div>
-            <input
-              id="secret-setup-plato"
-              type="password"
-              autocomplete="off"
-              placeholder="BLT API Key，例如：sk-xxxx"
-              style="width:100%; box-sizing:border-box; padding:6px 8px; margin-bottom:4px; font-size:13px;"
-            />
-            <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:4px;">
-              <button id="secret-setup-plato-verify" type="button" class="secret-gate-btn secondary">
-                验证柏拉图 API Key
+          <div class="secret-gate-footer">
+            <div id="secret-setup-error" class="secret-form-status">
+              所有密钥信息将加密写入 GitHub Secrets（用于 GitHub Actions），并同步生成本地 <code>secret.private</code> 备份，原文不会直接存入仓库。
+            </div>
+            <div class="secret-gate-actions">
+              <button id="secret-setup-back" type="button" class="secret-gate-btn secondary">
+                上一步
               </button>
-              <button id="secret-setup-plato-test" type="button" class="secret-gate-btn secondary">
-                测试当前配置
+              <button id="secret-setup-close" type="button" class="secret-gate-btn secondary">
+                关闭
               </button>
-            </div>
-            <div id="secret-setup-plato-status" style="min-height:18px; font-size:12px; color:#999; margin-bottom:8px;">
-              将通过 <code>/v1/token/quota</code> 和一次 <code>hello world</code> 请求检查配置可用性。
-            </div>
-
-            <div style="font-weight:500; margin-bottom:4px; display:flex; align-items:center; gap:4px;">
-              用于工作流总结 / 过滤的大模型（推荐选择 Gemini 3 Flash）
-              <span class="secret-model-tip">!
-                <span class="secret-model-tip-popup">
-                  按照 Thinking（思考模式）的高负载场景估算：<br/>
-                  <br/>
-                  总结：15k 输入 + 4k 输出（含思考）<br/>
-                  提问：16.1k 输入 + 2k 输出（含思考）<br/>
-                  <br/>
-                  模型 · 约价（单次）：<br/>
-                  - Gemini 3 Flash：总结 ¥0.0195，提问 ¥0.0141（不到 2 分钱，100 篇论文约 2 元）<br/>
-                  - DeepSeek V3：总结 ¥0.0294，提问 ¥0.0267（不到 3 分钱，长输出性价比极高）<br/>
-                  - GPT-5：总结 ¥0.0588，提问 ¥0.0401（约 6 分钱）<br/>
-                  - Gemini 3 Pro：总结 ¥0.0780，提问 ¥0.0562（约 8 分钱，一篇论文不到 1 毛钱）
-                </span>
-              </span>
-            </div>
-            <div id="secret-setup-plato-models" style="font-size:13px; margin-bottom:0;"></div>
-          </div>
-
-          <div id="secret-setup-custom-section" style="border:1px solid #eee; border-radius:8px; padding:10px; margin-bottom:4px;">
-            <div style="font-weight:500; margin-bottom:4px;">OpenAI-compatible 聊天配置</div>
-            <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:6px;">
-              <button id="secret-setup-preset-deepseek" type="button" class="secret-gate-btn secondary">
-                填入 DeepSeek 预设
+              <button id="secret-setup-generate" type="button" class="secret-gate-btn primary">
+                保存配置
               </button>
-              <button id="secret-setup-preset-openai" type="button" class="secret-gate-btn secondary">
-                填入 OpenAI 预设
-              </button>
-            </div>
-            <div style="font-size:12px; color:#666; margin-bottom:8px;">
-              预设会自动填写 <code>Base URL</code> 与推荐模型；API Key 仍需你自行输入。这里的模型仅供聊天区使用。
-            </div>
-            <input
-              id="secret-setup-custom-api-key"
-              type="password"
-              autocomplete="off"
-              placeholder="API Key"
-              style="width:100%; box-sizing:border-box; padding:6px 8px; margin-bottom:4px; font-size:13px;"
-            />
-            <input
-              id="secret-setup-custom-base-url"
-              type="text"
-              autocomplete="off"
-              placeholder="Base URL，例如 https://api.openai.com/v1"
-              style="width:100%; box-sizing:border-box; padding:6px 8px; margin-bottom:4px; font-size:13px;"
-            />
-            <input
-              id="secret-setup-custom-model-1"
-              type="text"
-              autocomplete="off"
-              placeholder="聊天模型 1（默认）"
-              style="width:100%; box-sizing:border-box; padding:6px 8px; margin-bottom:4px; font-size:13px;"
-            />
-            <input
-              id="secret-setup-custom-model-2"
-              type="text"
-              autocomplete="off"
-              placeholder="聊天模型 2（可选）"
-              style="width:100%; box-sizing:border-box; padding:6px 8px; margin-bottom:4px; font-size:13px;"
-            />
-            <input
-              id="secret-setup-custom-model-3"
-              type="text"
-              autocomplete="off"
-              placeholder="聊天模型 3（可选）"
-              style="width:100%; box-sizing:border-box; padding:6px 8px; margin-bottom:4px; font-size:13px;"
-            />
-            <button id="secret-setup-custom-test" type="button" class="secret-gate-btn secondary" style="margin-bottom:4px;">
-              测试当前配置
-            </button>
-            <div id="secret-setup-custom-status" style="min-height:18px; font-size:12px; color:#999; margin-bottom:0;">
-              将依次用已填写聊天模型发送 <code>hello world</code>，检查接口与模型是否可用。
             </div>
           </div>
-        </div>
-
-        <div id="secret-setup-error" style="min-height:18px; font-size:12px; color:#999; margin-top:8px; margin-bottom:8px;">
-          所有密钥信息将加密写入 GitHub Secrets（用于 GitHub Actions），并同步生成本地 <code>secret.private</code> 备份，原文不会直接存入仓库。
-        </div>
-        <div class="secret-gate-actions">
-          <button id="secret-setup-back" type="button" class="secret-gate-btn secondary">
-            上一步
-          </button>
-          <button id="secret-setup-close" type="button" class="secret-gate-btn secondary">
-            关闭
-          </button>
-          <button id="secret-setup-generate" type="button" class="secret-gate-btn primary">
-            保存配置
-          </button>
         </div>
       `;
 
@@ -1662,38 +1709,52 @@
 
     // 初始化向导：第 1 步（设置密码）
     const renderInitStep1 = () => {
+      setModalVariant('compact');
       modal.innerHTML = `
-        <h2 style="margin-top:0;">🛡️ 新配置指引 · 第一步</h2>
-        <p style="font-size:13px; color:#555; margin-bottom:8px;">
-          检测到当前仓库尚未创建 <code>secret.private</code> 文件。
-          请先设置一个用于加密本地配置的密码，该密码将用于解锁大模型密钥等敏感信息。
-        </p>
-        <label for="secret-setup-password" style="font-size:13px; color:#333; display:block; margin-bottom:4px;">
-          设置解锁密码：
-        </label>
-        <input
-          id="secret-setup-password"
-          type="password"
-          autocomplete="off"
-          style="width:100%; box-sizing:border-box; padding:6px 8px; margin-bottom:4px; font-size:13px;"
-        />
-        <input
-          id="secret-setup-password-confirm"
-          type="password"
-          autocomplete="off"
-          placeholder="再次输入密码确认"
-          style="width:100%; box-sizing:border-box; padding:6px 8px; margin-bottom:6px; font-size:13px;"
-        />
-        <div id="secret-setup-error" style="min-height:18px; font-size:12px; color:#666; margin-bottom:8px;">
-          密码至少 8 位，且必须包含数字、小写字母、大写字母和特殊符号。密码仅保存在浏览器本地，用于解锁密钥。
-        </div>
-        <div class="secret-gate-actions">
-          <button id="secret-setup-guest" type="button" class="secret-gate-btn secondary">
-            以游客身份访问
-          </button>
-          <button id="secret-setup-next" type="button" class="secret-gate-btn primary">
-            下一步
-          </button>
+        <div class="secret-gate-panel">
+          <div class="secret-gate-header">
+            <h2 class="secret-gate-title">🛡️ 新配置指引 · 第一步</h2>
+            <p class="secret-gate-subtitle">
+              检测到当前仓库尚未创建 <code>secret.private</code> 文件。
+              请先设置一个用于加密本地配置的密码，该密码将用于解锁大模型密钥等敏感信息。
+            </p>
+          </div>
+          <div class="secret-gate-body">
+            <div class="secret-form-stack">
+              <div>
+                <label for="secret-setup-password" class="secret-form-label">设置解锁密码</label>
+                <input
+                  id="secret-setup-password"
+                  type="password"
+                  autocomplete="off"
+                  class="secret-form-input"
+                />
+              </div>
+              <div>
+                <label for="secret-setup-password-confirm" class="secret-form-label">再次输入密码确认</label>
+                <input
+                  id="secret-setup-password-confirm"
+                  type="password"
+                  autocomplete="off"
+                  placeholder="再次输入密码确认"
+                  class="secret-form-input"
+                />
+              </div>
+            </div>
+          </div>
+          <div class="secret-gate-footer">
+            <div id="secret-setup-error" class="secret-form-status">
+              密码至少 8 位，且必须包含数字、小写字母、大写字母和特殊符号。密码仅保存在浏览器本地，用于解锁密钥。
+            </div>
+            <div class="secret-gate-actions">
+              <button id="secret-setup-guest" type="button" class="secret-gate-btn secondary">
+                以游客身份访问
+              </button>
+              <button id="secret-setup-next" type="button" class="secret-gate-btn primary">
+                下一步
+              </button>
+            </div>
+          </div>
         </div>
       `;
 
