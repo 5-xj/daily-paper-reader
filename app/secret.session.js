@@ -1030,7 +1030,7 @@
                   当前版本中，<code>BLT</code> 是工作流必填项；<code>OpenAI-compatible</code> 仅作为聊天区模型来源。
                 </p>
 
-                <div id="secret-setup-custom-section" class="secret-setup-card" style="margin:0; padding:14px;">
+                <div id="secret-setup-custom-section" class="secret-setup-subsection">
                   <h4 class="secret-setup-card-title" style="font-size:13px; margin-bottom:4px;">OpenAI-compatible 聊天配置</h4>
                   <p class="secret-setup-card-desc" style="margin-bottom:10px;">
                     预设会自动填写 <code>Base URL</code> 与推荐模型；API Key 仍需你自行输入。这里的模型仅供聊天区使用。
