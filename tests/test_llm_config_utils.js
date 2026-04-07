@@ -10,6 +10,7 @@ const {
   getOpenAICompatiblePreset,
   inferChatApiProfile,
   buildStreamingChatPayload,
+  buildConnectivityTestPayload,
 } = require('../app/llm-config-utils.js');
 
 function testNormalizeBaseUrlForStorage() {
@@ -163,6 +164,41 @@ function testBuildStreamingChatPayload() {
   );
 }
 
+function testBuildConnectivityTestPayload() {
+  assert.deepEqual(
+    buildConnectivityTestPayload({
+      baseUrl: 'https://api.deepseek.com',
+      model: 'deepseek-reasoner',
+    }),
+    {
+      model: 'deepseek-reasoner',
+      messages: [
+        { role: 'system', content: 'Reply with exactly: hello world' },
+        { role: 'user', content: 'hello world' },
+      ],
+      temperature: 0,
+      max_tokens: 32,
+      thinking: { type: 'disabled' },
+    },
+  );
+
+  assert.deepEqual(
+    buildConnectivityTestPayload({
+      baseUrl: 'https://api.deepseek.com',
+      model: 'deepseek-chat',
+    }),
+    {
+      model: 'deepseek-chat',
+      messages: [
+        { role: 'system', content: 'Reply with exactly: hello world' },
+        { role: 'user', content: 'hello world' },
+      ],
+      temperature: 0,
+      max_tokens: 32,
+    },
+  );
+}
+
 testNormalizeBaseUrlForStorage();
 testBuildChatCompletionsEndpoint();
 testSanitizeModelList();
@@ -171,5 +207,6 @@ testInferProviderType();
 testGetOpenAICompatiblePreset();
 testInferChatApiProfile();
 testBuildStreamingChatPayload();
+testBuildConnectivityTestPayload();
 
 console.log('llm config utils tests passed');

@@ -174,6 +174,30 @@
     return payload;
   };
 
+  const buildConnectivityTestPayload = ({ baseUrl, model }) => {
+    const normalizedModel = normalizeText(model);
+    const payload = {
+      model: normalizedModel,
+      messages: [
+        {
+          role: 'system',
+          content: 'Reply with exactly: hello world',
+        },
+        {
+          role: 'user',
+          content: 'hello world',
+        },
+      ],
+      temperature: 0,
+      max_tokens: 32,
+    };
+    const profile = inferChatApiProfile(baseUrl, model);
+    if (profile === 'deepseek' && normalizedModel.toLowerCase() === 'deepseek-reasoner') {
+      payload.thinking = { type: 'disabled' };
+    }
+    return payload;
+  };
+
   return {
     DEFAULT_PLATO_BASE_URL,
     DEFAULT_PLATO_CHAT_MODELS,
@@ -188,5 +212,6 @@
     getOpenAICompatiblePreset,
     inferChatApiProfile,
     buildStreamingChatPayload,
+    buildConnectivityTestPayload,
   };
 });

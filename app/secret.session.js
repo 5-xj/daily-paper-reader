@@ -215,6 +215,27 @@
     }
     return null;
   };
+  const buildConnectivityTestPayload = (baseUrl, model) => {
+    const utils = getLLMUtils();
+    if (typeof utils.buildConnectivityTestPayload === 'function') {
+      return utils.buildConnectivityTestPayload({ baseUrl, model });
+    }
+    return {
+      model: normalizeText(model || ''),
+      messages: [
+        {
+          role: 'system',
+          content: 'Reply with exactly: hello world',
+        },
+        {
+          role: 'user',
+          content: 'hello world',
+        },
+      ],
+      temperature: 0,
+      max_tokens: 32,
+    };
+  };
 
   const extractChatResponseText = (data) => {
     const normalizeContentPart = (part) => {
@@ -268,21 +289,7 @@
           statusEl.style.color = '#666';
         }
 
-        const payload = {
-          model,
-          messages: [
-            {
-              role: 'system',
-              content: 'Reply with exactly: hello world',
-            },
-            {
-              role: 'user',
-              content: 'hello world',
-            },
-          ],
-          temperature: 0,
-          max_tokens: 32,
-        };
+        const payload = buildConnectivityTestPayload(baseUrl, model);
 
         const headers = {
           'Content-Type': 'application/json',
