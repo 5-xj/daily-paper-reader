@@ -10,6 +10,12 @@ class GenerateDocsMetaParseTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         root = Path(__file__).resolve().parents[1]
+        if "fitz" not in sys.modules:
+            import types
+
+            fitz_stub = types.ModuleType("fitz")
+            fitz_stub.open = lambda *args, **kwargs: None
+            sys.modules["fitz"] = fitz_stub
         if "llm" not in sys.modules:
             import types
 

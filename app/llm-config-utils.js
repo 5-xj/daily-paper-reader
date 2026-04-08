@@ -14,6 +14,38 @@
     'gpt-5-chat',
     'gemini-3-pro-preview',
   ];
+  const OPENAI_COMPATIBLE_PRESETS = Object.freeze({
+    deepseek: Object.freeze({
+      key: 'deepseek',
+      label: 'DeepSeek 官方',
+      baseUrl: 'https://api.deepseek.com',
+      models: Object.freeze(['deepseek-chat', 'deepseek-reasoner']),
+    }),
+    glm: Object.freeze({
+      key: 'glm',
+      label: 'GLM Coding Plan',
+      baseUrl: 'https://open.bigmodel.cn/api/coding/paas/v4',
+      models: Object.freeze(['GLM-4.7', 'GLM-5', 'GLM-4.6']),
+    }),
+    minimax: Object.freeze({
+      key: 'minimax',
+      label: 'MiniMax Coding Plan',
+      baseUrl: 'https://api.minimaxi.com/v1',
+      models: Object.freeze(['MiniMax-M2.5', 'MiniMax-M2.7', 'MiniMax-M2.1']),
+    }),
+    kimi: Object.freeze({
+      key: 'kimi',
+      label: 'Kimi 编程预设',
+      baseUrl: 'https://api.moonshot.ai/v1',
+      models: Object.freeze(['kimi-k2.5', 'kimi-k2-turbo-preview', 'kimi-k2-thinking']),
+    }),
+    openai: Object.freeze({
+      key: 'openai',
+      label: 'OpenAI 官方',
+      baseUrl: 'https://api.openai.com/v1',
+      models: Object.freeze(['gpt-4.1-mini', 'gpt-4.1']),
+    }),
+  });
 
   const normalizeText = (value) => String(value || '').trim();
 
@@ -117,9 +149,100 @@
     return 'openai-compatible';
   };
 
+  const getOpenAICompatiblePreset = (key) => {
+    const presetKey = normalizeText(key).toLowerCase();
+    const preset = OPENAI_COMPATIBLE_PRESETS[presetKey];
+    if (!preset) return null;
+    return {
+      key: preset.key,
+      label: preset.label,
+      baseUrl: preset.baseUrl,
+      models: [...preset.models],
+    };
+  };
+
+  const inferChatApiProfile = (baseUrl, model) => {
+    const normalizedBaseUrl = normalizeBaseUrlForStorage(baseUrl || '').toLowerCase();
+    const normalizedModel = normalizeText(model || '').toLowerCase();
+    if (
+      /(^|\/\/)(api\.)?deepseek\.com(?:$|\/)/i.test(normalizedBaseUrl)
+      || normalizedModel.startsWith('deepseek-')
+    ) {
+      return 'deepseek';
+    }
+    if (/bltcy\.ai|gptbest\.vip/i.test(normalizedBaseUrl)) {
+      return 'plato';
+    }
+    return 'generic-openai';
+  };
+
+  const shouldUseXApiKeyHeader = ({ baseUrl, model }) => {
+    const normalizedBaseUrl = normalizeBaseUrlForStorage(baseUrl || '').toLowerCase();
+    const normalizedModel = normalizeText(model || '').toLowerCase();
+    if (
+      /^minimax-/i.test(normalizedModel)
+      || /(^|\/\/)api\.minimax(?:i)?\.(?:io|com)(?:$|\/)/i.test(normalizedBaseUrl)
+    ) {
+      return false;
+    }
+    return true;
+  };
+
+  const buildStreamingChatPayload = ({ baseUrl, model, messages }) => {
+    const payload = {
+      model: normalizeText(model),
+      messages: Array.isArray(messages) ? messages : [],
+      stream: true,
+    };
+    const profile = inferChatApiProfile(baseUrl, model);
+    if (profile === 'plato') {
+      payload.reasoning = { effort: 'medium' };
+      payload.extra_body = { return_reasoning: true };
+    } else if (profile === 'deepseek' && normalizeText(model).toLowerCase() === 'deepseek-reasoner') {
+      payload.thinking = { type: 'enabled' };
+    }
+    return payload;
+  };
+
+  const buildConnectivityTestPayload = ({ baseUrl, model }) => {
+    const normalizedModel = normalizeText(model);
+    const normalizedBaseUrl = normalizeBaseUrlForStorage(baseUrl || '').toLowerCase();
+    const wantsMaxCompletionTokens =
+      /^glm-/i.test(normalizedModel)
+      || /open\.bigmodel\.cn/.test(normalizedBaseUrl)
+      || /thinking/i.test(normalizedModel)
+      || /^kimi-/i.test(normalizedModel)
+      || /^minimax-/i.test(normalizedModel)
+      || normalizedModel.toLowerCase() === 'deepseek-reasoner';
+    const payload = {
+      model: normalizedModel,
+      messages: [
+        {
+          role: 'system',
+          content: 'Reply with exactly: hello world',
+        },
+        {
+          role: 'user',
+          content: 'hello world',
+        },
+      ],
+      temperature: 0,
+      max_tokens: 256,
+    };
+    if (wantsMaxCompletionTokens) {
+      payload.max_completion_tokens = 256;
+    }
+    const profile = inferChatApiProfile(baseUrl, model);
+    if (profile === 'deepseek' && normalizedModel.toLowerCase() === 'deepseek-reasoner') {
+      payload.thinking = { type: 'disabled' };
+    }
+    return payload;
+  };
+
   return {
     DEFAULT_PLATO_BASE_URL,
     DEFAULT_PLATO_CHAT_MODELS,
+    OPENAI_COMPATIBLE_PRESETS,
     normalizeText,
     normalizeBaseUrlForStorage,
     buildChatCompletionsEndpoint,
@@ -127,5 +250,10 @@
     resolveChatModels,
     resolveSummaryLLM,
     inferProviderType,
+    getOpenAICompatiblePreset,
+    inferChatApiProfile,
+    shouldUseXApiKeyHeader,
+    buildStreamingChatPayload,
+    buildConnectivityTestPayload,
   };
 });

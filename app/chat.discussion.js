@@ -60,6 +60,35 @@ window.PrivateDiscussionChat = (function () {
     });
     return models;
   };
+  const inferChatApiProfile = (baseUrl, model) => {
+    const utils = window.DPRLLMConfigUtils || {};
+    if (typeof utils.inferChatApiProfile === 'function') {
+      return utils.inferChatApiProfile(baseUrl, model);
+    }
+    const normalizedBaseUrl = String(baseUrl || '').trim().toLowerCase();
+    const normalizedModel = String(model || '').trim().toLowerCase();
+    if (
+      /(^|\/\/)(api\.)?deepseek\.com(?:$|\/)/i.test(normalizedBaseUrl)
+      || normalizedModel.startsWith('deepseek-')
+    ) {
+      return 'deepseek';
+    }
+    if (/bltcy\.ai|gptbest\.vip/i.test(normalizedBaseUrl)) {
+      return 'plato';
+    }
+    return 'generic-openai';
+  };
+  const buildStreamingChatPayload = (baseUrl, model, messages) => {
+    const utils = window.DPRLLMConfigUtils || {};
+    if (typeof utils.buildStreamingChatPayload === 'function') {
+      return utils.buildStreamingChatPayload({ baseUrl, model, messages });
+    }
+    return {
+      model,
+      messages,
+      stream: true,
+    };
+  };
 
   let chatDbPromise = null;
 
@@ -1134,28 +1163,51 @@ window.PrivateDiscussionChat = (function () {
       const timerId = setTimeout(() => controller.abort(), timeoutMs);
       let resp = null;
 
-      try {
-        resp = await fetch(endpoint, {
+      const baseUrl = (modelEntry && modelEntry.baseUrl ? modelEntry.baseUrl : '').trim();
+      const chatProfile = inferChatApiProfile(baseUrl, model);
+      const primaryPayload = buildStreamingChatPayload(baseUrl, model, messages);
+      const fallbackPayload = {
+        model,
+        messages,
+        stream: true,
+      };
+
+      const doChatFetch = async (payload) => fetch(endpoint, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
             Authorization: `Bearer ${apiKey}`,
           },
           signal: controller.signal,
-          body: JSON.stringify({
-            model,
-            messages,
-            stream: true,
-            // OpenAI 兼容：请求返回思考过程（reasoning_content / thinking）
-            reasoning: {
-              effort: 'medium',
-            },
-            // DeepSeek / 部分聚合网关要求通过 extra_body.return_reasoning 开启思考输出
-            extra_body: {
-              return_reasoning: true,
-            },
-          }),
+          body: JSON.stringify(payload),
         });
+
+      try {
+        resp = await doChatFetch(primaryPayload);
+        if (
+          resp
+          && !resp.ok
+          && (
+            JSON.stringify(primaryPayload).includes('"reasoning"')
+            || JSON.stringify(primaryPayload).includes('"extra_body"')
+            || JSON.stringify(primaryPayload).includes('"thinking"')
+          )
+        ) {
+          let retryText = '';
+          try {
+            retryText = await resp.text();
+          } catch {
+            retryText = '';
+          }
+          if (
+            resp.status === 400
+            && /reasoning|extra_body|return_reasoning|thinking/i.test(retryText)
+          ) {
+            resp = await doChatFetch(fallbackPayload);
+          } else {
+            resp._dprErrorPreview = retryText;
+          }
+        }
       } finally {
         clearTimeout(timerId);
       }
@@ -1163,7 +1215,7 @@ window.PrivateDiscussionChat = (function () {
       if (!resp.ok) {
         let errorText = '';
         try {
-          errorText = await resp.text();
+          errorText = resp._dprErrorPreview || await resp.text();
         } catch {
           errorText = '';
         }

@@ -854,44 +854,21 @@ window.SubscriptionsSmartQuery = (function () {
       return '';
     };
 
-    const isFetchFailure = (e) => {
-      if (!e) return false;
-      if (e.name === 'AbortError') return false;
-      if (e.name === 'TypeError') return true;
-      const msg = (e.message || '').toLowerCase();
-      return msg.includes('failed to fetch') || msg.includes('network') || msg.includes('ERR_NETWORK');
-    };
-
     const doFetch = async (
       endpoint,
       options = { useResponseFormat: true, includeTools: true },
-      withApiKeyHeader = true,
     ) => {
       const headers = {
         'Content-Type': 'application/json',
         Accept: 'application/json',
         Authorization: `Bearer ${llm.apiKey}`,
       };
-      if (withApiKeyHeader) {
-        headers['x-api-key'] = llm.apiKey;
-      }
       return fetch(endpoint, {
         method: 'POST',
         headers,
         body: JSON.stringify(requestPayload(options)),
         signal: controller.signal,
       });
-    };
-
-    const doFetchWithFallbackHeader = async (endpoint, options) => {
-      try {
-        return await doFetch(endpoint, options, true);
-      } catch (e) {
-        if (!isFetchFailure(e)) {
-          throw e;
-        }
-        return doFetch(endpoint, options, false);
-      }
     };
 
     let res = null;
@@ -903,20 +880,20 @@ window.SubscriptionsSmartQuery = (function () {
         try {
           let current = null;
           let txt = '';
-          current = await doFetchWithFallbackHeader(endpoint, {
+          current = await doFetch(endpoint, {
             useResponseFormat: true,
             includeTools: true,
           });
           if (current && !current.ok) {
             txt = await current.text().catch(() => '');
             if (current.status === 400 && /response[\s-]*format|json_object/i.test(txt)) {
-              current = await doFetchWithFallbackHeader(endpoint, {
+              current = await doFetch(endpoint, {
                 useResponseFormat: false,
                 includeTools: true,
               });
             }
             if (current && !current.ok && current.status === 400 && /tool_choice|tools/i.test(txt)) {
-              current = await doFetchWithFallbackHeader(endpoint, {
+              current = await doFetch(endpoint, {
                 useResponseFormat: false,
                 includeTools: false,
               });
