@@ -30,7 +30,7 @@
     minimax: Object.freeze({
       key: 'minimax',
       label: 'MiniMax Coding Plan',
-      baseUrl: 'https://api.minimax.io/v1',
+      baseUrl: 'https://api.minimaxi.com/v1',
       models: Object.freeze(['MiniMax-M2.5', 'MiniMax-M2.7', 'MiniMax-M2.1']),
     }),
     kimi: Object.freeze({
@@ -176,6 +176,18 @@
     return 'generic-openai';
   };
 
+  const shouldUseXApiKeyHeader = ({ baseUrl, model }) => {
+    const normalizedBaseUrl = normalizeBaseUrlForStorage(baseUrl || '').toLowerCase();
+    const normalizedModel = normalizeText(model || '').toLowerCase();
+    if (
+      /^minimax-/i.test(normalizedModel)
+      || /(^|\/\/)api\.minimax(?:i)?\.(?:io|com)(?:$|\/)/i.test(normalizedBaseUrl)
+    ) {
+      return false;
+    }
+    return true;
+  };
+
   const buildStreamingChatPayload = ({ baseUrl, model, messages }) => {
     const payload = {
       model: normalizeText(model),
@@ -240,6 +252,7 @@
     inferProviderType,
     getOpenAICompatiblePreset,
     inferChatApiProfile,
+    shouldUseXApiKeyHeader,
     buildStreamingChatPayload,
     buildConnectivityTestPayload,
   };

@@ -9,6 +9,7 @@ const {
   inferProviderType,
   getOpenAICompatiblePreset,
   inferChatApiProfile,
+  shouldUseXApiKeyHeader,
   buildStreamingChatPayload,
   buildConnectivityTestPayload,
 } = require('../app/llm-config-utils.js');
@@ -117,7 +118,7 @@ function testGetOpenAICompatiblePreset() {
     {
       key: 'minimax',
       label: 'MiniMax Coding Plan',
-      baseUrl: 'https://api.minimax.io/v1',
+      baseUrl: 'https://api.minimaxi.com/v1',
       models: ['MiniMax-M2.5', 'MiniMax-M2.7', 'MiniMax-M2.1'],
     },
   );
@@ -144,6 +145,23 @@ function testInferChatApiProfile() {
   assert.equal(
     inferChatApiProfile('https://api.openai.com/v1', 'gpt-4.1-mini'),
     'generic-openai',
+  );
+}
+
+function testShouldUseXApiKeyHeader() {
+  assert.equal(
+    shouldUseXApiKeyHeader({
+      baseUrl: 'https://api.minimaxi.com/v1',
+      model: 'MiniMax-M2.5',
+    }),
+    false,
+  );
+  assert.equal(
+    shouldUseXApiKeyHeader({
+      baseUrl: 'https://api.openai.com/v1',
+      model: 'gpt-4.1-mini',
+    }),
+    true,
   );
 }
 
@@ -251,6 +269,7 @@ testResolveChatModelsAndSummary();
 testInferProviderType();
 testGetOpenAICompatiblePreset();
 testInferChatApiProfile();
+testShouldUseXApiKeyHeader();
 testBuildStreamingChatPayload();
 testBuildConnectivityTestPayload();
 

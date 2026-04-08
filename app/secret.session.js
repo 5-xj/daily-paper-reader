@@ -236,6 +236,13 @@
       max_tokens: 256,
     };
   };
+  const shouldUseXApiKeyHeader = (baseUrl, model) => {
+    const utils = getLLMUtils();
+    if (typeof utils.shouldUseXApiKeyHeader === 'function') {
+      return utils.shouldUseXApiKeyHeader({ baseUrl, model });
+    }
+    return true;
+  };
 
   const extractChatResponseText = (data) => {
     const normalizeContentPart = (part) => {
@@ -300,8 +307,10 @@
           'Content-Type': 'application/json',
           Accept: 'application/json',
           Authorization: `Bearer ${apiKey}`,
-          'x-api-key': apiKey,
         };
+        if (shouldUseXApiKeyHeader(baseUrl, model)) {
+          headers['x-api-key'] = apiKey;
+        }
 
         const doFetch = (requestPayload) => fetch(endpoint, {
           method: 'POST',
