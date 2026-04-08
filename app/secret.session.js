@@ -1251,11 +1251,13 @@
           input.checked = input.value === 'openai-compatible';
         });
         syncProviderSections();
+        customApiKeyInput.value = '';
         customBaseUrlInput.value = preset.baseUrl || '';
         customModel1Input.value = preset.models[0] || '';
         customModel2Input.value = preset.models[1] || '';
         customModel3Input.value = preset.models[2] || '';
         resetCustomStatus();
+        customApiKeyInput.focus();
         setErrorText(
           `已填入 ${preset.label} 预设，请补充 API Key 后点击“测试当前配置”。`,
           '#666',
