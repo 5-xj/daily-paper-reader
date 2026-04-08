@@ -194,6 +194,14 @@
 
   const buildConnectivityTestPayload = ({ baseUrl, model }) => {
     const normalizedModel = normalizeText(model);
+    const normalizedBaseUrl = normalizeBaseUrlForStorage(baseUrl || '').toLowerCase();
+    const wantsMaxCompletionTokens =
+      /^glm-/i.test(normalizedModel)
+      || /open\.bigmodel\.cn/.test(normalizedBaseUrl)
+      || /thinking/i.test(normalizedModel)
+      || /^kimi-/i.test(normalizedModel)
+      || /^minimax-/i.test(normalizedModel)
+      || normalizedModel.toLowerCase() === 'deepseek-reasoner';
     const payload = {
       model: normalizedModel,
       messages: [
@@ -207,8 +215,11 @@
         },
       ],
       temperature: 0,
-      max_tokens: 32,
+      max_tokens: 256,
     };
+    if (wantsMaxCompletionTokens) {
+      payload.max_completion_tokens = 256;
+    }
     const profile = inferChatApiProfile(baseUrl, model);
     if (profile === 'deepseek' && normalizedModel.toLowerCase() === 'deepseek-reasoner') {
       payload.thinking = { type: 'disabled' };

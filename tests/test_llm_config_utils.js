@@ -204,7 +204,8 @@ function testBuildConnectivityTestPayload() {
         { role: 'user', content: 'hello world' },
       ],
       temperature: 0,
-      max_tokens: 32,
+      max_tokens: 256,
+      max_completion_tokens: 256,
       thinking: { type: 'disabled' },
     },
   );
@@ -221,7 +222,24 @@ function testBuildConnectivityTestPayload() {
         { role: 'user', content: 'hello world' },
       ],
       temperature: 0,
-      max_tokens: 32,
+      max_tokens: 256,
+    },
+  );
+
+  assert.deepEqual(
+    buildConnectivityTestPayload({
+      baseUrl: 'https://open.bigmodel.cn/api/coding/paas/v4',
+      model: 'GLM-4.7',
+    }),
+    {
+      model: 'GLM-4.7',
+      messages: [
+        { role: 'system', content: 'Reply with exactly: hello world' },
+        { role: 'user', content: 'hello world' },
+      ],
+      temperature: 0,
+      max_tokens: 256,
+      max_completion_tokens: 256,
     },
   );
 }

@@ -233,7 +233,7 @@
         },
       ],
       temperature: 0,
-      max_tokens: 32,
+      max_tokens: 256,
     };
   };
 
@@ -253,6 +253,11 @@
     }
     if (content && typeof content === 'object') {
       return normalizeContentPart(content);
+    }
+
+    const reasoningContent = message.reasoning_content || message.thinking;
+    if (typeof reasoningContent === 'string' && reasoningContent.trim()) {
+      return reasoningContent;
     }
 
     const outputText = (data || {}).output_text;
@@ -298,14 +303,25 @@
           'x-api-key': apiKey,
         };
 
-        const resp = await fetch(endpoint, {
+        const doFetch = (requestPayload) => fetch(endpoint, {
           method: 'POST',
           headers,
-          body: JSON.stringify(payload),
+          body: JSON.stringify(requestPayload),
           signal: controller.signal,
         });
-        if (!resp.ok) {
+        let resp = await doFetch(payload);
+        if (!resp.ok && payload.max_completion_tokens != null) {
           const text = await resp.text().catch(() => '');
+          if (resp.status === 400 && /max_completion_tokens/i.test(text)) {
+            const fallbackPayload = { ...payload };
+            delete fallbackPayload.max_completion_tokens;
+            resp = await doFetch(fallbackPayload);
+          } else {
+            resp._dprErrorPreview = text;
+          }
+        }
+        if (!resp.ok) {
+          const text = resp._dprErrorPreview || await resp.text().catch(() => '');
           throw new Error(
             `${model} 请求失败：HTTP ${resp.status} ${resp.statusText}${text ? ` - ${text.slice(0, 160)}` : ''}`,
           );
