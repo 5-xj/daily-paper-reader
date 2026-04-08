@@ -886,16 +886,16 @@
       const defaultPlatoModels = getDefaultPlatoChatModels();
       const platoSummaryModels = [
         {
+          value: 'gpt-5-chat',
+          label: 'GPT-5 Chat · 通用高质量对话',
+        },
+        {
           value: 'gemini-3-flash-preview-thinking-1000',
           label: 'Gemini 3 Flash（思考版，推荐）',
         },
         {
           value: 'deepseek-v3.2',
           label: 'DeepSeek V3.2 · 深度思考',
-        },
-        {
-          value: 'gpt-5-chat',
-          label: 'GPT-5 Chat · 通用高质量对话',
         },
         {
           value: 'gemini-3-pro-preview',
@@ -912,7 +912,7 @@
         currentChatEntry.baseUrl || '',
       );
       const initialPlatoModel =
-        normalizeText(currentSummaryLLM.model || '') || platoSummaryModels[0].value;
+        normalizeText(currentSummaryLLM.model || '') || 'gpt-5-chat';
       const initialCustomModels = sanitizeModelList(
         currentProviderType === 'openai-compatible'
           ? (currentChatEntry.models || [])
@@ -922,9 +922,6 @@
 
       modal.innerHTML = `
         <h2 style="margin-top:0;">🛡️ 新配置指引 · 第二步</h2>
-        <p style="font-size:13px; color:#555; margin-bottom:10px;">
-          配置 GitHub Token、工作流所需的 BLT 模型，以及聊天区可选的 OpenAI-compatible 模型。
-        </p>
         <div class="secret-setup-step2-grid" style="font-size:13px;">
           <div class="secret-setup-step2-col">
             <div class="secret-setup-step2-block">
@@ -932,16 +929,18 @@
               <p class="secret-setup-step2-note">
                 需要使用 <code>Classic PAT</code>，并同时具备 <code>repo</code>、<code>workflow</code> 和 <code>gist</code> 权限。
               </p>
-              <input
-                id="secret-setup-github-token"
-                type="password"
-                autocomplete="off"
-                placeholder="用于读写 config.yaml 与触发 workflow 的 GitHub PAT"
-                style="width:100%; box-sizing:border-box; padding:6px 8px; margin-bottom:4px; font-size:13px;"
-              />
-              <button id="secret-setup-github-verify" type="button" class="secret-gate-btn secondary" style="margin-bottom:4px;">
-                验证 GitHub Token
-              </button>
+              <div class="secret-setup-input-row">
+                <input
+                  id="secret-setup-github-token"
+                  type="password"
+                  autocomplete="off"
+                  placeholder="用于读写 config.yaml 与触发 workflow 的 GitHub PAT"
+                  style="width:100%; box-sizing:border-box; padding:6px 8px; font-size:13px;"
+                />
+                <button id="secret-setup-github-verify" type="button" class="secret-gate-btn secondary">
+                  验证
+                </button>
+              </div>
               <div id="secret-setup-github-status" style="min-height:18px; font-size:12px; color:#999;">
                 需要使用 <code>Classic PAT</code>，并同时具备 <code>repo</code>、<code>workflow</code> 和 <code>gist</code> 权限。
               </div>
@@ -952,19 +951,19 @@
               <p class="secret-setup-step2-note">
                 BLT 用于 query enrich、LLM refine、总结与 reranker，是工作流硬依赖。
               </p>
-              <input
-                id="secret-setup-plato"
-                type="password"
-                autocomplete="off"
-                placeholder="BLT API Key，例如：sk-xxxx"
-                style="width:100%; box-sizing:border-box; padding:6px 8px; margin-bottom:4px; font-size:13px;"
-              />
-              <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:4px;">
+              <div class="secret-setup-input-row multi-actions">
+                <input
+                  id="secret-setup-plato"
+                  type="password"
+                  autocomplete="off"
+                  placeholder="BLT API Key，例如：sk-xxxx"
+                  style="width:100%; box-sizing:border-box; padding:6px 8px; font-size:13px;"
+                />
                 <button id="secret-setup-plato-verify" type="button" class="secret-gate-btn secondary">
-                  验证柏拉图 API Key
+                  验证
                 </button>
                 <button id="secret-setup-plato-test" type="button" class="secret-gate-btn secondary">
-                  测试当前配置
+                  测试
                 </button>
               </div>
               <div id="secret-setup-plato-status" style="min-height:18px; font-size:12px; color:#999; margin-bottom:8px;">
@@ -972,7 +971,7 @@
               </div>
 
               <div style="font-weight:500; margin-bottom:4px; display:flex; align-items:center; gap:4px;">
-                用于工作流总结 / 过滤的大模型（推荐选择 Gemini 3 Flash）
+                用于工作流总结 / 过滤的大模型
                 <span class="secret-model-tip">!
                   <span class="secret-model-tip-popup">
                     按照 Thinking（思考模式）的高负载场景估算：<br/>
@@ -988,7 +987,9 @@
                   </span>
                 </span>
               </div>
-              <div id="secret-setup-plato-models" style="font-size:13px;"></div>
+              <div id="secret-setup-plato-models" style="font-size:13px;">
+                <select id="secret-setup-plato-model-select" class="secret-setup-select"></select>
+              </div>
             </div>
           </div>
 
@@ -1000,11 +1001,11 @@
               </p>
               <label class="secret-setup-provider-choice">
                 <input type="radio" name="secret-setup-provider" value="plato" />
-                <span><strong>聊天区也使用 BLT</strong><br>工作流总结、过滤、reranker 与聊天区统一使用柏拉图（BLTCY）模型。</span>
+                <span><strong>聊天区也使用 BLT</strong>工作流总结、过滤、reranker 与聊天区统一使用柏拉图（BLTCY）模型。</span>
               </label>
               <label class="secret-setup-provider-choice">
                 <input type="radio" name="secret-setup-provider" value="openai-compatible" />
-                <span><strong>聊天区使用 OpenAI-compatible</strong><br>工作流总结与 reranker 仍强制使用 BLT，最多 3 个自定义模型仅用于聊天区。</span>
+                <span><strong>聊天区使用 OpenAI-compatible</strong>工作流总结与 reranker 仍强制使用 BLT，最多 3 个自定义模型仅用于聊天区。</span>
               </label>
             </div>
 
@@ -1100,6 +1101,7 @@
       const customModel1Input = document.getElementById('secret-setup-custom-model-1');
       const customModel2Input = document.getElementById('secret-setup-custom-model-2');
       const customModel3Input = document.getElementById('secret-setup-custom-model-3');
+      const platoModelSelect = document.getElementById('secret-setup-plato-model-select');
       const deepseekPresetBtn = document.getElementById('secret-setup-preset-deepseek');
       const openaiPresetBtn = document.getElementById('secret-setup-preset-openai');
       const customTestBtn = document.getElementById('secret-setup-custom-test');
@@ -1121,6 +1123,7 @@
         !platoTestBtn ||
         !platoStatusEl ||
         !platoModelsWrap ||
+        !platoModelSelect ||
         !customApiKeyInput ||
         !customBaseUrlInput ||
         !customModel1Input ||
@@ -1138,20 +1141,9 @@
         return;
       }
 
-      platoModelsWrap.innerHTML = platoSummaryModels
-        .map(
-          (item) => `
-            <label style="display:flex; align-items:center; gap:6px; margin-bottom:2px;">
-              <input type="radio" name="secret-setup-summarize-model" value="${item.value}" />
-              <span>${item.label}</span>
-            </label>
-          `,
-        )
+      platoModelSelect.innerHTML = platoSummaryModels
+        .map((item) => `<option value="${item.value}">${item.label}</option>`)
         .join('');
-
-      const summaryModelInputs = Array.from(
-        document.querySelectorAll('input[name="secret-setup-summarize-model"]'),
-      );
 
       githubInput.value = initialGithubToken;
       platoInput.value = initialApiKey;
@@ -1168,11 +1160,9 @@
       providerInputs.forEach((input) => {
         input.checked = input.value === currentProviderType;
       });
-      summaryModelInputs.forEach((input) => {
-        input.checked = input.value === initialPlatoModel;
-      });
-      if (!summaryModelInputs.some((input) => input.checked) && summaryModelInputs[0]) {
-        summaryModelInputs[0].checked = true;
+      platoModelSelect.value = initialPlatoModel || 'gpt-5-chat';
+      if (!platoModelSelect.value) {
+        platoModelSelect.value = 'gpt-5-chat';
       }
 
       let githubOk = !!initialGithubToken;
@@ -1195,8 +1185,7 @@
       };
 
       const selectedPlatoModel = () => {
-        const checked = summaryModelInputs.find((input) => input.checked);
-        return checked ? normalizeText(checked.value) : '';
+        return normalizeText(platoModelSelect.value || '');
       };
 
       const syncProviderSections = () => {
@@ -1372,7 +1361,7 @@
       syncProviderSections();
 
       bindResetOnInput([githubInput], resetGithubStatus);
-      bindResetOnInput([platoInput, ...summaryModelInputs], resetPlatoStatus);
+      bindResetOnInput([platoInput, platoModelSelect], resetPlatoStatus);
       bindResetOnInput(
         [customApiKeyInput, customBaseUrlInput, customModel1Input, customModel2Input, customModel3Input],
         resetCustomStatus,
