@@ -103,6 +103,33 @@ function testGetOpenAICompatiblePreset() {
       models: ['deepseek-chat', 'deepseek-reasoner'],
     },
   );
+  assert.deepEqual(
+    getOpenAICompatiblePreset('glm'),
+    {
+      key: 'glm',
+      label: 'GLM Coding Plan',
+      baseUrl: 'https://open.bigmodel.cn/api/coding/paas/v4',
+      models: ['GLM-4.7', 'GLM-5', 'GLM-4.6'],
+    },
+  );
+  assert.deepEqual(
+    getOpenAICompatiblePreset('minimax'),
+    {
+      key: 'minimax',
+      label: 'MiniMax Coding Plan',
+      baseUrl: 'https://api.minimax.io/v1',
+      models: ['MiniMax-M2.5', 'MiniMax-M2.7', 'MiniMax-M2.1'],
+    },
+  );
+  assert.deepEqual(
+    getOpenAICompatiblePreset('kimi'),
+    {
+      key: 'kimi',
+      label: 'Kimi 编程预设',
+      baseUrl: 'https://api.moonshot.ai/v1',
+      models: ['kimi-k2.5', 'kimi-k2-turbo-preview', 'kimi-k2-thinking'],
+    },
+  );
 }
 
 function testInferChatApiProfile() {

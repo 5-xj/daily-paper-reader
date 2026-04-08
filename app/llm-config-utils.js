@@ -21,6 +21,24 @@
       baseUrl: 'https://api.deepseek.com',
       models: Object.freeze(['deepseek-chat', 'deepseek-reasoner']),
     }),
+    glm: Object.freeze({
+      key: 'glm',
+      label: 'GLM Coding Plan',
+      baseUrl: 'https://open.bigmodel.cn/api/coding/paas/v4',
+      models: Object.freeze(['GLM-4.7', 'GLM-5', 'GLM-4.6']),
+    }),
+    minimax: Object.freeze({
+      key: 'minimax',
+      label: 'MiniMax Coding Plan',
+      baseUrl: 'https://api.minimax.io/v1',
+      models: Object.freeze(['MiniMax-M2.5', 'MiniMax-M2.7', 'MiniMax-M2.1']),
+    }),
+    kimi: Object.freeze({
+      key: 'kimi',
+      label: 'Kimi 编程预设',
+      baseUrl: 'https://api.moonshot.ai/v1',
+      models: Object.freeze(['kimi-k2.5', 'kimi-k2-turbo-preview', 'kimi-k2-thinking']),
+    }),
     openai: Object.freeze({
       key: 'openai',
       label: 'OpenAI 官方',

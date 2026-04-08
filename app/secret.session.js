@@ -1018,6 +1018,15 @@
                 <button id="secret-setup-preset-deepseek" type="button" class="secret-gate-btn secondary">
                   填入 DeepSeek 预设
                 </button>
+                <button id="secret-setup-preset-glm" type="button" class="secret-gate-btn secondary">
+                  填入 GLM 预设
+                </button>
+                <button id="secret-setup-preset-minimax" type="button" class="secret-gate-btn secondary">
+                  填入 MiniMax 预设
+                </button>
+                <button id="secret-setup-preset-kimi" type="button" class="secret-gate-btn secondary">
+                  填入 Kimi 预设
+                </button>
                 <button id="secret-setup-preset-openai" type="button" class="secret-gate-btn secondary">
                   填入 OpenAI 预设
                 </button>
@@ -1103,6 +1112,9 @@
       const customModel3Input = document.getElementById('secret-setup-custom-model-3');
       const platoModelSelect = document.getElementById('secret-setup-plato-model-select');
       const deepseekPresetBtn = document.getElementById('secret-setup-preset-deepseek');
+      const glmPresetBtn = document.getElementById('secret-setup-preset-glm');
+      const minimaxPresetBtn = document.getElementById('secret-setup-preset-minimax');
+      const kimiPresetBtn = document.getElementById('secret-setup-preset-kimi');
       const openaiPresetBtn = document.getElementById('secret-setup-preset-openai');
       const customTestBtn = document.getElementById('secret-setup-custom-test');
       const customStatusEl = document.getElementById('secret-setup-custom-status');
@@ -1130,6 +1142,9 @@
         !customModel2Input ||
         !customModel3Input ||
         !deepseekPresetBtn ||
+        !glmPresetBtn ||
+        !minimaxPresetBtn ||
+        !kimiPresetBtn ||
         !openaiPresetBtn ||
         !customTestBtn ||
         !customStatusEl ||
@@ -1377,6 +1392,15 @@
       });
       deepseekPresetBtn.addEventListener('click', () => {
         applyOpenAICompatiblePreset('deepseek');
+      });
+      glmPresetBtn.addEventListener('click', () => {
+        applyOpenAICompatiblePreset('glm');
+      });
+      minimaxPresetBtn.addEventListener('click', () => {
+        applyOpenAICompatiblePreset('minimax');
+      });
+      kimiPresetBtn.addEventListener('click', () => {
+        applyOpenAICompatiblePreset('kimi');
       });
       openaiPresetBtn.addEventListener('click', () => {
         applyOpenAICompatiblePreset('openai');
