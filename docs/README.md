@@ -6,133 +6,151 @@
 </div>
 
 ## 每次日报
-- 最新运行日期：2026-04-11
-- 运行时间：2026-04-11 20:09:07 UTC
+- 最新运行日期：2026-04-12
+- 运行时间：2026-04-12 20:12:34 UTC
 - 运行状态：成功
-- 本次总论文数：37
-- 精读区：24
+- 本次总论文数：43
+- 精读区：30
 - 速读区：13
 
 ### 今日简报（AI）
-聚焦自进化推理与高效智能体进化，今日共阅读 37 篇论文，其中精读 24 篇。  
-最亮点方向为自动化因果估计（InferenceEvolve）与资源受限下的智能体多样化进化（RoboPhD）。  
-建议持续追踪自进化 AI 在复杂决策与层次优化中的应用突破。
-- 详情：[/202604/11/README](/202604/11/README)
+探索 AI 自动化不确定性量化与因果推断新前沿，共阅读 43 篇论文。  
+重点关注“自进化式因果效应估计”和“自动化不确定性建模”，技术成熟度显著提升。  
+建议继续关注结合量子启发优化与演化搜索的跨领域智能方法。
+- 详情：[/202604/12/README](/202604/12/README)
 
 ### 精读区论文标签
-1. [InferenceEvolve: Towards Automated Causal Effect Estimators through Self-Evolving AI](/202604/11/2604.04274v1-inferenceevolve-towards-automated-causal-effect-estimators-through-self-evolving-ai)  
+1. [Evolutionary Search for Automated Design of Uncertainty Quantification Methods](/202604/12/2604.03473v1-evolutionary-search-for-automated-design-of-uncertainty-quantification-methods)  
    标签：评分：10.0/10、query:llm-ec
-   evidence：利用大语言模型发现和改进因果方法的演化框架
-2. [RoboPhD: Evolving Diverse Complex Agents Under Tight Evaluation Budgets](/202604/11/2604.04347v1-robophd-evolving-diverse-complex-agents-under-tight-evaluation-budgets)  
+   evidence：利用LLM驱动的演化搜索自动发现不确定性量化方法
+2. [InferenceEvolve: Towards Automated Causal Effect Estimators through Self-Evolving AI](/202604/12/2604.04274v1-inferenceevolve-towards-automated-causal-effect-estimators-through-self-evolving-ai)  
    标签：评分：10.0/10、query:llm-ec
-   evidence：LLM引导的智能体工件演化与优化算法比较
-3. [ResearchEVO: An End-to-End Framework for Automated Scientific Discovery and Documentation](/202604/11/2604.05587v1-researchevo-an-end-to-end-framework-for-automated-scientific-discovery-and-documentation)  
+   evidence：使用LLM发现和改进因果方法的演化框架
+3. [RoboPhD: Evolving Diverse Complex Agents Under Tight Evaluation Budgets](/202604/12/2604.04347v1-robophd-evolving-diverse-complex-agents-under-tight-evaluation-budgets)  
    标签：评分：10.0/10、query:llm-ec
-   evidence：LLM引导的双维协同演化，用于优化算法逻辑和架构
-4. [PyVRP$^+$: LLM-Driven Metacognitive Heuristic Evolution for Hybrid Genetic Search in Vehicle Routing Problems](/202604/11/2604.07872v1-pyvrp-llm-driven-metacognitive-heuristic-evolution-for-hybrid-genetic-search-in-vehicle-routing-problems)  
+   evidence：LLM引导的智能体工件演化与优化算法
+4. [SignalClaw: LLM-Guided Evolutionary Synthesis of Interpretable Traffic Signal Control Skills](/202604/12/2604.05535v1-signalclaw-llm-guided-evolutionary-synthesis-of-interpretable-traffic-signal-control-skills)  
    标签：评分：10.0/10、query:llm-ec
-   evidence：LLM驱动的车辆路径问题元认知启发式演化
-5. [Evolutionary Search for Automated Design of Uncertainty Quantification Methods](/202604/11/2604.03473v1-evolutionary-search-for-automated-design-of-uncertainty-quantification-methods)  
+   evidence：利用大语言模型作为演化技能生成器，合成并优化可解释的交通信号控制技能
+5. [ResearchEVO: An End-to-End Framework for Automated Scientific Discovery and Documentation](/202604/12/2604.05587v1-researchevo-an-end-to-end-framework-for-automated-scientific-discovery-and-documentation)  
+   标签：评分：10.0/10、query:llm-ec
+   evidence：LLM引导的双维度协同演化，优化算法逻辑和架构
+6. [PyVRP$^+$: LLM-Driven Metacognitive Heuristic Evolution for Hybrid Genetic Search in Vehicle Routing Problems](/202604/12/2604.07872v1-pyvrp-llm-driven-metacognitive-heuristic-evolution-for-hybrid-genetic-search-in-vehicle-routing-problems)  
+   标签：评分：10.0/10、query:llm-ec
+   evidence：大语言模型驱动的车辆路径问题元认知启发式演化
+7. [Comparative Genomics Reveals the Ancestral Recombination Landscape of Placental Mammals](/202604/12/biorxiv-10-64898-2026-04-02-716207-v1-comparative-genomics-reveals-the-ancestral-recombination-landscape-of-placental-mammals)  
+   标签：评分：10.0/10、query:gene
+   evidence：比较基因组学与祖先重组图谱
+8. [Ranking Constraints via Topological Dual-Directional Search in Evolutionary Multi-Objective Optimization](/202604/12/2604.04724v1-ranking-constraints-via-topological-dual-directional-search-in-evolutionary-multi-objective-optimization)  
    标签：评分：9.0/10、query:llm-ec
-   evidence：利用LLM驱动的演化搜索自动发现以Python程序表示的方法
-6. [SignalClaw: LLM-Guided Evolutionary Synthesis of Interpretable Traffic Signal Control Skills](/202604/11/2604.05535v1-signalclaw-llm-guided-evolutionary-synthesis-of-interpretable-traffic-signal-control-skills)  
-   标签：评分：9.0/10、query:llm-ec
-   evidence：LLM引导的可解释控制技能演化合成
-7. [COSMO-Agent: Tool-Augmented Agent for Closed-loop Optimization,Simulation,and Modeling Orchestration](/202604/11/2604.05547v1-cosmo-agent-tool-augmented-agent-for-closed-loop-optimizationsimulationand-modeling-orchestration)  
-   标签：评分：9.0/10、query:llm-ec
-   evidence：LLM学习编排外部工具进行闭环优化
-8. [AutoSOTA: An End-to-End Automated Research System for State-of-the-Art AI Model Discovery](/202604/11/2604.05550v1-autosota-an-end-to-end-automated-research-system-for-state-of-the-art-ai-model-discovery)  
+   evidence：约束问题的演化多目标优化
+9. [AutoSOTA: An End-to-End Automated Research System for State-of-the-Art AI Model Discovery](/202604/12/2604.05550v1-autosota-an-end-to-end-automated-research-system-for-state-of-the-art-ai-model-discovery)  
    标签：评分：9.0/10、query:ahd
-   evidence：用于 SOTA AI 模型发现的自动化研究系统
-9. [Multi-objective Evolutionary Merging Enables Efficient Reasoning Models](/202604/11/2604.06465v1-multi-objective-evolutionary-merging-enables-efficient-reasoning-models)  
+   evidence：用于AI模型发现和经验优化的端到端自动化研究系统
+10. [Can Large Language Models Reinvent Foundational Algorithms?](/202604/12/2604.05716v1-can-large-language-models-reinvent-foundational-algorithms)  
+   标签：评分：9.0/10、query:ahd
+   evidence：测试LLM是否能重新发明如Dijkstra等基础算法
+11. [Multi-objective Evolutionary Merging Enables Efficient Reasoning Models](/202604/12/2604.06465v1-multi-objective-evolutionary-merging-enables-efficient-reasoning-models)  
    标签：评分：9.0/10、query:llm-ec
-   evidence：利用演化模型合并来优化大语言模型的推理性能
-10. [AI-Driven Research for Databases](/202604/11/2604.06566v1-ai-driven-research-for-databases)  
+   evidence：用于大模型多目标优化的演化模型合并
+12. [AI-Driven Research for Databases](/202604/12/2604.06566v1-ai-driven-research-for-databases)  
    标签：评分：9.0/10、query:llm-ec
-   evidence：利用LLM自动发现系统解决方案和代码生成
-11. [Long-term hybridization in a karst window reveals the genetic basis of eye loss in cavefish](/202604/11/biorxiv-10-1101-2024-10-25-620266-v2-long-term-hybridization-in-a-karst-window-reveals-the-genetic-basis-of-eye-loss-in-cavefish)  
+   evidence：使用大语言模型自动发现解决方案并生成优化代码
+13. [The Traveling Thief Problem with Time Windows: Benchmarks and Heuristics](/202604/12/2604.06724v1-the-traveling-thief-problem-with-time-windows-benchmarks-and-heuristics)  
+   标签：评分：9.0/10、query:llm-ec
+   evidence：带时间窗的旅行窃贼问题的启发式算法
+14. [Automating aggregation strategy selection in federated learning](/202604/12/2604.08056v1-automating-aggregation-strategy-selection-in-federated-learning)  
+   标签：评分：9.0/10、query:llm-ec
+   evidence：LLM推断策略并结合遗传搜索进行优化探索
+15. [Interplay between purging and admixture shapes genetic load in an invasive guppy population](/202604/12/biorxiv-10-1101-2025-09-12-675788-v2-interplay-between-purging-and-admixture-shapes-genetic-load-in-an-invasive-guppy-population)  
    标签：评分：9.0/10、query:gene
-   evidence：洞穴鱼进化变化的遗传基础
-12. [African Pan Genome Contigs Expose Biologically Relevant Sequence Still Hidden from Human Reference Frameworks](/202604/11/biorxiv-10-1101-2025-08-15-670543-v2-african-pan-genome-contigs-expose-biologically-relevant-sequence-still-hidden-from-human-reference-frameworks)  
+   evidence：种群中的遗传负荷、选择效力与进化轨迹
+16. [AEGIS: an annotation extraction and genomic integration resource](/202604/12/biorxiv-10-64898-2025-12-04-692274-v2-aegis-an-annotation-extraction-and-genomic-integration-resource)  
    标签：评分：9.0/10、query:gene
-   evidence：表征非洲泛基因组重叠群以定义序列和功能图谱
-13. [Response to divergent selection on meiotic recombination in Saccharomyces cerevisiae](/202604/11/biorxiv-10-64898-2026-04-02-716186-v1-response-to-divergent-selection-on-meiotic-recombination-in-saccharomyces-cerevisiae)  
+   evidence：旨在解析、验证和标准化基因组注释文件的工具包
+17. [Near perfect identification of half sibling versus niece/nephew avuncular pairs without pedigree information or genotyped relatives](/202604/12/biorxiv-10-64898-2026-01-06-697070-v6-near-perfect-identification-of-half-sibling-versus-niecenephew-avuncular-pairs-without-pedigree-information-or-genotyped-relatives)  
+   标签：评分：9.0/10、query:gene
+   evidence：基因组生物库及利用基因型数据识别亲属
+18. [Response to divergent selection on meiotic recombination in Saccharomyces cerevisiae](/202604/12/biorxiv-10-64898-2026-04-02-716186-v1-response-to-divergent-selection-on-meiotic-recombination-in-saccharomyces-cerevisiae)  
    标签：评分：9.0/10、query:gene
    evidence：关于减数分裂重组和遗传多样性的实验演化研究
-14. [Hybrid crosses reveal a cell-type-specific landscape of mouse regulatory variation](/202604/11/biorxiv-10-64898-2026-04-02-716195-v1-hybrid-crosses-reveal-a-cell-type-specific-landscape-of-mouse-regulatory-variation)  
+19. [Response to divergent selection on meiotic recombination in Saccharomyces cerevisiae](/202604/12/biorxiv-10-64898-2026-04-02-716186-v2-response-to-divergent-selection-on-meiotic-recombination-in-saccharomyces-cerevisiae)  
    标签：评分：9.0/10、query:gene
-   evidence：杂交后代基因表达的遗传结构和调控变异
-15. [Correlation Between Information Entropy and Functions of Gene Sequences in the Evolutionary Context: A New Way to Construct Gene Regulatory Networks from Sequence](/202604/11/biorxiv-10-64898-2026-04-03-714856-v1-correlation-between-information-entropy-and-functions-of-gene-sequences-in-the-evolutionary-context-a-new-way-to-construct-gene-regulatory-networks-from-sequence)  
+   evidence：酵母减数分裂重组的实验进化研究
+20. [Response to divergent selection on meiotic recombination in Saccharomyces cerevisiae](/202604/12/biorxiv-10-64898-2026-04-02-716186-v3-response-to-divergent-selection-on-meiotic-recombination-in-saccharomyces-cerevisiae)  
    标签：评分：9.0/10、query:gene
-   evidence：基因调控网络构建的信息论基础
-16. [Quaternion Spectral Fingerprinting of DNA: GPU-Accelerated Multi-Channel Fourier Analysis for Alignment-Free Genomics](/202604/11/biorxiv-10-64898-2026-04-03-716441-v1-quaternion-spectral-fingerprinting-of-dna-gpu-accelerated-multi-channel-fourier-analysis-for-alignment-free-genomics)  
+   evidence：减数分裂重组与遗传多样性的实验进化研究
+21. [Hybrid crosses reveal a cell-type-specific landscape of mouse regulatory variation](/202604/12/biorxiv-10-64898-2026-04-02-716195-v1-hybrid-crosses-reveal-a-cell-type-specific-landscape-of-mouse-regulatory-variation)  
    标签：评分：9.0/10、query:gene
-   evidence：用于无比对基因组学的GPU加速傅里叶分析
-17. [Deep-Plant: a supervised foundation model for plant regulatory genomics](/202604/11/biorxiv-10-64898-2026-04-06-716755-v1-deep-plant-a-supervised-foundation-model-for-plant-regulatory-genomics)  
+   evidence：杂交后代基因表达的遗传结构和调节变异
+22. [From nucleotides to semantics: genomic representation learning via joint-embedding predictive architecture](/202604/12/biorxiv-10-64898-2026-04-02-716255-v1-from-nucleotides-to-semantics-genomic-representation-learning-via-joint-embedding-predictive-architecture)  
    标签：评分：9.0/10、query:gene
-   evidence：植物调控基因组学和遗传图谱的基础模型
-18. [Detecting context-dependent selection on cancer driver genes with DiffDriver](/202604/11/biorxiv-10-64898-2026-04-06-716771-v1-detecting-context-dependent-selection-on-cancer-driver-genes-with-diffdriver)  
+   evidence：基因组表示学习与解码调控语法
+23. [Strategy Sets the Scene: Genetic architecture of linalool resistance in Botrytis cinerea](/202604/12/biorxiv-10-64898-2026-04-05-716576-v2-strategy-sets-the-scene-genetic-architecture-of-linalool-resistance-in-botrytis-cinerea)  
    标签：评分：9.0/10、query:gene
-   evidence：检测癌症驱动基因的选择以及个体特有的遗传背景。
-19. [Benchmarking SNP-Calling Accuracy Against Known Citrus Pedigrees Reveals Pangenome Advantages Over Linear References](/202604/11/biorxiv-10-64898-2026-04-07-716967-v1-benchmarking-snp-calling-accuracy-against-known-citrus-pedigrees-reveals-pangenome-advantages-over-linear-references)  
+   evidence：真菌抗性的遗传结构和全基因组关联研究
+24. [Contrasting patterns of seascape genetics in Acropora cf. tenuis and their symbiotic algae.](/202604/12/biorxiv-10-64898-2026-04-07-716991-v1-contrasting-patterns-of-seascape-genetics-in-acropora-cf-tenuis-and-their-symbiotic-algae)  
    标签：评分：9.0/10、query:gene
-   evidence：在柑橘育种谱系中基准测试SNP调用准确性和泛基因组优势。
-20. [Synolog: A Scalable Synteny-Based Framework for Genome Architecture Characterization](/202604/11/biorxiv-10-64898-2026-04-07-717040-v1-synolog-a-scalable-synteny-based-framework-for-genome-architecture-characterization)  
+   evidence：珊瑚及其共生藻类在海洋景观中的遗传变异
+25. [FM-GPT: Bayesian fine mapping for phenome-wide transcriptome-wide association studies](/202604/12/biorxiv-10-64898-2026-04-07-717122-v1-fm-gpt-bayesian-fine-mapping-for-phenome-wide-transcriptome-wide-association-studies)  
    标签：评分：9.0/10、query:gene
-   evidence：基因组架构特征描述和共线性集群框架
-21. [A computational model for quantifying instability of tandem repeats across the genome](/202604/11/biorxiv-10-64898-2026-04-08-717199-v1-a-computational-model-for-quantifying-instability-of-tandem-repeats-across-the-genome)  
+   evidence：全转录组关联研究的精细映射与因果基因
+26. [Long-read analysis of tetrameric microsatellites with vmwhere supports GGAA repeat length-dependent chromatin state association in Ewing sarcoma](/202604/12/biorxiv-10-64898-2026-04-08-717017-v1-long-read-analysis-of-tetrameric-microsatellites-with-vmwhere-supports-ggaa-repeat-length-dependent-chromatin-state-association-in-ewing-sarcoma)  
    标签：评分：9.0/10、query:gene
-   evidence：量化全基因组串联重复序列不稳定性的计算模型
-22. [Reproductive morph specialisation facilitated by a maternal sex-determining region in a fungus gnat (Bradysia coprophila)](/202604/11/biorxiv-10-64898-2026-04-09-717474-v1-reproductive-morph-specialisation-facilitated-by-a-maternal-sex-determining-region-in-a-fungus-gnat-bradysia-coprophila)  
+   evidence：用于复杂基因组微卫星基因分型和可视化的计算框架
+27. [Genomic insights into polyketide toxin synthesis and algal symbiosis using high-quality genome sequences of the early divergent hexacorallian genus Palythoa (Cnidaria, Zoantharia)](/202604/12/biorxiv-10-64898-2026-04-08-717340-v1-genomic-insights-into-polyketide-toxin-synthesis-and-algal-symbiosis-using-high-quality-genome-sequences-of-the-early-divergent-hexacorallian-genus-palythoa-cnidaria-zoantharia)  
    标签：评分：9.0/10、query:gene
-   evidence：母体遗传性别决定与生殖形态专业化
-23. [Beyond Invariable Sites: Using Evolutionary Stasis to Map Multi-Layered Constraints on the Evolution of Viral and Mammalian Genomes](/202604/11/biorxiv-10-64898-2026-04-09-717527-v1-beyond-invariable-sites-using-evolutionary-stasis-to-map-multi-layered-constraints-on-the-evolution-of-viral-and-mammalian-genomes)  
+   evidence：Palythoa属的高质量基因组序列和比较基因组分析
+28. [General, orders-of-magnitude faster whole-genome analysis with genotype representation graphs](/202604/12/biorxiv-10-64898-2026-04-10-717786-v1-general-orders-of-magnitude-faster-whole-genome-analysis-with-genotype-representation-graphs)  
    标签：评分：9.0/10、query:gene
-   evidence：绘制病毒和哺乳动物基因组进化的多层约束图谱
-24. [Transgenerational inheritance is variable across Caenorhabditis worms](/202604/11/biorxiv-10-64898-2026-04-10-717426-v1-transgenerational-inheritance-is-variable-across-caenorhabditis-worms)  
+   evidence：基于基因型表示图的全基因组分析
+29. [EVEE: Interpretable variant effect prediction from genomic foundation model embeddings](/202604/12/biorxiv-10-64898-2026-04-10-717844-v1-evee-interpretable-variant-effect-prediction-from-genomic-foundation-model-embeddings)  
    标签：评分：9.0/10、query:gene
-   evidence：跨代表观遗传继承和遗传反应的研究
+   evidence：用于跨变异类型致病性预测的基因组基础模型
+30. [Scalable genotyping in fixed transcriptomes resolves clonal heterogeneity via single-cell sequencing](/202604/12/biorxiv-10-64898-2026-04-11-717967-v1-scalable-genotyping-in-fixed-transcriptomes-resolves-clonal-heterogeneity-via-single-cell-sequencing)  
+   标签：评分：9.0/10、query:gene
+   evidence：单细胞中可扩展的基因分型和遗传变异检测
 
 ### 速读区论文标签
-1. [Synapse: Evolving Job-Person Fit with Explainable Two-phase Retrieval and LLM-guided Genetic Resume Optimization](/202604/11/2604.02539v1-synapse-evolving-job-person-fit-with-explainable-two-phase-retrieval-and-llm-guided-genetic-resume-optimization)  
+1. [An Alternating Primal Heuristic for Nonconvex MIQCQP with Dynamic Convexification and Parallel Local Branching](/202604/12/2604.04417v1-an-alternating-primal-heuristic-for-nonconvex-miqcqp-with-dynamic-convexification-and-parallel-local-branching)  
    标签：评分：8.0/10、query:llm-ec
-   evidence：LLM引导的遗传简历优化用于人岗匹配
-2. [Let's Have a Conversation: Designing and Evaluating LLM Agents for Interactive Optimization](/202604/11/2604.02666v1-lets-have-a-conversation-designing-and-evaluating-llm-agents-for-interactive-optimization)  
+   evidence：具有并行局部分支的非凸MIQCQP原始启发式算法
+2. [Quantum-inspired Ising machine using sparsified spin connectivity](/202604/12/2604.04606v1-quantum-inspired-ising-machine-using-sparsified-spin-connectivity)  
    标签：评分：8.0/10、query:llm-ec
-   evidence：用于交互式优化和建模的LLM智能体
-3. [Accelerating Black-Box Bilevel Optimization with Rank-Based Upper-Level Value Function Approximation](/202604/11/2604.02888v1-accelerating-black-box-bilevel-optimization-with-rank-based-upper-level-value-function-approximation)  
-   标签：评分：8.0/10、query:ahd
-   evidence：使用演化算法的高效黑盒双层优化框架
-4. [Engineering Algorithms for Dynamic Greedy Set Cover](/202604/11/2604.03152v1-engineering-algorithms-for-dynamic-greedy-set-cover)  
+   evidence：用于组合优化问题的量子启发式算法
+3. [Curvature batching gives single-exponential integer quadratic programming](/202604/12/2604.04851v1-curvature-batching-gives-single-exponential-integer-quadratic-programming)  
    标签：评分：8.0/10、query:llm-ec
-   evidence：实现并评估用于动态集合覆盖问题的贪心算法
-5. [Agentic Code Optimization via Compiler-LLM Cooperation](/202604/11/2604.04238v1-agentic-code-optimization-via-compiler-llm-cooperation)  
+   evidence：组合优化中整数二次规划的单指数算法
+4. [EffiPair: Improving the Efficiency of LLM-generated Code with Relative Contrastive Feedback](/202604/12/2604.05137v1-effipair-improving-the-efficiency-of-llm-generated-code-with-relative-contrastive-feedback)  
    标签：评分：8.0/10、query:llm-ec
-   evidence：通过编译器与LLM协作进行自动代码优化
-6. [Principled and Scalable Diversity-Aware Retrieval via Cardinality-Constrained Binary Quadratic Programming](/202604/11/2604.02554v1-principled-and-scalable-diversity-aware-retrieval-via-cardinality-constrained-binary-quadratic-programming)  
+   evidence：通过迭代优化提高 LLM 生成代码的效率
+5. [EvolveRouter: Co-Evolving Routing and Prompt for Multi-Agent Question Answering](/202604/12/2604.05149v1-evolverouter-co-evolving-routing-and-prompt-for-multi-agent-question-answering)  
+   标签：评分：8.0/10、query:llm-ec
+   evidence：用于改进智能体质量和协作结构的闭环协同演化过程
+6. [Vocabulary Dropout for Curriculum Diversity in LLM Co-Evolution](/202604/12/2604.03472v1-vocabulary-dropout-for-curriculum-diversity-in-llm-co-evolution)  
    标签：评分：7.0/10、query:llm-ec
-   evidence：将多样性检索建模为二阶规划组合优化问题
-7. [RFOX (Rotated-Field Oscillatory eXchange) quantum algorithm: Towards Parameter-Free Quantum Optimizers](/202604/11/2604.02569v1-rfox-rotated-field-oscillatory-exchange-quantum-algorithm-towards-parameter-free-quantum-optimizers)  
-   标签：评分：7.0/10、query:llm-ec
-   evidence：用于组合优化的量子算法
-8. [GrandCode: Achieving Grandmaster Level in Competitive Programming via Agentic Reinforcement Learning](/202604/11/2604.02721v1-grandcode-achieving-grandmaster-level-in-competitive-programming-via-agentic-reinforcement-learning)  
+   evidence：用于自主课程学习和问题生成的协同演化自博弈
+7. [Finding Sets of Pareto Sets in Real-World Scenarios -- A Multitask Multiobjective Perspective](/202604/12/2604.03570v1-finding-sets-of-pareto-sets-in-real-world-scenarios----a-multitask-multiobjective-perspective)  
    标签：评分：7.0/10、query:ahd
-   evidence：用于竞赛编程算法发现的智能体强化学习
-9. [Adaptive Threshold-Driven Continuous Greedy Method for Scalable Submodular Optimization](/202604/11/2604.03419v1-adaptive-threshold-driven-continuous-greedy-method-for-scalable-submodular-optimization)  
+   evidence：用于超参数优化和工程设计的演化多任务处理
+8. [RDEx-CMOP: Feasibility-Aware Indicator-Guided Differential Evolution for Fixed-Budget Constrained Multiobjective Optimization](/202604/12/2604.03708v1-rdex-cmop-feasibility-aware-indicator-guided-differential-evolution-for-fixed-budget-constrained-multiobjective-optimization)  
    标签：评分：7.0/10、query:llm-ec
-   evidence：用于可扩展子模优化的连续贪婪方法
-10. [Reinforcement Learning-based Knowledge Distillation with LLM-as-a-Judge](/202604/11/2604.02621v1-reinforcement-learning-based-knowledge-distillation-with-llm-as-a-judge)  
+   evidence：用于约束多目标优化问题的差分进化变体
+9. [Parent Selection Mechanisms in Elitist Crossover-Based Algorithms](/202604/12/2604.04083v1-parent-selection-mechanisms-in-elitist-crossover-based-algorithms)  
+   标签：评分：7.0/10、query:ahd
+   evidence：遗传算法中亲本选择机制的理论分析
+10. [Inside the Scaffold: A Source-Code Taxonomy of Coding Agent Architectures](/202604/12/2604.03515v1-inside-the-scaffold-a-source-code-taxonomy-of-coding-agent-architectures)  
    标签：评分：6.0/10、query:llm-ec
-   evidence：LLM作为裁判进行自动评估和训练信号生成
-11. [Importance Sampling Optimization with Laplace Principle](/202604/11/2604.02882v1-importance-sampling-optimization-with-laplace-principle)  
+   evidence：基于LLM的代码代理架构的源代码分类法
+11. [Neural Global Optimization via Iterative Refinement from Noisy Samples](/202604/12/2604.03614v1-neural-global-optimization-via-iterative-refinement-from-noisy-samples)  
    标签：评分：6.0/10、query:ahd
-   evidence：使用重要性采样和迭代采样分布改进超参数调优范式。
-12. [Analysis of Optimality of Large Language Models on Planning Problems](/202604/11/2604.02910v1-analysis-of-optimality-of-large-language-models-on-planning-problems)  
+   evidence：用于黑盒函数全局优化的神经方法
+12. [Persistent Cross-Attempt State Optimization for Repository-Level Code Generation](/202604/12/2604.03632v1-persistent-cross-attempt-state-optimization-for-repository-level-code-generation)  
    标签：评分：6.0/10、query:llm-ec
-   evidence：分析大语言模型在 Blocksworld 等规划问题上的最优性和启发式策略
-13. [From Model-Based Screening to Data-Driven Surrogates: A Multi-Stage Workflow for Exploring Stochastic Agent-Based Models](/202604/11/2604.03350v1-from-model-based-screening-to-data-driven-surrogates-a-multi-stage-workflow-for-exploring-stochastic-agent-based-models)  
-   标签：评分：6.0/10、query:ahd
-   evidence：基于模型的自动筛选与发现
+   evidence：仓库级代码生成的跨尝试知识优化
+13. [Stabilizing Unsupervised Self-Evolution of MLLMs via Continuous Softened Retracing reSampling](/202604/12/2604.03647v1-stabilizing-unsupervised-self-evolution-of-mllms-via-continuous-softened-retracing-resampling)  
+   标签：评分：6.0/10、query:llm-ec
+   evidence：多模态大语言模型的无监督自我演化
 
 
 <div class="dpr-home-promo-card">
