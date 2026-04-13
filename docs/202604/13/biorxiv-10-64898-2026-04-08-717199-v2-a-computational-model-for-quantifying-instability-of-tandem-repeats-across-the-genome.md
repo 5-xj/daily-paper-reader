@@ -1,0 +1,20 @@
+---
+title: A computational model for quantifying instability of tandem repeats across the genome
+authors: "Dolzhenko, E., English, A., Mokveld, T., de Sena Brandine, G., Kronenberg, Z., Wright, G., Drogemoller, B., Rowell, W. J., Wenger, A. M., Chen, X., Bennett, M. F., Weisburd, B., Erwin, G. S., Jin, P., Nelson, D. L., Dashnow, H., Sedlazeck, F., Eberle, M. A."
+date: 2026-04-12
+pdf: "https://www.biorxiv.org/content/10.64898/2026.04.08.717199v2.full.pdf"
+tags: ["query:gene"]
+score: 9.0
+evidence: 量化全基因组串联重复序列的计算模型
+tldr: 引入了一种利用长读长测序量化全基因组串联重复序列不稳定性的模型。
+source: biorxiv
+selection_source: fresh_fetch
+figures_json: "[{\"url\": \"assets/figures/biorxiv/biorxiv-10-64898-2026-04-08-717199-v2/fig-001.webp\", \"caption\": \"Figure 1: Overview of tandem repeat instability profiling. (A) Definition of a tandem repeat locus. (B) A cohort of HiFi samples was used to estimate baseline repeat instability. (C) For each locus, TRGT identifies the full-length consensus sequence of each repeat allele together with the reads supporting that allele. (D) For each supporting read, a divergence rate is computed as the length-normalized edit distance to the consensus allele sequence, then these read-level rates are binned to generate an allele instability profile. (E) Instability profiles are collected for all alleles of the repeat across the cohort. (F) A Dirichlet-multinomial model is fitted to these allele instability profiles to capture the baseline instability distribution of the repeat. (G) Instability of a query allele is assessed by comparing its profile to the fitted repeat-specific model.\", \"page\": 4, \"index\": 1, \"width\": 976, \"height\": 466}, {\"url\": \"assets/figures/biorxiv/biorxiv-10-64898-2026-04-08-717199-v2/fig-002.webp\", \"caption\": \"Figure 2: Repeat instability across HPRC. (A) Spearman correlation between repeat purity and instability rate stratified by motif length. (B) Distribution of repeat instability rates stratified by the mean repeat lengths. (C) Histogram of mean spans of perfect repeat tracts identified in repeat alleles in our catalog. (D) Mean repeat purity stratified by mean repeat length.\", \"page\": 5, \"index\": 2, \"width\": 976, \"height\": 635}, {\"url\": \"assets/figures/biorxiv/biorxiv-10-64898-2026-04-08-717199-v2/fig-003.webp\", \"caption\": \"Figure 3: Repeat instability across pathogenic tandem repeats (A) Instability rates of known pathogenic repeats. Fitted mean allele instability profiles for (B) PRNP, (C) DMPK, and (D) FMR1 repeats.\", \"page\": 6, \"index\": 3, \"width\": 976, \"height\": 625}]"
+motivation: 量化全基因组串联重复序列的计算模型。
+method: 方法与实现细节请参考摘要与正文。
+result: 结果与对比结论请参考摘要与正文。
+conclusion: 总体而言，该工作在所述任务上展示了有效性，并提供了可复用的思路或工具。
+---
+
+## Abstract
+Tandem repeats (TRs) exhibit high levels of somatic mosaicism, which is increasingly recognized as an important modifier of repeat expansion disorders. Long-read sequencing can capture full-length repeat alleles, yet robust frameworks for quantifying instability across TRs genome-wide are still needed. Here, we introduce a general-purpose model for quantifying TR instability in a given long-read sequencing dataset, without explicitly distinguishing biological mosaicism from technical noise, and which is broadly applicable to both simple and structurally complex loci. This model accurately characterizes allelic instability at each TR locus by representing the distribution of read-to-consensus deviations for each allele. Using HiFi sequencing data from 256 HPRC cell line samples, we fitted models for 617,007 TR loci, including known pathogenic repeats. We observe that instability levels are generally low, but vary substantially across individual TRs, and are driven more strongly by repeat composition than overall repeat length. Furthermore, we applied our method to targeted PureTarget long-read data from samples with known repeat expansions and identified significant mosaicism in the majority of expanded alleles. Our model offers a practical way to quantify instability of tandem repeats across the genome and to detect unusually unstable repeat alleles.

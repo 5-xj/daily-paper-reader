@@ -1,0 +1,757 @@
+Title: A First Guess is Rarely the Final Answer: Learning to Search in the Travelling Salesperson Problem
+
+URL Source: https://arxiv.org/pdf/2604.06940v1
+
+Published Time: Thu, 09 Apr 2026 00:52:20 GMT
+
+Number of Pages: 17
+
+Markdown Content:
+# A First Guess is Rarely the Final Answer: Learning to Search in the Travelling Salesperson Problem 
+
+Andoni Irazusta Garmendia 
+
+University of the Basque Country (UPV/EHU) 
+
+## Abstract 
+
+Most neural solvers for the Traveling Salesperson Problem (TSP) are trained to output a single solution, even though practitioners rarely stop there: at test time, they routinely spend extra compute on sampling or post-hoc search. This raises a natural question: can the search procedure itself be learned? Neural improvement methods take this perspective by learning a policy that applies local modifications to a candidate solution, accumulating gains over an improvement trajectory. Yet learned improvement for TSP remains comparatively immature, with existing methods still falling short of robust, scalable performance. We argue that a key reason is design mismatch: many approaches reuse state representations, architectural choices, and training recipes inherited from single-solution methods, rather than being built around the mechanics of local search. This mismatch motivates NICO-TSP ( Neural Improvement for Combinatorial Optimization ): a 2-opt improvement framework for TSP. NICO-TSP represents the current tour with exactly n edge tokens aligned with the neighborhood operator, scores 2-opt moves directly without tour positional encodings, and trains via a two-stage procedure: imitation learning to short-horizon optimal trajectories, followed by critic-free group-based reinforcement learning over longer rollouts. Under compute-matched evaluations that measure improvement as a function of both search steps and wall-clock time, NICO-TSP delivers consistently stronger and markedly more step-efficient improvement than prior learned and heuristic search baselines, generalizes far more reliably to larger out-of-distribution instances, and serves both as a competitive replacement for classical local search and as a powerful test-time refinement module for constructive solvers. 
+
+## 1 Introduction 
+
+A prevailing paradigm in Neural Combinatorial Optimization (NCO) Bengio et al. [2021], Mazyavkina et al. [2021] is to learn constructive policies that generate a solution from scratch Kool et al. [2018], Kwon et al. [2020], Luo et al. [2023]. This emphasis has led to objectives and evaluation protocols that prioritize the speed and quality of the first solution. However, in many realistic settings, the value of a learned solver is determined less by its initial output than by the solution quality it can achieve under a fixed compute budget. As a result, one-shot policies are often integrated into iterative inference pipelines that spend additional budget on search and refinement, for example, via sampling Kwon et al. [2020], beam search Vinyals et al. [2015], local search Deudon et al. [2018], or active search Hottung et al. [2021]. This common practice highlights a structural mismatch between how these models are optimized (single-solution output) and how they are ultimately deployed (budgeted iterative improvement). In this work, we treat search as the central learned object rather than a post-hoc patch. We focus on the Traveling Salesperson Problem (TSP) Applegate et al. [2011], a canonical testbed for NCO, and 
+
+> arXiv:2604.06940v1 [cs.LG] 8 Apr 2026
+
+study neural improvement : policies that iteratively apply local modifications to improve a candidate solution Wu et al. [2021], d O Costa et al. [2020], Hottung and Tierney [2020]. Neural improvement for TSP has remained comparatively underexplored and often underperforms constructive policies, not because local improvement is inherently weaker, but because existing learning-based formulations are misaligned with the improvement regime. First, most methods reuse node-centric representations designed for construction, while executing edge-based operators such as 2-opt; this forces the policy to reason about actions through an indirect state parameterization. Second, many architectures encode the current tour via tour positional encodings over nodes, introducing a fragile coordinate system whose semantics change with n and that can degrade sharply under scale shift. Third, training is typically posed as long-horizon reinforcement learning in a vast combinatorial space, where improvements become sparse near local optima and credit assignment across sequences of actions is unstable, leading to high-variance learning signals and slow optimization. We address these bottlenecks with three main contributions in a framework we term Neural Improve-ment for Combinatorial Optimization applied to the TSP (NICO-TSP): • Edge-centric representation. We introduce an edge-token representation that uses the 
+
+n tour edges as the primary tokens and augments them with local geometric context. In contrast to pairwise edge representations that scale as O(n2) tokens Meng et al. [2025], our representation is O(n) and aligns the model inputs with the objects directly edited by 2-opt. • Edge-attention policy without positional encodings. We propose an encoder–decoder architecture that contextualizes edge tokens and scores 2-opt actions directly from pairs of edge representations. The model does not rely on tour positional encodings, avoiding bad large-scale generalization issues. • Two-stage learning. We develop a two-stage training procedure that combines: (i) imitation learning with exact K-step lookahead and set-valued supervision, and (ii) critic-free group-based reinforcement learning, which further improves the policy through intra-instance competition. • Strong empirical performance. We show that NICO-TSP outperforms post-hoc search procedures applied to neural constructive methods, while also remaining competitive as a standalone neural improvement policy. 
+
+## 2 Background 
+
+2.1 Traveling Salesperson Problem 
+
+The Traveling Salesperson Problem (TSP) Applegate et al. [2011] asks for the minimum-length Hamiltonian cycle through n cities. Formally, for an instance x with city set V = {1, . . . , n } and distances dij ≥ 0, a tour is a permutation π = ( π1, . . . , π n) ∈ Πn with cost 
+
+C(π | x) = 
+
+> n
+
+X
+
+> k=1
+
+dπk ,π k+1 , πn+1 ≡ π1, (1) and the goal is to find π⋆ = arg min π∈Πn C(π | x).
+
+2.2 Neural Improvement as a Markov Decision Process 
+
+We frame Neural Improvement for the Traveling Salesperson Problem as a Markov Decision Process (MDP) in which a stochastic policy pθ iteratively refines a candidate tour through local modifications. The goal is to learn a general improvement strategy: from a set of training instances, we optimize parameters θ so that the resulting policy transfers to unseen TSP instances. We adopt an episodic formulation with a fixed improvement budget of T steps, i.e., t ∈ { 0, . . . , T −1}
+
+> 1
+
+. A state st ∈ S consists of the TSP instance x (fixed within an episode), the current candidate tour πt, and an auxiliary context variable ct that summarizes any historical information required   
+
+> 1The step budget Tcan differ between training and inference (e.g., short episodes for efficient learning and longer rollouts at test time).
+
+2to preserve the Markov property, i.e., st = ( x, π t, c t). All other quantities used by the policy are deterministic features derived from x and πt. Given st, the policy pθ (a | st) defines a distribution over actions at ∈ A (st), where A(st) is the set of feasible local moves under a chosen neighborhood operator. In this paper, we use the 2-opt neighborhood: an action at = ( i, j ) selects two non-adjacent 
+
+tour edges. We take 1 ≤ i < j ≤ n with j ≥ i + 2 and (i, j )̸ = (1 , n ), which replaces edges 
+
+(πt[i], π t[i + 1]) and (πt[j], π t[j + 1]) by (πt[i], π t[j]) and (πt[i + 1] , π t[j + 1]) . The transition is deterministic: st+1 = ( x, π t+1 , c t+1 ).
+
+## 3 Methods 
+
+This section introduces the representation, policy architecture, and learning framework of NICO-TSP. Full implementation details are provided in Appendix A. 
+
+3.1 Problem Representation 
+
+Most neural improvement policies for TSP use node tokens and inject the current tour through solution-dependent features, often tour positional encodings Wu et al. [2021], Ma et al. [2021]. This is indirect for 2-opt, whose actions are naturally defined over pairs of tour edges, and such positional encodings can generalize poorly across problem sizes, since both the numerical range and the semantic role of positions vary with tour length. We therefore represent the current solution directly as a sequence of tour edges and use these edges as the central tokens throughout the policy network. Concretely, given the current tour 
+
+πt = ( πt[1] , . . . , π t[n]) , we form the length-n cyclic sequence of directed edges 
+
+uk = πt[k], vk = πt[k + 1] , ek = ( uk → vk), k = 1 , . . . , n, (2) with the convention πt[n + 1] ≡ πt[1] .Each edge token combines information from its endpoints and local geometry. We first embed the raw node coordinates xi ∈ R2 with a linear map xemb  
+
+> i
+
+= Wxxi ∈ RD , and define the edge displacement, length, and normalized direction as 
+
+∆k = xvk − xuk , dk = ∥∆k∥2, ˆ∆k = ∆k
+
+max( dk, ε ) . (3) Additionally, we add local turn features from adjacent tour edges: turning angles at uk and vk
+
+represented as (cos , sin) , a neighbor-normalized length ratio ( rel _len k), and a tour-level z-scored edge length ( zk); see Appendix A.1 for details. We form edge-token embeddings by concatenating these features, and projecting to the model dimension D:
+
+hk = Lin 
+
+xemb uk , x emb vk , d k, ˆ∆k, cos (u) 
+
+> k
+
+, sin (u) 
+
+> k
+
+, cos (v) 
+
+> k
+
+, sin (v) 
+
+> k
+
+, rel _len k, z k
+
+
+
+∈ RD . (4) These embeddings are then fed to the edge-attention encoder. See Figure 1 (left) for an overview of the problem representation. 
+
+3.2 Policy Architecture 
+
+Our policy follows an encoder–decoder design: the encoder maps edge-token embeddings {hk}
+
+to contextual edge representations through L attention layers, and the decoder parameterizes a distribution over feasible 2-opt moves. Figure 1 (right) summarizes the forward pass. At step t, the current tour πt induces an ordered cyclic sequence of n edge embeddings {hk}nk=1 ,where neighboring indices correspond to adjacent edges on πt. To inject this cyclic structure, we apply a local cycle-mixing module that couples each token to its two tour-adjacent neighbors: 
+
+hk ← hk + α ϕ  [hk−1, h k, h k+1 ], (5) where indices wrap around modulo n, ϕ is a two-layer Feed-Forward Neural Network, and α is a learned scalar initialized to a small value ( α = 0 .1) so that Equation (5) starts close to the identity 3Figure 1: Overview of the edge-based representation and policy architecture. Tours are repre-sented as sequences of edge tokens, each encoding endpoint coordinates and local geometric features. These edge tokens are processed by an edge-attention encoder with local cycle mixing and global context fusion, producing contextualized edge representations. A pairwise decoder then scores all feasible 2-opt moves. mapping. The resulting sequence is then processed by L self-attention blocks Vaswani et al. [2017], yielding contextualized edge representations {h(L) 
+
+> k
+
+}nk=1 .We incorporate a global tour summary by mean-pooling the final encoder representations and injecting the resulting global context back into each token: 
+
+c = 1
+
+n
+
+> n
+
+X
+
+> k=1
+
+h(L) 
+
+> k
+
+, ˜hk = Wloc h(L) 
+
+> k
+
++ Wglob c, (6) where Wloc , W glob ∈ RD×D are learned linear maps. Given the contextual edge representations {˜hk}nk=1 , the decoder scores each candidate 2-opt move 
+
+(i, j ). We compute linear projections qi = WQ˜hi and kj = WK ˜hj , and define the pairwise logit via a scaled dot product, 
+
+ℓij = ⟨qi, k j ⟩
+
+pdkey 
+
+, (7) where dkey is the query/key dimensionality. To prevent overly large logits, we apply a bounded nonlinearity ℓij ← C tanh( ℓij ). For symmetric TSP instances, reversing the order of the two cuts corresponds to the same undirected move; we therefore symmetrize the logits via ℓij ← 12 (ℓij + ℓji ), removing an arbitrary ordering preference. Finally, infeasible pairs (adjacent cuts) are masked out. To discourage immediate backtracking, we also mask the last m executed moves and their swapped counterparts. The policy is the corresponding masked softmax, 
+
+pθ
+
+ (i, j ) | st
+
+ = exp( ℓij ) I[( i, j ) ∈ A (st)] 
+
+P 
+
+> (u,v )∈A (st)
+
+exp( ℓuv ) . (8) 
+
+3.3 Learning Framework 
+
+Existing neural improvement methods are typically trained with reinforcement learning, but long-horizon search makes optimization difficult, since the policy must discover high-quality improvement trajectories through exploration in an enormous combinatorial space. We address this using a two-stage procedure. We first train a policy via Imitation Learning (IL) on small instances, where an exact 
+
+K-step lookahead oracle provides optimal improvement trajectories that shape a high-quality action distribution. Given the trained policy, we then apply a group-based reinforcement learning stage Shao et al. [2024] that runs longer rollouts ( T > K ) and uses intra-instance competition to obtain a critic-free learning signal. Figure 2 illustrates the overall learning framework. 
+
+Diverse training states. Both learning stages use the same initialization pipeline. We sample a batch of instances with problem size n ∼ Unif {nlow , n high }, start from random tours, and apply a warmup of length t0 ∼ Unif {0, . . . , ⌊n⌋} . This diversifies starting states and induces an automatic curriculum as the policy improves. 4Figure 2: Overview of the proposed two-stage learning framework. An imitation learning stage uses optimal short-horizon trajectories, followed by a group-based reinforcement learning stage that refines the policy through instance-wise competition in longer horizons. 
+
+Oracle-Guided Imitation Learning. In the first stage, we train the policy using supervision from a short-horizon optimal oracle. Given a search state st corresponding to a tour, the oracle performs an exact exhaustive search over all valid K-step improvement sequences (with a small K = 2 used in experiments) and identifies the set of actions that initiate an optimal trajectory. Importantly, this supervision is set-valued : multiple actions may be equally optimal under the oracle. Let A∗ 
+
+> t
+
+(st) denote the oracle-provided set of optimal actions at step t. The policy is trained to assign high probability mass to this set by minimizing a negative log-mass objective 
+
+LIL (θ) = −
+
+> K
+
+X
+
+> t=1
+
+log X 
+
+> a∈A ∗
+> t(st)
+
+pθ (a | st), (9) where the state is advanced along one oracle-optimal trajectory to remain on-policy with the expert. 
+
+Group-Based Reinforcement Learning After the oracle-guided pretraining, we refine the policy using reinforcement learning. Starting from a warmup state, each base instance b is replicated G
+
+times to form a group, and G stochastic rollouts of length T are executed in parallel. While all rollouts are executed for T steps, we define a shared temporal horizon t(b)best ≤ T for each instance b to provide a consistent learning signal across the group. This horizon is defined as the time step at which the best tour within the group was first discovered (with ties broken by the earliest occurrence). By truncating the evaluation at this cutoff, we ensure that group members only receive reinforcement for actions taken within the time frame leading up to the winning trajectory. For each group member g, let C(b,g )best represent the best cost achieved within this cutoff: 
+
+C(b,g )best = min 
+
+> 0≤t≤t(b)best
+
+C
+
+
+
+π(b,g ) 
+
+> t
+
+| x(b)
+
+. (10) To evaluate performance, we compare this cost against a reference cost C(b)ref , which is the best tour cost attained during the warmup. We define the trajectory reward R(b,g ) as the normalized improvement over this reference: 
+
+R(b,g ) =max 
+
+
+
+C(b)ref − C(b,g )best , 0
+
+
+
+C(b)ref 
+
+. (11) 5Rather than estimating advantages with a learned critic, we compute a group-relative advantage A(b,g )
+
+by centering the rewards within each group: 
+
+A(b,g ) = R(b,g ) − 1
+
+G
+
+> G
+
+X
+
+> j=1
+
+R(b,j ). (12) Under this formulation, a rollout receives a positive signal only if it outperforms the group average for that specific instance. Crucially, if no member of the group manages to improve upon the reference cost, all rewards become zero, resulting in a null advantage and no learning signal for that instance. 
+
+Policy optimization. We optimize pθ with a critic-free PPO-style clipped surrogate objective Schul-man et al. [2017]. Rollouts are collected under a frozen behavior policy pθref , and we re-evaluate the log-likelihood of the stored actions under the current policy. We convert the trajectory-level group-relative signal in (12) into per-timestep weights by broadcasting it across the rollout prefix that contributes to the truncated reward: 
+
+A(b,g ) 
+
+> t
+
+= A(b,g ) I
+
+h
+
+t ≤ t(b)best 
+
+i
+
+, (13) For each timestep t, we form the importance ratio 
+
+ρ(b,g ) 
+
+> t
+
+(θ) = pθ (a(b,g ) 
+
+> t
+
+| s(b,g ) 
+
+> t
+
+)
+
+pθref (a(b,g ) 
+
+> t
+
+| s(b,g ) 
+
+> t
+
+) , (14) and minimize the clipped PPO loss: 
+
+L(θ) = −E(b,g,t )∼pθref 
+
+h
+
+min 
+
+
+
+ρ(b,g ) 
+
+> t
+
+(θ) A(b,g ) 
+
+> t
+
+, clip( ρ(b,g ) 
+
+> t
+
+(θ), 1 − ϵ, 1 + ϵ) A(b,g )
+
+> t
+
+i 
+
+. (15) 
+
+## 4 Experiments 
+
+This section evaluates NICO-TSP , which we refer to as NICO throughout the remainder of the paper. 
+
+4.1 Experimental Setup Training setup. We follow the two-stage learning procedure, first training the policy for 100 epochs using imitation learning with an exact lookahead of depth K = 2 and instances with n ∈ { 20 , . . . , 50 },and then continue training for an additional 200 epochs using group-based reinforcement learning with rollout horizon T = 32 and instances with n ∈ { 20 , . . . , 100 }. All used hyperparameters are reported in Appendix A.3. 
+
+Evaluation baselines. We compare NICO against three groups of baselines: (i) classical local search methods, namely greedy 2-opt, greedy 3-opt, and tabu search Glover [1990]; (ii) neural improvement methods, namely 2opt-DRL d O Costa et al. [2020], GAT-Improv Wu et al. [2021], 
+
+DACT Ma et al. [2021], and NeuOpt Ma et al. [2023]; and (iii) constructive and test-time search baselines, including LEHD Luo et al. [2023], multi-start sampling with POMO Kwon et al. [2020], and Efficient Active Search Hottung et al. [2021]. We use official implementations and pretrained checkpoints when available, and standardize runtime comparisons with the same batch size and improvement budget. Additional details are provided in Appendix B. 
+
+Hardware and software. All experiments were implemented in PyTorch and executed on a single NVIDIA A100 GPU for both training and inference. The implementation of NICO, along with the evaluation code and scripts required to reproduce the results, is publicly available at 2.
+
+4.2 Performance 
+
+Table 1 shows that NICO offers the best overall quality–compute trade-off among learned improve-ment methods. A single run achieves the best final cost in all four evaluated settings and is also the fastest learned improvement method throughout. The clearest pattern is scale robustness: while prior learned improvement baselines deteriorate sharply at n = 500 , NICO degrades much more gracefully. 
+
+> 2https://github.com/TheLeprechaun25/nico-tsp
+
+6Table 1: Best tour cost and inference time under a fixed budget of 10 n improvement steps for search methods, and a single forward pass for constructive methods. Bold indicates the best cost and fastest time among learned improvement methods.                                                                                                                                                     
+
+> Uniform Euclidean TSP TSPLIB-gen Method n=50 n=100 n=500 n=100
+> Cost ↓Time (s) ↓Cost ↓Time (s) ↓Cost ↓Time (s) ↓Cost ↓Time (s) ↓
+> Optimum 5.6705 7.7352 16.5396 5.6911 2opt Local Search 5.9466 3.39 8.3318 6.43 18.2049 37.53 6.0862 6.81 3opt Local Search 5.8338 6.54 8.0875 12.37 17.5621 3766.41 5.9126 10.97 Tabu Search 5.9474 14.65 8.2621 31.31 17.9746 307.94 6.0668 31.40 2opt-DRL 5.9109 5.70 7.8201 13.38 18.5447 224.63 5.9674 13.34 GAT-Improv 14.0424 8.83 39.0326 31.40 235.2172 752.33 31.4524 31.04 DACT 6.7532 7.01 7.8861 26.42 164.9038 1339.92 5.9935 26.65 NeuOpt 7.3853 9.01 7.7596 29.02 130.9429 827.41 5.8435 29.07 NICO 5.6708 1.35 7.7420 3.47 17.0113 77.11 5.7036 3.47
+> NICO (×8) 5.6705 3.30 7.7352 12.59 16.8676 557.62 5.6964 12.40 NICO (×32) 5.6705 16.93 7.7352 58.48 16.7976 3040.84 5.6927 56.89 LEHD 5.6964 0.47 7.7746 0.72 16.8084 13.09 5.7590 0.72 LEHD + NICO 5.6711 1.77 7.7386 3.98 16.7640 139.84 5.6998 3.98 LEHD + NICO (×8) 5.6705 3.43 7.7352 12.66 16.6817 569.04 5.6929 12.44 LEHD + NICO (×32) 5.6705 17.65 7.7352 59.17 16.6794 3050.12 5.6922 57.92
+
+Independent restarts further improve solution quality. NICO (×8) reaches the optimum at n = 50 
+
+and n = 100 , and yields additional gains at n = 500 and on TSPLIB-gen; NICO (×32) improves further at larger scales at the cost of higher runtime. As a post-hoc refinement module, NICO also consistently improves tours produced by LEHD, with particularly strong gains at n = 500 .Table 1 shows that NICO offers the best overall quality–compute trade-off among learned improve-ment methods. A single run attains the best final cost on uniform Euclidean instances with n = 50 
+
+and n = 500 , as well as on the TSPLIB-gen setting, while remaining very close to the best method on uniform n = 100 . A striking pattern is the difference in scale generalization: while several prior neural improvement methods remain competitive at n = 100 , their performance deteriorates sharply when extrapolated to n = 500 , whereas NICO degrades much more gracefully. Moreover, in the (×8) regime, NICO further improves to the optimum on n = 50 and n = 100 while still requiring less time than prior neural improvement baselines. Test-time scaling through multiple independent restarts further improves solution quality, reaching the optimum for n = 50 and n = 100 
+
+and yielding additional gains at n = 500 . In addition, NICO is effective as a post-hoc refinement module: applying it to the strong constructive baseline LEHD consistently improves over standalone LEHD across all settings, and is particularly beneficial at n = 500 , where LEHD+NICO also outperforms standalone NICO. 
+
+4.3 Anytime Performance 
+
+We now evaluate the anytime performance of NICO as a standalone improvement method. We compare the optimality gap (to the optimum value given by Concorde Applegate et al. [2011]) as a function of the number of improvement steps, thereby assessing not only final solution quality but also how quickly each method improves the candidate tour. 0 10 20 30 40 50 60 70         
+
+> Step / iteration
+> 0.0
+> 0.5
+> 1.0
+> 1.5
+> 2.0
+> 2.5
+> 3.0
+> 3.5
+> 4.0
+> Gap % to Optimum
+> Greedy 2-opt
+> NeuOPT
+> 2opt-drl
+> NICO 0200 400 600 800
+> Step / iteration
+> 0
+> 2
+> 4
+> 6
+> 8
+> 10
+> Gap % to Optimum
+> Greedy 2-opt
+> NeuOPT
+> 2opt-drl
+> NICO 01000 2000 3000 4000
+> Step / iteration
+> 10 1
+> 10 2
+> 10 3
+> Gap % to Optimum
+> Greedy 2-opt
+> NeuOPT
+> 2opt-drl
+> NICO
+
+Figure 3: Comparison of our method against the methods in the literature in the same setting. Instances of size n = 20 (left), n = 100 (center), and n = 500 (right). Figure 3 shows that NICO achieves a stronger anytime profile than the best performing improvement methods across all evaluated sizes. The comparison with greedy local search is especially informative: while greedy 2-opt always selects the best immediate improving move and therefore follows a purely 7one-step lookahead strategy, NICO is able to outperform this descent within the same number of steps in n = 20 , 100 . This indicates that the learned policy captures move choices that may lead to better improvement trajectories over multiple steps. 
+
+4.4 Improvement from Strong Initial Solutions 
+
+We next evaluate NICO as a refinement operator applied to high-quality initial tours in an anytime scenario. This setting is particularly relevant in practice: modern neural constructive methods and classical heuristics can already produce strong solutions, so the central question is whether a learned improvement policy can consistently extract additional gains from stronger starting points. We compare against sampling using the neural constructive method POMO Kwon et al. [2020] and three variants of Efficient Active Search (EAS) Hottung et al. [2021]: EAS-E MB , which updates encoder embeddings; EAS-L AY , which updates an added decoder residual layer; and EAS-T AB ,which modifies action probabilities through a tabular bias. For all methods, we use the same initialization protocol. For each instance, we first generate n candidate tours with POMO Kwon et al. [2020], trained on instances with 100 cities. Figure 4 reports anytime curves as a function of time. Across all evaluated sizes, NICO shows a stronger ability to further reduce tour cost starting from already strong initial solutions. 0.0 2.5 5.0 7.5 10.0 12.5 15.0 17.5 20.0           
+
+> Time (s)
+> 0.00
+> 0.05
+> 0.10
+> 0.15
+> 0.20
+> 0.25
+> 0.30
+> 0.35
+> 0.40
+> Gap % to Optimum
+> Sampling
+> EAS-emb
+> EAS-lay
+> EAS-tab
+> NICO 020 40 60 80 100
+> Time (s)
+> 0.0
+> 0.1
+> 0.2
+> 0.3
+> 0.4
+> 0.5
+> Gap % to Optimum
+> Sampling
+> EAS-emb
+> EAS-lay
+> EAS-tab
+> NICO 0100 200 300 400 500
+> Time (s)
+> 0
+> 10
+> 20
+> 30
+> 40
+> Gap % to Optimum
+> Sampling
+> EAS-emb
+> EAS-lay
+> EAS-tab
+> NICO
+
+Figure 4: Improvement from strong initial solutions. Average optimality gap as a function of execution time for n = 20 (left), n = 100 (center), and n = 500 (right). 
+
+4.5 Ablation Study 
+
+We conduct a cumulative ablation study to isolate the contribution of the main design choices in NICO. We begin from a node-centric neural improvement baseline inspired by GAT-Improv Wu et al. [2021], which uses an attention-based policy trained with PPO and a learned critic. We then progressively add the components of our method. (1) We first incorporate a stabilization stack consisting of AdamW optimizer, RMSNorm normalization, eight attention heads instead of one, and a mean graph baseline instead of max. (2) Next, we incorporate short-term search history to the policy input by masking the last m = 8 selected actions. (3) We then replace standard critic-based reinforcement learning with the proposed group-based reinforcement learning framework from Section 3.3. (4) After that, we introduce the edge-centric representation as described in Sections 3.1 and 3.2. (5) We finally add imitation-learning pretraining from Section 3.3. Figure 5 summarizes the effect of each component on in-distribution performance ( n = 100 ), scale generalization ( n = 500 ), and out-of-distribution generalization (tsplib n = 100 ). Several trends are clear. First, the architectural transition from node-centric to edge-centric representations yields the largest gains on larger instances, indicating that aligning the representation with the objects directly manipulated by 2-opt is critical for effective neural improvement. Second, replacing standard critic-based reinforcement learning with the proposed group-based reinforcement learning improves both robustness and final performance, suggesting that critic-free relative feedback is a better fit for this setting. Third, imitation-learning pretraining and reinforcement learning are complementary: pretraining provides a strong initialization for short-horizon decision making, while reinforcement learning further refines the policy toward stronger long-horizon improvement. Their combination consistently achieves the best overall results. We provide additional disentangled ablations and sensitivity analyses of the RL design choices in Appendix D, and report variability across training seeds and inference randomness in Appendix C. 840 50 60 70 80 90 100 
+
+> Optimality % (higher is better)
+> Base Model
+> + Stabilization Stack
+> + History-Conditioned
+> + Critic-Free Group RL
+> + Edge Inductive Bias
+> + IL Warm-Start
+> 83.76
+> 87.15
+> 95.56
+> 97.55
+> 99.21
+> 99.91
+> 36.41
+> 40.67
+> 52.99
+> 62.68
+> 93.59
+> 97.23
+> 69.00
+> 68.22
+> 81.62
+> 88.61
+> 97.54
+> 99.78
+> optimum
+> In-Distribution (unif100)
+> Gen. Large (unif500)
+> OOD (tsplib100)
+
+Figure 5: Ablation study. Each row adds one component. Bars show optimality (%). 
+
+## 5 Discussion 
+
+Our results suggest that neural improvement is best viewed not merely as an alternative to neural construction, but as a complementary interface for learned optimization. In the TSP setting, the same learned policy can serve two roles: it can operate as a standalone search procedure, or as a refinement module that extracts further gains from already strong solutions. This flexibility is especially appealing in practice, where optimization pipelines often combine multiple components under a fixed inference budget. Two design choices appear central to making this approach effective. First, aligning the representation with the neighborhood operator matters substantially: representing the current solution through tour edges, rather than nodes with tour-order features, leads to stronger improvement behavior and better scale robustness. Second, critic-free group-relative reinforcement learning provides a stable and effective training signal for improvement trajectories, especially when initialized with short-horizon imitation learning. In this sense, IL and RL play complementary roles: IL improves local move quality, while RL adapts the policy to the longer-horizon consequences of those moves during search. Additional implementation details, practical lessons, and negative results are reported in Appendix E. 
+
+Limitations. The main limitation is scale. Although NICO generalizes substantially better than prior neural improvement baselines, performance still degrades on much larger instances. This challenge is structural: in constructive decoding, each step typically selects among O(n) candidates, whereas 2-opt improvement requires ranking an O(n2) neighborhood at every step. As a result, generalizing to larger instances requires not only processing larger inputs, but also preserving a meaningful ordering over a much larger action space. In this regime, neural improvement from random initial tours may be less effective than refinement from stronger starting solutions, which is consistent with our empirical results on constructive warm starts. A second limitation is the supervision used in the imitation stage. Our teacher is only optimal over a short horizon K, which keeps supervision tractable but does not fully capture the longer-term structure of effective search trajectories. Extending supervision to longer horizons could further improve performance, but would require handling non-monotone trajectories and substantially more expensive oracle generation. Developing scalable teachers that better approximate long-horizon search remains an important direction for future work. 
+
+## 6 Conclusion 
+
+We introduced NICO-TSP, a neural improvement framework for the Traveling Salesperson Problem based on an edge-centric representation, a direct 2-opt scoring policy, and a two-stage training procedure combining short-horizon imitation learning with critic-free group-based reinforcement learning. Empirically, NICO improves over prior neural improvement baselines, generalizes more robustly across scales, and works effectively both as a standalone search policy and as a post-hoc refinement module. More broadly, these results suggest that in learned combinatorial optimization, search itself should be treated as a first-class object of learning. 9References 
+
+David L Applegate, Robert E Bixby, Vašek Chvátal, and William J Cook. The traveling salesman problem: a computational study. In The Traveling Salesman Problem . Princeton university press, 2011. Yoshua Bengio, Andrea Lodi, and Antoine Prouvost. Machine learning for combinatorial optimization: a methodological tour d’horizon. European Journal of Operational Research , 290(2):405–421, 2021. Paulo R d O Costa, Jason Rhuggenaath, Yingqian Zhang, and Alp Akcay. Learning 2-opt heuristics for the traveling salesman problem via deep reinforcement learning. In Asian conference on machine learning , pages 465–480. PMLR, 2020. Michel Deudon, Pierre Cournut, Alexandre Lacoste, Yossiri Adulyasak, and Louis-Martin Rousseau. Learning heuristics for the tsp by policy gradient. In International conference on the integration of constraint programming, artificial intelligence, and operations research , pages 170–181. Springer, 2018. Fred Glover. Tabu search: A tutorial. Interfaces , 20(4):74–94, 1990. André Hottung and Kevin Tierney. Neural large neighborhood search for the capacitated vehicle routing problem. In ECAI 2020 , pages 443–450. IOS Press, 2020. André Hottung, Yeong-Dae Kwon, and Kevin Tierney. Efficient active search for combinatorial optimization problems. arXiv preprint arXiv:2106.05126 , 2021. Wouter Kool, Herke van Hoof, and Max Welling. Attention, learn to solve routing problems! In International Conference on Learning Representations , 2018. Yeong-Dae Kwon, Jinho Choo, Byoungjip Kim, Iljoo Yoon, Youngjune Gwon, and Seungjai Min. Pomo: Policy optimization with multiple optima for reinforcement learning. Advances in Neural Information Processing Systems , 33:21188–21198, 2020. Bo Liu, Xingchao Liu, Xiaojie Jin, Peter Stone, and Qiang Liu. Conflict-averse gradient descent for multi-task learning. Advances in Neural Information Processing Systems , 34:18878–18890, 2021. Fu Luo, Xi Lin, Fei Liu, Qingfu Zhang, and Zhenkun Wang. Neural combinatorial optimization with heavy decoder: Toward large scale generalization. Advances in Neural Information Processing Systems , 36: 8845–8864, 2023. Yining Ma, Jingwen Li, Zhiguang Cao, Wen Song, Le Zhang, Zhenghua Chen, and Jing Tang. Learning to iteratively solve routing problems with dual-aspect collaborative transformer. Advances in Neural Information Processing Systems , 34:11096–11107, 2021. Yining Ma, Zhiguang Cao, and Yeow Meng Chee. Learning to search feasible and infeasible regions of routing problems with flexible neural k-opt. Advances in Neural Information Processing Systems , 36:49555–49578, 2023. Nina Mazyavkina, Sergey Sviridov, Sergei Ivanov, and Evgeny Burnaev. Reinforcement learning for combinato-rial optimization: A survey. Computers & Operations Research , 134:105400, 2021. Dian Meng, Zhiguang Cao, Yaoxin Wu, Yaqing Hou, Hongwei Ge, and Qiang Zhang. Eformer: An effective edge-based transformer for vehicle routing problems. arXiv preprint arXiv:2506.16428 , 2025. John Schulman, Filip Wolski, Prafulla Dhariwal, Alec Radford, and Oleg Klimov. Proximal policy optimization algorithms. arXiv preprint arXiv:1707.06347 , 2017. Zhihong Shao, Peiyi Wang, Qihao Zhu, Runxin Xu, Junxiao Song, Xiao Bi, Haowei Zhang, Mingchuan Zhang, YK Li, Yang Wu, et al. Deepseekmath: Pushing the limits of mathematical reasoning in open language models. arXiv preprint arXiv:2402.03300 , 2024. Ashish Vaswani, Noam Shazeer, Niki Parmar, Jakob Uszkoreit, Llion Jones, Aidan N Gomez, Łukasz Kaiser, and Illia Polosukhin. Attention is all you need. Advances in neural information processing systems , 30, 2017. Oriol Vinyals, Meire Fortunato, and Navdeep Jaitly. Pointer networks. Advances in neural information processing systems , 28, 2015. Yaoxin Wu, Wen Song, Zhiguang Cao, Jie Zhang, and Andrew Lim. Learning improvement heuristics for solving routing problems. IEEE transactions on neural networks and learning systems , 33(9):5057–5069, 2021. 
+
+10 A Additional Implementation Details 
+
+This appendix complements Section 3 with low-level definitions and hyperparameters required to reproduce our implementation. We first specify the exact geometric and history-dependent features used to construct edge tokens, then summarize architectural choices that are implicit in the main text, and finally report the training hyperparameters for both learning stages. 
+
+A.1 Edge-Token Feature Definitions 
+
+We index tour positions by k ∈ { 1, . . . , n }. At search step t, the current tour is πt = ( πt[1] , . . . , π t[n]) 
+
+and we define the k-th directed edge token as 
+
+ek = ( uk → vk), uk = πt[k], vk = πt[k + 1] ,
+
+with cyclic indexing πt[n + 1] ≡ πt[1] .
+
+Local turn and normalized length features. For each edge token ek = ( uk → vk), we consider its immediate tour context. Let wk be the predecessor of uk and sk the successor of vk along the current tour: 
+
+wk = πt[k − 1] , sk = πt[k + 2] ,
+
+where indices are understood cyclically modulo n. Denoting city coordinates by xi ∈ R2, we define the adjacent displacement vectors 
+
+ak = xuk − xwk , bk = xvk − xuk , ck = xsk − xvk ,
+
+and their Euclidean lengths 
+
+dprev  
+
+> k
+
+= ∥ak∥2, dk = ∥bk∥2, dnext  
+
+> k
+
+= ∥ck∥2.
+
+Throughout, numerical stability is ensured with a small constant ε = 10 −6, replacing denominators by max( ·, ε ) when needed. We represent the turning angles at uk and vk with signed (cos , sin) features. Let ⟨· , ·⟩ be the Euclidean inner product and let r(1) , r (2) denote the two coordinates of a vector r ∈ R2. Define 
+
+cos (u) 
+
+> k
+
+= ⟨ak, b k⟩
+
+max( ∥ak∥2∥bk∥2, ε ) , sin (u) 
+
+> k
+
+= a(1)  
+
+> k
+
+b(2)  
+
+> k
+
+− a(2)  
+
+> k
+
+b(1) 
+
+> k
+
+max( ∥ak∥2∥bk∥2, ε ) ,
+
+cos (v) 
+
+> k
+
+= ⟨bk, c k⟩
+
+max( ∥bk∥2∥ck∥2, ε ) , sin (v) 
+
+> k
+
+= b(1)  
+
+> k
+
+c(2)  
+
+> k
+
+− b(2)  
+
+> k
+
+c(1) 
+
+> k
+
+max( ∥bk∥2∥ck∥2, ε ) .
+
+The sine terms correspond to the signed 2D cross product and therefore disambiguate left vs. right turns. In addition, we include two length-normalization features. First, a neighbor-normalized ratio that compares the current edge length to the average of its adjacent edge lengths: 
+
+rel _len k = dk
+
+max   12 (dprev  
+
+> k
+
++ dnext  
+
+> k
+
+) , ε  .
+
+Second, a per-instance z-score of edge length under the current tour: 
+
+μd = 1
+
+n
+
+> n
+
+X
+
+> q=1
+
+dq , σd =
+
+vuut 1
+
+n
+
+> n
+
+X
+
+> q=1
+
+(dq − μd)2, zk = dk − μd
+
+max( σd, ε ) .
+
+Action-history feature. To expose recent search behavior to the policy, we maintain a FIFO history buffer of length Khist storing the last executed actions in tour-position space (padded with an invalid value −1 at initialization). From this buffer we compute an unordered per-position frequency feature: 
+
+hhist  
+
+> k
+
+∈ [0 , 1] ,
+
+defined as the number of occurrences of position k among the endpoints of the last Khist actions, normalized by the number of valid endpoints in the buffer. This yields a single scalar per edge token and is concatenated to the geometric features before projection to the model dimension. 11 A.2 Architecture Details 
+
+Our policy network follows an encoder–decoder design similar in spirit to prior neural improvement architectures Wu et al. [2021], but adapted to edge tokens and 2-opt move parameterization. The model can be viewed as a Transformer-style stack Vaswani et al. [2017] operating on the cyclic sequence of n tour edges, but without positional encodings or causal masking. 
+
+Encoder block. Each of the L encoder layers consists of multi-head self-attention followed by a position-wise feed-forward neural network (FFNN). In both cases we apply a residual update followed by normalization: (i) h ← Norm  h + MHA( h), (ii) h ← Norm  h + FFNN( h).
+
+The feed-forward network is a two-layer multilayer perceptron applied independently at each token, 
+
+FFNN( h) = W2 σ(W1h),
+
+with activation σ(·) = ReLU( ·), hidden width H, and input/output dimension D.
+
+Normalization. We use RMS normalization by default. Given a token embedding h ∈ RD ,RMSNorm is implemented as 
+
+RMSNorm( h) = h
+
+q 1
+
+> D
+
+PDd=1 h2 
+
+> d
+
++ ε,
+
+with ε = 10 −6.
+
+Decoder and action constraints. The edge-pair decoder computes logits for all (i, j ) pairs from contextualized edge representations using a scaled dot product, applies a tanh clip with C, sym-metrizes logits, and masks infeasible 2-opt pairs. Two additional mechanisms incorporate action history: (i) the scalar history feature described in Appendix A.1, and (ii) a hard constraint that masks the last m executed actions and their swapped counterparts, with m = mask_prev_actions .
+
+Default architectural hyperparameters. Unless stated otherwise, we use: 
+
+L = 3 , D = 128 , H = 128 , heads = 8 ,
+
+ReLU activations, no dropout, RMS normalization, mean-pooling graph context, action-history length 
+
+Khist = 16 , and masking of the last m = 8 actions. We use C = 10 .0.
+
+A.3 Training Hyperparameters 
+
+Both stages optimize the same policy network using AdamW. We use a learning rate of 10 −4, gradient clipping with maximum norm 0.5, and an exponential learning-rate decay factor of 0.99 applied once per epoch. 
+
+Stage 1 (IL). Imitation learning runs for 100 epochs. Each update uses the exact set-valued K-step teacher (Section 3) with lookahead horizon K = 2 , and minimizes the negative log-mass objective over the teacher-optimal action set at each step. Warmup states are sampled using a frozen snapshot of the current policy to induce diverse starting tours. During IL, we do not mask previous actions to avoid excluding teacher-optimal moves, and re-enable it for evaluation and RL. 
+
+Stage 2 (RL). RL fine-tuning continues from the IL checkpoint without resetting the optimizer or scheduler state and runs for an additional 200 epochs. We use group-based PPO with group size 
+
+G = 20 and rollout segment length T = 32 . Advantages are computed via intra-group centering with the winner-timestamp cutoff described in Section 3 and normalized over nonzero entries before PPO. We use the clipped PPO objective with ϵ = ppo_clip = 0 .2 and complete a unique PPO epoch for each collected rollout. 
+
+Behavior policy updates. Training segments are generated using a frozen behavior policy. We refresh this behavior policy at a fixed cadence: every 20 episodes during the RL stage, and after every episode during the IL stage. 12 B Details on Related Neural Improvement Methods 
+
+Here we briefly describe the tour-improvement baselines considered in this work. These methods differ mainly in three aspects: (i) how the current tour is encoded, including whether geometric and tour-order information are modeled jointly or separately; (ii) how candidate moves are parameterized and scored; and (iii) how the policy is trained and deployed under a finite inference budget. 
+
+Greedy local search. For completeness, we also include classical non-neural baselines based on greedy 2-opt and greedy 3-opt local search. Starting from an initial tour, these methods repeatedly evaluate all improving moves in their respective neighborhoods, apply the best one, and stop when no further improvement is available. Greedy 2-opt operates over pairwise edge exchanges, whereas greedy 3-opt considers reconnections obtained by removing and reconnecting three tour edges. Although simple and effective, both methods are purely myopic and can therefore become trapped in local optima; greedy 3-opt is typically stronger, but also substantially more expensive. 
+
+Tabu search. Tabu search Glover [1990] is a classical metaheuristic that augments local search with a short-term memory of recently applied moves or attributes, preventing the search from immediately revisiting the same region of the solution space. At each search step, the method selects the best admissible move, even if it is non-improving, while the tabu memory prevents recently applied moves from being revisited for a limited number of iterations (in experiments we used 8, as in NICO). Compared with purely greedy descent, tabu search can escape shallow local optima and continue exploring improving trajectories beyond the first local minimum. We include it as a strong non-neural search baseline because it captures the value of explicit search memory and controlled non-myopic exploration without requiring learning. 
+
+2opt-DRL. 2opt-DRL d O Costa et al. [2020] is an early neural-improvement approach that learns a stochastic policy for selecting 2-opt moves by deep reinforcement learning. Its policy network uses an attention-based pointer mechanism to choose the move conditioned on the current tour. The method showed that learned 2-opt policies can improve even random initial tours, but its performance depends strongly on rollout length, reward design, and the quality of the initialization distribution. 
+
+GAT-Improv. GAT-Improv Wu et al. [2021] represents the current solution with a self-attention architecture and learns an improvement policy with reinforcement learning. Relative to earlier pointer-style approaches, it places greater emphasis on encoding the full current solution and using global context when selecting the next move. The same work also showed that simple diversification strategies at inference time can further strengthen the learned policy. 
+
+DACT. DACT Ma et al. [2021] argues that tour-order information should be modeled explicitly rather than injected through standard positional encodings. It introduces a Dual-Aspect Collaborative Transformer that separately embeds node features and tour-positional features, and uses a cyclic positional encoding to better respect the circular symmetry of TSP tours. This design improves tour conditioning and was reported to yield stronger generalization across instance sizes than earlier transformer-based improvement models. 
+
+NeuOpt. NeuOpt Ma et al. [2023] extends neural tour improvement beyond fixed 2-opt moves by learning a flexible neural k-opt policy. It combines a factorized move parameterization with a recurrent dual-stream decoder, and further introduces guided exploration of both feasible and infeasible intermediate states. Compared with fixed-operator methods, NeuOpt enlarges the move space and can reduce one-step myopia, at the cost of a more complex action space and more challenging credit assignment. 
+
+Constructive baselines with test-time scaling. In addition to neural improvement methods, we also compare against strong neural construction baselines and their test-time scaling variants. In particular, we consider POMO Kwon et al. [2020], with sampling-based decoding, and Efficient Active Search (EAS) Hottung et al. [2021]. These methods are not improvement policies: they generate tours from scratch and invest additional inference-time compute through sampling, or instance-specific adaptation. We include them because one of the central questions of this paper is whether extra computation is better spent on scaling a constructive model or on applying a learned improvement policy to a smaller set of initial tours. 
+
+Evaluation protocol and runtime fairness. Because wall-clock comparisons across learned search methods can be sensitive to implementation details, we took several steps to make the evaluation 13 Table 2: Variability across training and inference randomness on the main evaluation settings from Section 4.2. We report the mean final best cost, together with the standard deviation across 5 independently trained checkpoints and across 20 inference runs from a fixed checkpoint.                  
+
+> Setting Mean Std. train (5)Std. infer (20 )unif50 5.6708 0.00268 0.000834
+> unif100 7.7420 0.00576 0.004561
+> unif500 17 .0113 0.14324 0.059026
+> tsplib100 5.7036 0.00109 0.003047
+
+as comparable as possible. All methods were evaluated on the same hardware and with the same inference budget, and all improvement methods were started from the same pool of initial tours. Runtime measurements include only the actual search procedure at test time, excluding costs such as model loading, and dataset preparation. 
+
+## C Robustness Across Training and Inference Randomness 
+
+In this section we evaluate variability arising from both training randomness and stochastic inference. 
+
+Training variability across seeds. We repeated the training of NICO with 5 random seeds and report the resulting variation on the main evaluation settings. Table 2 summarizes the mean final best cost together with the standard deviation across independently trained checkpoints. Across training seeds, the method remained stable, with the qualitative ranking against the main baselines unchanged. As expected, variability was larger on the hardest extrapolation regimes, especially at n = 500 ,but remained small relative to the performance gap between NICO and prior neural improvement baselines. 
+
+Inference variability with fixed checkpoints. Because inference is stochastic for sampling-based policies, we also measured run-to-run variation by repeating evaluation from a fixed checkpoint and fixed initial solutions under 20 different inference seeds. This isolates the variability induced purely by stochastic decoding. As shown in Table 2, inference-time variability is modest across all settings. 
+
+## D Additional Sensitivity Analyses and Disentangled Ablations 
+
+While the main-text ablation is cumulative and useful for understanding the effect of the final design stack, it does not fully isolate all interactions between individual components. Several choices also play a dual role as both hyperparameters and design decisions, especially in the RL stage. To avoid fragmenting these closely related analyses, we collect them here in a single section. Table 3 reports disentangled ablations of the stabilization stack and history conditioning shown in Section 4.5, while Table 4 summarizes the sensitivity of the RL stage to the group size and the rollout horizon. 
+
+Incremental construction of the stabilization stack. We first analyze the ingredients grouped under the stabilization stack, namely AdamW, eight attention heads instead of one, RMSNorm, and mean graph pooling instead of max pooling. As shown in Table 3, each successive modification improves over the previous configuration, and their combination yields the strongest result. 
+
+History conditioning versus history masking. We compare two ways of incorporating short-term search history: conditioning the policy on the last k selected actions, and masking recently selected actions to prevent immediate repetition. Both mechanisms help relative to a memory-free policy, but they play different roles. Conditioning improves state representation by exposing recent search context, whereas masking acts directly on the admissible action set. The results in Table 3 show that the best performance is obtained when both are used together, indicating that they are complementary rather than interchangeable. 
+
+Effect of group size G. The group size controls the strength of the relative baseline and the probability that at least one rollout in a group discovers an improving trajectory. Small values of 
+
+G reduce computation but increase the frequency of zero-signal groups, since none of the sampled rollouts may improve upon the warmup reference. Increasing G alleviates this issue and produces a more informative within-group ranking, but also raises computational cost. Table 4 shows that moving from G = 5 to G = 20 slightly improves performance, while increasing further to G = 40 
+
+14 Table 3: Additional disentangled ablations of the final method. Results are reported on the main validation setting using the same evaluation protocol as in the main text on 100 uniform instances with n = 100 . The default configuration used in the final model is highlighted in bold.            
+
+> Component Variant Best Cost
+> Stabilization stack Base RL model 9.235 + AdamW 9.129 + 8 heads 8.951 + RMSNorm 8.930 + Mean pooling 8.876 History mechanism No history (Base + Stabilization stack) 8.876 Conditioning only 8.701 Masking only 8.231 Conditioning + masking 8.094
+
+Table 4: Sensitivity of the RL stage to its main design choices. We report final best costs on 100 uniform instances with n = 100 . We also report the relative training cost under a fixed number of parameter-update steps. The default configuration used in the final model is highlighted in bold.                                            
+
+> Factor Setting Best cost Relative training cost
+> Group size GG= 5 7.747 0.629 ×
+> G= 10 7.744 0.843 ×
+> G=20 7.742 1.000 ×
+> G= 40 7.742 1.846 ×
+> Rollout horizon TT= 1 7.856 0.179 ×
+> T= 2 7.778 0.194 ×
+> T= 4 7.764 0.216 ×
+> T= 8 7.761 0.244 ×
+> T= 16 7.752 0.576 ×
+> T=32 7.742 1.000 ×
+> T= 64 7.739 2.610 ×
+> T= 128 7.746 6.597 ×
+
+yields only marginal additional gains (not visible in the used precision) at a substantially higher cost. We therefore use G = 20 in the final model as a favorable quality–efficiency trade-off. 
+
+Effect of rollout horizon T . The rollout horizon determines how far the policy is optimized beyond immediate one-step gains. Very short horizons make the RL stage close to myopic local improvement, while longer horizons expose the policy to richer delayed effects but also make credit assignment noisier and increase variance. As shown in Table 4, increasing the horizon from T = 1 to T = 32 
+
+yields a clear improvement, while extending it further to T = 64 and T = 128 provides only a small additional gain at noticeably higher cost. We therefore use T = 32 in the final model as a practical compromise between performance and efficiency. 
+
+## E Lessons Learned During Implementation 
+
+This section summarizes practical observations that materially affected training stability and final performance. While the main paper presents the final design, several alternative choices were explored during implementation and were ultimately discarded due to undesirable optimization behavior. We report them here because they may be useful for future work on neural improvement methods. 
+
+Mixing multiple sizes within a single update led to unstable optimization. We initially attempted to aggregate trajectories from several instance sizes into a single PPO update. This consistently harmed both convergence and generalization. Empirically, larger instances were more sensitive to a shared parameter update: because their action spaces are larger, they tended to drift further from the frozen behavior policy, which caused the PPO trust-region mechanism to suppress their contribution more aggressively. This reduced their effective sample count and made the update increasingly dominated by smaller sizes, reinforcing the imbalance over time. 15 More broadly, we found that gradients coming from different instance sizes often behaved like conflicting task gradients. Different sizes induce different state distributions, action entropies, and improvement dynamics, so averaging their losses in a single update frequently produced weaker learning signals than training on a single size at a time. This is consistent with the broader multi-task optimization literature on gradient interference. We experimented with CAGrad Liu et al. [2021] as a mitigation strategy, which slightly improved training stability, but did not yield commensurate performance gains given the additional computational overhead. 
+
+Large batch sizes were not always beneficial. Contrary to the usual intuition that larger batches provide cleaner gradients, we observed that very large RL batches often hurt performance. Smaller batches converged faster and typically reached better final policies. Our working hypothesis is that, in this setting, aggregating too many heterogeneous trajectories into a single update amplifies gradient cancellation: trajectories from different sizes, different initialization qualities, and different local-search regimes can induce partially contradictory policy updates. This effect resembles the interference observed when mixing several sizes within one optimization step. 
+
+Decoupling the trust region from data reuse improved generalization. In the group-based RL stage, we maintain two policies: a frozen behavior policy πθref used for rollout generation, and an updated policy πθ optimized on the collected segments. Standard PPO usually combines a trust region with multiple gradient epochs over the same batch. In our setting, repeatedly reusing the same batch consistently reduced generalization. Since fresh data are cheap to generate, we found it more effective to prioritize distributional coverage over reuse of fixed trajectories. Our final practice was therefore to decouple the trust-region mechanism from data reuse: we kept 
+
+πθref frozen for multiple rollout collections (with instances of different sizes), but applied only a single PPO epoch to each collected segment. In other words, the trust region was controlled mainly by the temporally fixed reference policy rather than by repeated optimization on the same data. This gave a better trade-off between policy stability and state-space coverage. 
+
+Group-relative RL can suffer from zero-signal groups. An important optimization bottleneck in the critic-free group-based RL stage is that some sampled groups provide no learning signal at all. If no rollout in a group improves upon the warmup reference solution, then all rewards are zero, the centered advantage is zero, and the corresponding instance contributes nothing to the gradient. We observed this behavior frequently enough to matter in practice, especially when the warmup reference was already strong relative to the rollout budget. Two natural ways to reduce the frequency of zero-signal groups are to increase exploration or to increase the number of sampled rollouts per group. In principle, stronger entropy regularization could encourage more diverse trajectories, while a larger group size raises the probability that at least one rollout improves upon the reference. However, in our experiments neither strategy was especially attractive: additional entropy did not improve performance, and increasing the group size beyond 
+
+G = 10 provided only limited gains relative to its computational cost, as seen in Appendix D. These observations suggest that the choice of warmup distribution is an important hidden design variable in group-based learning schemes. A more promising direction may therefore be to control the difficulty of the reference solution directly, for example through bucketed warmup policies or reference distributions conditioned on the instance difficulty for the current policy. 
+
+Short-term search history helped, but only up to a point. We also investigated explicit short-term memory in the policy through two mechanisms: (i) encoding the last m selected actions as historical context, and (ii) masking recently selected actions so that the policy cannot immediately repeat them. This consistently helped relative to memory-free variants, confirming that even limited search history is useful in neural improvement. However, larger values of m were not always better. In our in-distribution experiments, a moderate value (e.g., m = 8 ) performed best, while longer masks degraded results. One possible explanation is that the policy partially internalizes a preferred local-search rhythm during training, so an overly long recency mask may overconstrain the move space and interfere with beneficial revisitation patterns. 
+
+Imitation learning and reinforcement learning were complementary. A strong practical lesson was that imitation learning (IL) pretraining substantially improved optimization. Policies trained only with RL were less stable and usually converged to worse solutions. By contrast, short-horizon IL provided a much stronger initialization, after which RL could more effectively optimize longer-16 horizon search behavior. We also observed that the interaction between IL and RL was not monotonic: in some runs, applying IL after an RL stage temporarily hurt large-scale generalization, while a subsequent RL phase recovered the policy and even improved over the pre-IL checkpoint. This suggests that IL and RL shape different aspects of the policy: IL sharpens local move preferences, whereas RL is needed to recalibrate these preferences for longer-horizon, larger-scale search. 17
