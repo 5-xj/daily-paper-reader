@@ -44,7 +44,7 @@ def group_end() -> None:
 
 
 class LocalQwenReranker:
-  """本地 CrossEncoder 重排器，默认使用 Qwen3-Reranker-0.6B。"""
+  """本地 Qwen3 reranker，按 yes/no token 概率为 query-document 打分。"""
 
   def __init__(
     self,
@@ -52,24 +52,92 @@ class LocalQwenReranker:
     *,
     device: str = "",
     batch_size: int = DEFAULT_LOCAL_RERANK_BATCH_SIZE,
+    max_length: int = 8192,
   ) -> None:
     self.model_name = str(model_name or DEFAULT_LOCAL_RERANK_MODEL).strip()
     self.batch_size = max(int(batch_size or DEFAULT_LOCAL_RERANK_BATCH_SIZE), 1)
+    self.max_length = max(int(max_length or 8192), 256)
     try:
-      from sentence_transformers import CrossEncoder  # type: ignore
+      import torch  # type: ignore
+      from transformers import AutoModelForCausalLM, AutoTokenizer  # type: ignore
     except Exception as exc:
       raise RuntimeError(
-        "本地 reranker 需要 sentence-transformers，请先安装 requirements.txt。"
+        "本地 reranker 需要 torch 与 transformers，请先安装 requirements.txt。"
       ) from exc
 
-    kwargs: Dict[str, Any] = {}
-    clean_device = str(device or "").strip()
-    if clean_device:
-      kwargs["device"] = clean_device
+    self.torch = torch
+    self.device = str(device or "").strip() or ("cuda" if torch.cuda.is_available() else "cpu")
+    self.tokenizer = AutoTokenizer.from_pretrained(
+      self.model_name,
+      padding_side="left",
+      trust_remote_code=True,
+    )
+
+    model_kwargs: Dict[str, Any] = {"trust_remote_code": True}
+    if self.device == "cpu":
+      model_kwargs["dtype"] = torch.float32
     try:
-      self.model = CrossEncoder(self.model_name, trust_remote_code=True, **kwargs)
+      self.model = AutoModelForCausalLM.from_pretrained(self.model_name, **model_kwargs)
     except TypeError:
-      self.model = CrossEncoder(self.model_name, **kwargs)
+      if "dtype" in model_kwargs:
+        model_kwargs["torch_dtype"] = model_kwargs.pop("dtype")
+      else:
+        model_kwargs.pop("torch_dtype", None)
+      self.model = AutoModelForCausalLM.from_pretrained(self.model_name, **model_kwargs)
+    self.model.to(self.device)
+    self.model.eval()
+
+    self.token_false_id = self.tokenizer.convert_tokens_to_ids("no")
+    self.token_true_id = self.tokenizer.convert_tokens_to_ids("yes")
+    if self.token_false_id is None or self.token_true_id is None:
+      raise RuntimeError("Qwen3 reranker tokenizer 缺少 yes/no token，无法计算相关性。")
+
+    self.prefix = (
+      "<|im_start|>system\n"
+      "Judge whether the Document meets the requirements based on the Query and the Instruct provided. "
+      "Note that the answer can only be \"yes\" or \"no\"."
+      "<|im_end|>\n"
+      "<|im_start|>user\n"
+    )
+    self.suffix = "<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n"
+    self.prefix_tokens = self.tokenizer.encode(self.prefix, add_special_tokens=False)
+    self.suffix_tokens = self.tokenizer.encode(self.suffix, add_special_tokens=False)
+
+  @staticmethod
+  def _format_pair(query: str, document: str) -> str:
+    instruction = "Given an academic search query, retrieve papers that best satisfy the query."
+    return f"<Instruct>: {instruction}\n<Query>: {query}\n<Document>: {document}"
+
+  def _score_batch(self, query: str, documents: List[str]) -> List[float]:
+    pair_texts = [self._format_pair(query, doc) for doc in documents]
+    content_max_length = max(
+      self.max_length - len(self.prefix_tokens) - len(self.suffix_tokens),
+      32,
+    )
+    encoded = self.tokenizer(
+      pair_texts,
+      padding=False,
+      truncation=True,
+      max_length=content_max_length,
+      return_attention_mask=False,
+    )
+    input_ids = [
+      self.prefix_tokens + item + self.suffix_tokens
+      for item in encoded.get("input_ids", [])
+    ]
+    inputs = self.tokenizer.pad(
+      {"input_ids": input_ids},
+      padding=True,
+      return_tensors="pt",
+    )
+    inputs = {key: value.to(self.model.device) for key, value in inputs.items()}
+    with self.torch.no_grad():
+      logits = self.model(**inputs).logits[:, -1, :]
+      false_scores = logits[:, self.token_false_id]
+      true_scores = logits[:, self.token_true_id]
+      yes_no_scores = self.torch.stack([false_scores, true_scores], dim=1)
+      probs = self.torch.nn.functional.softmax(yes_no_scores, dim=1)[:, 1]
+    return [float(score) for score in probs.detach().cpu().tolist()]
 
   def rerank(
     self,
@@ -85,21 +153,11 @@ class LocalQwenReranker:
     if not documents:
       raise ValueError("rerank: documents 不能为空")
 
-    pairs = [(query_text, str(doc or "")) for doc in documents]
-    try:
-      raw_scores = self.model.predict(pairs, batch_size=self.batch_size)
-    except TypeError:
-      raw_scores = self.model.predict(pairs)
-
     results: List[Dict[str, Any]] = []
-    for idx, raw_score in enumerate(list(raw_scores)):
-      if isinstance(raw_score, (list, tuple)) and raw_score:
-        raw_score = raw_score[0]
-      try:
-        score = float(raw_score)
-      except Exception:
-        score = 0.0
-      results.append({"index": idx, "relevance_score": score})
+    for start in range(0, len(documents), self.batch_size):
+      batch_docs = [str(doc or "") for doc in documents[start : start + self.batch_size]]
+      for offset, score in enumerate(self._score_batch(query_text, batch_docs)):
+        results.append({"index": start + offset, "relevance_score": float(score)})
 
     results.sort(key=lambda item: item["relevance_score"], reverse=True)
     if top_n is not None:
