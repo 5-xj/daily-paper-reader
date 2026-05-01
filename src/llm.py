@@ -134,10 +134,17 @@ class LLMClient:
     def _provider_name(self, base_url: str | None = None) -> str:
         try:
             url = (base_url or self.base_url or '').lower()
+            model = str(self.model or '').strip().lower()
             if 'deepseek' in url:
                 return 'deepseek'
             if 'api.openai.com' in url:
                 return 'openai'
+            if 'open.bigmodel.cn' in url or 'bigmodel.cn' in url:
+                return 'glm'
+            if 'minimax' in url or 'minimaxi' in url:
+                return 'minimax'
+            if 'moonshot' in url or 'kimi' in url:
+                return 'kimi'
             if 'siliconflow' in url or 'siliconflow.cn' in url:
                 return 'siliconflow'
             if 'gptbest' in url:
@@ -148,6 +155,14 @@ class LLMClient:
                 return 'ollama'
             if 'cstcloud' in url or 'uni-api.cstcloud.cn' in url:
                 return 'cstcloud'
+            if model.startswith('deepseek-'):
+                return 'deepseek'
+            if model.startswith('glm-'):
+                return 'glm'
+            if model.startswith('minimax-'):
+                return 'minimax'
+            if model.startswith('kimi-'):
+                return 'kimi'
         except Exception:
             pass
         return 'llm'
@@ -300,17 +315,120 @@ class LLMClient:
             or os.getenv("LLM_STRUCTURED_FORMAT")
             or ""
         ).strip().lower().replace("-", "_")
+        if override in ("prompt_only", "prompt", "none", "text"):
+            return ["prompt_only"]
         if override in ("json_object", "object", "json"):
-            return ["json_object"]
+            return ["json_object", "prompt_only"]
         if override in ("json_schema", "schema", "structured"):
-            return ["json_schema", "json_object"]
+            return ["json_schema", "json_object", "prompt_only"]
 
         request_bases = self._iter_request_bases()
         primary_base = request_bases[0] if request_bases else self.base_url
         primary_provider = self._provider_name(primary_base)
-        if primary_provider in ("openai", "blt"):
-            return ["json_schema", "json_object"]
-        return ["json_object"]
+        if primary_provider in ("openai", "kimi", "blt"):
+            return ["json_schema", "json_object", "prompt_only"]
+        if primary_provider == "minimax":
+            return ["prompt_only"]
+        return ["json_object", "prompt_only"]
+
+    @staticmethod
+    def _messages_contain_json_instruction(messages: List[Dict[str, str]]) -> bool:
+        for message in messages or []:
+            if not isinstance(message, dict):
+                continue
+            content = message.get("content")
+            if isinstance(content, str) and "json" in content.lower():
+                return True
+        return False
+
+    @classmethod
+    def _ensure_json_instruction(
+        cls,
+        messages: List[Dict[str, str]],
+        format_name: str,
+    ) -> List[Dict[str, str]]:
+        if format_name not in ("json_object", "prompt_only"):
+            return messages
+        if cls._messages_contain_json_instruction(messages):
+            return messages
+        return [
+            {
+                "role": "system",
+                "content": "Output valid JSON only. Do not output Markdown, code fences, or explanatory text.",
+            },
+            *(messages or []),
+        ]
+
+    @classmethod
+    def _validate_json_schema_subset(
+        cls,
+        value: Any,
+        schema: Dict[str, Any],
+        path: str = "$",
+    ) -> str | None:
+        if not isinstance(schema, dict):
+            return None
+
+        expected_type = schema.get("type")
+        expected_types = expected_type if isinstance(expected_type, list) else [expected_type]
+        expected_types = [item for item in expected_types if isinstance(item, str)]
+
+        def type_matches(type_name: str) -> bool:
+            if type_name == "object":
+                return isinstance(value, dict)
+            if type_name == "array":
+                return isinstance(value, list)
+            if type_name == "string":
+                return isinstance(value, str)
+            if type_name == "number":
+                return isinstance(value, (int, float)) and not isinstance(value, bool)
+            if type_name == "integer":
+                return isinstance(value, int) and not isinstance(value, bool)
+            if type_name == "boolean":
+                return isinstance(value, bool)
+            if type_name == "null":
+                return value is None
+            return True
+
+        if expected_types and not any(type_matches(type_name) for type_name in expected_types):
+            return f"{path}: expected type {expected_types}, got {type(value).__name__}"
+
+        enum_values = schema.get("enum")
+        if isinstance(enum_values, list) and value not in enum_values:
+            return f"{path}: value is not in enum"
+
+        if expected_type == "object" or isinstance(value, dict):
+            if not isinstance(value, dict):
+                return f"{path}: expected object"
+            properties = schema.get("properties")
+            properties = properties if isinstance(properties, dict) else {}
+            required = schema.get("required")
+            required = required if isinstance(required, list) else []
+            for key in required:
+                if isinstance(key, str) and key not in value:
+                    return f"{path}.{key}: missing required field"
+            if schema.get("additionalProperties") is False:
+                extra = sorted(set(value.keys()) - set(properties.keys()))
+                if extra:
+                    return f"{path}: unexpected fields {extra}"
+            for key, child_schema in properties.items():
+                if key not in value:
+                    continue
+                err = cls._validate_json_schema_subset(value[key], child_schema, f"{path}.{key}")
+                if err:
+                    return err
+
+        if expected_type == "array" or isinstance(value, list):
+            if not isinstance(value, list):
+                return f"{path}: expected array"
+            item_schema = schema.get("items")
+            if isinstance(item_schema, dict):
+                for idx, item in enumerate(value):
+                    err = cls._validate_json_schema_subset(item, item_schema, f"{path}[{idx}]")
+                    if err:
+                        return err
+
+        return None
 
     def _build_response_format_by_name(
         self,
@@ -318,7 +436,7 @@ class LLMClient:
         schema_name: str,
         schema: Dict[str, Any],
         strict: bool,
-    ) -> Dict[str, Any]:
+    ) -> Dict[str, Any] | None:
         if format_name == "json_schema":
             return self.build_json_schema_response_format(
                 schema_name=schema_name,
@@ -327,6 +445,8 @@ class LLMClient:
             )
         if format_name == "json_object":
             return self.build_json_object_response_format()
+        if format_name == "prompt_only":
+            return None
         raise ValueError(f"未知结构化输出格式: {format_name}")
 
     @staticmethod
@@ -570,7 +690,7 @@ class LLMClient:
         strict: bool = True,
         allow_json_object_fallback: bool = True,
     ) -> Dict[str, Any]:
-        attempts: List[Tuple[str, Dict[str, Any]]] = [
+        attempts: List[Tuple[str, Dict[str, Any] | None]] = [
             (
                 format_name,
                 self._build_response_format_by_name(
@@ -588,10 +708,15 @@ class LLMClient:
         last_error: Exception | None = None
         for idx, (format_name, response_format) in enumerate(attempts):
             try:
-                response = self.chat(messages=messages, response_format=response_format)
+                request_messages = self._ensure_json_instruction(messages, format_name)
+                response = self.chat(messages=request_messages, response_format=response_format)
             except Exception as exc:
                 last_error = exc
-                if idx + 1 < len(attempts) and self._is_structured_output_unsupported_error(exc):
+                if (
+                    idx + 1 < len(attempts)
+                    and response_format is not None
+                    and self._is_structured_output_unsupported_error(exc)
+                ):
                     print(
                         f"[INFO] Structured Outputs 不受支持，回退到 {attempts[idx + 1][0]}。"
                     )
@@ -607,6 +732,17 @@ class LLMClient:
                         parsed = self.parse_json_content(content)
                     except Exception as exc:
                         parse_error = exc
+                    if parsed is not None and parse_error is None:
+                        schema_error = self._validate_json_schema_subset(parsed, schema)
+                        if schema_error:
+                            parse_error = ValueError(f"JSON schema validation failed: {schema_error}")
+
+            if parse_error is not None and idx + 1 < len(attempts):
+                print(
+                    f"[INFO] {format_name} 返回内容未通过 JSON 校验，"
+                    f"回退到 {attempts[idx + 1][0]}。"
+                )
+                continue
 
             structured = dict(response)
             structured["parsed"] = parsed

@@ -9,6 +9,7 @@ const {
   inferProviderType,
   getOpenAICompatiblePreset,
   inferChatApiProfile,
+  resolveJsonResponseMode,
   shouldUseXApiKeyHeader,
   buildStreamingChatPayload,
   buildConnectivityTestPayload,
@@ -139,12 +140,60 @@ function testInferChatApiProfile() {
     'deepseek',
   );
   assert.equal(
+    inferChatApiProfile('https://api.bltcy.ai/v1', 'deepseek-v3.2'),
+    'plato',
+  );
+  assert.equal(
     inferChatApiProfile('https://api.bltcy.ai/v1', 'gpt-5-chat'),
     'plato',
   );
   assert.equal(
     inferChatApiProfile('https://api.openai.com/v1', 'gpt-4.1-mini'),
-    'generic-openai',
+    'openai',
+  );
+  assert.equal(
+    inferChatApiProfile('https://open.bigmodel.cn/api/coding/paas/v4', 'GLM-4.7'),
+    'glm',
+  );
+  assert.equal(
+    inferChatApiProfile('https://api.minimaxi.com/v1', 'MiniMax-M2.5'),
+    'minimax',
+  );
+  assert.equal(
+    inferChatApiProfile('https://api.moonshot.ai/v1', 'kimi-k2.5'),
+    'kimi',
+  );
+}
+
+function testResolveJsonResponseMode() {
+  assert.equal(
+    resolveJsonResponseMode({
+      baseUrl: 'https://api.openai.com/v1',
+      model: 'gpt-4.1-mini',
+    }),
+    'json_schema',
+  );
+  assert.equal(
+    resolveJsonResponseMode({
+      baseUrl: 'https://api.deepseek.com',
+      model: 'deepseek-chat',
+    }),
+    'json_object',
+  );
+  assert.equal(
+    resolveJsonResponseMode({
+      baseUrl: 'https://api.minimaxi.com/v1',
+      model: 'MiniMax-M2.5',
+    }),
+    'prompt_only',
+  );
+  assert.equal(
+    resolveJsonResponseMode({
+      baseUrl: 'https://api.openai.com/v1',
+      model: 'gpt-4.1-mini',
+      preferSchema: false,
+    }),
+    'json_object',
   );
 }
 
@@ -269,6 +318,7 @@ testResolveChatModelsAndSummary();
 testInferProviderType();
 testGetOpenAICompatiblePreset();
 testInferChatApiProfile();
+testResolveJsonResponseMode();
 testShouldUseXApiKeyHeader();
 testBuildStreamingChatPayload();
 testBuildConnectivityTestPayload();

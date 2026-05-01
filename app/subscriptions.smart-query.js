@@ -822,6 +822,24 @@ window.SubscriptionsSmartQuery = (function () {
       throw new Error('LLM 配置缺少 baseUrl。');
     }
 
+    const resolveJsonResponseMode = () => {
+      const utils = window.DPRLLMConfigUtils || {};
+      if (typeof utils.resolveJsonResponseMode === 'function') {
+        return utils.resolveJsonResponseMode({
+          baseUrl: llm.baseUrl,
+          model: llm.model,
+          preferSchema: false,
+        });
+      }
+      const base = normalizeText(llm.baseUrl || '').toLowerCase();
+      const model = normalizeText(llm.model || '').toLowerCase();
+      if (/api\.minimax(?:i)?\.(?:io|com)/i.test(base) || /^minimax-/i.test(model)) {
+        return 'prompt_only';
+      }
+      return 'json_object';
+    };
+    const jsonResponseMode = resolveJsonResponseMode();
+
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 120000);
     const requestPayload = ({ useResponseFormat = true, includeTools = true }) => {
@@ -842,7 +860,7 @@ window.SubscriptionsSmartQuery = (function () {
         payload.tools = [];
         payload.tool_choice = 'none';
       }
-      if (useResponseFormat) {
+      if (useResponseFormat && jsonResponseMode === 'json_object') {
         payload.response_format = { type: 'json_object' };
       }
       return payload;
@@ -881,7 +899,7 @@ window.SubscriptionsSmartQuery = (function () {
           let current = null;
           let txt = '';
           current = await doFetch(endpoint, {
-            useResponseFormat: true,
+            useResponseFormat: jsonResponseMode !== 'prompt_only',
             includeTools: true,
           });
           if (current && !current.ok) {

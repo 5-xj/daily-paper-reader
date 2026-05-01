@@ -164,16 +164,48 @@
   const inferChatApiProfile = (baseUrl, model) => {
     const normalizedBaseUrl = normalizeBaseUrlForStorage(baseUrl || '').toLowerCase();
     const normalizedModel = normalizeText(model || '').toLowerCase();
-    if (
-      /(^|\/\/)(api\.)?deepseek\.com(?:$|\/)/i.test(normalizedBaseUrl)
-      || normalizedModel.startsWith('deepseek-')
-    ) {
-      return 'deepseek';
-    }
     if (/bltcy\.ai|gptbest\.vip/i.test(normalizedBaseUrl)) {
       return 'plato';
     }
+    if (/(^|\/\/)(api\.)?deepseek\.com(?:$|\/)/i.test(normalizedBaseUrl)) {
+      return 'deepseek';
+    }
+    if (/api\.openai\.com/i.test(normalizedBaseUrl)) {
+      return 'openai';
+    }
+    if (/open\.bigmodel\.cn|bigmodel\.cn/i.test(normalizedBaseUrl)) {
+      return 'glm';
+    }
+    if (/api\.minimax(?:i)?\.(?:io|com)/i.test(normalizedBaseUrl)) {
+      return 'minimax';
+    }
+    if (/moonshot\.ai|kimi/i.test(normalizedBaseUrl)) {
+      return 'kimi';
+    }
+    if (normalizedModel.startsWith('deepseek-')) {
+      return 'deepseek';
+    }
+    if (/^glm-/i.test(normalizedModel)) {
+      return 'glm';
+    }
+    if (/^minimax-/i.test(normalizedModel)) {
+      return 'minimax';
+    }
+    if (/^kimi-/i.test(normalizedModel)) {
+      return 'kimi';
+    }
     return 'generic-openai';
+  };
+
+  const resolveJsonResponseMode = ({ baseUrl, model, preferSchema = true }) => {
+    const profile = inferChatApiProfile(baseUrl, model);
+    if (profile === 'minimax') {
+      return 'prompt_only';
+    }
+    if (preferSchema && (profile === 'openai' || profile === 'kimi' || profile === 'plato')) {
+      return 'json_schema';
+    }
+    return 'json_object';
   };
 
   const shouldUseXApiKeyHeader = ({ baseUrl, model }) => {
@@ -252,6 +284,7 @@
     inferProviderType,
     getOpenAICompatiblePreset,
     inferChatApiProfile,
+    resolveJsonResponseMode,
     shouldUseXApiKeyHeader,
     buildStreamingChatPayload,
     buildConnectivityTestPayload,
