@@ -7,7 +7,7 @@ const {
   resolveChatModels,
   resolveSummaryLLM,
   inferProviderType,
-  getOpenAICompatiblePreset,
+  getDeepSeekPreset,
   inferChatApiProfile,
   resolveJsonResponseMode,
   shouldUseXApiKeyHeader,
@@ -39,8 +39,8 @@ function testBuildChatCompletionsEndpoint() {
 
 function testSanitizeModelList() {
   assert.deepEqual(
-    sanitizeModelList(['gpt-4o', ' gpt-4o ', 'qwen-max', 'glm-4.5', 'extra'], 3),
-    ['gpt-4o', 'qwen-max', 'glm-4.5'],
+    sanitizeModelList(['deepseek-chat', ' deepseek-chat ', 'deepseek-reasoner', 'custom-model', 'extra'], 3),
+    ['deepseek-chat', 'deepseek-reasoner', 'custom-model'],
   );
 }
 
@@ -77,27 +77,27 @@ function testInferProviderType() {
     inferProviderType({
       summarizedLLM: {
         apiKey: 'sk',
-        baseUrl: 'https://api.bltcy.ai/v1',
-        model: 'gemini-3-flash-preview-thinking-1000',
+        baseUrl: 'https://api.deepseek.com',
+        model: 'deepseek-chat',
       },
     }),
-    'plato',
+    'deepseek',
   );
   assert.equal(
     inferProviderType({
       summarizedLLM: {
         apiKey: 'sk',
-        baseUrl: 'https://api.openai.com/v1',
-        model: 'gpt-4.1-mini',
+        baseUrl: 'https://example.com/v1',
+        model: 'other-model',
       },
     }),
-    'openai-compatible',
+    'deepseek',
   );
 }
 
-function testGetOpenAICompatiblePreset() {
+function testGetDeepSeekPreset() {
   assert.deepEqual(
-    getOpenAICompatiblePreset('deepseek'),
+    getDeepSeekPreset('deepseek'),
     {
       key: 'deepseek',
       label: 'DeepSeek 官方',
@@ -105,33 +105,10 @@ function testGetOpenAICompatiblePreset() {
       models: ['deepseek-chat', 'deepseek-reasoner'],
     },
   );
-  assert.deepEqual(
-    getOpenAICompatiblePreset('glm'),
-    {
-      key: 'glm',
-      label: 'GLM Coding Plan',
-      baseUrl: 'https://open.bigmodel.cn/api/coding/paas/v4',
-      models: ['GLM-4.7', 'GLM-5', 'GLM-4.6'],
-    },
-  );
-  assert.deepEqual(
-    getOpenAICompatiblePreset('minimax'),
-    {
-      key: 'minimax',
-      label: 'MiniMax Coding Plan',
-      baseUrl: 'https://api.minimaxi.com/v1',
-      models: ['MiniMax-M2.5', 'MiniMax-M2.7', 'MiniMax-M2.1'],
-    },
-  );
-  assert.deepEqual(
-    getOpenAICompatiblePreset('kimi'),
-    {
-      key: 'kimi',
-      label: 'Kimi 编程预设',
-      baseUrl: 'https://api.moonshot.ai/v1',
-      models: ['kimi-k2.5', 'kimi-k2-turbo-preview', 'kimi-k2-thinking'],
-    },
-  );
+  assert.equal(getDeepSeekPreset('other-a'), null);
+  assert.equal(getDeepSeekPreset('other-b'), null);
+  assert.equal(getDeepSeekPreset('other-c'), null);
+  assert.equal(getDeepSeekPreset('other-d'), null);
 }
 
 function testInferChatApiProfile() {
@@ -139,40 +116,11 @@ function testInferChatApiProfile() {
     inferChatApiProfile('https://api.deepseek.com', 'deepseek-chat'),
     'deepseek',
   );
-  assert.equal(
-    inferChatApiProfile('https://api.bltcy.ai/v1', 'deepseek-v3.2'),
-    'plato',
-  );
-  assert.equal(
-    inferChatApiProfile('https://api.bltcy.ai/v1', 'gpt-5-chat'),
-    'plato',
-  );
-  assert.equal(
-    inferChatApiProfile('https://api.openai.com/v1', 'gpt-4.1-mini'),
-    'openai',
-  );
-  assert.equal(
-    inferChatApiProfile('https://open.bigmodel.cn/api/coding/paas/v4', 'GLM-4.7'),
-    'glm',
-  );
-  assert.equal(
-    inferChatApiProfile('https://api.minimaxi.com/v1', 'MiniMax-M2.5'),
-    'minimax',
-  );
-  assert.equal(
-    inferChatApiProfile('https://api.moonshot.ai/v1', 'kimi-k2.5'),
-    'kimi',
-  );
+  assert.equal(inferChatApiProfile('https://example.com/v1', 'other-model'), 'unsupported');
+  assert.equal(inferChatApiProfile('https://example.com/v1', 'other-model'), 'unsupported');
 }
 
 function testResolveJsonResponseMode() {
-  assert.equal(
-    resolveJsonResponseMode({
-      baseUrl: 'https://api.openai.com/v1',
-      model: 'gpt-4.1-mini',
-    }),
-    'json_schema',
-  );
   assert.equal(
     resolveJsonResponseMode({
       baseUrl: 'https://api.deepseek.com',
@@ -182,15 +130,8 @@ function testResolveJsonResponseMode() {
   );
   assert.equal(
     resolveJsonResponseMode({
-      baseUrl: 'https://api.minimaxi.com/v1',
-      model: 'MiniMax-M2.5',
-    }),
-    'prompt_only',
-  );
-  assert.equal(
-    resolveJsonResponseMode({
-      baseUrl: 'https://api.openai.com/v1',
-      model: 'gpt-4.1-mini',
+      baseUrl: 'https://example.com/v1',
+      model: 'other-model',
       preferSchema: false,
     }),
     'json_object',
@@ -200,15 +141,15 @@ function testResolveJsonResponseMode() {
 function testShouldUseXApiKeyHeader() {
   assert.equal(
     shouldUseXApiKeyHeader({
-      baseUrl: 'https://api.minimaxi.com/v1',
-      model: 'MiniMax-M2.5',
+      baseUrl: 'https://example.com/v1',
+      model: 'other-model',
     }),
-    false,
+    true,
   );
   assert.equal(
     shouldUseXApiKeyHeader({
-      baseUrl: 'https://api.openai.com/v1',
-      model: 'gpt-4.1-mini',
+      baseUrl: 'https://example.com/v1',
+      model: 'other-model',
     }),
     true,
   );
@@ -238,24 +179,9 @@ function testBuildStreamingChatPayload() {
       model: 'deepseek-reasoner',
       messages: [{ role: 'user', content: 'hi' }],
       stream: true,
-      thinking: { type: 'enabled' },
     },
   );
 
-  assert.deepEqual(
-    buildStreamingChatPayload({
-      baseUrl: 'https://api.bltcy.ai/v1',
-      model: 'gpt-5-chat',
-      messages: [{ role: 'user', content: 'hi' }],
-    }),
-    {
-      model: 'gpt-5-chat',
-      messages: [{ role: 'user', content: 'hi' }],
-      stream: true,
-      reasoning: { effort: 'medium' },
-      extra_body: { return_reasoning: true },
-    },
-  );
 }
 
 function testBuildConnectivityTestPayload() {
@@ -272,8 +198,6 @@ function testBuildConnectivityTestPayload() {
       ],
       temperature: 0,
       max_tokens: 256,
-      max_completion_tokens: 256,
-      thinking: { type: 'disabled' },
     },
   );
 
@@ -293,22 +217,6 @@ function testBuildConnectivityTestPayload() {
     },
   );
 
-  assert.deepEqual(
-    buildConnectivityTestPayload({
-      baseUrl: 'https://open.bigmodel.cn/api/coding/paas/v4',
-      model: 'GLM-4.7',
-    }),
-    {
-      model: 'GLM-4.7',
-      messages: [
-        { role: 'system', content: 'Reply with exactly: hello world' },
-        { role: 'user', content: 'hello world' },
-      ],
-      temperature: 0,
-      max_tokens: 256,
-      max_completion_tokens: 256,
-    },
-  );
 }
 
 testNormalizeBaseUrlForStorage();
@@ -316,7 +224,7 @@ testBuildChatCompletionsEndpoint();
 testSanitizeModelList();
 testResolveChatModelsAndSummary();
 testInferProviderType();
-testGetOpenAICompatiblePreset();
+testGetDeepSeekPreset();
 testInferChatApiProfile();
 testResolveJsonResponseMode();
 testShouldUseXApiKeyHeader();

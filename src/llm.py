@@ -10,7 +10,7 @@ import requests
 统一的 LLM 客户端封装。
 
 提供商/模型命名规则：'provider/model'，provider 大小写不敏感，model 保留大小写与路径。
-当前支持：deepseek、siliconflow、ollama、blt、cstcloud（科技云）。
+当前运行链路仅支持 DeepSeek；本地 reranker 不走 LLM API。
 """
 
 # 单次实验级别的全局 token 统计（需由调用方在实验开始前手动 reset）
@@ -23,8 +23,7 @@ GLOBAL_TOKENS = {
 # 单次实验级别的全局时间统计（秒）
 GLOBAL_TIME_SECONDS: float = 0.0
 
-PRIMARY_LLM_BASE_URL = "https://api.gptbest.vip/v1"
-DEFAULT_BLT_BASE_URL = "https://api.bltcy.ai/v1"
+DEFAULT_DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 
 
 def reset_global_tokens():
@@ -137,32 +136,8 @@ class LLMClient:
             model = str(self.model or '').strip().lower()
             if 'deepseek' in url:
                 return 'deepseek'
-            if 'api.openai.com' in url:
-                return 'openai'
-            if 'open.bigmodel.cn' in url or 'bigmodel.cn' in url:
-                return 'glm'
-            if 'minimax' in url or 'minimaxi' in url:
-                return 'minimax'
-            if 'moonshot' in url or 'kimi' in url:
-                return 'kimi'
-            if 'siliconflow' in url or 'siliconflow.cn' in url:
-                return 'siliconflow'
-            if 'gptbest' in url:
-                return 'blt'
-            if 'bltcy' in url or 'blt' in url:
-                return 'blt'
-            if 'ollama' in url or 'localhost' in url:
-                return 'ollama'
-            if 'cstcloud' in url or 'uni-api.cstcloud.cn' in url:
-                return 'cstcloud'
             if model.startswith('deepseek-'):
                 return 'deepseek'
-            if model.startswith('glm-'):
-                return 'glm'
-            if model.startswith('minimax-'):
-                return 'minimax'
-            if model.startswith('kimi-'):
-                return 'kimi'
         except Exception:
             pass
         return 'llm'
@@ -300,8 +275,7 @@ class LLMClient:
         """
         按主请求端点选择结构化输出格式。
 
-        官方 OpenAI 与 BLT 优先使用 json_schema；大多数 OpenAI-compatible
-        网关只稳定支持 json_object，因此不要先发送 json_schema 再等错误回退。
+        DeepSeek 官方 JSON Output 稳定入口是 json_object，因此默认不发送 json_schema。
         可用 DPR_LLM_STRUCTURED_FORMAT/LLM_STRUCTURED_FORMAT 覆盖：
         - json_schema: 强制 json_schema，允许时再回退 json_object
         - json_object: 强制 json_object
@@ -322,13 +296,6 @@ class LLMClient:
         if override in ("json_schema", "schema", "structured"):
             return ["json_schema", "json_object", "prompt_only"]
 
-        request_bases = self._iter_request_bases()
-        primary_base = request_bases[0] if request_bases else self.base_url
-        primary_provider = self._provider_name(primary_base)
-        if primary_provider in ("openai", "kimi", "blt"):
-            return ["json_schema", "json_object", "prompt_only"]
-        if primary_provider == "minimax":
-            return ["prompt_only"]
         return ["json_object", "prompt_only"]
 
     @staticmethod
@@ -499,7 +466,7 @@ class LLMClient:
         统一 Chat Completions 请求。
 
         :param messages: OpenAI 格式的消息列表
-        :param response_format: 可选，结构化输出配置（柏拉图支持）
+        :param response_format: 可选，结构化输出配置（DeepSeek JSON mode）
         """
         headers = {
             "Authorization": f"Bearer {self.api_key}",
@@ -553,9 +520,9 @@ class LLMClient:
                     print("API 响应无法解析为 JSON，原始文本预览:", response.text[:500])
                     raise
 
-                debug_raw = os.getenv("BLT_DEBUG_RAW") == "1" or os.getenv("LLM_DEBUG_RAW") == "1"
-                if debug_raw and self._provider_name(req_base) == "blt":
-                    print("[DEBUG] BLT 原始响应包:", response.text)
+                debug_raw = os.getenv("LLM_DEBUG_RAW") == "1"
+                if debug_raw:
+                    print("[DEBUG] LLM 原始响应包:", response.text)
 
                 if isinstance(response_data, dict) and 'error' in response_data:
                     err = response_data.get('error') or {}
@@ -761,139 +728,13 @@ class LLMClient:
         top_n: Optional[int] = None,
         model: Optional[str] = None,
     ) -> dict:
-        """重排序接口（默认不支持，只有 BLT 提供）。"""
-        raise NotImplementedError("rerank 仅支持 BltClient，请使用 BltClient 调用。")
+        """重排序接口不走远端 LLM API，请使用本地 reranker。"""
+        raise NotImplementedError("远端 rerank 已关闭，请使用 src/3.rank_papers.py 的本地 reranker。")
 
 
 class DeepSeekClient(LLMClient):
-    def __init__(self, api_key: str, model: str, base_url: str = "https://api.deepseek.com"):
+    def __init__(self, api_key: str, model: str, base_url: str = DEFAULT_DEEPSEEK_BASE_URL):
         super().__init__(api_key=api_key, model=model, base_url=base_url)
-
-
-class SiliconflowClient(LLMClient):
-    def __init__(self, api_key: str, model: str, base_url: str = "https://api.siliconflow.cn/v1"):
-        super().__init__(api_key=api_key, model=model, base_url=base_url)
-
-
-class CSTCloudClient(LLMClient):
-    """CSTCloud（科技云）提供商，OpenAI Chat Completions 兼容接口。
-
-    默认基址：https://uni-api.cstcloud.cn/v1
-    使用示例：model="CSTCloud/gpt-oss-120b" 或 "CSTCloud/qwen3:235b"
-    建议环境变量：CSTCLOUD_API_KEY
-    """
-    def __init__(self, api_key: str, model: str, base_url: str = "https://uni-api.cstcloud.cn/v1"):
-        super().__init__(api_key=api_key, model=model, base_url=base_url)
-
-
-SliconflowClient = SiliconflowClient
-
-
-class OllamaClient(LLMClient):
-    def __init__(self, api_key: str, model: str, base_url: str = "http://localhost:11111/v1"):
-        super().__init__(api_key=api_key, model=model, base_url=base_url)
-
-
-class BltClient(LLMClient):
-    """BLT（柏拉图）网关，OpenAI Chat Completions 兼容接口。"""
-    def __init__(self, api_key: str, model: str, base_url: str = None):
-        legacy_base = base_url or os.getenv('BLT_API_BASE', DEFAULT_BLT_BASE_URL)
-        primary_base = (
-            os.getenv("LLM_PRIMARY_BASE_URL")
-            or os.getenv("BLT_PRIMARY_BASE_URL")
-            or os.getenv("GPTBEST_BASE_URL")
-            or PRIMARY_LLM_BASE_URL
-        ).strip() or PRIMARY_LLM_BASE_URL
-        super().__init__(api_key=api_key, model=model, base_url=primary_base)
-        self._base_urls = self._normalize_base_urls([primary_base, legacy_base])
-
-    def rerank(
-        self,
-        query: str,
-        documents: List[str],
-        top_n: Optional[int] = None,
-        model: Optional[str] = None,
-    ) -> dict:
-        """
-        调用柏拉图 Rerank 接口（/v1/rerank）。
-
-        :param query: 查询文本
-        :param documents: 待排序文档列表
-        :param top_n: 返回的 Top N（可选）
-        :param model: 重排模型名（可选，默认使用 self.model）
-        """
-        if not query:
-            raise ValueError("rerank: query 不能为空")
-        if not documents:
-            raise ValueError("rerank: documents 不能为空")
-
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json",
-        }
-        payload: Dict[str, Any] = {
-            "model": model or self.model,
-            "query": query,
-            "documents": documents,
-        }
-        if top_n is not None:
-            payload["top_n"] = int(top_n)
-
-        request_bases = self._iter_retry_bases(total_attempts=6)
-        last_error: Exception | None = None
-        for attempt_idx, req_base in enumerate(request_bases, start=1):
-            request_url = f"{req_base.rstrip('/')}/rerank"
-            try:
-                response = requests.post(request_url, headers=headers, json=payload, timeout=120)
-                response.raise_for_status()
-                try:
-                    response_data = response.json()
-                except ValueError:
-                    print("Rerank 响应无法解析为 JSON，原始文本预览:", response.text[:500])
-                    raise
-
-                if isinstance(response_data, dict) and 'error' in response_data:
-                    err = response_data.get('error') or {}
-                    print("Rerank 返回错误:", {
-                        'type': err.get('type'),
-                        'code': err.get('code'),
-                        'message': err.get('message') or err,
-                    })
-                    raise requests.exceptions.HTTPError(f"Rerank API error: {err}")
-
-                return response_data
-            except Exception as e:
-                last_error = e
-                if attempt_idx < len(request_bases):
-                    next_base = request_bases[attempt_idx] if attempt_idx < len(request_bases) else ''
-                    print(
-                        f"Rerank 请求失败（base={req_base}，第 {attempt_idx} 次），"
-                        f"将回退到 {next_base}"
-                    )
-                    continue
-                print(f"通过 requests 调用 Rerank API 时出错: {e}")
-                print("Rerank 请求摘要:", {
-                    "url": request_url,
-                    "model": payload.get("model"),
-                    "query_len": len(query or ""),
-                    "documents": len(documents),
-                    "top_n": payload.get("top_n"),
-                })
-                if e.response is not None:
-                    try:
-                        print("错误详情(JSON):", e.response.json())
-                    except ValueError:
-                        try:
-                            print("错误详情(TEXT):", e.response.text[:500])
-                        except Exception:
-                            pass
-                else:
-                    print("错误详情: 未收到服务端响应（可能是网络/SSL问题）。")
-                raise
-
-        if last_error is not None:
-            raise last_error
-        raise RuntimeError("rerank 未命中可用 base")
 
 
 def parse_provider_model(model_str: str) -> Tuple[str, str]:
@@ -903,11 +744,9 @@ def parse_provider_model(model_str: str) -> Tuple[str, str]:
     规则：第一个 '/' 之前为提供商（大小写不敏感），之后的全部为模型名（大小写敏感，允许包含 '/').
     示例：
     - "deepseek/deepseek-chat" -> ("deepseek", "deepseek-chat")
-    - "SiliconFlow/Qwen/Qwen3-8B" -> ("siliconflow", "Qwen/Qwen3-8B")
-    - "ollama/llama3.1:8b" -> ("ollama", "llama3.1:8b")
     """
     if not isinstance(model_str, str) or '/' not in model_str:
-        raise ValueError("缺少模型提供商：请使用 'provider/model' 格式，例如 'CSTCloud/gpt-oss-120b'")
+        raise ValueError("缺少模型提供商：请使用 'deepseek/model' 格式，例如 'deepseek/deepseek-chat'")
     provider, model = model_str.split('/', 1)
     return provider.lower(), model
 
@@ -926,26 +765,16 @@ class ClientFactory:
         """
         model_env = (os.getenv('LLM_MODEL') or '').strip()
         if not model_env:
-            raise ValueError("缺少必要环境变量: LLM_MODEL（格式为 'provider/model'）")
+            raise ValueError("缺少必要环境变量: LLM_MODEL（格式为 'deepseek/model'）")
 
         provider, model = parse_provider_model(model_env)
         api_key = (os.getenv('LLM_API_KEY') or '').strip() or None
         base_url = (os.getenv('LLM_BASE_URL') or '').strip() or None
 
         if provider == 'deepseek':
-            base_url = base_url or "https://api.deepseek.com"
+            base_url = base_url or DEFAULT_DEEPSEEK_BASE_URL
             return DeepSeekClient(api_key=api_key or os.getenv('DEEPSEEK_API_KEY', ''), model=model, base_url=base_url)
-        if provider in ('siliconflow', 'silicon-flow', 'sflow'):
-            base_url = base_url or "https://api.siliconflow.cn/v1"
-            return SiliconflowClient(api_key=api_key or os.getenv('SILICONFLOW_API_KEY', ''), model=model, base_url=base_url)
-        if provider == 'ollama':
-            base_url = base_url or "http://localhost:11111/v1"
-            return OllamaClient(api_key=api_key or '', model=model, base_url=base_url)
-        if provider in ('blt', 'bltcy', 'plato'):
-            return BltClient(api_key=api_key or os.getenv('BLT_API_KEY', ''), model=model, base_url=base_url or os.getenv('BLT_API_BASE', 'https://api.bltcy.ai/v1'))
-        if provider in ('cstcloud', 'cst', 'cst-cloud', 'keji', 'keji-yun'):
-            return CSTCloudClient(api_key=api_key or os.getenv('CSTCLOUD_API_KEY', ''), model=model, base_url=base_url or 'https://uni-api.cstcloud.cn/v1')
-        raise ValueError(f"不支持的提供商: {provider}，请使用 'deepseek'、'siliconflow'、'blt'、'cstcloud' 或 'ollama'")
+        raise ValueError(f"当前仅支持 DeepSeek API，请使用 'deepseek/模型名'，当前 provider={provider}")
 
     @staticmethod
     def from_config(_config: dict | None = None):

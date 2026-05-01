@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# 使用柏拉图 Rerank API 对候选论文做重排序（简化版）。
+# 使用本地 Qwen3 Reranker 对候选论文做重排序（简化版）。
 
 import argparse
 import json
@@ -7,8 +7,6 @@ import os
 import random
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
-
-from llm import BltClient
 
 SCRIPT_DIR = os.path.dirname(__file__)
 ROOT_DIR = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
@@ -28,6 +26,8 @@ GLOBAL_POOL_GUARANTEED_MIN = 5
 GLOBAL_POOL_GUARANTEED_MAX = 20
 GLOBAL_POOL_RRF_MIN = 60
 GLOBAL_POOL_RRF_MAX = 300
+DEFAULT_LOCAL_RERANK_MODEL = "Qwen/Qwen3-Reranker-0.6B"
+DEFAULT_LOCAL_RERANK_BATCH_SIZE = 8
 
 
 def log(message: str) -> None:
@@ -41,6 +41,70 @@ def group_start(title: str) -> None:
 
 def group_end() -> None:
   print("::endgroup::", flush=True)
+
+
+class LocalQwenReranker:
+  """本地 CrossEncoder 重排器，默认使用 Qwen3-Reranker-0.6B。"""
+
+  def __init__(
+    self,
+    model_name: str = DEFAULT_LOCAL_RERANK_MODEL,
+    *,
+    device: str = "",
+    batch_size: int = DEFAULT_LOCAL_RERANK_BATCH_SIZE,
+  ) -> None:
+    self.model_name = str(model_name or DEFAULT_LOCAL_RERANK_MODEL).strip()
+    self.batch_size = max(int(batch_size or DEFAULT_LOCAL_RERANK_BATCH_SIZE), 1)
+    try:
+      from sentence_transformers import CrossEncoder  # type: ignore
+    except Exception as exc:
+      raise RuntimeError(
+        "本地 reranker 需要 sentence-transformers，请先安装 requirements.txt。"
+      ) from exc
+
+    kwargs: Dict[str, Any] = {}
+    clean_device = str(device or "").strip()
+    if clean_device:
+      kwargs["device"] = clean_device
+    try:
+      self.model = CrossEncoder(self.model_name, trust_remote_code=True, **kwargs)
+    except TypeError:
+      self.model = CrossEncoder(self.model_name, **kwargs)
+
+  def rerank(
+    self,
+    *,
+    query: str,
+    documents: List[str],
+    top_n: Optional[int] = None,
+    model: Optional[str] = None,
+  ) -> Dict[str, Any]:
+    query_text = str(query or "").strip()
+    if not query_text:
+      raise ValueError("rerank: query 不能为空")
+    if not documents:
+      raise ValueError("rerank: documents 不能为空")
+
+    pairs = [(query_text, str(doc or "")) for doc in documents]
+    try:
+      raw_scores = self.model.predict(pairs, batch_size=self.batch_size)
+    except TypeError:
+      raw_scores = self.model.predict(pairs)
+
+    results: List[Dict[str, Any]] = []
+    for idx, raw_score in enumerate(list(raw_scores)):
+      if isinstance(raw_score, (list, tuple)) and raw_score:
+        raw_score = raw_score[0]
+      try:
+        score = float(raw_score)
+      except Exception:
+        score = 0.0
+      results.append({"index": idx, "relevance_score": score})
+
+    results.sort(key=lambda item: item["relevance_score"], reverse=True)
+    if top_n is not None:
+      results = results[: max(int(top_n), 0)]
+    return {"results": results, "model": model or self.model_name}
 
 def build_token_encoder():
   try:
@@ -238,7 +302,7 @@ def rrf_merge(scores: Dict[int, float], rank_idx: int, orig_idx: int) -> None:
 
 
 def process_file(
-  reranker: BltClient,
+  reranker: Any,
   input_path: str,
   output_path: str,
   top_n: Optional[int],
@@ -388,7 +452,7 @@ def process_file(
 
 def main() -> None:
   parser = argparse.ArgumentParser(
-    description="步骤 3：使用 BLT Rerank API 对候选论文做重排序（简化版）。",
+    description="步骤 3：使用本地 Qwen3 Reranker 对候选论文做重排序（简化版）。",
   )
   parser.add_argument(
     "--input",
@@ -411,8 +475,20 @@ def main() -> None:
   parser.add_argument(
     "--rerank-model",
     type=str,
-    default=os.getenv("BLT_RERANK_MODEL") or os.getenv("RERANK_MODEL") or "qwen3-reranker-4b",
-    help="BLT Rerank 模型名称（默认 qwen3-reranker-4b）。",
+    default=os.getenv("LOCAL_RERANK_MODEL") or os.getenv("RERANK_MODEL") or DEFAULT_LOCAL_RERANK_MODEL,
+    help=f"本地 Rerank 模型名称（默认 {DEFAULT_LOCAL_RERANK_MODEL}）。",
+  )
+  parser.add_argument(
+    "--rerank-device",
+    type=str,
+    default=os.getenv("LOCAL_RERANK_DEVICE", ""),
+    help="本地 Rerank 运行设备，例如 cpu/cuda；默认交给 sentence-transformers 自动判断。",
+  )
+  parser.add_argument(
+    "--rerank-batch-size",
+    type=int,
+    default=int(os.getenv("LOCAL_RERANK_BATCH_SIZE") or DEFAULT_LOCAL_RERANK_BATCH_SIZE),
+    help=f"本地 Rerank 推理 batch size（默认 {DEFAULT_LOCAL_RERANK_BATCH_SIZE}）。",
   )
 
   args = parser.parse_args()
@@ -429,11 +505,15 @@ def main() -> None:
     log(f"[WARN] 输入文件不存在（今天可能没有新论文）：{input_path}，将跳过 Step 3。")
     return
 
-  api_key = os.getenv("BLT_API_KEY")
-  if not api_key:
-    raise RuntimeError("缺少 BLT_API_KEY 环境变量，无法调用 BLT Rerank API。")
-
-  reranker = BltClient(api_key=api_key, model=args.rerank_model)
+  log(
+    f"[INFO] 加载本地 reranker：model={args.rerank_model}，"
+    f"device={args.rerank_device or 'auto'}，batch_size={args.rerank_batch_size}"
+  )
+  reranker = LocalQwenReranker(
+    model_name=args.rerank_model,
+    device=args.rerank_device,
+    batch_size=args.rerank_batch_size,
+  )
   process_file(
     reranker=reranker,
     input_path=input_path,
