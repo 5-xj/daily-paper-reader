@@ -136,6 +136,8 @@ class LLMClient:
             url = (base_url or self.base_url or '').lower()
             if 'deepseek' in url:
                 return 'deepseek'
+            if 'api.openai.com' in url:
+                return 'openai'
             if 'siliconflow' in url or 'siliconflow.cn' in url:
                 return 'siliconflow'
             if 'gptbest' in url:
@@ -275,6 +277,57 @@ class LLMClient:
     @staticmethod
     def build_json_object_response_format() -> Dict[str, str]:
         return {"type": "json_object"}
+
+    def _structured_response_format_names(
+        self,
+        allow_json_object_fallback: bool,
+    ) -> List[str]:
+        """
+        按主请求端点选择结构化输出格式。
+
+        官方 OpenAI 与 BLT 优先使用 json_schema；大多数 OpenAI-compatible
+        网关只稳定支持 json_object，因此不要先发送 json_schema 再等错误回退。
+        可用 DPR_LLM_STRUCTURED_FORMAT/LLM_STRUCTURED_FORMAT 覆盖：
+        - json_schema: 强制 json_schema，允许时再回退 json_object
+        - json_object: 强制 json_object
+        - auto: 使用默认判断
+        """
+        if not allow_json_object_fallback:
+            return ["json_schema"]
+
+        override = (
+            os.getenv("DPR_LLM_STRUCTURED_FORMAT")
+            or os.getenv("LLM_STRUCTURED_FORMAT")
+            or ""
+        ).strip().lower().replace("-", "_")
+        if override in ("json_object", "object", "json"):
+            return ["json_object"]
+        if override in ("json_schema", "schema", "structured"):
+            return ["json_schema", "json_object"]
+
+        request_bases = self._iter_request_bases()
+        primary_base = request_bases[0] if request_bases else self.base_url
+        primary_provider = self._provider_name(primary_base)
+        if primary_provider in ("openai", "blt"):
+            return ["json_schema", "json_object"]
+        return ["json_object"]
+
+    def _build_response_format_by_name(
+        self,
+        format_name: str,
+        schema_name: str,
+        schema: Dict[str, Any],
+        strict: bool,
+    ) -> Dict[str, Any]:
+        if format_name == "json_schema":
+            return self.build_json_schema_response_format(
+                schema_name=schema_name,
+                schema=schema,
+                strict=strict,
+            )
+        if format_name == "json_object":
+            return self.build_json_object_response_format()
+        raise ValueError(f"未知结构化输出格式: {format_name}")
 
     @staticmethod
     def _is_structured_output_unsupported_error(error: Exception) -> bool:
@@ -519,16 +572,18 @@ class LLMClient:
     ) -> Dict[str, Any]:
         attempts: List[Tuple[str, Dict[str, Any]]] = [
             (
-                "json_schema",
-                self.build_json_schema_response_format(
+                format_name,
+                self._build_response_format_by_name(
+                    format_name=format_name,
                     schema_name=schema_name,
                     schema=schema,
                     strict=strict,
                 ),
             )
+            for format_name in self._structured_response_format_names(
+                allow_json_object_fallback=allow_json_object_fallback,
+            )
         ]
-        if allow_json_object_fallback:
-            attempts.append(("json_object", self.build_json_object_response_format()))
 
         last_error: Exception | None = None
         for idx, (format_name, response_format) in enumerate(attempts):

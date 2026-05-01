@@ -74,13 +74,35 @@ class LlmStructuredOutputTest(unittest.TestCase):
         )
 
     @patch("llm.requests.post")
-    def test_chat_structured_falls_back_for_deepseek_style_enum_error(self, mock_post):
-        mock_post.side_effect = [
-            self._mock_http_error_response(
-                '{"error":{"message":"response_format.type must be one of text or json_object"}}'
-            ),
-            self._mock_success_response({"content": '{"answer":"ok"}'}),
-        ]
+    def test_chat_structured_prefers_json_schema_for_official_openai(self, mock_post):
+        mock_post.return_value = self._mock_success_response({"content": '{"answer":"ok"}'})
+        client = LLMClient(
+            api_key="test-key",
+            model="gpt-4.1-mini",
+            base_url="https://api.openai.com/v1",
+        )
+
+        result = client.chat_structured(
+            messages=[{"role": "user", "content": "hello"}],
+            schema_name="answer_payload",
+            schema={
+                "type": "object",
+                "properties": {"answer": {"type": "string"}},
+                "required": ["answer"],
+                "additionalProperties": False,
+            },
+        )
+
+        self.assertEqual(result["response_format_used"], "json_schema")
+        self.assertEqual(result["parsed"], {"answer": "ok"})
+        self.assertEqual(
+            mock_post.call_args.kwargs["json"]["response_format"]["type"],
+            "json_schema",
+        )
+
+    @patch("llm.requests.post")
+    def test_chat_structured_prefers_json_object_for_deepseek(self, mock_post):
+        mock_post.return_value = self._mock_success_response({"content": '{"answer":"ok"}'})
         client = LLMClient(
             api_key="test-key",
             model="deepseek-chat",
@@ -102,7 +124,34 @@ class LlmStructuredOutputTest(unittest.TestCase):
         self.assertEqual(result["parsed"], {"answer": "ok"})
         self.assertEqual(
             [call.kwargs["json"]["response_format"]["type"] for call in mock_post.call_args_list],
-            ["json_schema", "json_object"],
+            ["json_object"],
+        )
+
+    @patch("llm.requests.post")
+    def test_chat_structured_prefers_json_object_for_generic_compatible_base(self, mock_post):
+        mock_post.return_value = self._mock_success_response({"content": '{"answer":"ok"}'})
+        client = LLMClient(
+            api_key="test-key",
+            model="GLM-4.7",
+            base_url="https://open.bigmodel.cn/api/coding/paas/v4",
+        )
+
+        result = client.chat_structured(
+            messages=[{"role": "user", "content": "hello"}],
+            schema_name="answer_payload",
+            schema={
+                "type": "object",
+                "properties": {"answer": {"type": "string"}},
+                "required": ["answer"],
+                "additionalProperties": False,
+            },
+        )
+
+        self.assertEqual(result["response_format_used"], "json_object")
+        self.assertEqual(result["parsed"], {"answer": "ok"})
+        self.assertEqual(
+            mock_post.call_args.kwargs["json"]["response_format"]["type"],
+            "json_object",
         )
 
     @patch("llm.requests.post")
