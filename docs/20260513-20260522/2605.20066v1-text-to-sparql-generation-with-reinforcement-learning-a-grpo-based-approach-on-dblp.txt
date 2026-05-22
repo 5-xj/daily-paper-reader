@@ -1,0 +1,289 @@
+Title: Text-to-SPARQL Generation with Reinforcement Learning: A GRPO-based Approach on DBLP
+
+URL Source: https://arxiv.org/pdf/2605.20066v1
+
+Published Time: Wed, 20 May 2026 01:32:37 GMT
+
+Number of Pages: 17
+
+Markdown Content:
+# Text-to-SPARQL Generation with Reinforcement Learning: A GRPO-based Approach on DBLP 
+
+Jann Pfeifer jann.pfeifer@leuphana.de 
+
+Debayan Banerjee debayan.banerjee@leuphana.de 
+
+Ricardo Usbeck ricardo.usbeck@leuphana.de 
+
+Leuphana University L¨ uneburg, Germany 
+
+## Abstract 
+
+Knowledge graph question answering seeks to translate natural language questions into ex-ecutable queries over knowledge graphs, but existing approaches often rely on large models or full supervision in the form of gold query annotations. This study examines whether reinforcement learning with outcome-based rewards can train a small instruction-tuned language model to perform zero-shot Text-to-SPARQL generation in the scholarly do-main. Group-Relative Policy Optimization (GRPO) is applied to the Qwen3-1.7B model on DBLP-QuAD, using prompts that combine natural language questions with symbolic hints about entities and relations. Training relies on execution feedback, structural constraints, and answer-level rewards, with an additional variant that incorporates gold-query-based shaping. The resulting models are compared to the unmodified zero-shot baseline and to a supervised DoRA-finetuned baseline across answer-level accuracy, execution accuracy, category-wise scores, and generalization to held-out templates. GRPO substantially im-proves over the zero-shot baseline and exhibits competitive generalization, while supervised DoRA finetuning achieves higher overall accuracy on the same model scale. Ablation anal-yses indicate that execution-based rewards account for most gains, with additional shaping yielding limited additional benefit, suggesting that outcome-based reinforcement learning is a viable training strategy when gold queries are unavailable for token-level supervision. 
+
+## 1. Introduction 
+
+Knowledge graphs (KGs) provide a structured representation of entities and their relation-ships across domains such as healthcare, finance, and the scholarly literature (Abu-Salih, 2021). While SPARQL offers a flexible query language for such graphs, it requires users to understand the underlying schema and to adhere to its formal syntax, making direct interaction difficult for non-expert users. Knowledge Graph Question Answering (KGQA) addresses this by mapping natural language questions to executable queries. Early systems approached this as a semantic parsing task, training sequence models on datasets such as LC-QuAD (Trivedi et al., 2017) and QALD (Perevalov et al., 2022). Encoder–decoder architectures based on T5 and BART established strong supervised base-lines under gold entity and relation linking (Banerjee et al., 2022), with extensions in-cluding structure-aware pretraining (Qi et al., 2024), copy mechanisms for KG elements (Hirigoyen et al., 2022), and enhanced attention with correction mechanisms (Chen et al., 2025b). More recently, LLMs have been applied via few-shot in-context learning and agentic pipelines (D’Abramo et al., 2025; Strappazon et al., 2025; Avila et al., 2024), sometimes matching fine-tuned baselines without task-specific training. However, these approaches  
+
+> ©J. Pfeifer, D. Banerjee & R. Usbeck.
+> arXiv:2605.20066v1 [cs.CL] 19 May 2026 Pfeifer Banerjee Usbeck
+
+typically rely on large models and substantial supervision or careful prompt engineering, which limits their applicability to new domains. In the scholarly KGQA setting specifically, DBLP-QuAD (Banerjee et al., 2023a) pro-vides a 10,000-question benchmark over the DBLP bibliographic KG involving diverse ques-tion types, temporal conditions, and compositional patterns. Other scholarly benchmarks include SciQA over the Open Research Knowledge Graph (Auer et al., 2023) and ORKG-QA (Jaradeh et al., 2020). Systems targeting these benchmarks range from neuro-symbolic pipelines (Abi Akl, 2023) to LLM prompting with ontological information (Jiang et al., 2023; Meloni et al., 2025), but they either rely on gold SPARQL supervision, assume strong linking components, or require large models. Reinforcement learning (RL) with verifiable rewards offers a complementary training paradigm for structured generation tasks where outputs can be executed and evaluated programmatically. In the Text-to-SQL literature, RL has been applied with execution-based and constraint-based rewards (Chen et al., 2025a; Pourreza et al., 2025; Stoisser et al., 2025), using algorithms such as REINFORCE, PPO, and Group Relative Policy Optimization (GRPO). GRPO, introduced by Shao et al. (2024), estimates advantages from groups of sampled trajectories without an explicit value function, reducing memory overhead relative to PPO. For KGQA, RL applications are more recent and typically agentic: Vossebeld and Wang (2025) fine-tune a compact LLM with GRPO to iteratively refine SPARQL over Wikidata, and concurrent preprints (Chen et al., 2025c; Song et al., 2025; Zhang and Zhao, 2025) adopt GRPO with curriculum or process-based rewards for multi-step KG reasoning. However, these approaches mostly target iterative agent pipelines rather than single-step Text-to-SPARQL generation with small models. A growing line of work shows that small models can be competitive for structured query generation when paired with appropriate training. Parameter-efficient fine-tuning achieves competitive Text-to-SQL results at small scale (Karki et al., 2025), RL fine-tuning can close part of the gap to large models on commodity hardware (Nguyen et al., 2025), and sub-1B models have been applied to KGQA as subgraph retrieval (Huang et al., 2024). Jiang et al. (2025) further show that a 7B agentic model can outperform larger baselines. Despite this progress, there is limited evidence on whether a small open-weight model can be trained via outcome-driven RL for single-step scholarly Text-to-SPARQL, and how such training compares to supervised fine-tuning at the same scale. This work investigates this question by applying GRPO to Qwen3-1.7B (Yang et al., 2025) on DBLP-QuAD. The model receives the natural language question together with symbolic hints about relevant entities and relations, enriched with human-readable schema information, and produces a SPARQL query under a fixed output protocol. We study two GRPO variants, one using only execution-based rewards and structural constraints, and one augmented with gold-query-based shaping. We compare both to the zero-shot base model and a supervised DoRA (Liu et al., 2024) baseline. The contributions of this paper are threefold: First, we present an outcome-driven training pipeline for scholarly Text-to-SPARQL that uses the symbolic executor as the pri-mary supervision signal at small model scale. Second, we provide a systematic comparison between zero-shot prompting, GRPO training, and supervised DoRA fine-tuning on DBLP-QuAD, including analyses of category-wise performance, temporal conditions, and held-out 
+
+> 2
+
+template generalization. Third, we analyze multi-component reward design for GRPO in this setting, isolating the role of execution-based rewards relative to shaping terms. 
+
+## 2. Methodology 
+
+2.1. Task formulation and assumptions 
+
+We study Text-to-SPARQL generation for scholarly KGQA on DBLP-QuAD, formulated as a single-step decision problem. Given one input prompt, the policy produces one complete SPARQL query as its terminal action. Inference is zero-shot, in the sense that no in-context demonstrations are provided at test time. A central design choice is to assume perfect entity and relation linking: the prompt provides pre-resolved entity and relation URIs alongside schema-enriched metadata, so the model is not required to perform entity disambiguation or relation mapping. This isolates the core challenge of generating an executable, KG-grounded query, while constituting a limitation by removing a major source of errors in end-to-end KGQA. To enable execution-based supervision, gold answer sets are materialized during prepro-cessing by executing the dataset’s gold SPARQL queries against a fixed DBLP endpoint, and the resulting answer sets are used consistently for reward computation and evaluation. 
+
+2.2. Input representation as symbolic hints 
+
+The policy input is a two-part conversational prompt consisting of a system message and a user message. This prompt functions as a lightweight symbolic interface, exposing rel-evant knowledge graph symbols (URIs) and typing cues (schema domain/range and short descriptions), and the neural policy is trained to respect these constraints during generation. 
+
+System prompt. The system message specifies both the task and the required output protocol, enforcing the following constraints: the generated SPARQL query must be syn-tactically and semantically correct, use full URIs without prefixes, and default to SELECT DISTINCT for retrieval queries or ASK for yes/no questions. The model is further instructed to produce step-by-step internal reasoning enclosed within <think> tags, followed by the final SPARQL query only, with no additional explanation or formatting (Appendix A.1.1). 
+
+User prompt content. The user message contains the natural language question, a list of linked entities, and a list of linked relations. Each entity is provided as a URI together with a human-readable label, which allows the model to access the surface form without dereferencing URIs during inference. Each relation is provided as a URI, a label, and schema-level context (domain, range, and a short comment/description). These relation descriptors serve as lightweight ontological grounding (Appendix A.1.2). 
+
+2.3. GRPO training objective 
+
+We optimize the policy using Group-Relative Policy Optimization (GRPO). Intuitively, for each question we sample a small group of candidate queries, rank and normalize their rewards within the group, and update the policy to increase the likelihood of higher-reward queries while remaining close to a fixed reference policy via KL regularization. Formally, for each prompt x we sample G rollouts y1, . . . , y G ∼ πθold (· | x) and compute a scalar terminal reward R(x, y i) for each completion. Rewards are standardized within the 
+
+> 3
+
+Pfeifer Banerjee Usbeck 
+
+group to obtain an implicit advantage estimate ˆAi = R(x, y i) − μR
+
+σR + εstd 
+
+, (1) where μR and σR denote the mean and standard deviation over the G rewards. In all experiments, we use a fixed group size of G = 4. Policy updates follow a PPO-style clipped surrogate objective. Let 
+
+ri(θ) = πθ(yi | x)
+
+πθold (yi | x) (2) denote the probability ratio. The clipped objective is 
+
+Lclip (θ) = E
+
+h
+
+min  ri(θ) ˆAi, clip( ri(θ), 1 − ϵ, 1 + ϵ) ˆAi
+
+i
+
+, (3) with clipping parameter ϵ = 0 .2. To regularize the updated policy against a fixed reference policy πref (the base model prior to GRPO fine-tuning), we add a KL penalty and optimize max  
+
+> θ
+
+Lclip (θ) − β EKL( πθ(· | x) ∥ πref (· | x)) , (4) with coefficient β = 0 .04. Exploration is controlled through stochastic decoding and the KL constraint; no explicit entropy bonus is used. 
+
+2.4. Reward design 
+
+The reward is designed to provide outcome-based supervision for executable query gener-ation, with execution feedback as the dominant signal and several lower-weighted shaping terms that enforce symbolic well-formedness. For each completion, the final scalar reward is a heuristically weighted linear combination of six components: 
+
+R = 3 Rexec + 2 Rsim + 1 Rstruct + 0 .5Rformat + 1 Rlen + 1 Rlen-ratio . (5) 
+
+Execution-feedback reward ( Rexec ). This component measures semantic correctness by executing the generated query qgen against the DBLP endpoint and comparing the re-sulting answer set Agen to the gold answer set Agold . If execution fails, the reward is set to a fixed penalty of −0.5. Otherwise, correctness is computed as the F1 score over normalized answer tuples: 
+
+Rexec = F1(Agen , A gold ). (6) 
+
+Structural coverage reward ( Rstruct ). To enforce grounding in the symbolic hints, we reward the inclusion of all required entity and relation URIs provided in the prompt: 
+
+Rstruct = 0 .5 Irelations + 0 .5 Ientities , (7) where each indicator is 1 if all required URIs of that type occur in qgen and 0 otherwise. This discourages the model from ignoring parts of the provided context. 
+
+4Format reward (Rformat ). This component implements a soft output-protocol con-straint. If a closing </think> tag is present, the suffix is extracted and checked for non-emptiness; a non-empty extracted query yields reward 1, otherwise 0. If no think tags are present, any non-empty completion is accepted with reward 1. 
+
+Length reward ( Rlen ). To reduce truncation-related failures, we mildly penalize outputs that approach the maximum generation length. The reward decreases linearly once the token length x exceeds a target length n = 768 (maximum a = 1024), clipped to [0 , 1]: 
+
+Rlen = clip 
+
+
+
+1 − x − na − n , 0, 1
+
+
+
+. (8) 
+
+Gold-query shaping (optional). Two additional components are available only in set-tings where the gold SPARQL query is exposed during training. The query similarity reward Rsim computes sentence-level BLEU between a normalized tokenization of qgen and the normalized gold query qgold . The query length ratio reward Rlen-ratio regularizes query complexity via a symmetric log-distance between the token lengths of qgen and qgold :
+
+r = |qgen ||qgold | , Rlen-ratio = exp  −α| log r|, α = 2 . (9) These terms provide token-level shaping, but they also introduce competing objectives relative to execution-based correctness. 
+
+2.5. Post-processing and execution loop 
+
+To recover a final query candidate from raw completions robustly, we locate the last closing 
+
+</think> tag, discard all preceding content, and extract the last fenced code block from the remaining suffix if present, or use the full suffix otherwise. The extracted query is executed against a fixed Virtuoso endpoint hosting the April 2024 DBLP knowledge graph, with a normalized-query cache to avoid redundant endpoint calls during training and evaluation. 
+
+## 3. Experimental Setup 
+
+3.1. Data and splits 
+
+All experiments are conducted on DBLP-QuAD, a scholarly KGQA benchmark built on the DBLP knowledge graph. DBLP-QuAD contains 10,000 executable question–SPARQL pairs distributed via Hugging Face (Banerjee et al., 2023a,b), split into training, validation and test sets at a 7:1:2 ratio (7,000, 1,000, and 2,000 instances respectively). Each instance provides the natural language question, the corresponding SPARQL query, linked entity and relation URIs, a query-type label, template identifier, and Boolean flags marking temporal questions and held-out template instances. The query-type label contains one of ten semantic question categories: Single Fact, Multiple Facts, Boolean, Negation, Double Negation, Double Intent, Union, Count, Su-perlative/Comparative, and Disambiguation. Since these categories correspond to distinct logical query patterns, we report category-wise breakdowns in addition to aggregate scores. We additionally evaluate on two orthogonal slices defined by the dataset flags. First, tem-poral questions, which require reasoning over publication years or other time-dependent information. Second, held-out template instances, which account for roughly 19% of the 
+
+> 5Pfeifer Banerjee Usbeck
+
+test split and provide a non-i.i.d. slice for assessing generalization beyond query patterns seen during training (Banerjee et al., 2023a). 
+
+3.2. Models and baselines 
+
+All compared configurations are based on the Qwen3-1.7B architecture and use the same preprocessing pipeline and prompt format described in Section 2. A model from the Qwen3 family was chosen, because it is practically trainable and has been shown to respond well to RL-style finetuning (Gandhi et al., 2025; Wang et al., 2025; Shao et al., 2025). 
+
+Zero-shot base model. As a reference point, we evaluate the unmodified instruction-tuned base model in a zero-shot setting on DBLP-QuAD using the same prompt template as in all other configurations. We consider two prompting modes: a chain-of-thought (CoT) variant that requests intermediate reasoning, and a non-CoT variant that prompts the model to output the query directly. 
+
+Supervised finetuning baseline (DoRA). As a non-RL baseline, we train a supervised finetuned model using DoRA adapters on the gold SPARQL targets. We choose DoRA as a parameter-efficient finetuning method primarily due to computational resource constraints. The model is optimized with a standard cross-entropy loss over the target query tokens, for a single epoch to match the data passes of the GRPO runs. Since the dataset provides supervision only for final SPARQL queries, CoT prompting is disabled in this setting. 
+
+GRPO without gold-query shaping. Our main RL configuration uses GRPO with outcome-based rewards and does not assume access to gold SPARQL queries during training. Rewards are constructed from execution feedback and auxiliary shaping terms that enforce grounding in the provided entities and relations and stabilize training. This setting reflects a weakly supervised scenario where only questions and gold answers are available. 
+
+GRPO with gold-query shaping. To assess the effect of incorporating query-level supervision within RL, we additionally evaluate a GRPO variant that includes gold-query-dependent shaping terms in the reward, namely a query similarity component and a query length regularizer. Comparing this variant to the outcome-only configuration isolates the contribution of gold-query shaping while keeping the RL algorithm and model scale fixed. 
+
+3.3. Training and compute conditions 
+
+All runs are conducted on a single machine equipped with two NVIDIA RTX A6000 GPUs. Mixed-precision training with the bfloat16 format is enabled throughout all experiments. For GRPO, we finetune the full model parameters, whereas the supervised baseline is trained with DoRA adapters. GRPO training follows a fixed update scheme across the main configuration and all reward ablations. The per-device batch size is set to 4 questions, and for each question the policy samples a group of G = 4 rollouts. This yields 16 sampled completions per forward pass on one device. Training is performed for a single epoch over the training set under the above accumulation regime. All runs use a fixed random seed for reproducibility. However, stochastic decoding during rollout generation (temperature 0.6, top-p 0.95) introduces non-determinism that a fixed seed does not fully control. 
+
+> 6
+
+Table 1: Overall answer-level performance on DBLP-QuAD. EMAcc denotes exact match accuracy on answer sets, ExAcc the fraction of queries that execute without errors, and F1 the macro-averaged F1 score over result sets. 
+
+Model EMAcc ExAcc F1 
+
+Qwen3 1.7B Base 0.07 0.50 0.14 Qwen3 1.7B Base (with CoT) 0.11 0.23 0.11 Qwen3 1.7B DoRA (1 Epoch) 0.69 0.91 0.78 
+
+Qwen3 1.7B GRPO (without gold queries) 0.47 0.83 0.48 Qwen3 1.7B GRPO (with gold queries) 0.44 0.85 0.45 Training is dominated by repeated SPARQL endpoint calls required for execution-feedback computation. On the described two-GPU setup, training the main GRPO config-uration for one epoch requires approximately 30 hours. This runtime includes the overhead of endpoint calls during rollout evaluation, which remains the primary bottleneck despite query caching. 
+
+3.4. Metrics and evaluation protocol 
+
+Evaluation targets semantic correctness via execution. For each model, generated queries are executed against the fixed DBLP endpoint, and the resulting answer bindings are compared to the gold answer sets materialized during preprocessing. All metrics are computed on the held-out test split of 2,000 examples. 
+
+Execution accuracy (ExAcc). Execution accuracy measures the fraction of instances for which the extracted query executes without raising an error. This metric captures adherence to SPARQL syntax and to the required output protocol. 
+
+Answer exact match (EMAcc) and answer-set F1. Exact-match accuracy (EMAcc) records the fraction of instances where the executed answer set matches the gold answer set exactly. To capture partial correctness for multi-answer queries, we additionally compute an F1 score over answer sets. 
+
+Category-wise analysis. To analyze performance across distinct logical query patterns, we report category-wise F1 scores for the ten DBLP-QuAD question categories. 
+
+Temporal and held-out template slices. Temporal accuracy (TempAcc) is computed analogously to EMAcc but restricted to the subset of instances marked as temporal. To assess generalization to unseen forms, we report held-out template accuracy (GenAcc), com-puted as EMAcc on the instances derived from templates that are withheld from training. 
+
+## 4. Results 
+
+4.1. Overall answer-level accuracy 
+
+Table 1 summarizes overall test set results. The zero-shot base model attains low answer-level performance (EMAcc 0.07, F1 0.14). Enabling chain-of-thought prompting increases 
+
+> 7Pfeifer Banerjee Usbeck
+
+Table 2: Accuracy by question category. Bool = Boolean, Cnt = Count, SF = Single-Fact, Un = Union, etc. Base = Qwen3-1.7B; DoRA = Qwen3-1.7B with DoRA adapters; GRPO-no / GRPO-gold = GRPO without/with gold-query rewards.                                                             
+
+> Model Bool Cnt Disamb D-Int D-Neg Multi Neg SF Sup+Comp Un
+> Base 0.00 0.10 0.07 0.04 0.00 0.09 0.00 0.25 0.14 0.04 Base+CoT 0.16 0.05 0.08 0.08 0.06 0.10 0.12 0.44 0.00 0.01 DoRA 0.72 0.59 0.85 0.58 0.86 0.71 0.75 0.96 0.46 0.56
+> GRPO-no 0.47 0.40 0.70 0.37 0.63 0.40 0.47 0.93 0.19 0.27 GRPO-gold 0.44 0.39 0.61 0.40 0.60 0.45 0.42 0.90 0.18 0.15
+
+EMAcc to 0.11, but sharply reduces executability (ExAcc 0.23) and slightly decreases F1 to 0.11. This pattern is consistent with CoT completions that deviate from the required output protocol or are truncated before producing a valid query. The supervised DoRA baseline achieves the strongest results overall (EMAcc 0.69, Ex-Acc 0.91, F1 0.78). Both GRPO variants substantially improve over zero-shot prompting. GRPO without gold-query-based rewards reaches EMAcc 0.47, ExAcc 0.83, and F1 0.48. Adding gold-query-based reward terms increases ExAcc slightly to 0.85, but reduces EMAcc (0.44) and F1 (0.45). Overall, GRPO closes a considerable part of the gap between zero-shot prompting and supervised finetuning, while remaining clearly below DoRA on aggregate ac-curacy in this configuration. 
+
+4.2. Category-wise behavior 
+
+Table 2 shows exact match accuracies across DBLP-QuAD question types. Categories corre-sponding to relatively local graph patterns (e.g., Single-Fact and Disambiguation) saturate at high scores for both DoRA and GRPO, suggesting that both methods reliably teach schema grounding and triple-pattern assembly. In contrast, disjunction (UNION) and Su-perlative/Comparative questions remain challenging, especially for GRPO, and constitute recurring failure modes in the qualitative analysis. 
+
+4.3. Generalization and temporal subsets 
+
+Table 3 reports exact match on the subsets for questions with temporal information and questions from held-out templates. For temporal questions, the ordering mirrors the overall results. DoRA performs best (TempAcc 0.69), followed by the GRPO variants (0.52 and 0.47), while the base models remain near 0.09–0.10. Thus, GRPO substantially improves over zero-shot prompting, yet does not close the gap to supervised finetuning. On held-out templates, GRPO achieves the strongest performance. GRPO without gold query shaping attains GenAcc 0.53 (and 0.48 with gold-query-based rewards), whereas DoRA reaches 0.40. Notably, GRPO generalization is close to its overall performance, while DoRA exhibits a larger drop from overall to held-out template accuracy. 
+
+> 8
+
+Table 3: Answer-level performance on temporal questions (TempAcc) and on questions de-rived from held-out templates (GenAcc), reported as exact match accuracy on the respective subsets. 
+
+Model TempAcc GenAcc 
+
+Qwen3 1.7B Base 0.09 0.06 Qwen3 1.7B Base (with CoT) 0.10 0.15 Qwen3 1.7B DoRA (1 Epoch) 0.69 0.40 Qwen3 1.7B GRPO (without gold queries) 0.52 0.53 
+
+Qwen3 1.7B GRPO (with gold queries) 0.47 0.48 Table 4: Answer-level, execution, temporal, and generalization performance for GRPO re-ward ablations. Configurations differ only in the included reward components: execution feedback, format reward, structural coverage reward, length reward, and gold-query-based rewards. 
+
+Model EMAcc ExAcc F1 TempAcc GenAcc 
+
+Rexec 0.40 0.71 0.41 0.40 0.49 
+
+Rexec,format 0.42 0.80 0.43 0.41 0.49 
+
+Rexec,format,struct 0.46 0.80 0.48 0.51 0.51 
+
+Rexec,format,struct,len 0.47 0.83 0.48 0.52 0.53 
+
+Rexec,format,struct,len,gold(sim,len-r) 0.44 0.85 0.45 0.47 0.48 
+
+4.4. Reward ablations and error analysis 
+
+To isolate which reward components drive the GRPO gains, Table 4 reports ablations that differ only in reward composition. Execution-feedback already yields most of the final performance (EMAcc 0.40, F1 0.41). Adding a format reward yields modest answer-level gains but improves execution reliability (ExAcc 0.80). Introducing the structural coverage reward yields the most pronounced improvements in answer correctness and subset performance (F1 0.48, TempAcc/GenAcc 0.51). The length reward refines this configuration slightly, corresponding to the strongest no-gold setting (EMAcc 0.47, ExAcc 0.83, TempAcc 0.52, GenAcc 0.53). Adding gold-query-based similarity and length-ratio terms increases ExAcc further (0.85) but reduces answer-level accuracy and subset performance. In this setup, gold-based shaping improves executability marginally while slightly degrading correctness and generalization. A qualitative analysis of stratified samples of incorrect generations (100 for GRPO-no-gold; 100 for DoRA) shows that failures concentrate around a small set of symbolic operators and structural requirements: disjunction/UNION handling and answer-shape consistency, negation via FILTER NOT EXISTS , aggregation and superlatives, multi-intent joins and miss-ing constraints, temporal comparisons, and syntax or schema violations. 
+
+> 9Pfeifer Banerjee Usbeck
+
+The error character differs by training strategy. GRPO exhibits more malformed out-puts and structural errors (including syntax and schema issues that prevent execution), alongside frequent failures on UNION, negation, and multi-intent patterns. DoRA failures are more often subtle semantic mismatches within otherwise well-formed SPARQL queries, and its larger drop on held-out templates is consistent with increased template reliance. Both models frequently mis-handle Boolean question shapes (ASK vs. SELECT), produc-ing answer-set mismatches even when partial patterns are correct. 
+
+## 5. Discussion and Conclusion 
+
+The results support a limited but practically relevant conclusion about outcome-based re-inforcement learning for single-step Text-to-SPARQL at small model scale. In this setting, GRPO can improve a weak zero-shot baseline under a strict output protocol, but it does not substitute supervised finetuning when gold SPARQL targets are available. DoRA achieves stronger overall performance, which is consistent with the denser supervision signal from token-level cross-entropy on gold queries, whereas GRPO learns from a terminal reward assignment over long generations. GRPO is therefore best viewed as a viable alternative for weakly supervised conditions where direct query supervision is unavailable. A notable pattern concerns generalization on held-out templates. GRPO appears less sensitive to the template shift than DoRA supervised finetuning, which is consistent with outcome-based optimization rewarding semantic correctness independently of the exact sur-face form of a query. However, this observation should be interpreted cautiously, as the held-out slice is still derived from the same benchmark and shares schema, vocabulary, and construction procedure with the training data. As a result, they do not fully represent out-of-distribution generalization in the open-world sense, and further validation on additional datasets and query structures is required. The category-wise and qualitative analyses suggest that errors shift from grounding to composition as query complexity increases. For simpler patterns, outcome-based reinforce-ment learning appears sufficient to learn basic SPARQL assembly and to ground generations in the provided entities and schema hints. For more compositional queries, errors more often involve symbolic operators such as disjunction, aggregation, and multi-intent joins. This is consistent with sparse terminal feedback providing limited guidance for precise structural decisions, and it motivates reward designs that more directly target compositional structure. The reward ablations support this interpretation. Execution feedback accounts for most GRPO gains, while structural coverage provides the most meaningful additional contribu-tion by encouraging consistent grounding in the supplied schema information. In contrast, gold-query-based shaping does not improve answer-level performance in this setup, and it may introduce a competing signal that favors reproducing a particular reference surface form even when alternative formulations are semantically correct and executable. Several limitations constrain the scope of these conclusions. The study assumes perfect entity and relation linking, which isolates SPARQL generation but removes a major failure source in end-to-end KGQA. The evaluation further focuses on a single model family, a single benchmark, and a fixed execution environment, so the observed patterns are not yet validated across knowledge graphs, schemas, or domains. Finally, results are based on single runs, and stochastic decoding during rollout generation introduces non-determinism that a fixed seed does not fully control. More extensive replication was limited by training time, 
+
+> 10
+
+since reward computation requires repeated SPARQL endpoint executions during rollout evaluation and this dominates runtime despite caching. Future work should integrate entity and relation linking into training and investigate process-level rewards derived from query decomposition to address failures on compositional query structures, potentially combined with curriculum strategies. 
+
+## References 
+
+Hanna Abi Akl. PSYCHIC: A neuro-symbolic framework for knowledge graph question-answering grounding. In ISWC 2023-International Semantic Web Conference , 2023. Bilal Abu-Salih. Domain-specific knowledge graphs: A survey. Journal of Network and Computer Applications , 185:103076, 2021. S¨ oren Auer, Dante AC Barone, Cassiano Bartz, Eduardo G Cortes, Mohamad Yaser Ja-radeh, Oliver Karras, Manolis Koubarakis, Dmitry Mouromtsev, Dmitrii Pliukhin, Daniil Radyush, et al. The sciqa scientific question answering benchmark for scholarly knowl-edge. Scientific Reports , 13(1):7240, 2023. Caio Viktor S. Avila, Vˆ ania M.P. Vidal, Wellington Franco, and Marco A. Casanova. Exper-iments with text-to-SPARQL based on ChatGPT. In 2024 IEEE 18th International Con-ference on Semantic Computing (ICSC) , pages 277–284, 2024. doi: 10.1109/ICSC59802. 2024.00050. Debayan Banerjee, Pranav Ajit Nair, Jivat Neet Kaur, Ricardo Usbeck, and Chris Biemann. Modern baselines for SPARQL semantic parsing. In Proceedings of the 45th International ACM SIGIR Conference on Research and Development in Information Retrieval , pages 2260–2265, 2022. Debayan Banerjee, Sushil Awale, Ricardo Usbeck, and Chris Biemann. DBLP-QuAD: A question answering dataset over the DBLP scholarly knowledge graph. In BIR@ECIR ,pages 37–51, 2023a. Debayan Banerjee, Sushil Awale, Ricardo Usbeck, and Chris Biemann. Awalesushil/DBLP-QuAD, 2023b. Weiqin Chen, Nhan Pham, Michael Glass, Long Vu, Gaetano Rossiello, Shankar Subrama-niam, and Santiago Paternain. ConstrainedSQL: Training llms for Text2SQL via con-strained reinforcement learning. In Annual Conference on Neural Information Processing Systems , 2025a. Yi-Hui Chen, Eric Jui-Lin Lu, and Kwan-Ho Cheng. Enhancing SPARQL query generation for question answering with a hybrid encoder–decoder and cross-attention model. Journal of Web Semantics , 87:100869, 2025b. ISSN 1570-8268. doi: 10.1016/j.websem.2025. 100869. Zhuo Chen, Fei Wang, Zixuan Li, Zhao Zhang, Weiwei Ding, Chuanguang Yang, Yongjun Xu, Xiaolong Jin, and Jiafeng Guo. KnowCoder-A1: Incentivizing agentic reasoning capability with outcome supervision for KBQA. arXiv preprint arXiv:2510.25101 , 2025c. 
+
+> 11 Pfeifer Banerjee Usbeck
+
+Jacopo D’Abramo, Andrea Zugarini, and Paolo Torroni. Investigating Large Language Models for Text-to-SPARQL Generation. In Weijia Shi, Wenhao Yu, Akari Asai, Meng Jiang, Greg Durrett, Hannaneh Hajishirzi, and Luke Zettlemoyer, editors, Proceedings of the 4th International Workshop on Knowledge-Augmented Methods for Natural Language Processing , pages 66–80, Albuquerque, New Mexico, USA, May 2025. Association for Computational Linguistics. ISBN 979-8-89176-229-9. Kanishk Gandhi, Ayush K Chakravarthy, Anikait Singh, Nathan Lile, and Noah Goodman. Cognitive behaviors that enable self-improving reasoners, or, four habits of highly effective STaRs. In Second Conference on Language Modeling , 2025. Rose Hirigoyen, Amal Zouaq, and Samuel Reyd. A copy mechanism for handling knowl-edge base elements in SPARQL neural machine translation. In Yulan He, Heng Ji, Sujian Li, Yang Liu, and Chua-Hui Chang, editors, Findings of the Association for Computa-tional Linguistics: AACL-IJCNLP 2022 , pages 226–236, Online only, November 2022. Association for Computational Linguistics. doi: 10.18653/v1/2022.findings-aacl.22. Wenyu Huang, Guancheng Zhou, Hongru Wang, Pavlos Vougiouklis, Mirella Lapata, and Jeff Pan. Less is more: Making smaller language models competent subgraph retrievers for multi-hop KGQA. In Findings of the Association for Computational Linguistics: EMNLP 2024 , pages 15787–15803, 2024. Mohamad Yaser Jaradeh, Markus Stocker, and S¨ oren Auer. Question answering on scholarly knowledge graphs. In Mark Hall, Tanja Merˇ cun, Thomas Risse, and Fabien Duchateau, editors, Digital Libraries for Open Knowledge , pages 19–32, Cham, 2020. Springer Inter-national Publishing. ISBN 978-3-030-54956-5. Jinhao Jiang, Kun Zhou, Wayne Xin Zhao, Yang Song, Chen Zhu, Hengshu Zhu, and Ji-Rong Wen. Kg-agent: An efficient autonomous agent framework for complex reasoning over knowledge graph. In Proceedings of the 63rd Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers) , pages 9505–9523, 2025. Longquan Jiang, Xi Yan, and Ricardo Usbeck. A structure and content prompt-based method for knowledge graph question answering over scholarly data. In QALD/Sem-REC@ ISWC , 2023. Sujan Karki, Pukar Karki, Binay Lal Shrestha, and Tantra Nath Jha. Smaller large lan-guage models for text-to-sql: Performance analysis and optimal performance. In 2025 International Conference on Inventive Computation Technologies (ICICT) , pages 1–7, 2025. doi: 10.1109/ICICT64420.2025.11005216. Shih-Yang Liu, Chien-Yi Wang, Hongxu Yin, Pavlo Molchanov, Yu-Chiang Frank Wang, Kwang-Ting Cheng, and Min-Hung Chen. Dora: Weight-decomposed low-rank adapta-tion. In Forty-First International Conference on Machine Learning , 2024. Antonello Meloni, Diego Reforgiato Recupero, Francesco Osborne, angelo salatino, Enrico Motta, Sahar Vahadati, and Jens Lehmann. Exploring large language models for scientific question answering via natural language to SPARQL translation. ACM Transactions on Intelligent Systems and Technology , August 2025. ISSN 2157-6904. doi: 10.1145/3757923. 
+
+> 12
+
+Xuan-Bang Nguyen, Xuan-Hieu Phan, and Massimo Piccardi. Fine-tuning text-to-SQL models with reinforcement-learning training objectives. Natural Language Processing Journal , 10:100135, 2025. ISSN 2949-7191. doi: 10.1016/j.nlp.2025.100135. Aleksandr Perevalov, Dennis Diefenbach, Ricardo Usbeck, and Andreas Both. Qald-9-plus: A multilingual dataset for question answering over dbpedia and wikidata translated by native speakers. In 2022 IEEE 16th International Conference on Semantic Computing (ICSC) , pages 229–234. IEEE, 2022. Mohammadreza Pourreza, Shayan Talaei, Ruoxi Sun, Xingchen Wan, Hailong Li, Azalia Mirhoseini, Amin Saberi, and Sercan O Arik. Reasoning-SQL: Reinforcement learning with SQL tailored partial rewards for reasoning-enhanced text-to-SQL. In Second Con-ference on Language Modeling , 2025. Jiexing Qi, Chang Su, Zhixin Guo, Lyuwen Wu, Zanwei Shen, Luoyi Fu, Xinbing Wang, and Chenghu Zhou. Enhancing SPARQL query generation for knowledge base question answering systems by learning to correct triplets. Applied Sciences , 14(1521), 2024. ISSN 2076-3417. doi: 10.3390/app14041521. Rulin Shao, Shuyue Stella Li, Rui Xin, Scott Geng, Yiping Wang, Sewoong Oh, Si-mon Shaolei Du, Nathan Lambert, Sewon Min, Ranjay Krishna, et al. Spurious rewards: Rethinking training signals in rlvr. arXiv preprint arXiv:2506.10947 , 2025. Zhihong Shao, Peiyi Wang, Qihao Zhu, Runxin Xu, Junxiao Song, Xiao Bi, Haowei Zhang, Mingchuan Zhang, Y. K. Li, Y. Wu, and Daya Guo. DeepSeekMath: Pushing the Limits of Mathematical Reasoning in Open Language Models, April 2024. Jinyeop Song, Song Wang, Julian Shun, and Yada Zhu. Efficient and Transferable Agentic Knowledge Graph RAG via Reinforcement Learning, October 2025. Josefa Lia Stoisser, Marc Boubnovski Martell, and Julien Fauqueur. Sparks of tabular reasoning via Text2SQL reinforcement learning. In The 4th Table Representation Learning Workshop at ACL 2025 , 2025. Alexis Strappazon, Michael Granitzer, El˝ od Egyed-Zsigmond, Jelena Mitrovic, and Mehdi Ben Amor. Instruct-to-SPARQL: A text-to-SPARQL dataset for training wikidata agents. In ACM SIGIR Conference on Human Information Interaction and Retrieval .ACM, 2025. Priyansh Trivedi, Gaurav Maheshwari, Mohnish Dubey, and Jens Lehmann. Lc-quad: A corpus for complex question answering over knowledge graphs. In International Semantic Web Conference , pages 210–218. Springer, 2017. Floris Vossebeld and Shenghui Wang. Learning to Refine: An Agentic RL Approach for It-erative SPARQL Query Construction. In Daniil Dobriy, Sanju Tiwari, Jennifer D’Souza, Nandana Mihindukulasooriya, and Francesco Osborne, editors, Proceedings of the Sec-ond International Workshop on Retrieval-Augmented Generation Enabled by Knowledge Graphs (RAGE-KG 2025) , volume 4079 of CEUR Workshop Proceedings , pages 19–32, Nara, Japan, November 2025. CEUR. 
+
+> 13 Pfeifer Banerjee Usbeck
+
+Zengzhi Wang, Fan Zhou, Xuefeng Li, and Pengfei Liu. Octothinker: Mid-training incen-tivizes reinforcement learning scaling. arXiv preprint arXiv:2506.20512 , 2025. An Yang, Anfeng Li, Baosong Yang, Beichen Zhang, Binyuan Hui, Bo Zheng, Bowen Yu, Chang Gao, Chengen Huang, Chenxu Lv, Chujie Zheng, Dayiheng Liu, Fan Zhou, Fei Huang, Feng Hu, Hao Ge, Haoran Wei, Huan Lin, Jialong Tang, Jian Yang, Jianhong Tu, Jianwei Zhang, Jianxin Yang, Jiaxi Yang, Jing Zhou, Jingren Zhou, Junyang Lin, Kai Dang, Keqin Bao, Kexin Yang, Le Yu, Lianghao Deng, Mei Li, Mingfeng Xue, Mingze Li, Pei Zhang, Peng Wang, Qin Zhu, Rui Men, Ruize Gao, Shixuan Liu, Shuang Luo, Tianhao Li, Tianyi Tang, Wenbiao Yin, Xingzhang Ren, Xinyu Wang, Xinyu Zhang, Xuancheng Ren, Yang Fan, Yang Su, Yichang Zhang, Yinger Zhang, Yu Wan, Yuqiong Liu, Zekun Wang, Zeyu Cui, Zhenru Zhang, Zhipeng Zhou, and Zihan Qiu. Qwen3 technical report, 2025. Zhiqiang Zhang and Wen Zhao. A collaborative reasoning framework powered by reinforce-ment learning and large language models for complex questions answering over knowl-edge graph. In Owen Rambow, Leo Wanner, Marianna Apidianaki, Hend Al-Khalifa, Barbara Di Eugenio, and Steven Schockaert, editors, Proceedings of the 31st Interna-tional Conference on Computational Linguistics , pages 10672–10684, Abu Dhabi, UAE, January 2025. Association for Computational Linguistics. 
+
+> 14
+
+## Appendix A. Supplementary Material 
+
+A.1. Prompt Templates 
+
+A.1.1. System Prompt 
+
+Your task is to generate a syntactically and semantically correct SPARQL query that answers a given natural language question, using only the provided entities and relations. Please follow these instructions: - carefully analyze the given question, pay special attention to negations (not, etc.). - Think step by step, reasoning through the transformation from question to query. - Enclose your detailed reasoning in <think> ... </think> tags. - Output the final SPARQL query - without any extra explanation or formatting. Query Generation Rules: - Only use the provided entities and relations; do not invent or infer additional ones. - Use all provided entities and relations in the query. - Do not use prefixes; write all URIs in full. - By default, use SELECT DISTINCT in your queries, unless the context clearly requires otherwise. - For yes/no questions, always use the ASK keyword to obtain a boolean result - Carefully consider whether the answer should be the subject or object in each relevant triple pattern. - Always use single quotes for literals Example output format: <think> Step-by-step reasoning here. </think> SPARQL query here 
+
+A.1.2. User Prompt 
+
+Generate a SPARQL query to answer the following question. Question: {question} Relevant Entities: {entities} Relevant Relations: {relations} 
+
+15 Pfeifer Banerjee Usbeck 
+
+A.2. Hyperparameters 
+
+A.2.1. Decoding Parameters 
+
+Table 5: Generation hyperparameters used for inference. 
+
+Parameter Value 
+
+Base model Qwen3-1.7B (chat) Max input length 668 tokens Max new tokens 1024 tokens Temperature 0.6 Top-p 0.95 Min-p 0.0 Top-k 20 Beam search disabled Repetition penalty 1.0 Padding side left 
+
+A.2.2. GRPO Training Parameters 
+
+Table 6: Hyperparameters for GRPO training. 
+
+Parameter Value 
+
+Base model Qwen3-1.7B (chat) Training set size 7000 Batch size (per device) 4Gradient Accumulation Steps 16 Group size 4Max new tokens 1024 Learning rate 1e-6 Optimizer AdamW Beta 1 / Beta 2 0.9 / 0.999 Weight decay 0.0 LR schedule linear Advantage normalization per-group KL penalty ( β) 0.04 KL target policy initial pretrained model Clipping ( ε) 0.2 Mixed precision bfloat16 Random seed 42 
+
+> 16
+
+A.2.3. DoRA Fine-tuning Parameters 
+
+Table 7: Hyperparameters for DoRA supervised finetuning. 
+
+Parameter Value 
+
+Base model Qwen3-1.7B (chat) Training epochs 1Batch size (per GPU) 8Gradient accumulation 8Effective batch size 64 Learning rate 2e-5 Optimizer AdamW Weight decay 0.0 LR schedule linear Warmup ratio 0.0 Max sequence length 1024 tokens Loss Cross-entropy on target SPARQL DoRA rank 8DoRA alpha 32 DoRA dropout 0.05 Target modules q, k, v, o projections Mixed precision bfloat16
