@@ -143,6 +143,20 @@ class LLMClient:
         return 'llm'
 
     @staticmethod
+    def _is_authentication_error(exc: Exception) -> bool:
+        response = getattr(exc, "response", None)
+        status_code = getattr(response, "status_code", None)
+        if status_code in (401, 403):
+            return True
+        message = str(exc or "").lower()
+        return any(token in message for token in (
+            "authentication fails",
+            "invalid api key",
+            "authorization required",
+            "unauthorized",
+        ))
+
+    @staticmethod
     def _extract_text_content(value: Any) -> str:
         if isinstance(value, str):
             return value
@@ -616,6 +630,19 @@ class LLMClient:
 
             except Exception as e:
                 last_error = e
+                if self._is_authentication_error(e):
+                    print(
+                        "LLM 鉴权失败：当前 API Key 无效或无权限，请在本地配置中更新 DeepSeek API Key 后重试。"
+                    )
+                    if hasattr(e, "response") and e.response is not None:
+                        try:
+                            print("错误详情(JSON):", e.response.json())
+                        except ValueError:
+                            try:
+                                print("错误详情(TEXT):", e.response.text[:500])
+                            except Exception:
+                                pass
+                    raise
                 if response_format is not None and self._is_structured_output_unsupported_error(e):
                     raise
                 if attempt_idx < len(request_bases):
@@ -743,10 +770,10 @@ def parse_provider_model(model_str: str) -> Tuple[str, str]:
 
     规则：第一个 '/' 之前为提供商（大小写不敏感），之后的全部为模型名（大小写敏感，允许包含 '/').
     示例：
-    - "deepseek/deepseek-chat" -> ("deepseek", "deepseek-chat")
+    - "deepseek/deepseek-v4-flash" -> ("deepseek", "deepseek-v4-flash")
     """
     if not isinstance(model_str, str) or '/' not in model_str:
-        raise ValueError("缺少模型提供商：请使用 'deepseek/model' 格式，例如 'deepseek/deepseek-chat'")
+        raise ValueError("缺少模型提供商：请使用 'deepseek/model' 格式，例如 'deepseek/deepseek-v4-flash'")
     provider, model = model_str.split('/', 1)
     return provider.lower(), model
 

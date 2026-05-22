@@ -39,8 +39,8 @@ function testBuildChatCompletionsEndpoint() {
 
 function testSanitizeModelList() {
   assert.deepEqual(
-    sanitizeModelList(['deepseek-chat', ' deepseek-chat ', 'deepseek-reasoner', 'custom-model', 'extra'], 3),
-    ['deepseek-chat', 'deepseek-reasoner', 'custom-model'],
+    sanitizeModelList(['deepseek-v4-flash', ' deepseek-v4-flash ', 'deepseek-v4-pro', 'custom-model', 'extra'], 3),
+    ['deepseek-v4-flash', 'deepseek-v4-pro', 'custom-model'],
   );
 }
 
@@ -78,7 +78,7 @@ function testInferProviderType() {
       summarizedLLM: {
         apiKey: 'sk',
         baseUrl: 'https://api.deepseek.com',
-        model: 'deepseek-chat',
+        model: 'deepseek-v4-flash',
       },
     }),
     'deepseek',
@@ -102,7 +102,7 @@ function testGetDeepSeekPreset() {
       key: 'deepseek',
       label: 'DeepSeek 官方',
       baseUrl: 'https://api.deepseek.com',
-      models: ['deepseek-chat', 'deepseek-reasoner'],
+      models: ['deepseek-v4-flash', 'deepseek-v4-pro'],
     },
   );
   assert.equal(getDeepSeekPreset('other-a'), null);
@@ -113,7 +113,7 @@ function testGetDeepSeekPreset() {
 
 function testInferChatApiProfile() {
   assert.equal(
-    inferChatApiProfile('https://api.deepseek.com', 'deepseek-chat'),
+    inferChatApiProfile('https://api.deepseek.com', 'deepseek-v4-flash'),
     'deepseek',
   );
   assert.equal(inferChatApiProfile('https://example.com/v1', 'other-model'), 'unsupported');
@@ -124,7 +124,7 @@ function testResolveJsonResponseMode() {
   assert.equal(
     resolveJsonResponseMode({
       baseUrl: 'https://api.deepseek.com',
-      model: 'deepseek-chat',
+      model: 'deepseek-v4-flash',
     }),
     'json_object',
   );
@@ -159,11 +159,11 @@ function testBuildStreamingChatPayload() {
   assert.deepEqual(
     buildStreamingChatPayload({
       baseUrl: 'https://api.deepseek.com',
-      model: 'deepseek-chat',
+      model: 'deepseek-v4-flash',
       messages: [{ role: 'user', content: 'hi' }],
     }),
     {
-      model: 'deepseek-chat',
+      model: 'deepseek-v4-flash',
       messages: [{ role: 'user', content: 'hi' }],
       stream: true,
     },
@@ -172,11 +172,11 @@ function testBuildStreamingChatPayload() {
   assert.deepEqual(
     buildStreamingChatPayload({
       baseUrl: 'https://api.deepseek.com',
-      model: 'deepseek-reasoner',
+      model: 'deepseek-v4-pro',
       messages: [{ role: 'user', content: 'hi' }],
     }),
     {
-      model: 'deepseek-reasoner',
+      model: 'deepseek-v4-pro',
       messages: [{ role: 'user', content: 'hi' }],
       stream: true,
     },
@@ -188,10 +188,10 @@ function testBuildConnectivityTestPayload() {
   assert.deepEqual(
     buildConnectivityTestPayload({
       baseUrl: 'https://api.deepseek.com',
-      model: 'deepseek-reasoner',
+      model: 'deepseek-v4-pro',
     }),
     {
-      model: 'deepseek-reasoner',
+      model: 'deepseek-v4-pro',
       messages: [
         { role: 'system', content: 'Reply with exactly: hello world' },
         { role: 'user', content: 'hello world' },
@@ -204,10 +204,10 @@ function testBuildConnectivityTestPayload() {
   assert.deepEqual(
     buildConnectivityTestPayload({
       baseUrl: 'https://api.deepseek.com',
-      model: 'deepseek-chat',
+      model: 'deepseek-v4-flash',
     }),
     {
-      model: 'deepseek-chat',
+      model: 'deepseek-v4-flash',
       messages: [
         { role: 'system', content: 'Reply with exactly: hello world' },
         { role: 'user', content: 'hello world' },

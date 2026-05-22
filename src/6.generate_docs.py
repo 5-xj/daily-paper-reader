@@ -37,7 +37,7 @@ RANGE_DATE_RE = re.compile(r"^(\d{8})-(\d{8})$")
 # LLM 配置（使用 llm.py 内的 DeepSeek 客户端）
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY") or os.getenv("SUMMARY_API_KEY")
 DEEPSEEK_BASE_URL = os.getenv("DEEPSEEK_BASE_URL") or os.getenv("SUMMARY_BASE_URL") or "https://api.deepseek.com"
-DEEPSEEK_MODEL = os.getenv("SUMMARY_MODEL") or os.getenv("DEEPSEEK_MODEL") or "deepseek-chat"
+DEEPSEEK_MODEL = os.getenv("SUMMARY_MODEL") or os.getenv("DEEPSEEK_MODEL") or "deepseek-v4-flash"
 LLM_CLIENT = None
 if DEEPSEEK_API_KEY:
     LLM_CLIENT = DeepSeekClient(

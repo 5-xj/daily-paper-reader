@@ -62,7 +62,7 @@ class MainPipelineTest(unittest.TestCase):
                 "DEEPSEEK_BASE_URL": "https://api.deepseek.com",
                 "SUMMARY_API_KEY": "summary-key",
                 "SUMMARY_BASE_URL": "https://summary.example.com/v1",
-                "SUMMARY_MODEL": "deepseek-chat",
+                "SUMMARY_MODEL": "deepseek-v4-flash",
             },
             clear=True,
         ):
@@ -72,7 +72,7 @@ class MainPipelineTest(unittest.TestCase):
         self.assertEqual(env["SUMMARY_API_KEY"], "summary-key")
         self.assertEqual(env["DEEPSEEK_BASE_URL"], "https://summary.example.com/v1")
         self.assertEqual(env["LLM_PRIMARY_BASE_URL"], "https://summary.example.com/v1")
-        self.assertEqual(env["DEEPSEEK_MODEL"], "deepseek-chat")
+        self.assertEqual(env["DEEPSEEK_MODEL"], "deepseek-v4-flash")
 
     def test_main_runs_local_rerank_without_remote_rerank_base(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -106,7 +106,7 @@ class MainPipelineTest(unittest.TestCase):
                 self.mod.main()
 
             labels = [item[0] for item in calls]
-            self.assertIn("Step 3 - Local Rerank", labels)
+            self.assertIn("Step 3 - Rerank", labels)
             self.assertIn("Step 4 - LLM refine", labels)
 
     def test_main_keeps_local_rerank_in_deepseek_mode(self):
@@ -141,7 +141,7 @@ class MainPipelineTest(unittest.TestCase):
                 self.mod.main()
 
             labels = [item[0] for item in calls]
-            self.assertIn("Step 3 - Local Rerank", labels)
+            self.assertIn("Step 3 - Rerank", labels)
 
 
 if __name__ == "__main__":

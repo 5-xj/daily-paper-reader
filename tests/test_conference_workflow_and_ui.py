@@ -16,7 +16,6 @@ class ConferenceWorkflowAndUiTest(unittest.TestCase):
         self.assertIn("RERANK_PROFILE", text)
         self.assertIn("RERANK_API_KEY", text)
         self.assertIn("SILICONFLOW_API_KEY", text)
-        self.assertIn("BLT_RERANK_API_KEY", text)
 
     def test_conference_retrieval_workflow_dispatches_pipeline(self):
         root = pathlib.Path(__file__).resolve().parents[1]
@@ -39,7 +38,6 @@ class ConferenceWorkflowAndUiTest(unittest.TestCase):
         self.assertIn("RERANK_PROFILE", text)
         self.assertIn("RERANK_API_KEY", text)
         self.assertIn("SILICONFLOW_API_KEY", text)
-        self.assertIn("BLT_RERANK_API_KEY", text)
         self.assertIn("DEEPSEEK_API_KEY", text)
         self.assertIn("python src/conference_pipeline.py", text)
         self.assertIn("--run-llm-refine", text)
@@ -53,12 +51,63 @@ class ConferenceWorkflowAndUiTest(unittest.TestCase):
 
         self.assertIn("conference-paper-retrieval.yml", runner)
         self.assertIn("runConferenceRetrieval", runner)
+        self.assertIn("/api/local/workflows/dispatch", runner)
+        self.assertIn("DPR_LOCAL_API_BASE", runner)
+        self.assertIn(":8567${path}", runner)
+        self.assertIn("loadLocalConfigOverride", runner)
+        self.assertIn("config: localConfigOverride", runner)
+        self.assertIn("secret: localSecret", runner)
+        github_token = (root / "app" / "subscriptions.github-token.js").read_text(encoding="utf-8")
+        self.assertIn("loadLocalConfigOverride", github_token)
+        self.assertIn("saveLocalConfigToDisk", github_token)
+        self.assertIn("/api/local/config", github_token)
+        self.assertIn("192\\.168", runner)
+        self.assertTrue((root / "src" / "local_debug_server.py").exists())
+        self.assertTrue((root / "scripts" / "local_debug.sh").exists())
+        self.assertTrue((root / "scripts" / "bootstrap_local.sh").exists())
+        self.assertTrue((root / "requirements-cpu.txt").exists())
         self.assertIn("run_rerank: 'true'", runner)
         self.assertIn("run_llm_refine: 'true'", runner)
         self.assertIn("reranker_profile", runner)
+        self.assertIn("scrollWorkflowOutputToBottom", runner)
+        self.assertIn("data-dpr-workflow-log", runner)
+        self.assertIn("logEl.scrollTop = logEl.scrollHeight", runner)
+        self.assertIn("refreshLocalRun(r.runId)", runner)
         self.assertIn("runConferenceRetrieval(conf, years)", manager)
         self.assertIn("会议论文检索", manager)
         self.assertNotIn("runConferenceMaintain(conf, years)", manager)
+
+    def test_local_debug_uses_browser_config_override(self):
+        root = pathlib.Path(__file__).resolve().parents[1]
+        server = (root / "src" / "local_debug_server.py").read_text(encoding="utf-8")
+        main = (root / "src" / "main.py").read_text(encoding="utf-8")
+        bm25 = (root / "src" / "2.1.retrieval_papers_bm25.py").read_text(encoding="utf-8")
+        embedding = (root / "src" / "2.2.retrieval_papers_embedding.py").read_text(encoding="utf-8")
+        fetch_arxiv = (root / "src" / "maintain" / "fetchers" / "fetch_arxiv.py").read_text(encoding="utf-8")
+
+        self.assertIn("DPR_CONFIG_FILE", server)
+        self.assertIn("/api/local/config", server)
+        self.assertIn("CONFIG_PATH.write_text", server)
+        self.assertIn("/api/local/secret", server)
+        self.assertIn("SECRET_PATH.write_text", server)
+        self.assertIn("build_secret_env", server)
+        self.assertIn("DEEPSEEK_API_KEY", server)
+        self.assertIn("SUMMARY_API_KEY", server)
+        self.assertIn("config.yaml", server)
+        self.assertIn("payload.get(\"config\")", server)
+        self.assertIn("payload.get(\"secret\")", server)
+        for text in [main, bm25, embedding, fetch_arxiv]:
+            self.assertIn("DPR_CONFIG_FILE", text)
+
+    def test_local_secret_private_is_disk_backed_and_ignored(self):
+        root = pathlib.Path(__file__).resolve().parents[1]
+        secret_js = (root / "app" / "secret.session.js").read_text(encoding="utf-8")
+        gitignore = (root / ".gitignore").read_text(encoding="utf-8")
+
+        self.assertIn("/api/local/secret", secret_js)
+        self.assertIn("saveLocalSecretPayloadToDisk", secret_js)
+        self.assertIn("loadLocalSecretPayloadPreferred", secret_js)
+        self.assertIn("secret.private", gitignore)
 
 
 if __name__ == "__main__":

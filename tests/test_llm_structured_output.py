@@ -46,7 +46,7 @@ class LlmStructuredOutputTest(unittest.TestCase):
         mock_post.return_value = self._mock_success_response({"content": '{"answer":"ok"}'})
         client = LLMClient(
             api_key="test-key",
-            model="deepseek-chat",
+            model="deepseek-v4-flash",
             base_url="https://api.deepseek.com",
         )
 
@@ -78,7 +78,7 @@ class LlmStructuredOutputTest(unittest.TestCase):
         ]
         client = LLMClient(
             api_key="test-key",
-            model="deepseek-chat",
+            model="deepseek-v4-flash",
             base_url="https://api.deepseek.com",
         )
 
@@ -107,7 +107,7 @@ class LlmStructuredOutputTest(unittest.TestCase):
         ]
         client = LLMClient(
             api_key="test-key",
-            model="deepseek-chat",
+            model="deepseek-v4-flash",
             base_url="https://api.deepseek.com",
         )
 
@@ -132,7 +132,7 @@ class LlmStructuredOutputTest(unittest.TestCase):
         )
         client = LLMClient(
             api_key="test-key",
-            model="deepseek-chat",
+            model="deepseek-v4-flash",
             base_url="https://api.deepseek.com",
         )
 

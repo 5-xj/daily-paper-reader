@@ -103,6 +103,7 @@ class RerankerApiTest(unittest.TestCase):
         self.assertEqual(call["json"]["documents"], ["doc a", "doc b"])
         self.assertEqual(call["json"]["top_n"], 2)
         self.assertEqual(call["json"]["instruction"], "academic relevance")
+        self.assertEqual(reranker.max_documents_per_request, 64)
 
         stats = reranker.stats("Qwen/Qwen3-Reranker-8B")
         self.assertEqual(stats["api_calls"], 1)

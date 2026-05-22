@@ -29,6 +29,11 @@ GLOBAL_POOL_RRF_MAX = 300
 DEFAULT_LOCAL_RERANK_MODEL = "Qwen/Qwen3-Reranker-0.6B"
 DEFAULT_LOCAL_RERANK_BATCH_SIZE = 8
 RERANK_PROFILE_CONFIGS: Dict[str, Dict[str, str]] = {
+  "public-zwwen-rerank": {
+    "provider": "public_zwwen",
+    "model": "Qwen/Qwen3-Reranker-0.6B",
+    "base_url": "https://zwwen.online/rerank",
+  },
   "local-qwen3-0.6b": {
     "provider": "local",
     "model": "Qwen/Qwen3-Reranker-0.6B",
@@ -37,10 +42,6 @@ RERANK_PROFILE_CONFIGS: Dict[str, Dict[str, str]] = {
     "provider": "siliconflow",
     "model": "Qwen/Qwen3-Reranker-0.6B",
     "base_url": "https://api.siliconflow.cn/v1/rerank",
-  },
-  "blt-qwen3-4b": {
-    "provider": "blt",
-    "model": "qwen3-reranker-4b",
   },
 }
 
@@ -64,8 +65,10 @@ def _normalize_rerank_profile(value: str) -> str:
     "siliconflow": "siliconflow-qwen3-0.6b",
     "siliconflow-0.6b": "siliconflow-qwen3-0.6b",
     "sf-0.6b": "siliconflow-qwen3-0.6b",
-    "blt": "blt-qwen3-4b",
-    "blt-4b": "blt-qwen3-4b",
+    "public": "public-zwwen-rerank",
+    "public-rerank": "public-zwwen-rerank",
+    "public-zwwen": "public-zwwen-rerank",
+    "zwwen": "public-zwwen-rerank",
   }
   return aliases.get(text, text)
 
@@ -76,8 +79,10 @@ def _normalize_rerank_provider(value: str) -> str:
     return "local"
   if text in {"siliconflow", "sf"}:
     return "siliconflow"
-  if text in {"blt", "remote"}:
-    return text
+  if text in {"public", "public-zwwen", "public-zwwen-rerank", "zwwen"}:
+    return "public_zwwen"
+  if text in {"remote"}:
+    return "siliconflow"
   return text
 
 
@@ -90,26 +95,20 @@ def resolve_default_rerank_model() -> str:
   profile_config = _resolve_rerank_profile_config(os.getenv("RERANK_PROFILE", ""))
   if profile_config.get("model"):
     return profile_config["model"]
-  provider = _normalize_rerank_provider(os.getenv("RERANK_PROVIDER") or "blt")
+  provider = _normalize_rerank_provider(os.getenv("RERANK_PROVIDER") or "public_zwwen")
   if provider == "local":
     return os.getenv("LOCAL_RERANK_MODEL") or os.getenv("RERANK_MODEL") or DEFAULT_LOCAL_RERANK_MODEL
-  if provider == "blt":
-    return os.getenv("BLT_RERANK_MODEL") or os.getenv("RERANK_MODEL") or "qwen3-reranker-4b"
   return os.getenv("RERANK_MODEL") or DEFAULT_LOCAL_RERANK_MODEL
 
 
 def _resolve_remote_api_key(provider: str) -> str:
-  if provider == "siliconflow":
+  if provider in {"siliconflow", "public_zwwen"}:
     return (
       os.getenv("SILICONFLOW_API_KEY")
       or os.getenv("RERANK_API_KEY")
-      or ""
-    ).strip()
-  if provider == "blt":
-    return (
-      os.getenv("BLT_RERANK_API_KEY")
-      or os.getenv("RERANK_API_KEY")
-      or os.getenv("BLT_API_KEY")
+      or os.getenv("PUBLIC_RERANK_API_KEY")
+      or os.getenv("DPR_PUBLIC_SERVICE_API_KEY")
+      or "26932a86d772001af60cbd9d2c162bfda3a90e094f797f3d6806f6077478b27a"
       or ""
     ).strip()
   return (os.getenv("RERANK_API_KEY") or "").strip()
@@ -125,14 +124,12 @@ def _resolve_remote_base_url(provider: str, profile_config: Dict[str, str], expl
       or profile_config.get("base_url")
       or "https://api.siliconflow.cn/v1/rerank"
     ).strip()
-  if provider == "blt":
+  if provider == "public_zwwen":
     return (
-      os.getenv("BLT_RERANK_BASE_URL")
+      os.getenv("PUBLIC_RERANK_API_BASE_URL")
       or os.getenv("RERANK_API_BASE_URL")
-      or os.getenv("BLT_API_BASE")
-      or os.getenv("BLT_PRIMARY_BASE_URL")
       or profile_config.get("base_url")
-      or ""
+      or "https://zwwen.online/rerank"
     ).strip()
   return (os.getenv("RERANK_API_BASE_URL") or profile_config.get("base_url") or "").strip()
 
@@ -450,15 +447,17 @@ def iter_batches(
   docs_with_idx: List[Tuple[int, str]],
   query_tokens: int,
   encoder,
+  max_docs_per_batch: Optional[int] = None,
 ) -> List[Tuple[List[int], List[str]]]:
   batches: List[Tuple[List[int], List[str]]] = []
+  batch_limit = max(int(max_docs_per_batch or BATCH_SIZE), 1)
   pos = 0
   while pos < len(docs_with_idx):
     total_tokens = query_tokens
     batch_docs: List[str] = []
     batch_indices: List[int] = []
 
-    while pos < len(docs_with_idx) and len(batch_docs) < BATCH_SIZE:
+    while pos < len(docs_with_idx) and len(batch_docs) < batch_limit:
       orig_idx, doc = docs_with_idx[pos]
       doc_tokens = estimate_tokens(doc, encoder)
       if total_tokens + doc_tokens > TOKEN_SAFETY and batch_docs:
@@ -473,6 +472,18 @@ def iter_batches(
       continue
     batches.append((batch_indices, batch_docs))
   return batches
+
+
+def resolve_effective_rerank_batch_size(reranker: Any) -> int:
+  batch_size = BATCH_SIZE
+  max_documents = getattr(reranker, "max_documents_per_request", None)
+  if max_documents is None:
+    return batch_size
+  try:
+    remote_limit = max(int(max_documents), 1)
+  except (TypeError, ValueError):
+    return batch_size
+  return min(batch_size, remote_limit)
 
 
 def rrf_merge(scores: Dict[int, float], rank_idx: int, orig_idx: int) -> None:
@@ -537,12 +548,13 @@ def process_file(
     save_json(data, output_path)
     return
   encoder = build_token_encoder()
+  effective_batch_size = resolve_effective_rerank_batch_size(reranker)
   group_start(f"Step 3 - rerank {os.path.basename(input_path)}")
   log(
     f"[INFO] 开始 rerank：queries={len(queries)}（仅 intent/语义查询），papers={len(papers_list)}，"
     f"global_pool={len(global_candidate_ids)}（lane_top_k={lane_top_k}, "
     f"guaranteed_per_lane={guaranteed_per_lane}, global_top={global_rrf_top}），"
-    f"batch_size={BATCH_SIZE}，"
+    f"batch_size={effective_batch_size}，"
     f"max_chars={MAX_CHARS_PER_DOC}，token_safety={TOKEN_SAFETY}"
   )
 
@@ -558,7 +570,12 @@ def process_file(
     random.shuffle(docs_with_idx)
 
     query_tokens = estimate_tokens(q_text, encoder)
-    batches = iter_batches(docs_with_idx, query_tokens, encoder)
+    batches = iter_batches(
+      docs_with_idx,
+      query_tokens,
+      encoder,
+      max_docs_per_batch=effective_batch_size,
+    )
     log(
       f"[INFO] Query {q_idx}/{len(queries)} tag={q.get('tag') or ''} | candidates={len(top_ids)} "
       f"| batches={len(batches)} | query_tokens≈{query_tokens}"
@@ -661,13 +678,13 @@ def main() -> None:
     "--rerank-profile",
     type=str,
     default=os.getenv("RERANK_PROFILE", ""),
-    help="Rerank 预设：local-qwen3-0.6b / siliconflow-qwen3-0.6b / blt-qwen3-4b。",
+    help="Rerank 预设：public-zwwen-rerank / local-qwen3-0.6b / siliconflow-qwen3-0.6b。",
   )
   parser.add_argument(
     "--rerank-provider",
     type=str,
     default=os.getenv("RERANK_PROVIDER", ""),
-    help="Rerank provider：local / siliconflow / blt；默认由 --rerank-profile 推断。",
+    help="Rerank provider：public_zwwen / local / siliconflow；默认由 --rerank-profile 推断。",
   )
   parser.add_argument(
     "--rerank-model",
@@ -728,7 +745,7 @@ def main() -> None:
 
   profile_config = _resolve_rerank_profile_config(args.rerank_profile)
   provider = _normalize_rerank_provider(
-    args.rerank_provider or profile_config.get("provider") or os.getenv("RERANK_PROVIDER") or "blt"
+    args.rerank_provider or profile_config.get("provider") or os.getenv("RERANK_PROVIDER") or "public_zwwen"
   )
   rerank_model = (
     args.rerank_model
@@ -736,11 +753,9 @@ def main() -> None:
     or (
       os.getenv("LOCAL_RERANK_MODEL")
       if provider == "local"
-      else os.getenv("BLT_RERANK_MODEL")
-      if provider == "blt"
       else os.getenv("RERANK_MODEL")
     )
-    or ("qwen3-reranker-4b" if provider == "blt" else DEFAULT_LOCAL_RERANK_MODEL)
+    or DEFAULT_LOCAL_RERANK_MODEL
   )
   log(
     f"[INFO] reranker 配置：profile={args.rerank_profile or 'custom'}，provider={provider}，"
@@ -758,33 +773,23 @@ def main() -> None:
       device=args.rerank_device,
       batch_size=args.rerank_batch_size,
     )
-  elif provider == "siliconflow":
+  elif provider in {"siliconflow", "public_zwwen"}:
     try:
       from reranker_api import SiliconFlowReranker  # type: ignore
     except Exception as exc:
-      raise RuntimeError("硅基流动 reranker 需要 src/reranker_api.py 可导入。") from exc
+      raise RuntimeError("远端 reranker 需要 src/reranker_api.py 可导入。") from exc
 
     api_key = _resolve_remote_api_key(provider)
     base_url = _resolve_remote_base_url(provider, profile_config, args.rerank_api_base_url)
     if not api_key:
-      raise RuntimeError("硅基流动 reranker 缺少 SILICONFLOW_API_KEY 或 RERANK_API_KEY。")
+      raise RuntimeError("远端 reranker 缺少 SILICONFLOW_API_KEY、PUBLIC_RERANK_API_KEY 或 RERANK_API_KEY。")
     if not base_url:
-      raise RuntimeError("硅基流动 reranker 缺少 API Base URL。")
-    log(f"[INFO] 使用硅基流动 reranker：base_url={base_url}")
+      raise RuntimeError("远端 reranker 缺少 API Base URL。")
+    log(f"[INFO] 使用远端 reranker：provider={provider} base_url={base_url}")
     reranker = SiliconFlowReranker(
       api_key=api_key,
       base_url=base_url,
     )
-  elif provider == "blt":
-    api_key = _resolve_remote_api_key(provider)
-    base_url = _resolve_remote_base_url(provider, profile_config, args.rerank_api_base_url)
-    if not api_key:
-      raise RuntimeError("BLT reranker 缺少 BLT_API_KEY、BLT_RERANK_API_KEY 或 RERANK_API_KEY。")
-    log(f"[INFO] 使用 BLT reranker：base_url={base_url or '<default>'}")
-    kwargs: Dict[str, Any] = {"api_key": api_key, "model": rerank_model}
-    if base_url:
-      kwargs["base_url"] = base_url
-    reranker = BltClient(**kwargs)
   else:
     raise RuntimeError(f"不支持的 reranker provider：{provider}")
   process_file(

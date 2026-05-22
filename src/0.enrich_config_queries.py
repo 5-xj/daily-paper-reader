@@ -19,7 +19,7 @@ MODEL_NAME = (
   os.getenv("DEEPSEEK_REWRITE_MODEL")
   or os.getenv("SUMMARY_MODEL")
   or os.getenv("DEEPSEEK_MODEL")
-  or "deepseek-chat"
+  or "deepseek-v4-flash"
 )
 BASE_URL = os.getenv("DEEPSEEK_BASE_URL") or os.getenv("SUMMARY_BASE_URL") or "https://api.deepseek.com"
 

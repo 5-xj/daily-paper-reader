@@ -13,7 +13,6 @@ import requests
 SILICONFLOW_RERANK_URL = "https://api.siliconflow.cn/v1/rerank"
 SILICONFLOW_QWEN3_RERANKER_MODELS = [
   "Qwen/Qwen3-Reranker-0.6B",
-  "Qwen/Qwen3-Reranker-4B",
   "Qwen/Qwen3-Reranker-8B",
 ]
 SILICONFLOW_CHUNK_OPTION_MODELS = {
@@ -23,7 +22,6 @@ SILICONFLOW_CHUNK_OPTION_MODELS = {
 }
 SILICONFLOW_QWEN3_PRICE_PER_M_TOKEN = {
   "Qwen/Qwen3-Reranker-0.6B": 0.01,
-  "Qwen/Qwen3-Reranker-4B": 0.02,
   "Qwen/Qwen3-Reranker-8B": 0.04,
 }
 DEFAULT_QWEN3_RERANK_INSTRUCTION = (
@@ -104,6 +102,7 @@ class SiliconFlowReranker:
     return_documents: bool = False,
     max_chunks_per_doc: Optional[int] = None,
     overlap_tokens: Optional[int] = None,
+    max_documents_per_request: Optional[int] = None,
     min_interval_seconds: Optional[float] = None,
     max_retries: Optional[int] = None,
     retry_delay_seconds: Optional[float] = None,
@@ -129,6 +128,14 @@ class SiliconFlowReranker:
     self.return_documents = bool(return_documents)
     self.max_chunks_per_doc = max_chunks_per_doc
     self.overlap_tokens = overlap_tokens
+    self.max_documents_per_request = max(
+      int(
+        max_documents_per_request
+        if max_documents_per_request is not None
+        else _env_int("RERANK_MAX_DOCUMENTS_PER_REQUEST", 64)
+      ),
+      1,
+    )
     self.min_interval_seconds = max(
       float(
         min_interval_seconds
