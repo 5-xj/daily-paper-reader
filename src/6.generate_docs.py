@@ -18,7 +18,7 @@ from typing import Any, Dict, List, Tuple
 
 import fitz  # PyMuPDF
 import requests
-from llm import BltClient
+from llm import DeepSeekClient
 
 SCRIPT_DIR = os.path.dirname(__file__)
 ROOT_DIR = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
@@ -34,18 +34,23 @@ CONFIG_FILE = os.path.join(ROOT_DIR, "config.yaml")
 TODAY_STR = str(os.getenv("DPR_RUN_DATE") or "").strip() or datetime.now(timezone.utc).strftime("%Y%m%d")
 RANGE_DATE_RE = re.compile(r"^(\d{8})-(\d{8})$")
 
-# LLM 配置（使用 llm.py 内的 BLT 客户端）
-BLT_API_KEY = os.getenv("BLT_API_KEY")
-BLT_MODEL = os.getenv("BLT_SUMMARY_MODEL", "gemini-3-flash-preview")
+# LLM 配置（使用 llm.py 内的 DeepSeek 客户端）
+DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY") or os.getenv("SUMMARY_API_KEY")
+DEEPSEEK_BASE_URL = os.getenv("DEEPSEEK_BASE_URL") or os.getenv("SUMMARY_BASE_URL") or "https://api.deepseek.com"
+DEEPSEEK_MODEL = os.getenv("SUMMARY_MODEL") or os.getenv("DEEPSEEK_MODEL") or "deepseek-chat"
 LLM_CLIENT = None
-if BLT_API_KEY:
-    LLM_CLIENT = BltClient(api_key=BLT_API_KEY, model=BLT_MODEL)
+if DEEPSEEK_API_KEY:
+    LLM_CLIENT = DeepSeekClient(
+        api_key=DEEPSEEK_API_KEY,
+        model=DEEPSEEK_MODEL,
+        base_url=DEEPSEEK_BASE_URL,
+    )
 
 DEFAULT_DOCS_CONCURRENCY = 4
 
 
-def call_blt_text(
-    client: BltClient,
+def call_llm_text(
+    client: DeepSeekClient,
     messages: List[Dict[str, str]],
     temperature: float,
     max_tokens: int,
@@ -61,8 +66,8 @@ def call_blt_text(
     return (resp.get("content") or "").strip()
 
 
-def call_blt_structured_json(
-    client: BltClient,
+def call_llm_structured_json(
+    client: DeepSeekClient,
     messages: List[Dict[str, str]],
     schema_name: str,
     schema: Dict[str, Any],
@@ -313,7 +318,7 @@ def translate_title_and_abstract_to_zh(title: str, abstract: str) -> Tuple[str, 
             "required": ["title_zh", "abstract_zh"],
             "additionalProperties": False,
         }
-        parsed = call_blt_structured_json(
+        parsed = call_llm_structured_json(
             LLM_CLIENT,
             messages,
             schema_name="translate_zh",
@@ -518,7 +523,7 @@ def upsert_glance_block_in_text(md_text: str, glance: str) -> str:
 
 def generate_deep_summary(md_file_path: str, txt_file_path: str, max_retries: int = 3) -> str | None:
     if LLM_CLIENT is None:
-        log("[WARN] 未配置 BLT_API_KEY，跳过精读总结。")
+        log("[WARN] 未配置 DEEPSEEK_API_KEY 或 SUMMARY_API_KEY，跳过精读总结。")
         return None
     if not os.path.exists(md_file_path):
         return None
@@ -558,7 +563,7 @@ def generate_deep_summary(md_file_path: str, txt_file_path: str, max_retries: in
     last = ""
     for attempt in range(1, max_retries + 1):
         try:
-            summary = call_blt_text(LLM_CLIENT, messages, temperature=0.3, max_tokens=4096)
+            summary = call_llm_text(LLM_CLIENT, messages, temperature=0.3, max_tokens=4096)
             summary = (summary or "").strip()
             if not summary:
                 continue
@@ -573,7 +578,7 @@ def generate_deep_summary(md_file_path: str, txt_file_path: str, max_retries: in
                 {"role": "user", "content": "你上一次的总结可能被截断了，请从中断处继续补全，不要重复已输出内容。"},
                 {"role": "user", "content": f"上一次输出如下：\n\n{summary}\n\n请继续补全，最后以一行“（完）”结束。"},
             ]
-            cont = call_blt_text(LLM_CLIENT, cont_messages, temperature=0.3, max_tokens=2048)
+            cont = call_llm_text(LLM_CLIENT, cont_messages, temperature=0.3, max_tokens=2048)
             cont = (cont or "").strip()
             merged = f"{summary}\n\n{cont}".strip()
             if os.getenv("DPR_DEBUG_STEP6") == "1":
@@ -628,7 +633,7 @@ def generate_glance_overview(title: str, abstract: str, max_retries: int = 3) ->
 
     for attempt in range(1, max_retries + 1):
         try:
-            parsed = call_blt_structured_json(
+            parsed = call_llm_structured_json(
                 LLM_CLIENT,
                 messages,
                 schema_name="glance_overview",
@@ -952,7 +957,7 @@ def build_daily_brief_summary(
         "直接输出 1-3 行文本，不要 Markdown 标题，也不要 JSON。"
     )
     try:
-        content = call_blt_text(
+        content = call_llm_text(
             LLM_CLIENT,
             [
                 {"role": "system", "content": system_prompt},

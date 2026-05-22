@@ -24,6 +24,18 @@ window.DPRWorkflowRunner = (function () {
       name: '重置 content（docs + archive）',
       desc: '将 docs 恢复为 docs_init 基线，并清空 archive。该操作为危险操作。',
     },
+    {
+      key: 'conference-retrieval',
+      id: 'conference-paper-retrieval.yml',
+      name: '会议论文检索',
+      desc: '按会议和年份触发 Supabase BM25/Embedding 候选召回与 RRF 融合。',
+      dispatchInputs: {
+        top_k: '50',
+        rrf_top_n: '200',
+        run_rerank: 'true',
+        run_llm_refine: 'true',
+      },
+    },
   ];
 
   const QUICK_FETCH_PRESETS = {
@@ -97,6 +109,15 @@ window.DPRWorkflowRunner = (function () {
       if (!raw) return '';
       const obj = JSON.parse(raw);
       return String((obj && obj.token) || '').trim();
+    } catch {
+      return '';
+    }
+  };
+  const loadRerankerProfile = () => {
+    try {
+      const secret = window.decoded_secret_private || {};
+      const reranker = secret.rerankerLLM || {};
+      return String(reranker.profile || '').trim();
     } catch {
       return '';
     }
@@ -581,7 +602,16 @@ window.DPRWorkflowRunner = (function () {
       const dispatchUrl = `https://api.github.com/repos/${owner}/${repo}/actions/workflows/${encodeURIComponent(
         workflowFile,
       )}/dispatches`;
-      const dispatchInputs = combineInputs(wf.dispatchInputs, extraInputs);
+      const dynamicInputs = { ...(wf.dispatchInputs || {}) };
+      const rerankerProfile = loadRerankerProfile();
+      if (
+        rerankerProfile &&
+        (workflowFile === 'daily-paper-reader.yml' ||
+          workflowFile === 'conference-paper-retrieval.yml')
+      ) {
+        dynamicInputs.reranker_profile = rerankerProfile;
+      }
+      const dispatchInputs = combineInputs(dynamicInputs, extraInputs);
       const dispatchBody = {
         ref: String(repoContext.defaultBranch || 'main'),
       };
@@ -815,9 +845,54 @@ window.DPRWorkflowRunner = (function () {
     return runWorkflowByKey(preset.key, mergedInputs);
   };
 
+  const normalizeConferenceName = (value) => {
+    const text = String(value || '').trim();
+    const lower = text.toLowerCase();
+    if (lower === 'nips' || lower === 'neurips') return 'NeurIPS';
+    if (lower === 'icml') return 'ICML';
+    return '';
+  };
+
+  const normalizeConferenceYears = (values) => {
+    const raw = Array.isArray(values) ? values : [values];
+    const out = [];
+    const seen = new Set();
+    raw.forEach((item) => {
+      const year = parseInt(item, 10);
+      if (!Number.isFinite(year) || year <= 0 || seen.has(year)) return;
+      seen.add(year);
+      out.push(String(year));
+    });
+    return out;
+  };
+
+  const runConferenceRetrieval = async (conference, years, options = {}) => {
+    const normalizedConference = normalizeConferenceName(conference);
+    const normalizedYears = normalizeConferenceYears(years);
+    if (!normalizedConference || !normalizedYears.length) {
+      open();
+      setStatus('请先选择支持的会议和年份。', '#c00');
+      return false;
+    }
+    const extraInputs =
+      options && typeof options === 'object' && options.dispatchInputs
+        ? options.dispatchInputs
+        : {};
+    return runWorkflowByKey('conference-retrieval', {
+      conference: normalizedConference,
+      years: normalizedYears.join(','),
+      ...extraInputs,
+    });
+  };
+
+  const runConferenceMaintain = async (conference, years) =>
+    runConferenceRetrieval(conference, years);
+
   return {
     open,
     runWorkflowByKey,
     runQuickFetchByDays,
+    runConferenceRetrieval,
+    runConferenceMaintain,
   };
 })();

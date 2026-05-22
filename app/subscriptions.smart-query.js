@@ -807,9 +807,6 @@ window.SubscriptionsSmartQuery = (function () {
         pushUnique(`${src}/chat/completions`);
       };
 
-      expandEndpoint('https://hk-api.gptbest.vip');
-      expandEndpoint('https://api.bltcy.ai');
-
       const raw = normalizeText(llm.baseUrl);
       if (!raw) {
         return out;
@@ -822,9 +819,22 @@ window.SubscriptionsSmartQuery = (function () {
       throw new Error('LLM 配置缺少 baseUrl。');
     }
 
+    const resolveJsonResponseMode = () => {
+      const utils = window.DPRLLMConfigUtils || {};
+      if (typeof utils.resolveJsonResponseMode === 'function') {
+        return utils.resolveJsonResponseMode({
+          baseUrl: llm.baseUrl,
+          model: llm.model,
+          preferSchema: false,
+        });
+      }
+      return 'json_object';
+    };
+    const jsonResponseMode = resolveJsonResponseMode();
+
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 120000);
-    const requestPayload = ({ useResponseFormat = true, includeTools = true }) => {
+    const requestPayload = ({ useResponseFormat = true } = {}) => {
       const payload = {
         model: llm.model,
         messages: [
@@ -838,11 +848,7 @@ window.SubscriptionsSmartQuery = (function () {
         ],
         temperature: 0.1,
       };
-      if (includeTools) {
-        payload.tools = [];
-        payload.tool_choice = 'none';
-      }
-      if (useResponseFormat) {
+      if (useResponseFormat && jsonResponseMode === 'json_object') {
         payload.response_format = { type: 'json_object' };
       }
       return payload;
@@ -881,21 +887,13 @@ window.SubscriptionsSmartQuery = (function () {
           let current = null;
           let txt = '';
           current = await doFetch(endpoint, {
-            useResponseFormat: true,
-            includeTools: true,
+            useResponseFormat: jsonResponseMode !== 'prompt_only',
           });
           if (current && !current.ok) {
             txt = await current.text().catch(() => '');
             if (current.status === 400 && /response[\s-]*format|json_object/i.test(txt)) {
               current = await doFetch(endpoint, {
                 useResponseFormat: false,
-                includeTools: true,
-              });
-            }
-            if (current && !current.ok && current.status === 400 && /tool_choice|tools/i.test(txt)) {
-              current = await doFetch(endpoint, {
-                useResponseFormat: false,
-                includeTools: false,
               });
             }
           }
