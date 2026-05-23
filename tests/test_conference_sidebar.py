@@ -93,6 +93,46 @@ class ConferenceSidebarTest(unittest.TestCase):
             self.assertNotIn("# A Conference Paper", md_text)
             self.assertNotIn("## 命中理由", md_text)
 
+    def test_update_sidebar_filters_score_three_and_keeps_four(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = pathlib.Path(tmp)
+            sidebar = tmp_path / "_sidebar.md"
+            result = tmp_path / "conference-icml-2025.supabase.llm.json"
+            payload = {
+                "papers": [
+                    {
+                        "id": "openreview-icml-2025-low",
+                        "title": "Score Three Paper",
+                        "link": "https://openreview.net/forum?id=low",
+                        "pdf_url": "https://openreview.net/pdf?id=low",
+                        "source": "ICML-2025-Accepted",
+                        "abstract": "Low score abstract.",
+                    },
+                    {
+                        "id": "openreview-icml-2025-keep",
+                        "title": "Score Four Paper",
+                        "link": "https://openreview.net/forum?id=keep",
+                        "pdf_url": "https://openreview.net/pdf?id=keep",
+                        "source": "ICML-2025-Accepted",
+                        "abstract": "High score abstract.",
+                    },
+                ],
+                "queries": [],
+                "llm_ranked": [
+                    {"paper_id": "openreview-icml-2025-low", "score": 3, "canonical_evidence": "三分。"},
+                    {"paper_id": "openreview-icml-2025-keep", "score": 4, "canonical_evidence": "四分。"},
+                ],
+            }
+            result.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+            self.mod.update_sidebar_with_conference(sidebar, result, docs_dir=tmp_path / "docs", deep_min_score=-1)
+            text = sidebar.read_text(encoding="utf-8")
+
+            self.assertNotIn("Score Three Paper", text)
+            self.assertIn("Score Four Paper", text)
+            self.assertFalse((tmp_path / "docs" / "conference" / "icml-2025" / "openreview-icml-2025-low-score-three-paper.md").exists())
+            self.assertTrue((tmp_path / "docs" / "conference" / "icml-2025" / "openreview-icml-2025-keep-score-four-paper.md").exists())
+
     def test_update_sidebar_replaces_existing_conference_block(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = pathlib.Path(tmp)

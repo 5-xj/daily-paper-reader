@@ -8,6 +8,7 @@ import html
 import importlib.util
 import json
 import re
+import shutil
 import sys
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Tuple
@@ -17,7 +18,8 @@ ROOT_DIR = Path(__file__).resolve().parent.parent
 DEFAULT_SIDEBAR_PATH = ROOT_DIR / "docs" / "_sidebar.md"
 DEFAULT_DOCS_DIR = ROOT_DIR / "docs"
 CONFERENCE_HEADING = "* Conference Papers\n"
-CONFERENCE_DEEP_MIN_SCORE = 3.0
+CONFERENCE_DISPLAY_MIN_SCORE = 4.0
+CONFERENCE_DEEP_MIN_SCORE = 4.0
 _GENERATE_DOCS_MODULE = None
 
 
@@ -308,7 +310,7 @@ def is_generated_deep_summary(text: str) -> bool:
     return "（完）" in summary or "## " in summary or "### " in summary or len(summary) > 600
 
 
-def collect_ranked_ids(data: Dict[str, Any], limit: int) -> List[Dict[str, Any]]:
+def collect_ranked_ids(data: Dict[str, Any], limit: int, min_score: float = CONFERENCE_DISPLAY_MIN_SCORE) -> List[Dict[str, Any]]:
     papers = data.get("papers") if isinstance(data.get("papers"), list) else []
     paper_ids = [norm_text(p.get("id")) for p in papers if isinstance(p, dict) and norm_text(p.get("id"))]
     llm_ranked = data.get("llm_ranked") if isinstance(data.get("llm_ranked"), list) else []
@@ -344,6 +346,8 @@ def collect_ranked_ids(data: Dict[str, Any], limit: int) -> List[Dict[str, Any]]
     if not ranked:
         ranked = [{"paper_id": paper_id} for paper_id in paper_ids]
 
+    if min_score >= 0:
+        ranked = [item for item in ranked if score_from_ranked_item(item) >= min_score]
     if limit > 0:
         ranked = ranked[:limit]
     return ranked
@@ -530,7 +534,37 @@ def enrich_conference_paper_for_deep_read(
         print(f"[WARN] 会议论文精读生成失败：{paper.get('id') or md_path.stem}: {exc}", flush=True)
 
 
-def build_conference_block(result_path: Path, docs_dir: Path, limit: int = 80, deep_min_score: float = CONFERENCE_DEEP_MIN_SCORE) -> List[str]:
+def cleanup_conference_outputs(
+    docs_dir: Path,
+    papers: Dict[str, Dict[str, Any]],
+    kept_ranked: List[Dict[str, Any]],
+    conference: str,
+    years: str,
+) -> None:
+    conference_dir = docs_dir / "conference" / build_conference_key(conference, years)
+    if conference_dir.exists() and conference_dir.is_dir():
+        shutil.rmtree(conference_dir)
+
+    kept_ids = {norm_text(item.get("paper_id")) for item in kept_ranked if norm_text(item.get("paper_id"))}
+    for paper_id, paper in papers.items():
+        if paper_id in kept_ids:
+            continue
+        source_key = source_key_for_figures(paper)
+        asset_key = norm_text(paper.get("id")) or slugify(norm_text(paper.get("title")))
+        if not asset_key:
+            continue
+        figure_dir = docs_dir / "assets" / "figures" / source_key / asset_key
+        if figure_dir.exists() and figure_dir.is_dir():
+            shutil.rmtree(figure_dir)
+
+
+def build_conference_block(
+    result_path: Path,
+    docs_dir: Path,
+    limit: int = 80,
+    deep_min_score: float = CONFERENCE_DEEP_MIN_SCORE,
+    display_min_score: float = CONFERENCE_DISPLAY_MIN_SCORE,
+) -> List[str]:
     data = load_json(result_path)
     conference, years = parse_conference_result_name(result_path)
     marker = build_conference_marker(conference, years)
@@ -540,7 +574,8 @@ def build_conference_block(result_path: Path, docs_dir: Path, limit: int = 80, d
         for item in (data.get("papers") if isinstance(data.get("papers"), list) else [])
         if isinstance(item, dict) and norm_text(item.get("id"))
     }
-    ranked = collect_ranked_ids(data, limit)
+    ranked = collect_ranked_ids(data, limit, min_score=display_min_score)
+    cleanup_conference_outputs(docs_dir, papers, ranked, conference, years)
     route_by_id = write_conference_docs(
         docs_dir,
         papers,
@@ -622,6 +657,7 @@ def update_sidebar_with_conference(
     limit: int = 80,
     docs_dir: Path = DEFAULT_DOCS_DIR,
     deep_min_score: float = CONFERENCE_DEEP_MIN_SCORE,
+    display_min_score: float = CONFERENCE_DISPLAY_MIN_SCORE,
 ) -> None:
     sidebar_path.parent.mkdir(parents=True, exist_ok=True)
     lines = sidebar_path.read_text(encoding="utf-8").splitlines(keepends=True) if sidebar_path.exists() else []
@@ -629,7 +665,13 @@ def update_sidebar_with_conference(
     marker = build_conference_marker(conference, years)
     remove_existing_conference_block(lines, marker)
     heading_idx = ensure_conference_heading(lines)
-    block = build_conference_block(result_path, docs_dir=docs_dir, limit=limit, deep_min_score=deep_min_score)
+    block = build_conference_block(
+        result_path,
+        docs_dir=docs_dir,
+        limit=limit,
+        deep_min_score=deep_min_score,
+        display_min_score=display_min_score,
+    )
     lines[heading_idx + 1:heading_idx + 1] = block
     sidebar_path.write_text("".join(lines), encoding="utf-8")
 
@@ -657,6 +699,12 @@ def main() -> None:
         default=CONFERENCE_DEEP_MIN_SCORE,
         help="会议论文分数达到该阈值时生成精读全文和图片；设置为负数可禁用。",
     )
+    parser.add_argument(
+        "--display-min-score",
+        type=float,
+        default=CONFERENCE_DISPLAY_MIN_SCORE,
+        help="会议论文进入 sidebar 和 docs 的最低 LLM 分数；默认只展示 4 分及以上。",
+    )
     args = parser.parse_args()
 
     result_path = choose_result_file(Path(item) for item in args.result)
@@ -666,6 +714,7 @@ def main() -> None:
         limit=max(int(args.limit or 0), 0),
         docs_dir=Path(args.docs_dir),
         deep_min_score=float(args.deep_min_score),
+        display_min_score=float(args.display_min_score),
     )
     print(f"[INFO] Conference sidebar updated: {args.sidebar} <- {result_path}", flush=True)
 

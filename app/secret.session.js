@@ -143,8 +143,9 @@
   }
 
   async function loadLocalSecretPayloadPreferred(staticPayload) {
+    if (staticPayload) return staticPayload;
     if (!isLocalDebugHost()) return null;
-    return staticPayload || loadLocalSecretPayload();
+    return loadLocalSecretPayload();
   }
 
   const setAccessMode = (mode, detail) => {
