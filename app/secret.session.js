@@ -1952,8 +1952,11 @@
         const savedPwd = loadSavedPassword();
         openSecretOverlay(overlay);
         // 确保浮层可见
-        if (!savedPwd) {
-          // 没有保存密码：从第 1 步开始完整向导
+        if (hasSecretFile && !savedPwd) {
+          // 已有 secret.private 但浏览器没有保存密码时，必须先解锁，不能回到初始化向导。
+          renderUnlockUI();
+        } else if (!savedPwd) {
+          // 没有 secret.private 且没有保存密码：从第 1 步开始完整向导。
           renderInitStep1();
         } else {
           // 已保存密码：直接进入第 2 步配置向导
@@ -2022,7 +2025,7 @@
         if (hasSecret) {
           // 已存在 secret.private：若浏览器保存了密码，先尝试自动解锁；
           // 成功则直接进入页面；失败或无密码则展示解锁/游客界面。
-          const savedPwd = savedPwdAtInit || loadSavedPassword();
+          const savedPwd = loadSavedPassword();
           if (savedPwd) {
             try {
               const payload = localPayload || staticPayload || await fetchStaticSecretPayload();
