@@ -17,6 +17,75 @@
     return host === 'localhost' || host === '127.0.0.1' || host === '::1';
   };
 
+  const getGithubPagesRepoInfoFromLocation = () => {
+    const href = String((window.location && window.location.href) || '');
+    const match = href.match(/^https?:\/\/([^.]+)\.github\.io\/([^/?#]+)/i);
+    if (!match) return null;
+    return {
+      owner: match[1],
+      repo: decodeURIComponent(match[2] || '').replace(/^\/+|\/+$/g, ''),
+    };
+  };
+
+  const getCurrentDirectoryUrl = () => {
+    const loc = window.location || {};
+    const origin = String(loc.origin || '');
+    const pathname = String(loc.pathname || '/');
+    if (!origin) return '';
+    const dirPath = pathname.endsWith('/')
+      ? pathname
+      : pathname.includes('.')
+        ? pathname.replace(/\/[^/]*$/, '/')
+        : `${pathname}/`;
+    return `${origin}${dirPath}`;
+  };
+
+  const buildSecretFileUrlCandidates = () => {
+    const out = [];
+    const seen = new Set();
+    const push = (url) => {
+      const candidate = String(url || '').trim();
+      if (!candidate || seen.has(candidate)) return;
+      seen.add(candidate);
+      out.push(candidate);
+    };
+    const currentDir = getCurrentDirectoryUrl();
+    if (currentDir) push(new URL(SECRET_FILE_URL, currentDir).href);
+    push(SECRET_FILE_URL);
+    push(`./${SECRET_FILE_URL}`);
+    const gh = getGithubPagesRepoInfoFromLocation();
+    if (gh && gh.owner && gh.repo) {
+      push(`https://raw.githubusercontent.com/${encodeURIComponent(gh.owner)}/${encodeURIComponent(gh.repo)}/main/${SECRET_FILE_URL}`);
+      push(`https://raw.githubusercontent.com/${encodeURIComponent(gh.owner)}/${encodeURIComponent(gh.repo)}/master/${SECRET_FILE_URL}`);
+    }
+    return out;
+  };
+
+  async function fetchStaticSecretPayload() {
+    let lastError = null;
+    const candidates = buildSecretFileUrlCandidates();
+    for (let i = 0; i < candidates.length; i += 1) {
+      const url = candidates[i];
+      try {
+        const resp = await fetch(url, {
+          method: 'GET',
+          cache: 'no-store',
+        });
+        if (!resp || !resp.ok) {
+          lastError = new Error(`HTTP ${resp ? resp.status : 0} ${url}`);
+          continue;
+        }
+        return await resp.json();
+      } catch (e) {
+        lastError = e;
+      }
+    }
+    if (lastError) {
+      console.warn('[SECRET] 未能读取静态 secret.private：', lastError);
+    }
+    return null;
+  }
+
   const getLocalApiUrl = (path) => {
     const base = String(window.DPR_LOCAL_API_BASE || '').trim().replace(/\/$/, '');
     if (base) return `${base}${path}`;
@@ -1000,11 +1069,10 @@
         unlockBtn.disabled = true;
         guestBtn.disabled = true;
         try {
-          const resp = await fetch(SECRET_FILE_URL, { cache: 'no-store' });
-          if (!resp.ok) {
-            throw new Error(`获取 secret.private 失败，HTTP ${resp.status}`);
+          const staticPayload = await fetchStaticSecretPayload();
+          if (!staticPayload) {
+            throw new Error('获取 secret.private 失败');
           }
-          const staticPayload = await resp.json();
           const payload = await loadLocalSecretPayloadPreferred(staticPayload);
           const secret = await decryptSecret(pwd, payload);
           // 将解密后的配置保存在内存中，不落盘，同时记住密码以便下次自动解锁
@@ -1958,21 +2026,8 @@
     // 检查是否已经存在 secret.private（用于区分“解锁”与“初始化”）
     (async () => {
       try {
-        let staticPayload = null;
-        const resp = await fetch(SECRET_FILE_URL, {
-          method: 'GET',
-          cache: 'no-store',
-        });
-        let hasSecret = false;
-        if (resp && resp.ok) {
-          try {
-            // 不再依赖 content-type，只要能成功解析为 JSON，就认为是合法的 secret.private
-            staticPayload = await resp.clone().json();
-            hasSecret = true;
-          } catch {
-            hasSecret = false;
-          }
-        }
+        const staticPayload = await fetchStaticSecretPayload();
+        let hasSecret = Boolean(staticPayload);
         const localPayload = await loadLocalSecretPayloadPreferred(staticPayload);
         hasSecret = hasSecret || Boolean(localPayload);
 
@@ -1984,17 +2039,10 @@
           const savedPwd = savedPwdAtInit || loadSavedPassword();
           if (savedPwd) {
             try {
-              const payload = localPayload || (await (async () => {
-                const resp2 = await fetch(SECRET_FILE_URL, {
-                  cache: 'no-store',
-                });
-                if (!resp2.ok) {
-                  throw new Error(
-                    `获取 secret.private 失败，HTTP ${resp2.status}`,
-                  );
-                }
-                return resp2.json();
-              })());
+              const payload = localPayload || staticPayload || await fetchStaticSecretPayload();
+              if (!payload) {
+                throw new Error('获取 secret.private 失败');
+              }
               const secret = await decryptSecret(savedPwd, payload);
               window.decoded_secret_private = secret;
               // 这里不在 setupOverlay 作用域内，直接标记全局访问模式为 full 并广播事件
