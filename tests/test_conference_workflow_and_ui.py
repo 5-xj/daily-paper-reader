@@ -16,6 +16,7 @@ class ConferenceWorkflowAndUiTest(unittest.TestCase):
         self.assertIn("RERANK_PROFILE", text)
         self.assertIn("RERANK_API_KEY", text)
         self.assertIn("SILICONFLOW_API_KEY", text)
+        self.assertIn('default: "public-zwwen-rerank"', text)
 
     def test_conference_retrieval_workflow_dispatches_pipeline(self):
         root = pathlib.Path(__file__).resolve().parents[1]
@@ -30,7 +31,7 @@ class ConferenceWorkflowAndUiTest(unittest.TestCase):
         self.assertEqual((inputs.get("top_k") or {}).get("default"), "50")
         self.assertEqual((inputs.get("rrf_top_n") or {}).get("default"), "200")
         self.assertEqual((inputs.get("run_rerank") or {}).get("default"), "true")
-        self.assertEqual((inputs.get("reranker_profile") or {}).get("default"), "")
+        self.assertEqual((inputs.get("reranker_profile") or {}).get("default"), "public-zwwen-rerank")
         self.assertEqual((inputs.get("run_llm_refine") or {}).get("default"), "true")
         self.assertIn("MKL_THREADING_LAYER: GNU", text)
         self.assertIn("DPR_RERANK_GLOBAL_POOL_LIMIT: \"120\"", text)
@@ -66,8 +67,13 @@ class ConferenceWorkflowAndUiTest(unittest.TestCase):
         self.assertTrue((root / "scripts" / "local_debug.sh").exists())
         self.assertTrue((root / "scripts" / "bootstrap_local.sh").exists())
         self.assertTrue((root / "requirements-cpu.txt").exists())
+        server = (root / "src" / "local_debug_server.py").read_text(encoding="utf-8")
+        self.assertIn("src/conference_pipeline.py", server)
+        self.assertIn("src/conference_sidebar.py", server)
+        self.assertIn(".supabase.llm.json", server)
         self.assertIn("run_rerank: 'true'", runner)
         self.assertIn("run_llm_refine: 'true'", runner)
+        self.assertIn("reranker_profile: 'public-zwwen-rerank'", runner)
         self.assertIn("reranker_profile", runner)
         self.assertIn("scrollWorkflowOutputToBottom", runner)
         self.assertIn("data-dpr-workflow-log", runner)
@@ -90,6 +96,8 @@ class ConferenceWorkflowAndUiTest(unittest.TestCase):
         self.assertIn("CONFIG_PATH.write_text", server)
         self.assertIn("/api/local/secret", server)
         self.assertIn("SECRET_PATH.write_text", server)
+        self.assertIn("ENV_PATH", server)
+        self.assertIn("update_env_file", server)
         self.assertIn("build_secret_env", server)
         self.assertIn("DEEPSEEK_API_KEY", server)
         self.assertIn("SUMMARY_API_KEY", server)
@@ -106,7 +114,9 @@ class ConferenceWorkflowAndUiTest(unittest.TestCase):
 
         self.assertIn("/api/local/secret", secret_js)
         self.assertIn("saveLocalSecretPayloadToDisk", secret_js)
+        self.assertIn("body.secret = secretPlain", secret_js)
         self.assertIn("loadLocalSecretPayloadPreferred", secret_js)
+        self.assertIn("DEFAULT_RERANKER_PROFILE.value", secret_js)
         self.assertIn("secret.private", gitignore)
 
 

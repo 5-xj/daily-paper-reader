@@ -11,6 +11,11 @@ require('../app/subscriptions.manager.js');
 const {
   normalizeSubscriptions,
   isConferenceYearSelectable,
+  refreshQuickRunButtons,
+  clearQuickRunUnsavedMessage,
+  __setQuickRunMsgEl,
+  __setQuickRunConferenceBtn,
+  __setUnsavedChanges,
 } = global.window.SubscriptionsManager.__test;
 
 function buildBaseConfig() {
@@ -102,6 +107,25 @@ function testNormalizeSubscriptionsPreservesCustomBiorxivBackendFields() {
   assert.equal(backend.vector_rpc_exact, 'match_biorxiv_papers_exact');
 }
 
+function testNormalizeSubscriptionsConvertsChineseTagToEnglishFallback() {
+  const config = buildBaseConfig();
+  config.subscriptions.intent_profiles[0].tag = '强化学习';
+  config.subscriptions.intent_profiles[0].keywords = [
+    {
+      keyword: 'reinforcement learning',
+      query: 'reinforcement learning algorithms comparison',
+    },
+  ];
+  config.subscriptions.intent_profiles[0].intent_queries = [
+    {
+      query: 'policy gradient reinforcement learning',
+    },
+  ];
+
+  const normalized = normalizeSubscriptions(config);
+  assert.equal(normalized.subscriptions.intent_profiles[0].tag, 'reinforcement-learning');
+}
+
 function testRunProfileQuickFetchPassesProfileTagToWorkflow() {
   const calls = [];
   global.window.DPRWorkflowRunner = {
@@ -131,9 +155,73 @@ function testConferenceCurrentYearDisabledForPendingSources() {
   assert.equal(isConferenceYearSelectable('ICML', previousYear), true);
 }
 
+function testQuickRunUnsavedMessageClearsAfterSave() {
+  const msgEl = {
+    textContent: '',
+    style: {
+      color: '',
+    },
+  };
+  __setQuickRunMsgEl(msgEl);
+  __setUnsavedChanges(true);
+  refreshQuickRunButtons();
+  assert.equal(msgEl.textContent, '检测到未保存修改，请先保存后再发起快速抓取。');
+  assert.equal(msgEl.style.color, '#c00');
+
+  __setUnsavedChanges(false);
+  refreshQuickRunButtons();
+  clearQuickRunUnsavedMessage();
+  assert.equal(msgEl.textContent, '配置已保存，可以发起快速抓取。');
+  assert.equal(msgEl.style.color, '#080');
+}
+
+function buildMockButton() {
+  const classes = new Set();
+  return {
+    disabled: false,
+    title: '',
+    textContent: '开始检索',
+    getAttribute(name) {
+      if (name === 'data-default-title') return '一次性触发会议论文拉取任务';
+      return '';
+    },
+    classList: {
+      toggle(name, enabled) {
+        if (enabled) classes.add(name);
+        else classes.delete(name);
+      },
+      contains(name) {
+        return classes.has(name);
+      },
+    },
+  };
+}
+
+function testConferenceRunDisabledWhenUnsaved() {
+  const btn = buildMockButton();
+  __setQuickRunConferenceBtn(btn);
+  __setUnsavedChanges(true);
+  refreshQuickRunButtons();
+
+  assert.equal(btn.disabled, true);
+  assert.equal(btn.classList.contains('chat-quick-run-item--disabled'), true);
+  assert.equal(btn.title, '请先点击“保存”后再发起会议论文检索。');
+
+  __setUnsavedChanges(false);
+  refreshQuickRunButtons();
+
+  assert.equal(btn.disabled, false);
+  assert.equal(btn.classList.contains('chat-quick-run-item--disabled'), false);
+  assert.equal(btn.title, '一次性触发会议论文拉取任务');
+  __setQuickRunConferenceBtn(null);
+}
+
 testNormalizeSubscriptionsAddsBiorxivBackend();
 testNormalizeSubscriptionsPreservesCustomBiorxivBackendFields();
+testNormalizeSubscriptionsConvertsChineseTagToEnglishFallback();
 testRunProfileQuickFetchPassesProfileTagToWorkflow();
 testConferenceCurrentYearDisabledForPendingSources();
+testQuickRunUnsavedMessageClearsAfterSave();
+testConferenceRunDisabledWhenUnsaved();
 
 console.log('subscriptions manager tests passed');

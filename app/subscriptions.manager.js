@@ -62,16 +62,20 @@ window.SubscriptionsManager = (function () {
     '}',
     'Requirements:',
     '1) keywords: output 5-12 objects; each item must include keyword and query, keyword_cn optional.',
-    '2) keywords are used for recall and should be atomic phrases (prefer 1-3 core words).',
-    '3) Avoid coupling core terms (e.g., "symbolic regression", "reinforcement learning", "genetic programming", "Transformer") with extra qualifiers into one keyword. Keep core terms atomic in keyword and use query for full intent.',
-    '4) Suggested example:',
+    '2) keyword and query MUST be English retrieval text only. Do not put Chinese in keyword or query.',
+    '3) keyword_cn and query_cn MUST be Chinese translations/explanations when present.',
+    '4) keywords are used for recall and should be atomic phrases (prefer 1-3 core words).',
+    '5) Avoid coupling core terms (e.g., "symbolic regression", "reinforcement learning", "genetic programming", "Transformer") with extra qualifiers into one keyword. Keep core terms atomic in keyword and use query for full intent.',
+    '6) Suggested example:',
     '   {"keyword":"symbolic regression","query":"deep symbolic regression methods","keyword_cn":"符号回归","query_cn":"符号回归深度方法"},',
     '   {"keyword":"reinforcement learning","query":"policy gradient symbolic regression","keyword_cn":"强化学习","query_cn":"策略梯度在符号回归中的应用"},',
     '   {"keyword":"MCTS","query":"MCTS for symbolic regression"}',
-    '5) intent_queries: output 1-4 actionable intent queries. Each item should include query and optional query_cn.',
-    '6) Do not output extra fields like must_have / optional / exclude / rewrite_for_embedding / must_have.',
-    '7) Return pure JSON only, no explanations.',
-    '8) Tag suggestion should be concise, preferably under 6 characters.',
+    '7) intent_queries: output 1-4 actionable intent queries. The query field MUST be English only; query_cn should be Chinese.',
+    '8) Do not output extra fields like must_have / optional / exclude / rewrite_for_embedding / must_have.',
+    '9) Return pure JSON only, no explanations.',
+    '10) Tag suggestion should be concise and descriptive. No fixed length limit.',
+    '11) Tag suggestion must be English words or an English acronym only. Never output Chinese in tag.',
+    '12) Tag suggestion must use hyphen-separated words when multiple words are needed, for example "reinforcement-learning". Do not use spaces or underscores in tag.',
   ].join('\n');
 
   const QUICK_RUN_CONFERENCES = [
@@ -84,6 +88,51 @@ window.SubscriptionsManager = (function () {
   ]);
 
   const normalizeText = (v) => String(v || '').trim();
+  const sanitizeProfileTag = (value) => {
+    const base = normalizeText(value);
+    if (!base) return '';
+    const tag = base
+      .replace(/\((?:19|20)\d{2}(?:年)?\)/g, '')
+      .replace(/（(?:19|20)\d{2}(?:年)?）/g, '')
+      .replace(/([\u4e00-\u9fffA-Za-z]+)\s*(?:19|20)\d{2}(?!\d)/g, '$1')
+      .replace(/(?:19|20)\d{2}(?!\d)([\u4e00-\u9fffA-Za-z]+)/g, '$1')
+      .replace(/[\s_-]*(?:19|20)\d{2}(?:年)?[\s_-]*/g, '')
+      .replace(/\+/g, '-')
+      .replace(/[\s_]+/g, '-')
+      .replace(/[^A-Za-z0-9-]+/g, '')
+      .replace(/-+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .trim();
+    if (!/[A-Za-z]/.test(tag)) return '';
+    return tag;
+  };
+  const deriveProfileTag = (profile, fallback) => {
+    const values = [profile && profile.tag];
+    (Array.isArray(profile && profile.keywords) ? profile.keywords : []).forEach((item) => {
+      if (typeof item === 'string') {
+        values.push(item);
+        return;
+      }
+      if (item && typeof item === 'object') {
+        values.push(item.keyword, item.query);
+      }
+    });
+    (Array.isArray(profile && profile.intent_queries) ? profile.intent_queries : []).forEach((item) => {
+      if (typeof item === 'string') {
+        values.push(item);
+        return;
+      }
+      if (item && typeof item === 'object') {
+        values.push(item.query);
+      }
+    });
+    values.push(fallback);
+    for (let idx = 0; idx < values.length; idx += 1) {
+      const tag = sanitizeProfileTag(values[idx]);
+      if (tag) return tag;
+    }
+    return '';
+  };
   const normalizeSourceKey = (v) => normalizeText(v).toLowerCase();
   const toStableId = (value) => {
     const text = normalizeText(value).toLowerCase();
@@ -435,17 +484,39 @@ window.SubscriptionsManager = (function () {
 
   const refreshQuickRunButtons = () => {
     const blocked = hasUnsavedChanges;
-    [quickRun10dBtn, quickRun30dBtn, quickRun30dStandardBtn].forEach((btn) => {
+    [quickRun10dBtn, quickRun30dBtn, quickRun30dStandardBtn, quickRunConferenceBtn].forEach((btn) => {
       if (!btn) return;
       btn.disabled = blocked;
       btn.classList.toggle('chat-quick-run-item--disabled', blocked);
       btn.title = blocked
-        ? '请先点击“保存”后再发起快速抓取。'
+        ? (btn === quickRunConferenceBtn ? '请先点击“保存”后再发起会议论文检索。' : '请先点击“保存”后再发起快速抓取。')
         : (btn.getAttribute('data-default-title') || btn.textContent || '');
     });
     if (blocked && quickRunMsgEl) {
       quickRunMsgEl.textContent = '检测到未保存修改，请先保存后再发起快速抓取。';
       quickRunMsgEl.style.color = '#c00';
+    }
+    const conferenceMsgEl = document && typeof document.getElementById === 'function'
+      ? document.getElementById('arxiv-admin-conference-run-msg')
+      : null;
+    if (blocked && conferenceMsgEl) {
+      conferenceMsgEl.textContent = '检测到未保存修改，请先保存后再发起会议论文检索。';
+      conferenceMsgEl.style.color = '#c00';
+    }
+  };
+
+  const clearQuickRunUnsavedMessage = () => {
+    if (!quickRunMsgEl) return;
+    if (/未保存修改|先保存|先点击/.test(quickRunMsgEl.textContent || '')) {
+      quickRunMsgEl.textContent = '配置已保存，可以发起快速抓取。';
+      quickRunMsgEl.style.color = '#080';
+    }
+    const conferenceMsgEl = document && typeof document.getElementById === 'function'
+      ? document.getElementById('arxiv-admin-conference-run-msg')
+      : null;
+    if (conferenceMsgEl && /未保存修改|先保存|先点击/.test(conferenceMsgEl.textContent || '')) {
+      conferenceMsgEl.textContent = '配置已保存，可以发起会议论文检索。';
+      conferenceMsgEl.style.color = '#080';
     }
   };
 
@@ -543,6 +614,16 @@ window.SubscriptionsManager = (function () {
   };
 
   const runQuickConferenceRetrieval = (msgEl) => {
+    if (hasUnsavedChanges) {
+      const text = '检测到未保存修改，请先点击“保存”后再发起会议论文检索。';
+      if (msgEl) {
+        msgEl.textContent = text;
+        msgEl.style.color = '#c00';
+      }
+      setQuickRunMessage(text, '#c00');
+      refreshQuickRunButtons();
+      return false;
+    }
     const years = selectedConferenceYears.slice();
     const conf = String(selectedConference || '').trim();
     if (!years.length || !conf) {
@@ -550,20 +631,21 @@ window.SubscriptionsManager = (function () {
         msgEl.textContent = '请先选择会议和年份。';
         msgEl.style.color = '#c00';
       }
-      return;
+      return false;
     }
     if (!window.DPRWorkflowRunner || typeof window.DPRWorkflowRunner.runConferenceRetrieval !== 'function') {
       if (msgEl) {
         msgEl.textContent = '工作流触发器未加载到当前页面。';
         msgEl.style.color = '#c00';
       }
-      return;
+      return false;
     }
     window.DPRWorkflowRunner.runConferenceRetrieval(conf, years);
     if (msgEl) {
       msgEl.textContent = `已发起 ${conf} ${years.join(', ')} 会议论文检索任务。`;
       msgEl.style.color = '#080';
     }
+    return true;
   };
 
   const runResetContent = (msgEl) => {
@@ -606,7 +688,7 @@ window.SubscriptionsManager = (function () {
     return profiles
       .map((p, idx) => {
         if (!p || typeof p !== 'object') return null;
-        const tag = normalizeText(p.tag) || toStableId(p.description || `profile-${idx + 1}`);
+        const tag = deriveProfileTag(p, `profile-${idx + 1}`) || `profile-${idx + 1}`;
         const description = normalizeText(p.description || '');
         const enabled = p.enabled !== false;
         const fallbackToArxiv = !Object.prototype.hasOwnProperty.call(p, 'paper_sources');
@@ -643,7 +725,7 @@ window.SubscriptionsManager = (function () {
     for (let idx = 0; idx < profiles.length; idx += 1) {
       const profile = profiles[idx];
       if (!profile || typeof profile !== 'object') continue;
-      const tag = normalizeText(profile.tag) || `词条${idx + 1}`;
+      const tag = deriveProfileTag(profile, `profile-${idx + 1}`) || `profile-${idx + 1}`;
       const fallbackToArxiv = !Object.prototype.hasOwnProperty.call(profile, 'paper_sources');
       const paperSources = normalizePaperSources(profile.paper_sources, { fallbackToArxiv });
       const keywords = dedupeKeywords(
@@ -984,6 +1066,7 @@ window.SubscriptionsManager = (function () {
       draftConfig = toSave;
       hasUnsavedChanges = false;
       refreshQuickRunButtons();
+      clearQuickRunUnsavedMessage();
       if (window.SubscriptionsSmartQuery && window.SubscriptionsSmartQuery.clearPendingDeletedProfileIds) {
         window.SubscriptionsSmartQuery.clearPendingDeletedProfileIds();
       }
@@ -1098,8 +1181,7 @@ window.SubscriptionsManager = (function () {
     resetContentBtn = document.getElementById('arxiv-admin-reset-content-btn');
     resetContentMsgEl = document.getElementById('arxiv-admin-reset-content-msg');
     if (quickRunConferenceBtn) {
-      quickRunConferenceBtn.disabled = false;
-      quickRunConferenceBtn.classList.remove('chat-quick-run-item--disabled');
+      quickRunConferenceBtn.setAttribute('data-default-title', '一次性触发会议论文拉取任务');
       quickRunConferenceBtn.title = '一次性触发会议论文拉取任务';
     }
     initializeConferenceChoices();
@@ -1264,6 +1346,17 @@ window.SubscriptionsManager = (function () {
       buildDefaultSourceBackend: (sourceKey, config) => buildDefaultSourceBackend(sourceKey, cloneDeep(config || {})),
       normalizePaperSources: (values, options) => normalizePaperSources(values, options),
       isConferenceYearSelectable: (conference, year) => isConferenceYearSelectable(conference, year),
+      __setQuickRunMsgEl: (el) => {
+        quickRunMsgEl = el || null;
+      },
+      __setQuickRunConferenceBtn: (el) => {
+        quickRunConferenceBtn = el || null;
+      },
+      __setUnsavedChanges: (value) => {
+        hasUnsavedChanges = !!value;
+      },
+      refreshQuickRunButtons,
+      clearQuickRunUnsavedMessage,
     },
   };
 })();

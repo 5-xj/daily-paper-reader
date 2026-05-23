@@ -12,6 +12,7 @@
     'deepseek-v4-flash',
     'deepseek-v4-pro',
   ];
+  const DEEPSEEK_V4_MAX_OUTPUT_TOKENS = 393216;
   const DEEPSEEK_PRESETS = Object.freeze({
     deepseek: Object.freeze({
       key: 'deepseek',
@@ -146,16 +147,34 @@
     return 'json_object';
   };
 
+  const isDeepSeekV4Model = (model) => {
+    const normalizedModel = normalizeText(model || '').toLowerCase();
+    return normalizedModel === 'deepseek-v4-flash' || normalizedModel === 'deepseek-v4-pro';
+  };
+
+  const resolveMaxOutputTokens = ({ baseUrl, model } = {}) => {
+    const profile = inferChatApiProfile(baseUrl, model);
+    if (profile === 'deepseek' && isDeepSeekV4Model(model)) {
+      return DEEPSEEK_V4_MAX_OUTPUT_TOKENS;
+    }
+    return null;
+  };
+
   const shouldUseXApiKeyHeader = ({ baseUrl, model }) => {
     return true;
   };
 
   const buildStreamingChatPayload = ({ baseUrl, model, messages }) => {
-    return {
+    const payload = {
       model: normalizeText(model),
       messages: Array.isArray(messages) ? messages : [],
       stream: true,
     };
+    const maxTokens = resolveMaxOutputTokens({ baseUrl, model });
+    if (maxTokens) {
+      payload.max_tokens = maxTokens;
+    }
+    return payload;
   };
 
   const buildConnectivityTestPayload = ({ baseUrl, model }) => {
@@ -191,6 +210,8 @@
     getDeepSeekPreset,
     inferChatApiProfile,
     resolveJsonResponseMode,
+    isDeepSeekV4Model,
+    resolveMaxOutputTokens,
     shouldUseXApiKeyHeader,
     buildStreamingChatPayload,
     buildConnectivityTestPayload,

@@ -1819,6 +1819,225 @@ window.$docsify = {
         });
       };
 
+      const setupCollapsibleConferenceSidebar = () => {
+        const nav = document.querySelector('.sidebar-nav');
+        if (!nav) return;
+
+        const STORAGE_KEY = 'dpr_sidebar_conference_state_v1';
+        const ANIM_MS = 220;
+
+        const readState = () => {
+          try {
+            const raw = window.localStorage
+              ? window.localStorage.getItem(STORAGE_KEY)
+              : null;
+            return raw ? JSON.parse(raw) || {} : {};
+          } catch {
+            return {};
+          }
+        };
+
+        const state = readState();
+        const saveState = () => {
+          try {
+            if (window.localStorage) {
+              window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+            }
+          } catch {
+            // ignore
+          }
+        };
+
+        const getDirectTextNode = (li) => {
+          if (!li || typeof Node === 'undefined') return null;
+          return (
+            Array.from(li.childNodes || []).find((node) => {
+              return node && node.nodeType === Node.TEXT_NODE && String(node.textContent || '').trim();
+            }) || null
+          );
+        };
+
+        const getToggleLabel = (li) => {
+          if (!li) return '';
+          const label = li.querySelector(
+            ':scope > .sidebar-conference-toggle .sidebar-conference-toggle-label',
+          );
+          if (label) return String(label.textContent || '').trim();
+          const textNode = getDirectTextNode(li);
+          return String((textNode && textNode.textContent) || '').trim();
+        };
+
+        const normalizeKeyPart = (value) => {
+          return String(value || '').trim().toLowerCase().replace(/\s+/g, '-');
+        };
+
+        const updateOpenAncestorHeights = (li) => {
+          let parent = li ? li.parentElement : null;
+          while (parent) {
+            const parentLi = parent.closest('li.sidebar-conference-node');
+            if (!parentLi) break;
+            if (!parentLi.classList.contains('sidebar-conference-collapsed')) {
+              const ul = parentLi.querySelector(':scope > ul.sidebar-conference-content');
+              if (ul) ul.style.maxHeight = `${ul.scrollHeight}px`;
+            }
+            parent = parentLi.parentElement;
+          }
+        };
+
+        const setConferenceCollapsed = (li, collapsed, options = {}) => {
+          const { animate = true } = options || {};
+          const ul = li.querySelector(':scope > ul');
+          if (!ul) return;
+          ul.classList.add('sidebar-conference-content');
+          const doAnimate = animate && !prefersReducedMotion();
+
+          if (!doAnimate) {
+            ul.style.transition = 'none';
+            ul.style.maxHeight = collapsed ? '0px' : `${ul.scrollHeight}px`;
+            ul.style.opacity = collapsed ? '0' : '1';
+            requestAnimationFrame(() => {
+              ul.style.transition = '';
+              updateOpenAncestorHeights(li);
+            });
+            return;
+          }
+
+          if (collapsed) {
+            ul.style.maxHeight = `${ul.scrollHeight}px`;
+            ul.style.opacity = '0';
+            requestAnimationFrame(() => {
+              ul.style.maxHeight = '0px';
+            });
+          } else {
+            ul.style.opacity = '1';
+            ul.style.maxHeight = '0px';
+            requestAnimationFrame(() => {
+              ul.style.maxHeight = `${ul.scrollHeight}px`;
+            });
+          }
+
+          setTimeout(() => {
+            try {
+              if (!li.classList.contains('sidebar-conference-collapsed')) {
+                ul.style.maxHeight = `${ul.scrollHeight}px`;
+              }
+              updateOpenAncestorHeights(li);
+              syncSidebarActiveIndicator({ animate: false });
+            } catch {
+              // ignore
+            }
+          }, ANIM_MS + 30);
+        };
+
+        const ensureToggle = (li, label, storageKey) => {
+          if (!li || !label || !storageKey) return;
+          const childUl = li.querySelector(':scope > ul');
+          if (!childUl) return;
+
+          li.classList.add('sidebar-conference-node');
+          childUl.classList.add('sidebar-conference-content');
+
+          let wrapper = li.querySelector(':scope > .sidebar-conference-toggle');
+          if (!wrapper) {
+            wrapper = document.createElement('div');
+            wrapper.className = 'sidebar-conference-toggle';
+
+            const labelSpan = document.createElement('span');
+            labelSpan.className = 'sidebar-conference-toggle-label';
+
+            const arrowSpan = document.createElement('span');
+            arrowSpan.className = 'sidebar-conference-toggle-arrow';
+            arrowSpan.setAttribute('aria-hidden', 'true');
+
+            wrapper.appendChild(labelSpan);
+            wrapper.appendChild(arrowSpan);
+
+            const textNode = getDirectTextNode(li);
+            if (textNode && textNode.parentNode === li) {
+              li.replaceChild(wrapper, textNode);
+            } else {
+              li.insertBefore(wrapper, li.firstChild);
+            }
+          }
+
+          const labelSpan = wrapper.querySelector('.sidebar-conference-toggle-label');
+          const arrowSpan = wrapper.querySelector('.sidebar-conference-toggle-arrow');
+          if (labelSpan) labelSpan.textContent = label;
+
+          const collapsed = state[storageKey] === 'closed';
+          li.dataset.sidebarConferenceKey = storageKey;
+          li.classList.toggle('sidebar-conference-collapsed', collapsed);
+          if (arrowSpan) arrowSpan.textContent = collapsed ? '▸' : '▾';
+          wrapper.setAttribute('role', 'button');
+          wrapper.setAttribute('tabindex', '0');
+          wrapper.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+          setConferenceCollapsed(li, collapsed, { animate: false });
+
+          if (!wrapper.dataset.dprConferenceToggleBound) {
+            wrapper.dataset.dprConferenceToggleBound = '1';
+            const toggle = (event) => {
+              if (event) {
+                event.preventDefault();
+                event.stopPropagation();
+                if (event.stopImmediatePropagation) event.stopImmediatePropagation();
+              }
+              const nowCollapsed = li.classList.toggle('sidebar-conference-collapsed');
+              const currentArrow = wrapper.querySelector('.sidebar-conference-toggle-arrow');
+              if (currentArrow) currentArrow.textContent = nowCollapsed ? '▸' : '▾';
+              wrapper.setAttribute('aria-expanded', nowCollapsed ? 'false' : 'true');
+              state[storageKey] = nowCollapsed ? 'closed' : 'open';
+              saveState();
+              setConferenceCollapsed(li, nowCollapsed, { animate: true });
+              requestAnimationFrame(() => {
+                syncSidebarActiveIndicator({ animate: false });
+              });
+            };
+            wrapper.addEventListener('click', toggle, true);
+            wrapper.addEventListener('keydown', (event) => {
+              const keyName = event && event.key ? event.key : '';
+              if (keyName !== 'Enter' && keyName !== ' ') return;
+              toggle(event);
+            });
+          }
+        };
+
+        const rootItems = Array.from(nav.querySelectorAll('li')).filter((li) => {
+          if (!li.querySelector(':scope > ul')) return false;
+          return getToggleLabel(li) === 'Conference Papers';
+        });
+
+        rootItems.forEach((rootLi) => {
+          ensureToggle(rootLi, 'Conference Papers', 'root:conference-papers');
+          const childLis = Array.from(rootLi.querySelectorAll(':scope > ul > li'));
+          childLis.forEach((li) => {
+            if (!li.querySelector(':scope > ul')) return;
+            const label = getToggleLabel(li);
+            if (!label) return;
+            ensureToggle(li, label, `conference:${normalizeKeyPart(label)}`);
+          });
+        });
+
+        requestAnimationFrame(() => {
+          try {
+            nav
+              .querySelectorAll(
+                'li.sidebar-conference-node:not(.sidebar-conference-collapsed) > ul.sidebar-conference-content',
+              )
+              .forEach((ul) => {
+                const prevTransition = ul.style.transition;
+                ul.style.transition = 'none';
+                ul.style.maxHeight = `${ul.scrollHeight}px`;
+                ul.style.opacity = '1';
+                requestAnimationFrame(() => {
+                  ul.style.transition = prevTransition || '';
+                });
+              });
+          } catch {
+            // ignore
+          }
+        });
+      };
+
       // 4. 论文“已阅读”状态管理（存储在 localStorage）
       const READ_STORAGE_KEY = 'dpr_read_papers_v1';
 
@@ -2383,9 +2602,13 @@ window.$docsify = {
       const hydrateStructuredSidebarItems = () => {
         const nav = document.querySelector('.sidebar-nav');
         if (!nav) return;
-        const links = nav.querySelectorAll('a.dpr-sidebar-item-link[href*="#/"]');
+        const links = nav.querySelectorAll('a.dpr-sidebar-item-link.dpr-sidebar-item-structured');
         links.forEach((a) => {
           if (a.dataset.sidebarStructuredHydrated === '1') return;
+          const li = a.closest('li');
+          if (li && li.classList) {
+            li.classList.add('sidebar-paper-item');
+          }
           const href = String(a.getAttribute('href') || '').trim();
           const routeMatch = href.match(/#\/(.+)$/);
           const routeId = routeMatch ? decodeURIComponent(routeMatch[1]).replace(/\/$/, '') : '';
@@ -2511,7 +2734,10 @@ window.$docsify = {
       // 侧边栏/正文的论文页标题条：英文右侧，中文左侧，中间竖线
       const isPaperRouteFile = (file) => {
         const f = String(file || '');
-        return /^(?:\d{6}\/\d{2}|\d{8}-\d{8})\/(?!README\.md$).+\.md$/i.test(f);
+        return (
+          /^(?:\d{6}\/\d{2}|\d{8}-\d{8})\/(?!README\.md$).+\.md$/i.test(f) ||
+          /^conference\/[^/]+\/(?!README\.md$).+\.md$/i.test(f)
+        );
       };
 
       const isReportRouteFile = (file) => {
@@ -2763,9 +2989,13 @@ window.$docsify = {
 
         // 只对论文条目启用（避免日期分组标题等）
         if (!li.classList || !li.classList.contains('sidebar-paper-item')) return;
-        // 若该条目在“折叠的日期”之下：隐藏高亮层，避免折叠后仍残留选中背景
+        // 若该条目在折叠分组之下：隐藏高亮层，避免折叠后仍残留选中背景
         try {
-          if (li.closest && li.closest('li.sidebar-day-collapsed')) {
+          if (
+            li.closest &&
+            (li.closest('li.sidebar-day-collapsed') ||
+              li.closest('li.sidebar-conference-collapsed'))
+          ) {
             hideSidebarActiveIndicator();
             return;
           }
@@ -2916,7 +3146,11 @@ window.$docsify = {
         // 匹配论文页：
         // - 传统路径：#/YYYYMM/DD/slug
         // - 区间路径：#/YYYYMMDD-YYYYMMDD/slug
-        return /^#\/(?:\d{6}\/\d{2}|\d{8}-\d{8})\/(?!README$).+/i.test(h);
+        // - 会议路径：#/conference/<conference-year>/slug
+        return (
+          /^#\/(?:\d{6}\/\d{2}|\d{8}-\d{8})\/(?!README$).+/i.test(h) ||
+          /^#\/conference\/[^/]+\/(?!README$).+/i.test(h)
+        );
       };
 
       const isReportHref = (href) => {
@@ -3695,6 +3929,75 @@ window.$docsify = {
         });
       };
 
+      const closePdfPreview = () => {
+        document.body.classList.remove('dpr-pdf-preview-open');
+        document.querySelectorAll('[data-pdf-preview-toggle]').forEach((btn) => {
+          btn.setAttribute('aria-expanded', 'false');
+          btn.textContent = '预览 PDF';
+        });
+      };
+
+      const buildEmbeddablePdfUrl = (url) => {
+        const raw = String(url || '').trim();
+        if (!raw) return '';
+        try {
+          const parsed = new URL(raw, window.location.href);
+          if (/openreview\.net$/i.test(parsed.hostname)) {
+            return `https://docs.google.com/gview?embedded=1&url=${encodeURIComponent(parsed.href)}`;
+          }
+          return parsed.href;
+        } catch (_err) {
+          return raw;
+        }
+      };
+
+      const ensurePdfPreviewPanel = () => {
+        let panel = document.getElementById('dpr-pdf-preview-panel');
+        if (panel) return panel;
+        panel = document.createElement('aside');
+        panel.id = 'dpr-pdf-preview-panel';
+        panel.className = 'dpr-pdf-preview-panel';
+        panel.setAttribute('aria-label', 'PDF 预览');
+        panel.innerHTML = [
+          '<div class="dpr-pdf-preview-header">',
+          '<div class="dpr-pdf-preview-title">PDF 预览</div>',
+          '<div class="dpr-pdf-preview-actions">',
+          '<a class="dpr-pdf-preview-open-link" href="#" target="_blank" rel="noopener">新窗口打开</a>',
+          '<button class="dpr-pdf-preview-close" type="button" aria-label="关闭 PDF 预览">×</button>',
+          '</div>',
+          '</div>',
+          '<iframe class="dpr-pdf-preview-frame" title="PDF 预览"></iframe>',
+        ].join('');
+        document.body.appendChild(panel);
+        panel.querySelector('.dpr-pdf-preview-close')?.addEventListener('click', closePdfPreview);
+        return panel;
+      };
+
+      const bindPdfPreviewToggle = () => {
+        document.querySelectorAll('[data-pdf-preview-toggle]').forEach((btn) => {
+          if (btn.dataset.bound === '1') return;
+          btn.dataset.bound = '1';
+          btn.addEventListener('click', () => {
+            const url = String(btn.getAttribute('data-pdf-url') || '').trim();
+            if (!url) return;
+            const panel = ensurePdfPreviewPanel();
+            const frame = panel.querySelector('.dpr-pdf-preview-frame');
+            const openLink = panel.querySelector('.dpr-pdf-preview-open-link');
+            const previewUrl = buildEmbeddablePdfUrl(url);
+            if (frame && frame.getAttribute('src') !== previewUrl) {
+              frame.setAttribute('src', previewUrl);
+            }
+            if (openLink) {
+              openLink.setAttribute('href', url);
+            }
+            const nextOpen = !document.body.classList.contains('dpr-pdf-preview-open');
+            document.body.classList.toggle('dpr-pdf-preview-open', nextOpen);
+            btn.setAttribute('aria-expanded', nextOpen ? 'true' : 'false');
+            btn.textContent = nextOpen ? '关闭预览' : '预览 PDF';
+          });
+        });
+      };
+
       // 根据 front matter 生成论文页面 HTML
       const renderPaperFromMeta = (meta) => {
         if (!meta) return '';
@@ -3707,6 +4010,30 @@ window.$docsify = {
             const css = { keyword: 'tag-green', query: 'tag-blue', paper: 'tag-pink' }[kind] || 'tag-pink';
             return `<span class="tag-label ${css}">${escapeHtml(label)}</span>`;
           }).join(' ');
+        };
+        const renderSourceChips = (source) => {
+          const text = String(source || '').trim();
+          if (!text) return '';
+          const parts = text.split('-').map((item) => item.trim()).filter(Boolean);
+          if (parts.length >= 3 && /^\d{4}$/.test(parts[1])) {
+            const statusRaw = parts.slice(2).join('-');
+            const statusLower = statusRaw.toLowerCase();
+            let statusLabel = statusRaw;
+            let statusClass = 'tag-source';
+            if (statusLower.startsWith('accepted')) {
+              statusLabel = 'Accepted';
+              statusClass = 'tag-accepted';
+            } else if (statusLower.startsWith('rejected')) {
+              statusLabel = 'Rejected';
+              statusClass = 'tag-rejected';
+            }
+            return [
+              `<span class="tag-label tag-source">${escapeHtml(parts[0].toUpperCase())}</span>`,
+              `<span class="tag-label tag-source">${escapeHtml(parts[1])}</span>`,
+              `<span class="tag-label ${statusClass}">${escapeHtml(statusLabel)}</span>`,
+            ].join(' ');
+          }
+          return `<span class="tag-label tag-source">${escapeHtml(text)}</span>`;
         };
 
         const lines = [];
@@ -3739,7 +4066,7 @@ window.$docsify = {
         lines.push('<div class="paper-meta-right">');
         lines.push(`<p><strong>Authors</strong>: ${escapeHtml(meta.authors || 'Unknown')}</p>`);
         if (meta.source) {
-          lines.push(`<p><strong>Source</strong>: ${escapeHtml(meta.source)}</p>`);
+          lines.push(`<p><strong>Source</strong>: ${renderSourceChips(meta.source)}</p>`);
         }
         lines.push(`<p><strong>Date</strong>: ${escapeHtml(meta.date || 'Unknown')}</p>`);
         if (meta.pdf) {
@@ -3851,6 +4178,7 @@ window.$docsify = {
         const isPaperPage = isPaperRouteFile(file);
         const isLandingLikePage = isHomePage || isReportPage;
         syncPageTypeClasses({ isHomePage, isReportPage, isPaperPage });
+        closePdfPreview();
 
         // A. 对正文区域进行一次全局公式渲染（支持 $...$ / $$...$$）
         const mainContent = document.querySelector('.markdown-section');
@@ -3862,6 +4190,7 @@ window.$docsify = {
 
         // 论文页标题条排版（只对 docs/YYYYMM/DD/*.md 生效）
         applyPaperTitleBar();
+        bindPdfPreviewToggle();
 
         // 论文页左右切换：更新导航列表并绑定事件（只绑定一次）
         updateNavState();
@@ -3912,6 +4241,7 @@ window.$docsify = {
         // F. 侧边栏按日期折叠
         // ----------------------------------------------------
         setupCollapsibleSidebarByDay();
+        setupCollapsibleConferenceSidebar();
         hydrateStructuredSidebarItems();
         bindSidebarVirtualHashLinks();
         neutralizeSidebarNoactiveLinks();

@@ -54,21 +54,16 @@
     }
   }
 
-  async function loadLocalSecretPayloadFromDisk() {
-    if (!isLocalDebugHost()) return null;
-    const res = await fetch(getLocalApiUrl('/api/local/secret'), { cache: 'no-store' });
-    if (!res.ok) return null;
-    const data = await res.json().catch(() => null);
-    if (!data || !data.ok || !data.exists || !data.payload) return null;
-    return data.payload;
-  }
-
-  async function saveLocalSecretPayloadToDisk(payload) {
+  async function saveLocalSecretPayloadToDisk(payload, secretPlain) {
     if (!isLocalDebugHost()) return false;
+    const body = { payload };
+    if (secretPlain && typeof secretPlain === 'object') {
+      body.secret = secretPlain;
+    }
     const res = await fetch(getLocalApiUrl('/api/local/secret'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ payload }),
+      body: JSON.stringify(body),
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok || !data.ok) {
@@ -78,15 +73,9 @@
     return true;
   }
 
-  async function loadLocalSecretPayloadPreferred() {
+  async function loadLocalSecretPayloadPreferred(staticPayload) {
     if (!isLocalDebugHost()) return null;
-    try {
-      const diskPayload = await loadLocalSecretPayloadFromDisk();
-      if (diskPayload) return diskPayload;
-    } catch (e) {
-      console.warn('[SECRET] 读取本地磁盘 secret.private 失败，回退 localStorage：', e);
-    }
-    return loadLocalSecretPayload();
+    return staticPayload || loadLocalSecretPayload();
   }
 
   const setAccessMode = (mode, detail) => {
@@ -1011,15 +1000,12 @@
         unlockBtn.disabled = true;
         guestBtn.disabled = true;
         try {
-          const localPayload = await loadLocalSecretPayloadPreferred();
-          let payload = localPayload;
-          if (!payload) {
-            const resp = await fetch(SECRET_FILE_URL, { cache: 'no-store' });
-            if (!resp.ok) {
-              throw new Error(`获取 secret.private 失败，HTTP ${resp.status}`);
-            }
-            payload = await resp.json();
+          const resp = await fetch(SECRET_FILE_URL, { cache: 'no-store' });
+          if (!resp.ok) {
+            throw new Error(`获取 secret.private 失败，HTTP ${resp.status}`);
           }
+          const staticPayload = await resp.json();
+          const payload = await loadLocalSecretPayloadPreferred(staticPayload);
           const secret = await decryptSecret(pwd, payload);
           // 将解密后的配置保存在内存中，不落盘，同时记住密码以便下次自动解锁
           window.decoded_secret_private = secret;
@@ -1690,9 +1676,9 @@
           },
           rerankerLLM: providerDraft.reranker
             ? {
-                profile: providerDraft.reranker.profile || 'local-qwen3-0.6b',
-                provider: providerDraft.reranker.provider || providerDraft.reranker.type || 'local',
-                type: providerDraft.reranker.type || providerDraft.reranker.provider || 'local',
+                profile: providerDraft.reranker.profile || DEFAULT_RERANKER_PROFILE.value,
+                provider: providerDraft.reranker.provider || providerDraft.reranker.type || DEFAULT_RERANKER_PROFILE.provider,
+                type: providerDraft.reranker.type || providerDraft.reranker.provider || DEFAULT_RERANKER_PROFILE.provider,
                 apiKey: providerDraft.reranker.apiKey,
                 baseUrl: providerDraft.reranker.baseUrl,
                 model: providerDraft.reranker.model,
@@ -1751,7 +1737,7 @@
 
           if (localOnly) {
             try {
-              await saveLocalSecretPayloadToDisk(payload);
+              await saveLocalSecretPayloadToDisk(payload, plainConfig);
             } catch (e) {
               console.error(e);
               setErrorText('❌ 保存到本地 secret.private 失败，请确认本地后端已启动。', '#c00');
@@ -1954,35 +1940,48 @@
     }
 
     if (!overlay) return;
+    try {
+      window.DPRSecretSetup = window.DPRSecretSetup || {};
+      const earlyOpenStep2 = function () {
+        setupOverlay(true);
+        openSecretOverlay(overlay);
+        const formalOpenStep2 = window.DPRSecretSetup && window.DPRSecretSetup.openStep2;
+        if (typeof formalOpenStep2 === 'function' && formalOpenStep2 !== earlyOpenStep2) {
+          formalOpenStep2();
+        }
+      };
+      window.DPRSecretSetup.openStep2 = earlyOpenStep2;
+    } catch {
+      // 初始化早期兜底入口失败时，后续 setupOverlay 仍会尝试注册正式入口。
+    }
 
     // 检查是否已经存在 secret.private（用于区分“解锁”与“初始化”）
     (async () => {
       try {
-        const localPayload = await loadLocalSecretPayloadPreferred();
-        let resp = null;
-        let hasSecret = Boolean(localPayload);
-        if (!hasSecret) {
-          resp = await fetch(SECRET_FILE_URL, {
-            method: 'GET',
-            cache: 'no-store',
-          });
-        }
-        if (!hasSecret && resp && resp.ok) {
+        let staticPayload = null;
+        const resp = await fetch(SECRET_FILE_URL, {
+          method: 'GET',
+          cache: 'no-store',
+        });
+        let hasSecret = false;
+        if (resp && resp.ok) {
           try {
             // 不再依赖 content-type，只要能成功解析为 JSON，就认为是合法的 secret.private
-            await resp.clone().json();
+            staticPayload = await resp.clone().json();
             hasSecret = true;
           } catch {
             hasSecret = false;
           }
         }
+        const localPayload = await loadLocalSecretPayloadPreferred(staticPayload);
+        hasSecret = hasSecret || Boolean(localPayload);
 
         window.DPR_ACCESS_MODE = 'locked';
 
         if (hasSecret) {
           // 已存在 secret.private：若浏览器保存了密码，先尝试自动解锁；
           // 成功则直接进入页面；失败或无密码则展示解锁/游客界面。
-          const savedPwd = loadSavedPassword();
+          const savedPwd = savedPwdAtInit || loadSavedPassword();
           if (savedPwd) {
             try {
               const payload = localPayload || (await (async () => {
