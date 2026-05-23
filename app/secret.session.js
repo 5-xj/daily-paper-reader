@@ -17,16 +17,6 @@
     return host === 'localhost' || host === '127.0.0.1' || host === '::1';
   };
 
-  const getGithubPagesRepoInfoFromLocation = () => {
-    const href = String((window.location && window.location.href) || '');
-    const match = href.match(/^https?:\/\/([^.]+)\.github\.io\/([^/?#]+)/i);
-    if (!match) return null;
-    return {
-      owner: match[1],
-      repo: decodeURIComponent(match[2] || '').replace(/^\/+|\/+$/g, ''),
-    };
-  };
-
   const getCurrentDirectoryUrl = () => {
     const loc = window.location || {};
     const origin = String(loc.origin || '');
@@ -40,48 +30,24 @@
     return `${origin}${dirPath}`;
   };
 
-  const buildSecretFileUrlCandidates = () => {
-    const out = [];
-    const seen = new Set();
-    const push = (url) => {
-      const candidate = String(url || '').trim();
-      if (!candidate || seen.has(candidate)) return;
-      seen.add(candidate);
-      out.push(candidate);
-    };
+  const getStaticSecretFileUrl = () => {
     const currentDir = getCurrentDirectoryUrl();
-    if (currentDir) push(new URL(SECRET_FILE_URL, currentDir).href);
-    push(SECRET_FILE_URL);
-    push(`./${SECRET_FILE_URL}`);
-    const gh = getGithubPagesRepoInfoFromLocation();
-    if (gh && gh.owner && gh.repo) {
-      push(`https://raw.githubusercontent.com/${encodeURIComponent(gh.owner)}/${encodeURIComponent(gh.repo)}/main/${SECRET_FILE_URL}`);
-      push(`https://raw.githubusercontent.com/${encodeURIComponent(gh.owner)}/${encodeURIComponent(gh.repo)}/master/${SECRET_FILE_URL}`);
-    }
-    return out;
+    return currentDir ? new URL(SECRET_FILE_URL, currentDir).href : SECRET_FILE_URL;
   };
 
   async function fetchStaticSecretPayload() {
-    let lastError = null;
-    const candidates = buildSecretFileUrlCandidates();
-    for (let i = 0; i < candidates.length; i += 1) {
-      const url = candidates[i];
-      try {
-        const resp = await fetch(url, {
-          method: 'GET',
-          cache: 'no-store',
-        });
-        if (!resp || !resp.ok) {
-          lastError = new Error(`HTTP ${resp ? resp.status : 0} ${url}`);
-          continue;
-        }
-        return await resp.json();
-      } catch (e) {
-        lastError = e;
+    const url = getStaticSecretFileUrl();
+    try {
+      const resp = await fetch(url, {
+        method: 'GET',
+        cache: 'no-store',
+      });
+      if (!resp || !resp.ok) {
+        throw new Error(`HTTP ${resp ? resp.status : 0} ${url}`);
       }
-    }
-    if (lastError) {
-      console.warn('[SECRET] 未能读取静态 secret.private：', lastError);
+      return await resp.json();
+    } catch (e) {
+      console.warn('[SECRET] 未能读取静态 secret.private：', e);
     }
     return null;
   }
@@ -596,6 +562,18 @@
   // 可选 progress 回调用于在 UI 中展示上传进度：progress(currentIndex, total, secretName)
   async function saveSummarizeSecretsToGithub(token, options, progress) {
     try {
+      if (!window.sodium && typeof window.DPRLoadAssets === 'function') {
+        await window.DPRLoadAssets([
+          {
+            type: 'script',
+            path: 'app/vendor/libsodium/0.7.10/dist/modules/libsodium.js',
+          },
+          {
+            type: 'script',
+            path: 'app/vendor/libsodium-wrappers/0.7.9/dist/modules/libsodium-wrappers.js',
+          },
+        ]);
+      }
       // 等待 libsodium-wrappers 就绪（通过 CDN 注入全局 sodium）
       if (!window.sodium || !window.sodium.ready) {
         if (

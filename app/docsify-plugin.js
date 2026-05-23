@@ -4149,6 +4149,36 @@ window.$docsify = {
         return paperHtml + body;
       });
 
+      const refreshDeferredPageEnhancements = () => {
+        try {
+          const paperId = getPaperId();
+          const routePath = vm.route && vm.route.path ? vm.route.path : '';
+          const lowerId = (paperId || '').toLowerCase();
+          const file = vm && vm.route ? vm.route.file : '';
+          const isHomePage =
+            !paperId ||
+            lowerId === 'readme' ||
+            routePath === '/' ||
+            routePath === '';
+          const isLandingLikePage = isHomePage || isReportRouteFile(file);
+          const mainContent = document.querySelector('.markdown-section');
+          if (mainContent) {
+            const root = isPaperRouteFile(file) ? ensurePageContentRoot() : null;
+            renderMathInEl(root || mainContent);
+          }
+          if (!isLandingLikePage && window.PrivateDiscussionChat) {
+            window.PrivateDiscussionChat.initForPage(paperId);
+          }
+        } catch {
+          // ignore
+        }
+      };
+
+      document.addEventListener(
+        'dpr-deferred-assets-ready',
+        refreshDeferredPageEnhancements,
+      );
+
       // --- Docsify 生命周期钩子 ---
       hook.doneEach(function () {
         try {
