@@ -174,6 +174,13 @@
 
   const openSecretOverlay = (overlayEl) => {
     if (!overlayEl) return;
+    try {
+      if (typeof window.DPRHideInitialSplash === 'function') {
+        window.DPRHideInitialSplash();
+      }
+    } catch {
+      // ignore
+    }
     if (secretOverlayHideTimer) {
       clearTimeout(secretOverlayHideTimer);
       secretOverlayHideTimer = null;

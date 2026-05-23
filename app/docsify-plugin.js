@@ -4151,6 +4151,15 @@ window.$docsify = {
 
       // --- Docsify 生命周期钩子 ---
       hook.doneEach(function () {
+        try {
+          if (typeof window.DPRHideInitialSplash === 'function') {
+            window.DPRHideInitialSplash();
+          }
+          document.dispatchEvent(new Event('dpr-docsify-ready'));
+        } catch {
+          // ignore
+        }
+
         // 路由统一：将 #/?id=%2f... 自动规整为 #/...
         try {
           const canonical = decodeLegacyIdHash(window.location.hash || '');
