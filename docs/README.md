@@ -5,27 +5,14 @@
   </ul>
 </div>
 
-## 每次日报
-- 最新运行日期：2026-05-13 ~ 2026-05-22
-- 运行时间：2026-05-22 20:40:44 UTC
-- 运行状态：成功
-- 本次总论文数：1
-- 精读区：1
-- 速读区：0
+# 日报 · 2017-06-12
 
-### 今日简报（AI）
-今天精读1篇论文，探索用GRPO强化学习方法实现Text-to-SPARQL生成，在DBLP数据集上取得较好效果。  
-核心方向是强化学习驱动的语义解析，能将自然语言问题自动转化为结构化查询，提升数据库交互效率。  
-下一步可尝试将GRPO迁移到其他领域（如学术搜索、企业数据）或与其他NL2SQL方法对比，验证泛化性。
-- 详情：[/20260513-20260522/README](/20260513-20260522/README)
+- 该日报为历史补齐版本（由已有文档自动生成）。
+- 论文数量：1
 
-### 精读区论文标签
-1. [Text-to-SPARQL Generation with Reinforcement Learning: A GRPO-based Approach on DBLP](/20260513-20260522/2605.20066v1-text-to-sparql-generation-with-reinforcement-learning-a-grpo-based-approach-on-dblp)  
-   标签：评分：8.0/10、query:q2
-   evidence：使用GRPO强化学习方法生成SPARQL查询
+## 论文列表
+1. [attention is all you need](#/201706/12/1706.03762v1-attention-is-all-you-need)
 
-### 速读区论文标签
-- 本次无速读推荐。
 
 
 <div class="dpr-home-promo-card">
