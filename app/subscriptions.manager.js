@@ -786,7 +786,7 @@ window.SubscriptionsManager = (function () {
     }
 
     const confirmText = window.prompt(
-      '危险操作：该操作会将 docs 备份为 docs_backup_xxx 后恢复为 docs_init，并清空 archive。输入「RESET_ALL」确认。',
+      '危险区域：仅重置论文内容。会将 docs 备份为 docs_backup_xxx 后恢复为 docs_init，并清空 archive；不会删除配置、密钥或词条设置。输入「RESET_ALL」确认。',
     );
     if (confirmText !== 'RESET_ALL') {
       if (msgEl) {
@@ -806,7 +806,7 @@ window.SubscriptionsManager = (function () {
 
     window.DPRWorkflowRunner.runWorkflowByKey('reset-content');
     if (msgEl) {
-      msgEl.textContent = '已发起删除并重置任务，已触发工作流。';
+      msgEl.textContent = '已发起论文内容重置任务。';
       msgEl.style.color = '#080';
     }
   };
@@ -1074,12 +1074,12 @@ window.SubscriptionsManager = (function () {
               </div>
 
               <div class="dpr-task-danger-module">
-                <div class="chat-quick-run-title">危险操作</div>
+                <div class="chat-quick-run-title">危险区域</div>
+                <div class="dpr-task-danger-desc">恢复初始论文；不删除设置</div>
                 <button
                   id="arxiv-admin-reset-content-btn"
                   class="chat-quick-run-run-btn"
                   type="button"
-                  style="background:#c62828; color:#fff; border-color:#b71c1c;"
                 >
                   删除所有
                 </button>
