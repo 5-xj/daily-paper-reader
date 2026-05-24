@@ -104,6 +104,11 @@ window.SubscriptionsManager = (function () {
   ]);
 
   const normalizeText = (v) => String(v || '').trim();
+  const truncateDisplayText = (value, maxChars) => {
+    const chars = Array.from(normalizeText(value));
+    if (chars.length <= maxChars) return chars.join('');
+    return chars.slice(0, maxChars).join('');
+  };
   const escapeHtml = (str) => String(str || '')
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
@@ -452,12 +457,11 @@ window.SubscriptionsManager = (function () {
 
   const initializeConferenceChoices = () => {
     if (!selectedConferenceYearPairs.size) {
+      const defaultYear = '2025';
       QUICK_RUN_CONFERENCES.forEach((conference) => {
-        getConferenceYearOptions().forEach((year) => {
-          if (isConferenceYearSelectable(conference, year)) {
-            selectedConferenceYearPairs.add(`${conference}:${year}`);
-          }
-        });
+        if (isConferenceYearSelectable(conference, defaultYear)) {
+          selectedConferenceYearPairs.add(`${conference}:${defaultYear}`);
+        }
       });
     }
   };
@@ -521,7 +525,6 @@ window.SubscriptionsManager = (function () {
   };
   const getDailySelectedProfileTagsForRun = () =>
     getSelectedProfilesForRun()
-      .filter((profile) => !profile.temporary && !profile.paused)
       .map((profile) => normalizeText(profile && profile.tag))
       .filter(Boolean);
   const getProfilesForRun = () => {
@@ -534,16 +537,15 @@ window.SubscriptionsManager = (function () {
       selected: true,
     }));
   };
-  const isDailyRunnableProfile = (profile) => !!profile && !profile.temporary && !profile.paused;
   const renderProfilePicker = (targetEl, mode) => {
     if (!targetEl) return;
     const profiles = getProfilesForRun();
     const filtered = mode === 'daily'
-      ? profiles.filter(isDailyRunnableProfile)
+      ? profiles
       : profiles;
     if (!filtered.length) {
       targetEl.innerHTML = `<div class="dpr-profile-picker-empty">${
-        mode === 'daily' ? '暂无可抓取的常规词条。' : '暂无可检索的词条。'
+        mode === 'daily' ? '暂无可快速抓取的词条。' : '暂无可检索的词条。'
       }</div>`;
       return;
     }
@@ -551,6 +553,7 @@ window.SubscriptionsManager = (function () {
       const selected = !!profile.selected;
       const tag = normalizeText(profile.tag);
       const desc = normalizeText(profile.description);
+      const shortDesc = truncateDisplayText(desc, 10);
       return `<button
         class="dpr-profile-picker-chip${selected ? ' is-selected' : ''}"
         type="button"
@@ -561,7 +564,7 @@ window.SubscriptionsManager = (function () {
       >
         <span class="dpr-profile-picker-check" aria-hidden="true">${selected ? '✓' : ''}</span>
         <span class="dpr-profile-picker-tag">${escapeHtml(tag)}</span>
-        ${desc ? `<span class="dpr-profile-picker-desc">${escapeHtml(desc)}</span>` : ''}
+        ${shortDesc ? `<span class="dpr-profile-picker-desc">${escapeHtml(shortDesc)}</span>` : ''}
       </button>`;
     }).join('');
   };
@@ -588,7 +591,7 @@ window.SubscriptionsManager = (function () {
           normalizeText(profile.scope).toLowerCase() === 'conference'
         )
       );
-      if (mode === 'daily') return !isTemporary && !profile.paused;
+      if (mode === 'daily') return true;
       return true;
     }, selected);
   };
@@ -661,7 +664,7 @@ window.SubscriptionsManager = (function () {
   const refreshQuickRunButtons = () => {
     const selectedProfiles = getSelectedProfilesForRun();
     const selectedProfileCount = selectedProfiles.length;
-    const dailySelectedProfileCount = selectedProfiles.filter((profile) => !profile.temporary && !profile.paused).length;
+    const dailySelectedProfileCount = selectedProfileCount;
     const dailyBlocked = hasUnsavedChanges || dailySelectedProfileCount < 1;
     const conferenceBlocked =
       hasUnsavedChanges || selectedProfileCount < 1 || selectedConferenceYearPairs.size < 1;
@@ -682,15 +685,15 @@ window.SubscriptionsManager = (function () {
         } else if (btn === quickRunConferenceBtn && !selectedConferenceYearPairs.size) {
           title = '请先选择至少一个会议年份。';
         } else {
-          title = btn === quickRunConferenceBtn ? '请先选择至少一个会议年份。' : '仅会议和日常停用词条不参与日常抓取，请选择至少一个已启用的常规词条。';
+          title = btn === quickRunConferenceBtn ? '请先选择至少一个会议年份。' : '请先选择至少一个词条。';
         }
       }
       btn.title = title;
     });
     if (quickRunHintEl) {
       quickRunHintEl.textContent = dailySelectedProfileCount > 0
-        ? `已选 ${dailySelectedProfileCount} 个常规词条。`
-        : '请选择至少一个常规词条。';
+        ? `已选 ${dailySelectedProfileCount} 个词条。`
+        : '请选择至少一个词条。';
     }
     if (conferenceHintEl) {
       conferenceHintEl.textContent = selectedProfileCount > 0
@@ -831,7 +834,7 @@ window.SubscriptionsManager = (function () {
   const runSelectedQuickFetch = async (days, runOptions = {}) => {
     const tags = getDailySelectedProfileTagsForRun();
     if (!tags.length) {
-      setQuickRunMessage('请先勾选至少一个已启用的常规词条。仅会议和日常停用词条不会参与快速抓取。', '#c00');
+      setQuickRunMessage('请先勾选至少一个词条。快速抓取支持任意词条。', '#c00');
       refreshQuickRunButtons();
       return false;
     }
@@ -1193,7 +1196,6 @@ window.SubscriptionsManager = (function () {
                 <div class="dpr-input-card">
                   <div class="dpr-inline-row">
                     <button id="dpr-sq-open-chat-btn" class="arxiv-tool-btn" style="background:#2e7d32; color:#fff;">新增</button>
-                    <button id="dpr-sq-open-temp-btn" class="arxiv-tool-btn dpr-temp-add-btn" type="button">新增仅会议</button>
                   </div>
                 </div>
               </div>
@@ -1213,7 +1215,7 @@ window.SubscriptionsManager = (function () {
             <div class="dpr-bulk-bar-head">
               <div>
                 <div class="chat-quick-run-title">快速抓取</div>
-                <div id="arxiv-admin-quick-run-hint" class="dpr-task-hint">默认全选常规词条。</div>
+                <div id="arxiv-admin-quick-run-hint" class="dpr-task-hint">默认全选词条，快速抓取不区分日常状态。</div>
               </div>
               <button id="arxiv-admin-open-workflow-panel-btn" class="arxiv-tool-btn dpr-task-workflow-btn" type="button">打开工作流</button>
             </div>
@@ -1322,7 +1324,6 @@ window.SubscriptionsManager = (function () {
       window.SubscriptionsSmartQuery.attach({
         displayListEl: document.getElementById('dpr-sq-display'),
         openChatBtn: document.getElementById('dpr-sq-open-chat-btn'),
-        openTemporaryBtn: document.getElementById('dpr-sq-open-temp-btn'),
         msgEl,
         reloadAll,
       });
@@ -1711,6 +1712,8 @@ window.SubscriptionsManager = (function () {
           if (text) selectedConferenceYearPairs.add(text);
         });
       },
+      __initializeConferenceChoices: () => initializeConferenceChoices(),
+      __getSelectedConferenceYearPairs: () => Array.from(selectedConferenceYearPairs),
       runSelectedQuickFetch,
       refreshQuickRunButtons,
       clearQuickRunUnsavedMessage,

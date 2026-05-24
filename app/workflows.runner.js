@@ -253,22 +253,29 @@ window.DPRWorkflowRunner = (function () {
     }
   };
 
-  const scrollWorkflowOutputToBottom = () => {
-    if (!runsEl) return;
-    const logEl = runsEl.querySelector('[data-dpr-workflow-log]');
-    const bodyEl = document.getElementById('dpr-workflow-body');
+  const isWorkflowLogNearBottom = (logEl) => {
+    if (!logEl) return true;
+    const distance =
+      Number(logEl.scrollHeight || 0) -
+      Number(logEl.scrollTop || 0) -
+      Number(logEl.clientHeight || 0);
+    return distance <= 24;
+  };
+
+  const scrollWorkflowLogToBottom = (shouldScroll) => {
+    if (!runsEl || !shouldScroll) return;
     requestAnimationFrame(() => {
+      const logEl = runsEl.querySelector('[data-dpr-workflow-log]');
       if (logEl) {
         logEl.scrollTop = logEl.scrollHeight;
-      }
-      if (bodyEl) {
-        bodyEl.scrollTop = bodyEl.scrollHeight;
       }
     });
   };
 
   const renderLocalRun = (run, logText) => {
     if (!runsEl || !run) return;
+    const previousLogEl = runsEl.querySelector('[data-dpr-workflow-log]');
+    const shouldFollowLog = isWorkflowLogNearBottom(previousLogEl);
     const status = run.status || '';
     const conclusion = run.conclusion || '';
     const badgeColor =
@@ -296,7 +303,7 @@ window.DPRWorkflowRunner = (function () {
       <div style="font-size:12px; color:#666; margin-bottom:8px;">${escapeHtml(command)}</div>
       ${logHtml}
     `;
-    scrollWorkflowOutputToBottom();
+    scrollWorkflowLogToBottom(shouldFollowLog);
   };
 
   const refreshLocalRun = async (runId) => {

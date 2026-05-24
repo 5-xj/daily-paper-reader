@@ -108,6 +108,33 @@ class LlmRefineRecoveryTest(unittest.TestCase):
         self.assertIn((("p-1",), 1), calls)
         self.assertIn((("p-2",), 1), calls)
 
+    def test_recover_filter_results_accepts_short_best_effort_fields(self):
+        docs = [
+            {"id": "p-1", "content": "doc1"},
+        ]
+        calls = []
+
+        def runner(batch_docs, attempt, retry_note):
+            calls.append((tuple(item["id"] for item in batch_docs), attempt, retry_note))
+            return [
+                {
+                    **self.relevant_result("p-1", score=8),
+                    "tldr_cn": "相关，但摘要信息有限。",
+                    "motivation_cn": "信息有限。",
+                    "method_cn": "信息有限。",
+                    "result_cn": "信息有限。",
+                    "conclusion_cn": "信息有限。",
+                }
+            ]
+
+        out = self.mod.recover_filter_results(docs, runner, max_attempts=3, debug_tag="short_test")
+
+        self.assertEqual(out[0]["id"], "p-1")
+        self.assertEqual(out[0]["tldr_cn"], "相关，但摘要信息有限。")
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0][1], 1)
+        self.assertEqual(calls[0][2], "")
+
     def test_call_filter_repeats_user_prompt_with_separator(self):
         captured = {}
         test_case = self
@@ -164,6 +191,7 @@ class LlmRefineRecoveryTest(unittest.TestCase):
         self.assertIn("title_zh", user_content)
         self.assertIn("150-220 Chinese characters", user_content)
         self.assertIn("30-70 Chinese characters", user_content)
+        self.assertIn("length targets are guidance", user_content)
         self.assertIn("same style as a paper-page TLDR abstract", user_content)
         self.assertNotIn("<= 60 Chinese characters", user_content)
         self.assertTrue(user_content.rstrip().endswith("Output must be strict JSON only, no markdown, no fences, no extra text."))

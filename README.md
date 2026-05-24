@@ -165,7 +165,7 @@ https://<你的用户名>.github.io/daily-paper-reader
 scripts/bootstrap_local.sh
 ```
 
-这个脚本会自动创建 `.venv`、按需从 `.env.example` 生成 `.env`，然后启动本地后端。默认使用快速部署模式，不会下载 `torch` 等重依赖。启动完成后访问：
+这个脚本会自动创建 `.venv`、安装远程服务模式依赖、按需从 `.env.example` 生成 `.env`，然后启动本地后端。默认不会下载 `torch` 等重依赖。启动完成后访问：
 
 ```text
 http://127.0.0.1:8567
@@ -183,6 +183,18 @@ scripts/local_debug.sh
 python src/local_debug_server.py --host 127.0.0.1 --port 8567
 ```
 
+如果需要跳过依赖安装，可以使用：
+
+```bash
+DPR_SKIP_INSTALL=1 scripts/bootstrap_local.sh
+```
+
+如果只想启动并明确跳过依赖安装，也可以使用旧的快速部署模式：
+
+```bash
+DPR_INSTALL_MODE=minimal scripts/bootstrap_local.sh
+```
+
 如果要一次性安装完整运行依赖，可以使用：
 
 ```bash
@@ -193,12 +205,6 @@ DPR_INSTALL_MODE=full scripts/bootstrap_local.sh
 
 ```bash
 DPR_INSTALL_MODE=full DPR_TORCH_INDEX_URL=https://download.pytorch.org/whl/cpu scripts/bootstrap_local.sh
-```
-
-如果需要跳过依赖安装，可以使用：
-
-```bash
-DPR_SKIP_INSTALL=1 scripts/bootstrap_local.sh
 ```
 
 在 `localhost / 127.0.0.1` 页面里点击“触发工作流”时，前端会自动调用本地后端 `/api/local/workflows/dispatch`，把 `daily-paper-reader.yml`、`conference-paper-retrieval.yml` 等映射为本地 Python 子进程执行，不会上 GitHub，也不会要求启用 Actions。运行日志会显示在工作流面板里，并保存在 `.local-runs/`。

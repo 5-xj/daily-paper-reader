@@ -1824,7 +1824,7 @@ window.$docsify = {
         if (!nav) return;
 
         const STORAGE_KEY = 'dpr_sidebar_conference_state_v1';
-        const ANIM_MS = 220;
+        const ANIM_MS = 240;
 
         const readState = () => {
           try {
@@ -1857,18 +1857,63 @@ window.$docsify = {
           );
         };
 
+        const getDirectLabelNode = (li) => {
+          if (!li) return null;
+          const textNode = getDirectTextNode(li);
+          if (textNode) return textNode;
+          return (
+            Array.from(li.children || []).find((node) => {
+              if (!node || node.tagName === 'UL') return false;
+              if (node.classList && node.classList.contains('sidebar-conference-content')) return false;
+              if (node.classList && node.classList.contains('sidebar-conference-toggle')) return true;
+              return !!String(node.textContent || '').trim();
+            }) || null
+          );
+        };
+
         const getToggleLabel = (li) => {
           if (!li) return '';
           const label = li.querySelector(
             ':scope > .sidebar-conference-toggle .sidebar-conference-toggle-label',
           );
           if (label) return String(label.textContent || '').trim();
-          const textNode = getDirectTextNode(li);
-          return String((textNode && textNode.textContent) || '').trim();
+          const labelNode = getDirectLabelNode(li);
+          return String((labelNode && labelNode.textContent) || '').trim();
         };
 
         const normalizeKeyPart = (value) => {
           return String(value || '').trim().toLowerCase().replace(/\s+/g, '-');
+        };
+
+        const getElementDepth = (el) => {
+          let depth = 0;
+          let current = el;
+          while (current && current.parentElement) {
+            depth += 1;
+            current = current.parentElement;
+          }
+          return depth;
+        };
+
+        const syncOpenDescendantHeights = (li) => {
+          if (!li) return;
+          Array.from(
+            li.querySelectorAll(
+              'li.sidebar-conference-node:not(.sidebar-conference-collapsed) > ul.sidebar-conference-content',
+            ),
+          )
+            .sort((a, b) => getElementDepth(b) - getElementDepth(a))
+            .forEach((ul) => {
+              ul.style.maxHeight = `${ul.scrollHeight}px`;
+              ul.style.opacity = '1';
+            });
+        };
+
+        const getConferenceContentHeight = (li) => {
+          if (!li) return 0;
+          syncOpenDescendantHeights(li);
+          const ul = li.querySelector(':scope > ul.sidebar-conference-content, :scope > ul');
+          return ul ? ul.scrollHeight : 0;
         };
 
         const updateOpenAncestorHeights = (li) => {
@@ -1878,7 +1923,7 @@ window.$docsify = {
             if (!parentLi) break;
             if (!parentLi.classList.contains('sidebar-conference-collapsed')) {
               const ul = parentLi.querySelector(':scope > ul.sidebar-conference-content');
-              if (ul) ul.style.maxHeight = `${ul.scrollHeight}px`;
+              if (ul) ul.style.maxHeight = `${getConferenceContentHeight(parentLi)}px`;
             }
             parent = parentLi.parentElement;
           }
@@ -1893,7 +1938,7 @@ window.$docsify = {
 
           if (!doAnimate) {
             ul.style.transition = 'none';
-            ul.style.maxHeight = collapsed ? '0px' : `${ul.scrollHeight}px`;
+            ul.style.maxHeight = collapsed ? '0px' : `${getConferenceContentHeight(li)}px`;
             ul.style.opacity = collapsed ? '0' : '1';
             requestAnimationFrame(() => {
               ul.style.transition = '';
@@ -1903,23 +1948,28 @@ window.$docsify = {
           }
 
           if (collapsed) {
-            ul.style.maxHeight = `${ul.scrollHeight}px`;
+            ul.style.maxHeight = `${getConferenceContentHeight(li)}px`;
             ul.style.opacity = '0';
             requestAnimationFrame(() => {
               ul.style.maxHeight = '0px';
+              updateOpenAncestorHeights(li);
             });
           } else {
             ul.style.opacity = '1';
             ul.style.maxHeight = '0px';
             requestAnimationFrame(() => {
-              ul.style.maxHeight = `${ul.scrollHeight}px`;
+              ul.style.maxHeight = `${getConferenceContentHeight(li)}px`;
+              updateOpenAncestorHeights(li);
+              requestAnimationFrame(() => {
+                updateOpenAncestorHeights(li);
+              });
             });
           }
 
           setTimeout(() => {
             try {
               if (!li.classList.contains('sidebar-conference-collapsed')) {
-                ul.style.maxHeight = `${ul.scrollHeight}px`;
+                ul.style.maxHeight = `${getConferenceContentHeight(li)}px`;
               }
               updateOpenAncestorHeights(li);
               syncSidebarActiveIndicator({ animate: false });
@@ -1952,9 +2002,9 @@ window.$docsify = {
             wrapper.appendChild(labelSpan);
             wrapper.appendChild(arrowSpan);
 
-            const textNode = getDirectTextNode(li);
-            if (textNode && textNode.parentNode === li) {
-              li.replaceChild(wrapper, textNode);
+            const labelNode = getDirectLabelNode(li);
+            if (labelNode && labelNode.parentNode === li) {
+              li.replaceChild(wrapper, labelNode);
             } else {
               li.insertBefore(wrapper, li.firstChild);
             }
@@ -2036,10 +2086,12 @@ window.$docsify = {
 
         requestAnimationFrame(() => {
           try {
-            nav
-              .querySelectorAll(
+            Array.from(
+              nav.querySelectorAll(
                 'li.sidebar-conference-node:not(.sidebar-conference-collapsed) > ul.sidebar-conference-content',
-              )
+              ),
+            )
+              .sort((a, b) => getElementDepth(b) - getElementDepth(a))
               .forEach((ul) => {
                 const prevTransition = ul.style.transition;
                 ul.style.transition = 'none';
@@ -3901,7 +3953,13 @@ window.$docsify = {
           `<div class="paper-figure-viewport">${slides}</div>`,
           items.length > 1 ? '<button class="paper-figure-nav paper-figure-nav-next" type="button" data-figure-next aria-label="下一张">›</button>' : '',
           '</div>',
-          items.length > 1 ? `<div class="paper-figure-thumbs">${thumbs}</div>` : '',
+          items.length > 1 ? [
+            '<div class="paper-figure-thumbs-wrap">',
+            '<button class="paper-figure-thumb-nav paper-figure-thumb-nav-prev" type="button" data-figure-thumb-prev aria-label="上一张缩略图">‹</button>',
+            `<div class="paper-figure-thumbs">${thumbs}</div>`,
+            '<button class="paper-figure-thumb-nav paper-figure-thumb-nav-next" type="button" data-figure-thumb-next aria-label="下一张缩略图">›</button>',
+            '</div>',
+          ].join('') : '',
           '</div>',
           '</div>',
           '',
@@ -3975,7 +4033,10 @@ window.$docsify = {
           '<div class="paper-media-dialog-kicker">Paper Media</div>',
           '<div class="paper-media-dialog-title">论文图表附件</div>',
           '</div>',
+          '<div class="paper-media-dialog-actions">',
+          '<button class="paper-media-fullscreen" type="button" data-paper-media-fullscreen aria-pressed="false" aria-label="全屏查看">全屏</button>',
           '<button class="paper-media-close" type="button" data-paper-media-close aria-label="关闭">×</button>',
+          '</div>',
           '</div>',
           `<div class="paper-media-tabs">${tabButtons}</div>`,
           '<div class="paper-media-body">',
@@ -4001,11 +4062,20 @@ window.$docsify = {
           }
           const dialog = modal.querySelector('.paper-media-dialog');
           const closeButtons = Array.from(modal.querySelectorAll('[data-paper-media-close]'));
+          const fullscreenButton = modal.querySelector('[data-paper-media-fullscreen]');
           const tabs = Array.from(modal.querySelectorAll('[data-paper-media-tab]'));
           const panes = Array.from(modal.querySelectorAll('[data-paper-media-pane]'));
           let savedScrollY = 0;
           let closeTimer = 0;
           let lastTrigger = null;
+          const setFullscreen = (enabled) => {
+            modal.classList.toggle('is-fullscreen', !!enabled);
+            if (fullscreenButton) {
+              fullscreenButton.setAttribute('aria-pressed', enabled ? 'true' : 'false');
+              fullscreenButton.textContent = enabled ? '退出全屏' : '全屏';
+              fullscreenButton.setAttribute('aria-label', enabled ? '退出全屏查看' : '全屏查看');
+            }
+          };
           const activate = (name) => {
             tabs.forEach((tab) => tab.classList.toggle('is-active', tab.dataset.paperMediaTab === name));
             panes.forEach((pane) => pane.classList.toggle('is-active', pane.dataset.paperMediaPane === name));
@@ -4026,6 +4096,7 @@ window.$docsify = {
             savedScrollY = window.scrollY || document.documentElement.scrollTop || document.body.scrollTop || 0;
             lastTrigger = trigger || document.activeElement || null;
             if (name) activate(name);
+            setFullscreen(false);
             modal.classList.remove('is-closing');
             modal.classList.add('is-open');
             modal.setAttribute('aria-hidden', 'false');
@@ -4042,6 +4113,7 @@ window.$docsify = {
           };
           const close = () => {
             if (!modal.classList.contains('is-open')) return;
+            setFullscreen(false);
             if (closeTimer) clearTimeout(closeTimer);
             modal.classList.add('is-closing');
             modal.classList.remove('is-open');
@@ -4062,12 +4134,29 @@ window.$docsify = {
           openButtons.forEach((button) => {
             button.addEventListener('click', () => open(button.dataset.paperMediaOpen || 'figures', button));
           });
-          closeButtons.forEach((button) => button.addEventListener('click', close));
+          closeButtons.forEach((button) => button.addEventListener('click', (event) => {
+            if (modal.classList.contains('is-fullscreen') && event.currentTarget.classList.contains('paper-media-backdrop')) {
+              setFullscreen(false);
+              return;
+            }
+            close();
+          }));
+          if (fullscreenButton) {
+            fullscreenButton.addEventListener('click', () => {
+              setFullscreen(!modal.classList.contains('is-fullscreen'));
+            });
+          }
           tabs.forEach((tab) => {
             tab.addEventListener('click', () => activate(tab.dataset.paperMediaTab || 'figures'));
           });
           modal.addEventListener('keydown', (event) => {
-            if (event.key === 'Escape') close();
+            if (event.key === 'Escape') {
+              if (modal.classList.contains('is-fullscreen')) {
+                setFullscreen(false);
+                return;
+              }
+              close();
+            }
           });
         });
       };
@@ -4079,12 +4168,29 @@ window.$docsify = {
 
           const slides = Array.from(root.querySelectorAll('[data-figure-slide]'));
           const thumbs = Array.from(root.querySelectorAll('[data-figure-thumb]'));
+          const thumbsTrack = root.querySelector('.paper-figure-thumbs');
           const prevBtn = root.querySelector('[data-figure-prev]');
           const nextBtn = root.querySelector('[data-figure-next]');
+          const thumbPrevBtn = root.querySelector('[data-figure-thumb-prev]');
+          const thumbNextBtn = root.querySelector('[data-figure-thumb-next]');
           const counter = root.querySelector('[data-figure-current]');
           if (!slides.length) return;
 
           let current = 0;
+          const centerActiveThumb = () => {
+            if (!thumbsTrack || !thumbs[current]) return;
+            const activeThumb = thumbs[current];
+            const targetLeft =
+              activeThumb.offsetLeft -
+              (thumbsTrack.clientWidth - activeThumb.offsetWidth) / 2;
+            const maxLeft = Math.max(0, thumbsTrack.scrollWidth - thumbsTrack.clientWidth);
+            const left = Math.min(Math.max(0, targetLeft), maxLeft);
+            try {
+              thumbsTrack.scrollTo({ left, behavior: 'smooth' });
+            } catch (_err) {
+              thumbsTrack.scrollLeft = left;
+            }
+          };
           const render = () => {
             slides.forEach((slide, index) => {
               slide.classList.toggle('is-active', index === current);
@@ -4097,6 +4203,9 @@ window.$docsify = {
             }
             if (prevBtn) prevBtn.disabled = slides.length <= 1;
             if (nextBtn) nextBtn.disabled = slides.length <= 1;
+            if (thumbPrevBtn) thumbPrevBtn.disabled = slides.length <= 1;
+            if (thumbNextBtn) thumbNextBtn.disabled = slides.length <= 1;
+            centerActiveThumb();
           };
 
           if (prevBtn) {
@@ -4107,6 +4216,18 @@ window.$docsify = {
           }
           if (nextBtn) {
             nextBtn.addEventListener('click', () => {
+              current = (current + 1) % slides.length;
+              render();
+            });
+          }
+          if (thumbPrevBtn) {
+            thumbPrevBtn.addEventListener('click', () => {
+              current = (current - 1 + slides.length) % slides.length;
+              render();
+            });
+          }
+          if (thumbNextBtn) {
+            thumbNextBtn.addEventListener('click', () => {
               current = (current + 1) % slides.length;
               render();
             });
@@ -4413,7 +4534,7 @@ window.$docsify = {
         syncPageTypeClasses({ isHomePage, isReportPage, isPaperPage });
         closePdfPreview();
         document.querySelectorAll('[data-paper-media-modal]').forEach((modal) => {
-          modal.classList.remove('is-open', 'is-closing');
+          modal.classList.remove('is-open', 'is-closing', 'is-fullscreen');
           modal.setAttribute('aria-hidden', 'true');
         });
 

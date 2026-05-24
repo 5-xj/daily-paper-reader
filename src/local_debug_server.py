@@ -275,6 +275,7 @@ def build_command(workflow_key: str, workflow_file: str, inputs: dict[str, str])
         run_date = datetime.now(timezone.utc).strftime("%Y%m%d")
         conference = str(inputs.get("conference") or "ICML")
         years = str(inputs.get("years") or "2025")
+        profile_tag = str(inputs.get("profile_tag") or "")
         pipeline_cmd = [
             python,
             "src/conference_pipeline.py",
@@ -299,7 +300,6 @@ def build_command(workflow_key: str, workflow_file: str, inputs: dict[str, str])
             pipeline_cmd.extend(["--run-llm-refine", "--llm-min-star", str(inputs.get("llm_min_star") or "4"), "--llm-filter-concurrency", "2"])
         script = "\n".join([
             "set -euo pipefail",
-            " ".join(shlex.quote(part) for part in pipeline_cmd),
             (
                 f"TOKENS=$(CONFERENCE_INPUT={shlex.quote(conference)} "
                 f"YEARS_INPUT={shlex.quote(years)} "
@@ -315,7 +315,28 @@ def build_command(workflow_key: str, workflow_file: str, inputs: dict[str, str])
             ),
             "CONF_TOKEN=$(echo \"$TOKENS\" | sed -n '1p')",
             "YEAR_TOKEN=$(echo \"$TOKENS\" | sed -n '2p')",
-            "python src/conference_sidebar.py "
+            f"PROFILE_TAG={shlex.quote(profile_tag)}",
+            "export DPR_FILTER_PROFILE_TAG=\"$PROFILE_TAG\"",
+            (
+                "TOPIC_MARKER=$(CONF_TOKEN=\"$CONF_TOKEN\" YEAR_TOKEN=\"$YEAR_TOKEN\" "
+                "PROFILE_TAG=\"$DPR_FILTER_PROFILE_TAG\" "
+                f"{shlex.quote(python)} - <<'PY'\n"
+                "import os, sys\n"
+                "sys.path.insert(0, 'src')\n"
+                "from conference_sidebar import build_conference_topic_marker, topic_from_profile_tag\n"
+                "kind, label = topic_from_profile_tag(os.environ.get('PROFILE_TAG', ''))\n"
+                "print(build_conference_topic_marker(os.environ['CONF_TOKEN'], os.environ['YEAR_TOKEN'], kind, label))\n"
+                "PY\n"
+                ")"
+            ),
+            (
+                "if [ -f docs/_sidebar.md ] && grep -Fq \"$TOPIC_MARKER\" docs/_sidebar.md; then\n"
+                "  echo \"[INFO] 已存在会议词条，跳过重复检索：conference=${CONF_TOKEN}-${YEAR_TOKEN} profile=${DPR_FILTER_PROFILE_TAG:-General}\"\n"
+                "  exit 0\n"
+                "fi"
+            ),
+            " ".join(shlex.quote(part) for part in pipeline_cmd),
+            f"{shlex.quote(python)} src/conference_sidebar.py "
             f"--result archive/{run_date}/rank/conference-${{CONF_TOKEN}}-${{YEAR_TOKEN}}.supabase.llm.json "
             f"--result archive/{run_date}/rank/conference-${{CONF_TOKEN}}-${{YEAR_TOKEN}}.supabase.rerank.json "
             f"--result archive/{run_date}/filtered/conference-${{CONF_TOKEN}}-${{YEAR_TOKEN}}.supabase.rrf.json "

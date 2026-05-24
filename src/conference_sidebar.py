@@ -504,6 +504,7 @@ def write_conference_docs(
     *,
     deep_min_score: float = CONFERENCE_DEEP_MIN_SCORE,
 ) -> Dict[str, str]:
+    _ = deep_min_score  # 兼容旧参数；会议链路当前对所有展示论文生成精读与图表。
     route_by_id: Dict[str, str] = {}
     for item in ranked:
         paper_id = norm_text(item.get("paper_id"))
@@ -513,15 +514,14 @@ def write_conference_docs(
         route = build_conference_paper_route(paper, conference, years)
         md_path = docs_dir / f"{route}.md"
         md_path.parent.mkdir(parents=True, exist_ok=True)
-        if deep_min_score >= 0 and score_from_ranked_item(item) >= deep_min_score:
-            enrich_conference_paper_for_deep_read(
-                paper,
-                item,
-                md_path=md_path,
-                docs_dir=docs_dir,
-                conference=conference,
-                years=years,
-            )
+        enrich_conference_paper_for_deep_read(
+            paper,
+            item,
+            md_path=md_path,
+            docs_dir=docs_dir,
+            conference=conference,
+            years=years,
+        )
         md_path.write_text(build_conference_markdown(paper, item, conference, years), encoding="utf-8")
         route_by_id[paper_id] = route
     return route_by_id
@@ -840,6 +840,54 @@ def ensure_conference_heading(lines: List[str]) -> int:
     return insert_idx
 
 
+def _conference_block_sort_key(block: List[str]) -> Tuple[str, int, int, int, str]:
+    header = block[0] if block else ""
+    marker_match = re.search(r"<!--dpr-conference:([^>]+)-->", header)
+    marker = marker_match.group(1) if marker_match else ""
+    label = re.sub(r"<!--.*?-->", "", header)
+    label = re.sub(r"^\s*\*\s*", "", label).strip()
+    conf = marker.split("-")[0] if marker else label.split()[0] if label else ""
+    years = [int(item) for item in re.findall(r"(?:19|20)\d{2}", marker or label)]
+    latest_year = max(years) if years else 0
+    earliest_year = min(years) if years else 0
+    is_range = 1 if len(set(years)) > 1 else 0
+    return (conf.upper(), -latest_year, is_range, -earliest_year, marker or label)
+
+
+def sort_conference_blocks(lines: List[str]) -> None:
+    heading_idx = find_conference_heading(lines)
+    if heading_idx < 0:
+        return
+
+    block_start = heading_idx + 1
+    block_end = block_start
+    while block_end < len(lines) and not lines[block_end].startswith("* "):
+        block_end += 1
+
+    prefix: List[str] = []
+    conference_lines = lines[block_start:block_end]
+    blocks: List[List[str]] = []
+    current: List[str] = []
+    for line in conference_lines:
+        if line.startswith("  * ") and not line.startswith("    * "):
+            if current:
+                blocks.append(current)
+            current = [line]
+        elif current:
+            current.append(line)
+        else:
+            prefix.append(line)
+    if current:
+        blocks.append(current)
+    if not blocks:
+        return
+
+    sorted_lines: List[str] = []
+    for block in sorted(blocks, key=_conference_block_sort_key):
+        sorted_lines.extend(block)
+    lines[block_start:block_end] = prefix + sorted_lines
+
+
 def update_sidebar_with_conference(
     sidebar_path: Path,
     result_path: Path,
@@ -864,6 +912,7 @@ def update_sidebar_with_conference(
     heading_idx = ensure_conference_heading(lines)
     block = merge_conference_paper_lines(block, existing_paper_lines, conference, years)
     lines[heading_idx + 1:heading_idx + 1] = block
+    sort_conference_blocks(lines)
     sidebar_path.write_text("".join(lines), encoding="utf-8")
 
 
@@ -888,7 +937,7 @@ def main() -> None:
         "--deep-min-score",
         type=float,
         default=CONFERENCE_DEEP_MIN_SCORE,
-        help="会议论文分数达到该阈值时生成精读全文和图片；设置为负数可禁用。",
+        help="兼容旧参数；会议链路现在会为所有展示论文生成精读全文和图表。",
     )
     parser.add_argument(
         "--display-min-score",

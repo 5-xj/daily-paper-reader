@@ -76,6 +76,23 @@ class LocalDebugEnvTest(unittest.TestCase):
             self.assertNotIn("DEEPSEEK_API_KEY=old", text)
             self.assertNotIn("PUBLIC_RERANK_API_KEY=old-rerank", text)
 
+    def test_local_conference_command_skips_existing_topic_before_pipeline(self):
+        cmd = self.mod.build_command(
+            "conference-retrieval",
+            "conference-paper-retrieval.yml",
+            {"conference": "ICML", "years": "2025", "profile_tag": "RL"},
+        )
+        script = cmd[-1]
+
+        self.assertIn("export DPR_FILTER_PROFILE_TAG=\"$PROFILE_TAG\"", script)
+        self.assertIn("build_conference_topic_marker", script)
+        self.assertIn("已存在会议词条，跳过重复检索", script)
+        self.assertIn("src/conference_pipeline.py", script)
+        self.assertNotIn("\npython src/conference_sidebar.py", script)
+        self.assertIn(f"\n{self.mod.sys.executable} src/conference_sidebar.py", script)
+        self.assertLess(script.index("TOPIC_MARKER="), script.index("src/conference_pipeline.py"))
+        self.assertLess(script.index("grep -Fq \"$TOPIC_MARKER\""), script.index("src/conference_pipeline.py"))
+
 
 if __name__ == "__main__":
     unittest.main()

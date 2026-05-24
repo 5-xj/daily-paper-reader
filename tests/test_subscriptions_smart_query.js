@@ -147,10 +147,42 @@ function testGeneratedCandidatesDoNotCollapseConceptToSingleModifier() {
   );
 }
 
+function testProfileSelectionPersistsAcrossRerender() {
+  const smartQuery = global.window.SubscriptionsSmartQuery;
+  smartQuery.render([
+    { tag: 'selection-a', description: 'A' },
+    { tag: 'selection-b', description: 'B' },
+  ]);
+  assert.deepEqual(
+    smartQuery.getSelectedProfileTags(),
+    ['selection-a', 'selection-b'],
+  );
+
+  smartQuery.setProfileSelection('selection-b', false);
+  assert.deepEqual(smartQuery.getSelectedProfileTags(), ['selection-a']);
+
+  smartQuery.render([
+    { tag: 'selection-a', description: 'A updated' },
+    { tag: 'selection-b', description: 'B updated' },
+  ]);
+  assert.deepEqual(smartQuery.getSelectedProfileTags(), ['selection-a']);
+
+  smartQuery.render([
+    { tag: 'selection-a', description: 'A updated' },
+    { tag: 'selection-b', description: 'B updated' },
+    { tag: 'selection-c', description: 'C new' },
+  ]);
+  assert.deepEqual(
+    smartQuery.getSelectedProfileTags(),
+    ['selection-a', 'selection-c'],
+  );
+}
+
 testPromptRequiresEnglishRetrievalFieldsAndChineseCnFields();
 testSuggestedTagIsEnglishAndAtMostTwelveChars();
 testGeneratedCandidatesKeepChineseOutOfRetrievalFields();
 testGeneratedCandidatesDropWeakAcronymKeywords();
 testGeneratedCandidatesDoNotCollapseConceptToSingleModifier();
+testProfileSelectionPersistsAcrossRerender();
 
 console.log('subscriptions smart query tests passed');
