@@ -7,6 +7,7 @@
 window.SubscriptionsSmartQuery = (function () {
   const MAX_KEYWORDS_PER_PROFILE = 6;
   const MAX_INTENT_QUERIES_PER_PROFILE = 4;
+  const MAX_PROFILE_TAG_CHARS = 12;
   let displayListEl = null;
   let createBtn = null;
   let openChatBtn = null;
@@ -17,6 +18,9 @@ window.SubscriptionsSmartQuery = (function () {
 
   let currentProfiles = [];
   const pendingDeletedProfileIds = new Set();
+  const selectedProfileKeys = new Set();
+  let runSelectionMode = '';
+  let selectionChangeHandler = null;
   let modalOverlay = null;
   let modalPanel = null;
   let modalState = null;
@@ -53,17 +57,22 @@ window.SubscriptionsSmartQuery = (function () {
     '1) keywords: output 5-12 objects; each item must include keyword and query, keyword_cn optional.',
     '2) keyword and query MUST be English retrieval text only. Do not put Chinese in keyword or query.',
     '3) keyword_cn and query_cn MUST be Chinese translations/explanations when present.',
-    '4) keywords are used for recall and should be atomic phrases (prefer 1-3 core words).',
-    '5) Keep keywords atomic and avoid packing multiple concepts into one phrase.',
-    '6) Do not include concrete example topics in the prompt.',
-    '7) intent_queries: output 1-4 actionable intent queries. The query field MUST be English only; query_cn should be Chinese.',
-    '8) Do not output extra fields like must_have / optional / exclude / rewrite_for_embedding.',
-    '9) Return pure JSON only, no explanations.',
-    '10) intent_queries should be concise, timeless, and must not include years or year-like tokens.',
-    '11) Tag suggestion should be concise and descriptive. No fixed length limit.',
-    '12) Tag suggestion must NOT include any year. Do not append or embed years (including digits like 2026/2025/2024 etc.) in tag.',
-    '13) Tag suggestion must be English words or an English acronym only. Never output Chinese in tag.',
-    '14) Tag suggestion must use hyphen-separated words when multiple words are needed, for example "reinforcement-learning". Do not use spaces or underscores in tag.',
+    '4) keywords are used for BM25 recall and should be meaningful atomic noun phrases, normally 2-4 English words.',
+    '5) Do NOT output acronym-only or abbreviation-only keywords such as "rl", "xrl", "sr", "llm". Expand them to full phrases like "reinforcement learning" or "large language model".',
+    '6) Do NOT output incomplete modifier phrases ending with generic words like "driven", "based", "related", "guided", "enhanced", "for", or "with".',
+    '7) Do NOT output standalone adjective/modifier keywords like "explainable", "interpretable", "deep", or "neural"; attach the target concept, e.g. "explainable reinforcement learning".',
+    '8) Keep keywords atomic and avoid packing multiple concepts into one phrase.',
+    '9) Do not include concrete example topics in the prompt.',
+    '10) intent_queries: output 1-4 actionable intent queries. The query field MUST be English only; query_cn should be Chinese.',
+    '11) intent_queries must be specific semantic search sentences, not acronym-only strings.',
+    '12) Do not output extra fields like must_have / optional / exclude / rewrite_for_embedding.',
+    '13) Return pure JSON only, no explanations.',
+    '14) intent_queries should be concise, timeless, and must not include years or year-like tokens.',
+    '15) Tag suggestion must be concise: at most 12 characters total, counting hyphens.',
+    '16) Tag suggestion must NOT include any year. Do not append or embed years (including digits like 2026/2025/2024 etc.) in tag.',
+    '17) Tag suggestion must be English words or an English acronym only. Never output Chinese in tag.',
+    '18) Tag suggestion must use hyphen-separated words when multiple words are needed, for example "reinforcement-learning". Do not use spaces or underscores in tag.',
+    '19) If the descriptive tag would exceed 12 characters, output an English acronym or a shorter hyphenated label.',
   ].join('\n');
 
   const normalizeText = (v) => String(v || '').trim();
@@ -199,13 +208,25 @@ window.SubscriptionsSmartQuery = (function () {
     tag = tag
       .replace(/\+/g, '-')
       .replace(/[\s_]+/g, '-')
-      .replace(/[^A-Za-z0-9-]+/g, '')
+      .replace(/[^A-Za-z-]+/g, '')
       .replace(/-+/g, '-')
       .replace(/-+$/g, '')
       .replace(/^-+/g, '')
       .trim();
     if (!/[A-Za-z]/.test(tag)) return '';
-    return tag;
+    if (tag.length <= MAX_PROFILE_TAG_CHARS) return tag;
+    const words = tag.split('-').filter(Boolean);
+    if (words.length > 1) {
+      const acronym = words
+        .map((word) => word[0] || '')
+        .join('')
+        .replace(/[^A-Za-z]/g, '');
+      if (acronym.length >= 2 && acronym.length <= MAX_PROFILE_TAG_CHARS) {
+        const allCapsSource = words.every((word) => word === word.toUpperCase());
+        return allCapsSource ? acronym.toUpperCase() : acronym.toLowerCase();
+      }
+    }
+    return tag.slice(0, MAX_PROFILE_TAG_CHARS).replace(/-+$/g, '');
   };
   const deriveTagFromCandidates = (candidates, fallbacks = []) => {
     const values = [];
@@ -256,6 +277,43 @@ window.SubscriptionsSmartQuery = (function () {
     if (!profileOrTag) return '';
     if (typeof profileOrTag === 'string') return toStableId(profileOrTag);
     return toStableId(profileOrTag.tag) || '';
+  };
+  const isConferenceOnlyProfile = (profile) =>
+    !!(
+      profile &&
+      (
+        profile.temporary === true ||
+        profile.conference_only === true ||
+        normalizeText(profile.scope).toLowerCase() === 'conference'
+      )
+    );
+  const canSelectProfileForRunMode = (profile) => {
+    return !!profile;
+  };
+  const notifySelectionChange = () => {
+    if (typeof selectionChangeHandler !== 'function') return;
+    const selectedProfiles = (currentProfiles || []).filter((profile) =>
+      selectedProfileKeys.has(getProfileKey(profile)),
+    );
+    selectionChangeHandler(selectedProfiles.map((profile) => ({
+      tag: normalizeText(profile && profile.tag),
+      description: normalizeText(profile && profile.description),
+      scope: normalizeText(profile && profile.scope),
+      temporary: isConferenceOnlyProfile(profile),
+    })));
+  };
+  const toggleProfileSelection = (profileId) => {
+    const profile = findCurrentProfile(profileId);
+    if (!profile || !canSelectProfileForRunMode(profile)) return;
+    const key = getProfileKey(profile);
+    if (!key) return;
+    if (selectedProfileKeys.has(key)) {
+      selectedProfileKeys.delete(key);
+    } else {
+      selectedProfileKeys.add(key);
+    }
+    renderMain();
+    notifySelectionChange();
   };
 
   const filterVisiblePaperSources = (values) => {
@@ -711,6 +769,7 @@ window.SubscriptionsSmartQuery = (function () {
       'advanced',
       'robust',
       'efficient',
+      'explainable',
       'interpretable',
       'hybrid',
       'scalable',
@@ -722,13 +781,28 @@ window.SubscriptionsSmartQuery = (function () {
         .replace(/^(for|of|in|on|with|using|based on)\s+/i, '')
         .replace(/\s+/g, ' ')
         .trim();
+    const trimWeakKeywordSuffix = (s) =>
+      normalizeText(s)
+        .replace(/\b(driven|based|related|guided|enhanced|oriented|focused|for|with)$/i, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+    const isWeakAcronymKeyword = (s) => /^[A-Za-z]{1,3}$/.test(normalizeText(s));
+    const isLowQualityKeyword = (s) => {
+      const text = normalizeText(s);
+      if (!text) return true;
+      if (isWeakAcronymKeyword(text)) return true;
+      if (!/\s/.test(text) && genericModifierSet.has(text.toLowerCase())) return true;
+      return /\b(driven|based|related|guided|enhanced|oriented|focused|for|with)$/i.test(text);
+    };
 
     let keywords = rawKeywords
       .map((item, idx) => {
         if (!item) return null;
-        const rawKeyword =
-          typeof item === 'string' ? normalizeText(item) : normalizeText(item.keyword || item.text || item.expr || '');
+        const rawKeyword = trimWeakKeywordSuffix(
+          typeof item === 'string' ? normalizeText(item) : normalizeText(item.keyword || item.text || item.expr || ''),
+        );
         if (!isEnglishRetrievalText(rawKeyword)) return null;
+        if (isLowQualityKeyword(rawKeyword)) return null;
         const keywordCn = normalizeText(
           typeof item === 'string'
             ? ''
@@ -742,7 +816,7 @@ window.SubscriptionsSmartQuery = (function () {
             ? ''
             : normalizeText(item.query_cn || item.query_zh || item.note || ''),
         );
-        const query = isEnglishRetrievalText(rawQuery) ? rawQuery : rawKeyword;
+        const query = isEnglishRetrievalText(rawQuery) && !isWeakAcronymKeyword(rawQuery) ? rawQuery : rawKeyword;
         return {
           keyword: rawKeyword,
           keyword_cn: keywordCn,
@@ -754,7 +828,7 @@ window.SubscriptionsSmartQuery = (function () {
 
     // 关键词召回去冗余：
     // 若已有核心术语（如 symbolic regression），则将 "X symbolic regression" 归一为 "X"；
-    // 若 X 只是泛形容词，则直接丢弃该冗余词条。
+    // 但不能把 "explainable reinforcement learning" 这类完整概念裁成单个泛形容词。
     const plainList = keywords.map((k) => normalizePhrase(k.keyword || ''));
     const plainSet = new Set(plainList);
     const anchorCandidates = new Set();
@@ -785,8 +859,8 @@ window.SubscriptionsSmartQuery = (function () {
           const prefixPlain = trimLeadingConnector(plain.slice(0, idx));
           if (!prefixPlain) return null;
           const parts = prefixPlain.split(' ').filter(Boolean);
-          if (parts.length === 1 && genericModifierSet.has(parts[0])) {
-            return null;
+          if (parts.length === 1) {
+            return k;
           }
           return {
             ...k,
@@ -808,7 +882,7 @@ window.SubscriptionsSmartQuery = (function () {
 
     const rawIntentQueries = normalizeIntentSource(data);
     const intentQueries = normalizeIntentQueryEntries(rawIntentQueries).filter((item) =>
-      isEnglishRetrievalText(item && item.query),
+      isEnglishRetrievalText(item && item.query) && !isWeakAcronymKeyword(item && item.query),
     );
 
     return {
@@ -1052,6 +1126,11 @@ window.SubscriptionsSmartQuery = (function () {
 
       profile.description = normalizeText(profile.description || description || '');
       profile.paper_sources = normalizePaperSources(paperSources, { fallbackToArxiv: false });
+      if (candidates && candidates.temporaryProfile) {
+        profile.scope = 'conference';
+        profile.temporary = true;
+        profile.conference_only = true;
+      }
       profile.keywords = kwList;
       const mergedIntentQueries = [];
       const intentSeen = new Set();
@@ -1108,6 +1187,9 @@ window.SubscriptionsSmartQuery = (function () {
         tag: sanitizeAutoTag(tag || existedProfile.tag || '') || deriveTagFromCandidates(candidates) || `profile-${idx + 1}`,
         description: normalizeText(description || existedProfile.description || ''),
         paper_sources: normalizePaperSources(paperSources, { fallbackToArxiv: false }),
+        ...(candidates && candidates.temporaryProfile
+          ? { scope: 'conference', temporary: true, conference_only: true }
+          : {}),
         keywords:
           selectedKeywords.length > 0
             ? selectedKeywords
@@ -1379,6 +1461,120 @@ window.SubscriptionsSmartQuery = (function () {
     `;
   };
 
+  const renderChoiceField = (value, placeholder, isPrimary = false) => {
+    const text = normalizeText(value);
+    const classes = ['dpr-inline-field', 'dpr-choice-field'];
+    if (!text) classes.push('is-empty');
+    if (isPrimary) classes.push('is-primary');
+    return `
+      <span class="${classes.join(' ')}">
+        <span class="dpr-inline-text">${escapeHtml(escapeValueForRender(value, placeholder))}</span>
+      </span>
+    `;
+  };
+
+  const getCandidateItem = (kind, index, state = modalState) => {
+    const realKind = normalizeCandidateKind(kind);
+    const list = getCandidatesByKindForState(state, realKind);
+    if (!Array.isArray(list) || index < 0 || index >= list.length) {
+      return { realKind, list: null, item: null };
+    }
+    return { realKind, list, item: list[index] || null };
+  };
+
+  const getCandidateEditDraft = (item, primaryField, secondaryField, fallbackDesc) => {
+    const draft = item && item._editDraft && typeof item._editDraft === 'object'
+      ? item._editDraft
+      : {};
+    return {
+      primary: normalizeText(draft.primary ?? item?.[primaryField] ?? ''),
+      secondary: normalizeText(draft.secondary ?? item?.[secondaryField] ?? fallbackDesc ?? ''),
+    };
+  };
+
+  const startCandidateEdit = (kind, index, fields) => {
+    const { item } = getCandidateItem(kind, index);
+    if (!item || isDraftSlot(item)) return;
+    const primaryField = fields.primary || '';
+    const secondaryField = fields.secondary || '';
+    item._editing = true;
+    item._editDraft = {
+      primary: normalizeText(item[primaryField] || ''),
+      secondary: normalizeText(item[secondaryField] || item[fields.fallback] || ''),
+    };
+    renderChatModal();
+  };
+
+  const cancelCandidateEdit = (kind, index) => {
+    const { item } = getCandidateItem(kind, index);
+    if (!item) return;
+    delete item._editing;
+    delete item._editDraft;
+    renderChatModal();
+  };
+
+  const saveCandidateEdit = (kind, index, fields) => {
+    const { item, realKind } = getCandidateItem(kind, index);
+    if (!item) return;
+    const primaryField = fields.primary || '';
+    const secondaryField = fields.secondary || '';
+    const draft = getCandidateEditDraft(item, primaryField, secondaryField, item[fields.fallback]);
+    applyDraftSlotValue(realKind, index, primaryField, draft.primary, modalState);
+    applyDraftSlotValue(realKind, index, secondaryField, draft.secondary, modalState);
+    delete item._editing;
+    delete item._editDraft;
+    renderChatModal();
+  };
+
+  const updateCandidateEditDraft = (target) => {
+    if (!target || !modalState) return;
+    const kind = target.getAttribute('data-kind') || '';
+    const index = Number(target.getAttribute('data-index'));
+    const draftField = target.getAttribute('data-candidate-edit-field') || '';
+    const { item } = getCandidateItem(kind, index);
+    if (!item || !item._editing) return;
+    if (!item._editDraft || typeof item._editDraft !== 'object') {
+      item._editDraft = {};
+    }
+    if (draftField === 'primary' || draftField === 'secondary') {
+      item._editDraft[draftField] = target.value;
+    }
+  };
+
+  const renderCandidateEditCard = (kind, idx, item, fields, selected, disabled) => {
+    const primaryField = fields.primary || '';
+    const secondaryField = fields.secondary || '';
+    const draft = getCandidateEditDraft(item, primaryField, secondaryField, item[fields.fallback]);
+    return `
+      <div class="dpr-cloud-item dpr-cloud-item-editing ${selected ? 'selected' : ''} ${disabled ? 'dpr-choice-disabled' : ''}" data-kind="${kind}" data-index="${idx}" data-disabled="${disabled ? '1' : '0'}" aria-disabled="${disabled ? 'true' : 'false'}">
+        <span class="dpr-cloud-item-body dpr-cloud-edit-body">
+          <input
+            type="text"
+            class="dpr-candidate-edit-input"
+            data-kind="${escapeHtml(kind)}"
+            data-index="${idx}"
+            data-candidate-edit-field="primary"
+            value="${escapeHtml(draft.primary)}"
+            placeholder="${escapeHtml(fields.primaryPlaceholder || '英文检索文本')}"
+          />
+          <input
+            type="text"
+            class="dpr-candidate-edit-input"
+            data-kind="${escapeHtml(kind)}"
+            data-index="${idx}"
+            data-candidate-edit-field="secondary"
+            value="${escapeHtml(draft.secondary)}"
+            placeholder="${escapeHtml(fields.secondaryPlaceholder || '中文说明')}"
+          />
+        </span>
+        <span class="dpr-cloud-edit-actions">
+          <button type="button" class="arxiv-tool-btn dpr-cloud-edit-save" data-action="save-candidate-edit" data-kind="${escapeHtml(kind)}" data-index="${idx}" data-primary-field="${escapeHtml(primaryField)}" data-secondary-field="${escapeHtml(secondaryField)}" data-fallback-field="${escapeHtml(fields.fallback || '')}" title="保存修改">✓</button>
+          <button type="button" class="arxiv-tool-btn dpr-cloud-edit-cancel" data-action="cancel-candidate-edit" data-kind="${escapeHtml(kind)}" data-index="${idx}" title="取消修改">×</button>
+        </span>
+      </div>
+    `;
+  };
+
   const renderDraftInputField = (kind, idx, field, value, placeholder) => {
     return `
       <input
@@ -1568,35 +1764,42 @@ window.SubscriptionsSmartQuery = (function () {
         const selected = !!item._selected;
         const checked = selected ? 'checked' : '';
         const disabled = isCandidateDisabled(items, item, realKind);
+        const fieldMeta = {
+          primary: textField,
+          secondary: descField,
+          fallback: descFallbackField,
+          primaryPlaceholder: options.defaultPrimaryPlaceholder || '英文检索文本',
+          secondaryPlaceholder: defaultDesc || '中文说明',
+        };
+        if (item._editing) {
+          return renderCandidateEditCard(realKind, idx, item, fieldMeta, selected, disabled);
+        }
         return `
-        <label class="dpr-cloud-item ${selected ? 'selected' : ''} ${disabled ? 'dpr-choice-disabled' : ''}" data-kind="${kind}" data-index="${idx}" data-disabled="${disabled ? '1' : '0'}" aria-disabled="${disabled ? 'true' : 'false'}">
+        <div class="dpr-cloud-item ${selected ? 'selected' : ''} ${disabled ? 'dpr-choice-disabled' : ''}" data-action="toggle-chat-choice-card" data-kind="${realKind}" data-index="${idx}" data-disabled="${disabled ? '1' : '0'}" aria-disabled="${disabled ? 'true' : 'false'}">
           <input
             type="checkbox"
             data-action="toggle-chat-choice"
-            data-kind="${kind}"
+            data-kind="${realKind}"
             data-index="${idx}"
             ${checked}
             ${disabled ? 'disabled' : ''}
           />
           <span class="dpr-cloud-item-body">
-            ${renderEditableField(
-              kind,
-              idx,
-              textField,
-              text,
-              options.defaultPrimaryPlaceholder || '（英文）',
-              true,
-            )}
-            ${renderEditableField(
-              kind,
-              idx,
-              descField,
-              desc || item[descFallbackField] || item.source || '',
-              defaultDesc || '（无说明）',
-              false,
-            )}
+            ${renderChoiceField(text, options.defaultPrimaryPlaceholder || '（英文）', true)}
+            ${renderChoiceField(desc || item[descFallbackField] || item.source || '', defaultDesc || '（无说明）', false)}
           </span>
-        </label>
+          <button
+            type="button"
+            class="arxiv-tool-btn dpr-cloud-edit-trigger"
+            data-action="edit-candidate-choice"
+            data-kind="${realKind}"
+            data-index="${idx}"
+            data-primary-field="${escapeHtml(textField)}"
+            data-secondary-field="${escapeHtml(descField)}"
+            data-fallback-field="${escapeHtml(descFallbackField)}"
+            title="修改英文与中文说明"
+          >✎</button>
+        </div>
       `;
       })
       .join('');
@@ -1609,20 +1812,51 @@ window.SubscriptionsSmartQuery = (function () {
     el.style.color = color || '#666';
   };
 
+  const isChatAppendRound = (state = modalState) =>
+    Array.isArray(state && state.requestHistory) && state.requestHistory.length > 0;
+
+  const getChatActionMeta = (state = modalState) =>
+    isChatAppendRound(state)
+      ? { label: '追加生成', className: 'dpr-chat-send-btn--append' }
+      : { label: '生成候选', className: 'dpr-chat-send-btn--initial' };
+
   const setSendBtnLoading = (loading) => {
     const btn = modalPanel?.querySelector('[data-action="chat-send"]');
     if (!btn) return;
+    const meta = getChatActionMeta();
     if (loading) {
       btn.disabled = true;
       btn.classList.add('dpr-btn-loading');
       const label = btn.querySelector('.dpr-chat-send-label');
-      if (label) label.textContent = '生成中...';
+      if (label) label.textContent = '生成中';
       return;
     }
     btn.disabled = false;
     btn.classList.remove('dpr-btn-loading');
     const label = btn.querySelector('.dpr-chat-send-label');
-    if (label) label.textContent = '生成候选';
+    if (label) label.textContent = meta.label;
+  };
+
+  const toggleChatChoice = (kind, index, nextSelected = null) => {
+    if (!modalState || modalState.type !== 'chat') return;
+    const realKind = normalizeCandidateKind(kind);
+    const list = realKind === 'intent' ? modalState.intent_queries : modalState.keywords;
+    if (
+      !Array.isArray(list) ||
+      index < 0 ||
+      index >= list.length ||
+      isDraftSlot(list[index]) ||
+      list[index]._editing
+    ) {
+      return;
+    }
+    const selected = typeof nextSelected === 'boolean' ? nextSelected : !list[index]._selected;
+    if (!canSelectMoreCandidates(list, selected, realKind)) {
+      setMessage(`${getKindLabel(realKind)} 最多只能选择 ${getSelectionLimit(realKind)} 条。`, '#c00');
+      return;
+    }
+    list[index]._selected = selected;
+    renderChatModal();
   };
 
   const ensureModal = () => {
@@ -1665,45 +1899,57 @@ window.SubscriptionsSmartQuery = (function () {
   const renderMain = () => {
     if (!displayListEl) return;
     if (!currentProfiles.length) {
-      displayListEl.innerHTML = '<div style="color:#999;">暂无词条，先点「新增」打开对话生成。</div>';
+      displayListEl.innerHTML = '<div class="dpr-entry-empty">暂无词条，先点「新增」打开对话生成。</div>';
+      notifySelectionChange();
       return;
     }
 
     displayListEl.innerHTML = currentProfiles
       .map((p) => {
         const isPaused = !!p.paused;
-        const isQuickRunOpen = !!p._quickRunOpen;
-        const pauseLabel = isPaused ? '恢复' : '暂停';
+        const isTemporary = isConferenceOnlyProfile(p);
+        const selectable = canSelectProfileForRunMode(p);
+        const selected = selectedProfileKeys.has(getProfileKey(p));
+        const pauseLabel = isPaused ? '启用日常' : '停用日常';
         const pauseBtnClass = isPaused ? 'dpr-entry-resume-btn' : 'dpr-entry-pause-btn';
-        const cardClass = 'dpr-entry-card' + (isPaused ? ' dpr-entry-card--paused' : '');
-        const pausedBadge = isPaused ? '<span class="dpr-entry-paused-badge">已暂停</span>' : '';
         const profileId = escapeHtml(getProfileKey(p) || '');
-        const runPanelClass = `dpr-entry-run-panel${isQuickRunOpen ? ' is-open' : ''}`;
+        const pauseButton = isTemporary
+          ? ''
+          : `<button class="arxiv-tool-btn ${pauseBtnClass}" data-action="pause-profile" data-profile-id="${profileId}">${pauseLabel}</button>`;
+        const cardClass = [
+          'dpr-entry-card',
+          isPaused ? 'dpr-entry-card--paused' : '',
+          isTemporary ? 'dpr-entry-card--temporary' : '',
+          'dpr-entry-card--selection-mode',
+          selectable ? 'dpr-entry-card--selectable' : '',
+          selected ? 'is-selected' : '',
+          !selectable ? 'dpr-entry-card--selection-disabled' : '',
+        ].filter(Boolean).join(' ');
+        const pausedBadge = isPaused ? '<span class="dpr-entry-paused-badge">日常停用</span>' : '';
+        const temporaryBadge = isTemporary ? '<span class="dpr-entry-temp-badge">仅会议</span>' : '';
+        const selectionControl = `<span class="dpr-entry-select-dot" aria-hidden="true">${selected ? '✓' : ''}</span>`;
         return `
           <div class="${cardClass}" data-profile-id="${profileId}">
             <div class="dpr-entry-top">
               <div class="dpr-entry-headline">
+                ${selectionControl}
                 <span class="dpr-entry-title">${escapeHtml(p.tag || '')}</span>
                 ${pausedBadge}
+                ${temporaryBadge}
                 <span class="dpr-entry-desc-inline">${escapeHtml(p.description || '（无描述）')}</span>
                 <span class="dpr-entry-source-inline">${renderProfileSourceChips(p.paper_sources)}</span>
               </div>
               <div class="dpr-entry-actions">
-                <button class="arxiv-tool-btn dpr-entry-run-toggle-btn" data-action="toggle-profile-runs" data-profile-id="${profileId}">${isQuickRunOpen ? '收起运行' : '运行'}</button>
-                <button class="arxiv-tool-btn ${pauseBtnClass}" data-action="pause-profile" data-profile-id="${profileId}">${pauseLabel}</button>
+                ${pauseButton}
                 <button class="arxiv-tool-btn dpr-entry-edit-btn" data-action="edit-profile" data-profile-id="${profileId}">修改</button>
                 <button class="arxiv-tool-btn dpr-entry-delete-btn" data-action="delete-profile" data-profile-id="${profileId}">删除</button>
               </div>
-            </div>
-            <div class="${runPanelClass}">
-              <button class="arxiv-tool-btn dpr-entry-run-btn" data-action="run-profile-10d" data-profile-id="${profileId}">10 天</button>
-              <button class="arxiv-tool-btn dpr-entry-run-btn" data-action="run-profile-30d-skims" data-profile-id="${profileId}">30 天速览</button>
-              <button class="arxiv-tool-btn dpr-entry-run-btn" data-action="run-profile-30d-standard" data-profile-id="${profileId}">30 天标准</button>
             </div>
           </div>
         `;
       })
       .join('');
+    notifySelectionChange();
   };
 
   const openAddModal = (tag, description, candidates) => {
@@ -1747,6 +1993,7 @@ window.SubscriptionsSmartQuery = (function () {
       requestHistory: [],
       inputTag: sanitizeAutoTag(options.tag || ''),
       inputDesc: normalizeText(options.description || ''),
+      temporaryProfile: !!options.temporaryProfile,
       paper_sources: normalizePaperSources(options.paper_sources, { fallbackToAll: true }),
       pending: false,
       chatStatus: '',
@@ -1893,18 +2140,7 @@ window.SubscriptionsSmartQuery = (function () {
       hasIntentSection && modalState.intent_queries.some((item) => !isDraftSlot(item));
     const hasCandidates = hasKeywords || hasIntentQueries;
     const sourceChoices = renderPaperSourceChoices(modalState.paper_sources || []);
-    const isFirstRound = !(Array.isArray(modalState.requestHistory) && modalState.requestHistory.length);
-    const actionLabel = isFirstRound ? '生成候选' : '新增候选';
-    const tipSection = isFirstRound
-      ? `<div class="dpr-modal-group-title">
-           请先在下方输入你的检索想法
-         </div>
-         <div class="dpr-help-examples">
-           <div class="dpr-help-example">ex: 强化学习 符号回归</div>
-           <div class="dpr-help-example">ex: 请帮我去查找强化学习和符号回归相关的论文</div>
-           <div class="dpr-help-example">ex: 请帮我查找可解释的强化学习驱动符号回归方程发现论文</div>
-         </div>`
-      : '';
+    const actionMeta = getChatActionMeta(modalState);
     const kwSection = hasKeywordSection
       ? `<div class="dpr-chat-result-block">
            <div class="dpr-modal-group-title">${buildSelectionTitle('keyword', '用于召回')}</div>
@@ -1930,46 +2166,52 @@ window.SubscriptionsSmartQuery = (function () {
 
     modalPanel.innerHTML = `
       <div class="dpr-modal-head">
-        <div class="dpr-modal-title">${modalState && modalState.editProfileId ? '修改查询' : '新增查询'}</div>
+        <div class="dpr-modal-title">
+          ${modalState && modalState.editProfileId ? '修改查询' : (modalState.temporaryProfile ? '新增仅会议查询' : '新增查询')}
+          ${modalState.temporaryProfile ? '<span class="dpr-entry-temp-badge">仅会议</span>' : ''}
+        </div>
         <button class="arxiv-tool-btn" data-action="close">关闭</button>
       </div>
-      <div class="dpr-chat-result-module">
-        ${tipSection}
-        <div class="dpr-chat-result-content">${mixedHtml || emptyBlock}</div>
-      </div>
       <div class="dpr-modal-actions dpr-chat-action-area">
-        <div class="dpr-chat-row">
-          <label class="dpr-chat-label dpr-chat-inline-desc">
-            <span class="dpr-chat-label-text">检索需求</span>
-            <textarea id="dpr-chat-desc-input" rows="2" placeholder="请帮我去查找强化学习和符号回归相关的论文">${escapeHtml(
-              modalState.inputDesc || '',
-            )}</textarea>
-          </label>
-          <button
-            class="arxiv-tool-btn dpr-chat-send-btn"
-            data-action="chat-send"
-            ${modalState.pending ? 'disabled' : ''}
-          >
-            <span class="dpr-chat-send-label">${actionLabel}</span>
-            <span class="dpr-mini-spinner" aria-hidden="true"></span>
-          </button>
+        <div class="dpr-chat-row dpr-chat-main-row">
+          <div class="dpr-chat-composer">
+            <label class="dpr-chat-label dpr-chat-inline-desc">
+              <span class="dpr-chat-label-text">检索需求</span>
+              <textarea id="dpr-chat-desc-input" rows="5" placeholder="请在这里像和 ChatGPT 对话一样描述你的检索需求。例如：&#10;请帮我查找强化学习和符号回归相关的论文&#10;请帮我查找可解释的强化学习驱动符号回归方程发现论文">${escapeHtml(
+                modalState.inputDesc || '',
+              )}</textarea>
+            </label>
+            <button
+              class="arxiv-tool-btn dpr-chat-send-btn ${actionMeta.className}"
+              data-action="chat-send"
+              ${modalState.pending ? 'disabled' : ''}
+            >
+              <span class="dpr-chat-send-label">${actionMeta.label}</span>
+              <span class="dpr-mini-spinner" aria-hidden="true"></span>
+            </button>
+          </div>
         </div>
         <div id="dpr-chat-inline-status" class="dpr-chat-inline-status">${escapeHtml(modalState.chatStatus || '')}</div>
       </div>
-      <div class="dpr-modal-actions dpr-modal-add-footer">
-        <label class="dpr-chat-label dpr-chat-inline-tag">
-          <span class="dpr-chat-label-text">标签</span>
-          <input id="dpr-chat-tag-input" type="text" placeholder="例如：SR" value="${escapeHtml(modalState.inputTag || '')}" />
-        </label>
-        <label class="dpr-chat-label dpr-chat-inline-desc">
-          <span class="dpr-chat-label-text">中文描述</span>
-          <input id="dpr-chat-required-desc" type="text" placeholder="请填写描述" value="${escapeHtml(modalState.inputDesc || '')}" />
-        </label>
-        <div class="dpr-chat-label dpr-chat-inline-sources">
-          <span class="dpr-chat-label-text">论文源</span>
-          <div class="dpr-paper-source-row">${sourceChoices}</div>
+      <div class="dpr-chat-result-module">
+        <div class="dpr-chat-result-content">${mixedHtml || emptyBlock}</div>
+      </div>
+      <div class="dpr-chat-bottom-bar">
+        <div class="dpr-chat-meta-bar">
+          <label class="dpr-chat-label dpr-chat-inline-tag">
+            <span class="dpr-chat-label-text">标签</span>
+            <input id="dpr-chat-tag-input" type="text" placeholder="例如：symbolic-regression" value="${escapeHtml(modalState.inputTag || '')}" />
+          </label>
+          <label class="dpr-chat-label dpr-chat-inline-profile-desc">
+            <span class="dpr-chat-label-text">中文描述</span>
+            <input id="dpr-chat-required-desc" type="text" placeholder="用于日报展示，可由模型自动补全" value="${escapeHtml(modalState.inputDesc || '')}" />
+          </label>
+          <div class="dpr-chat-label dpr-chat-inline-sources">
+            <span class="dpr-chat-label-text">论文源</span>
+            <div class="dpr-paper-source-row">${sourceChoices}</div>
+          </div>
         </div>
-        <button class="arxiv-tool-btn" data-action="apply-chat" style="background:#2e7d32;color:#fff;" ${hasCandidates ? '' : 'disabled'}>
+        <button class="arxiv-tool-btn dpr-chat-save-btn" data-action="apply-chat" ${hasCandidates ? '' : 'disabled'}>
           保存查询
         </button>
       </div>
@@ -2193,6 +2435,42 @@ window.SubscriptionsSmartQuery = (function () {
       }
       return;
     }
+    if (modalState && modalState.type === 'chat') {
+      if (action === 'toggle-chat-choice-card') {
+        e.preventDefault();
+        e.stopPropagation();
+        const kind = actionEl.getAttribute('data-kind') || '';
+        const idx = Number(actionEl.getAttribute('data-index'));
+        toggleChatChoice(kind, idx);
+        return;
+      }
+      if (action === 'edit-candidate-choice') {
+        e.preventDefault();
+        e.stopPropagation();
+        startCandidateEdit(actionEl.getAttribute('data-kind') || '', Number(actionEl.getAttribute('data-index')), {
+          primary: actionEl.getAttribute('data-primary-field') || '',
+          secondary: actionEl.getAttribute('data-secondary-field') || '',
+          fallback: actionEl.getAttribute('data-fallback-field') || '',
+        });
+        return;
+      }
+      if (action === 'save-candidate-edit') {
+        e.preventDefault();
+        e.stopPropagation();
+        saveCandidateEdit(actionEl.getAttribute('data-kind') || '', Number(actionEl.getAttribute('data-index')), {
+          primary: actionEl.getAttribute('data-primary-field') || '',
+          secondary: actionEl.getAttribute('data-secondary-field') || '',
+          fallback: actionEl.getAttribute('data-fallback-field') || '',
+        });
+        return;
+      }
+      if (action === 'cancel-candidate-edit') {
+        e.preventDefault();
+        e.stopPropagation();
+        cancelCandidateEdit(actionEl.getAttribute('data-kind') || '', Number(actionEl.getAttribute('data-index')));
+        return;
+      }
+    }
 
     if (modalState && modalState.type === 'add') {
       if (action === 'toggle-kw-card') {
@@ -2352,6 +2630,10 @@ window.SubscriptionsSmartQuery = (function () {
   const handleModalInput = (e) => {
     const target = e.target;
     if (!target || !target.matches) return;
+    if (target.matches('input[data-candidate-edit-field]')) {
+      updateCandidateEditDraft(target);
+      return;
+    }
     if (!target.matches('input[data-draft-input="1"]')) return;
     if (!modalState) return;
     const kind = target.getAttribute('data-kind') || '';
@@ -2404,40 +2686,16 @@ window.SubscriptionsSmartQuery = (function () {
 
   const handleDisplayClick = (e) => {
     const actionEl = e.target && e.target.closest ? e.target.closest('[data-action][data-profile-id]') : null;
-    if (!actionEl) return;
+    if (!actionEl) {
+      const card = e.target && e.target.closest ? e.target.closest('.dpr-entry-card[data-profile-id]') : null;
+      if (card) {
+        toggleProfileSelection(card.getAttribute('data-profile-id') || '');
+      }
+      return;
+    }
     const profileId = actionEl.getAttribute('data-profile-id');
     if (!profileId) return;
     const action = actionEl.getAttribute('data-action');
-    if (action === 'toggle-profile-runs') {
-      currentProfiles = (currentProfiles || []).map((profile) => {
-        if (!profile || typeof profile !== 'object') return profile;
-        const sameProfile = getProfileKey(profile) === getProfileKey(profileId);
-        return {
-          ...profile,
-          _quickRunOpen: sameProfile ? !profile._quickRunOpen : false,
-        };
-      });
-      renderMain();
-      return;
-    }
-    if (action === 'run-profile-10d' || action === 'run-profile-30d-skims' || action === 'run-profile-30d-standard') {
-      const profile = findCurrentProfile(profileId);
-      if (!profile) return;
-      if (!window.SubscriptionsManager || typeof window.SubscriptionsManager.runProfileQuickFetch !== 'function') {
-        setMessage('后台管理运行器未加载，无法发起单词条抓取。', '#c00');
-        return;
-      }
-      if (action === 'run-profile-10d') {
-        window.SubscriptionsManager.runProfileQuickFetch(profile.tag || '', 10);
-        return;
-      }
-      if (action === 'run-profile-30d-skims') {
-        window.SubscriptionsManager.runProfileQuickFetch(profile.tag || '', 30, { fetchMode: 'skims' });
-        return;
-      }
-      window.SubscriptionsManager.runProfileQuickFetch(profile.tag || '', 30, { fetchMode: 'standard' });
-      return;
-    }
     if (action === 'edit-profile') {
       openEditModal(profileId);
       return;
@@ -2464,7 +2722,7 @@ window.SubscriptionsSmartQuery = (function () {
         return next;
       });
       const tag = normalizeText(profile.tag) || '该词条';
-      const statusText = nextPaused ? '已暂停' : '已恢复';
+      const statusText = nextPaused ? '已停用日常抓取' : '已启用日常抓取';
       setMessage(`词条「${tag}」${statusText}，请点击「保存」。`, '#666');
       return;
     }
@@ -2481,9 +2739,11 @@ window.SubscriptionsSmartQuery = (function () {
       const normalizedProfileId = getProfileId(profileId);
       if (normalizedProfileId) {
         pendingDeletedProfileIds.add(normalizedProfileId);
+        selectedProfileKeys.delete(normalizedProfileId);
       }
       currentProfiles = currentProfiles.filter((item) => getProfileKey(item) !== normalizedProfileId);
       renderMain();
+      notifySelectionChange();
 
       window.SubscriptionsManager.updateDraftConfig((cfg) => {
         const next = cfg || {};
@@ -2503,6 +2763,7 @@ window.SubscriptionsSmartQuery = (function () {
     displayListEl = context.displayListEl || null;
     createBtn = context.createBtn || null;
     openChatBtn = context.openChatBtn || null;
+    const openTemporaryBtn = context.openTemporaryBtn || null;
     tagInputEl = context.tagInputEl || null;
     descInputEl = context.descInputEl || null;
     msgEl = context.msgEl || null;
@@ -2516,6 +2777,12 @@ window.SubscriptionsSmartQuery = (function () {
     if (openChatBtn && !openChatBtn._bound) {
       openChatBtn._bound = true;
       openChatBtn.addEventListener('click', openChatModal);
+    }
+    if (openTemporaryBtn && !openTemporaryBtn._bound) {
+      openTemporaryBtn._bound = true;
+      openTemporaryBtn.addEventListener('click', () => {
+        openChatModal({ temporaryProfile: true });
+      });
     }
 
     const autoResizeDesc = () => {
@@ -2548,13 +2815,45 @@ window.SubscriptionsSmartQuery = (function () {
   const render = (profiles) => {
     const normalizedProfiles = Array.isArray(profiles) ? deepClone(profiles) : [];
     currentProfiles = filterDeletedProfiles(normalizedProfiles);
+    const liveKeys = new Set(currentProfiles.map((profile) => getProfileKey(profile)).filter(Boolean));
+    Array.from(selectedProfileKeys).forEach((key) => {
+      if (!liveKeys.has(key)) selectedProfileKeys.delete(key);
+    });
     renderMain();
+  };
+  const setRunSelectionMode = (mode, onSelectionChange) => {
+    runSelectionMode = mode === 'conference' || mode === 'daily' ? mode : '';
+    selectionChangeHandler = typeof onSelectionChange === 'function' ? onSelectionChange : null;
+    renderMain();
+    notifySelectionChange();
+  };
+  const getSelectedProfilesForRun = () =>
+    (currentProfiles || [])
+      .filter((profile) => selectedProfileKeys.has(getProfileKey(profile)))
+      .map((profile) => ({
+        tag: normalizeText(profile && profile.tag),
+        description: normalizeText(profile && profile.description),
+        scope: normalizeText(profile && profile.scope),
+        temporary: isConferenceOnlyProfile(profile),
+        paused: !!(profile && profile.paused),
+      }))
+      .filter((profile) => profile.tag);
+  const getSelectedProfileTags = () =>
+    getSelectedProfilesForRun().map((profile) => profile.tag);
+  const clearRunSelection = () => {
+    selectedProfileKeys.clear();
+    renderMain();
+    notifySelectionChange();
   };
 
   return {
     attach,
     render,
     clearPendingDeletedProfileIds,
+    setRunSelectionMode,
+    getSelectedProfilesForRun,
+    getSelectedProfileTags,
+    clearRunSelection,
     __test: {
       buildPromptFromTemplate,
       defaultPromptTemplate,

@@ -284,21 +284,31 @@ def ensure_conference_figures(
     docs_dir: Path,
     pdf_url: str,
 ) -> List[Dict[str, Any]]:
+    figures, _tables = ensure_conference_media(paper, docs_dir=docs_dir, pdf_url=pdf_url)
+    return figures
+
+
+def ensure_conference_media(
+    paper: Dict[str, Any],
+    *,
+    docs_dir: Path,
+    pdf_url: str,
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     if not pdf_url:
-        return []
+        return [], []
     asset_key = norm_text(paper.get("id")) or slugify(norm_text(paper.get("title")))
     try:
-        from paper_figures import ensure_paper_figures
+        from paper_figures import ensure_paper_media
 
-        return ensure_paper_figures(
+        return ensure_paper_media(
             pdf_url=pdf_url,
             docs_dir=str(docs_dir),
             source_key=source_key_for_figures(paper),
             asset_key=asset_key,
         )
     except Exception as exc:
-        print(f"[WARN] 会议论文插图提取失败：{asset_key}: {exc}", flush=True)
-        return []
+        print(f"[WARN] 会议论文图表提取失败：{asset_key}: {exc}", flush=True)
+        return [], []
 
 
 def is_generated_deep_summary(text: str) -> bool:
@@ -437,8 +447,11 @@ def build_conference_markdown(
         lines.append(f"source: {yaml_escape_value(source)}")
     lines.append("selection_source: conference_retrieval")
     figure_assets = paper.get("_figure_assets") if isinstance(paper.get("_figure_assets"), list) else []
+    table_assets = paper.get("_table_assets") if isinstance(paper.get("_table_assets"), list) else []
     if figure_assets:
         lines.append(f"figures_json: {yaml_escape_value(json.dumps(figure_assets, ensure_ascii=False))}")
+    if table_assets:
+        lines.append(f"tables_json: {yaml_escape_value(json.dumps(table_assets, ensure_ascii=False))}")
     lines.append(f"motivation: {yaml_escape_value(glance['motivation'])}")
     lines.append(f"method: {yaml_escape_value(glance['method'])}")
     lines.append(f"result: {yaml_escape_value(glance['result'])}")
@@ -502,11 +515,16 @@ def enrich_conference_paper_for_deep_read(
     cached_figures = parse_json_front_matter_value(existing_meta.get("figures_json"))
     if isinstance(cached_figures, list) and cached_figures:
         paper["_figure_assets"] = cached_figures
+    cached_tables = parse_json_front_matter_value(existing_meta.get("tables_json"))
+    if isinstance(cached_tables, list) and cached_tables:
+        paper["_table_assets"] = cached_tables
 
-    if not norm_text(existing_meta.get("figures_json")):
-        figures = ensure_conference_figures(paper, docs_dir=docs_dir, pdf_url=pdf_url)
+    if not norm_text(existing_meta.get("figures_json")) or not norm_text(existing_meta.get("tables_json")):
+        figures, tables = ensure_conference_media(paper, docs_dir=docs_dir, pdf_url=pdf_url)
         if figures:
             paper["_figure_assets"] = figures
+        if tables:
+            paper["_table_assets"] = tables
 
     existing_summary = ""
     if existing:

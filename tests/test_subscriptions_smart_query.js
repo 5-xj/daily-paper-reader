@@ -24,14 +24,17 @@ function testPromptRequiresEnglishRetrievalFieldsAndChineseCnFields() {
   assert.match(prompt, /keyword and query MUST be English retrieval text only/);
   assert.match(prompt, /keyword_cn and query_cn MUST be Chinese/);
   assert.match(prompt, /The query field MUST be English only/);
+  assert.match(prompt, /Do NOT output acronym-only/);
+  assert.match(prompt, /meaningful atomic noun phrases/);
+  assert.match(prompt, /standalone adjective\/modifier keywords/);
   assert.match(prompt, /hyphen-separated words/);
   assert.match(prompt, /English words or an English acronym only/);
-  assert.match(prompt, /No fixed length limit/);
+  assert.match(prompt, /at most 12 characters/);
 }
 
-function testSuggestedTagUsesHyphenWithoutLengthLimit() {
-  assert.equal(sanitizeAutoTag('reinforcement learning algorithms'), 'reinforcement-learning-algorithms');
-  assert.equal(sanitizeAutoTag('RL_optimization 2026'), 'RL-optimization');
+function testSuggestedTagIsEnglishAndAtMostTwelveChars() {
+  assert.equal(sanitizeAutoTag('reinforcement learning algorithms'), 'rla');
+  assert.equal(sanitizeAutoTag('RL_optimization 2026'), 'ro');
   assert.equal(sanitizeAutoTag('强化学习'), '');
   assert.equal(sanitizeAutoTag('强化学习 RL'), 'RL');
   assert.equal(
@@ -39,8 +42,9 @@ function testSuggestedTagUsesHyphenWithoutLengthLimit() {
       tag: '强化学习',
       keywords: [{ keyword: 'reinforcement learning', query: 'reinforcement learning algorithms comparison' }],
     }),
-    'reinforcement-learning',
+    'rl',
   );
+  assert.equal(sanitizeAutoTag('verylongsingleword'), 'verylongsing');
 }
 
 function testGeneratedCandidatesKeepChineseOutOfRetrievalFields() {
@@ -99,8 +103,54 @@ function testGeneratedCandidatesKeepChineseOutOfRetrievalFields() {
   });
 }
 
+function testGeneratedCandidatesDropWeakAcronymKeywords() {
+  const normalized = normalizeGenerated({
+    tag: 'RL',
+    description: '强化学习方程发现',
+    keywords: [
+      { keyword: 'rl', query: 'reinforcement learning equation discovery', keyword_cn: '强化学习方程发现' },
+      { keyword: 'xrl', query: 'explainable reinforcement learning symbolic regression', keyword_cn: '可解释强化学习符号回归' },
+      { keyword: 'reinforcement learning driven', query: 'reinforcement learning driven equation discovery', keyword_cn: '强化学习驱动' },
+      { keyword: 'reinforcement learning', query: 'reinforcement learning equation discovery', keyword_cn: '强化学习' },
+    ],
+    intent_queries: [
+      { query: 'rl', query_cn: '强化学习' },
+      { query: 'explainable reinforcement learning for symbolic regression', query_cn: '可解释强化学习符号回归' },
+    ],
+  });
+
+  assert.deepEqual(
+    normalized.keywords.map((item) => item.keyword),
+    ['reinforcement learning'],
+  );
+  assert.deepEqual(
+    normalized.intent_queries.map((item) => item.query),
+    ['explainable reinforcement learning for symbolic regression'],
+  );
+}
+
+function testGeneratedCandidatesDoNotCollapseConceptToSingleModifier() {
+  const normalized = normalizeGenerated({
+    tag: 'xrl-sr',
+    description: '可解释强化学习驱动符号回归方程发现',
+    keywords: [
+      { keyword: 'explainable reinforcement learning', query: 'explainable reinforcement learning for symbolic regression', keyword_cn: '可解释强化学习' },
+      { keyword: 'reinforcement learning', query: 'reinforcement learning equation discovery', keyword_cn: '强化学习' },
+      { keyword: 'symbolic regression', query: 'symbolic regression equation discovery', keyword_cn: '符号回归' },
+      { keyword: 'explainable', query: 'explainable reinforcement learning', keyword_cn: '可解释强化学习' },
+    ],
+  });
+
+  assert.deepEqual(
+    normalized.keywords.map((item) => item.keyword),
+    ['explainable reinforcement learning', 'reinforcement learning', 'symbolic regression'],
+  );
+}
+
 testPromptRequiresEnglishRetrievalFieldsAndChineseCnFields();
-testSuggestedTagUsesHyphenWithoutLengthLimit();
+testSuggestedTagIsEnglishAndAtMostTwelveChars();
 testGeneratedCandidatesKeepChineseOutOfRetrievalFields();
+testGeneratedCandidatesDropWeakAcronymKeywords();
+testGeneratedCandidatesDoNotCollapseConceptToSingleModifier();
 
 console.log('subscriptions smart query tests passed');

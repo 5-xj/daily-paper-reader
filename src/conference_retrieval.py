@@ -476,6 +476,7 @@ def main() -> None:
     years = parse_years(args.years)
     top_k = max(int(args.top_k or 1), 1)
     config = load_config(args.config)
+    os.environ["DPR_INCLUDE_CONFERENCE_ONLY_PROFILES"] = "1"
     plan = build_pipeline_inputs(config)
     bm25_queries = clone_queries_for_conference(plan.get("bm25_queries") or [], ",".join(conferences))
     embedding_queries = clone_queries_for_conference(plan.get("embedding_queries") or [], ",".join(conferences))

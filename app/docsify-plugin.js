@@ -3805,8 +3805,8 @@ window.$docsify = {
           .replace(/"/g, '&quot;');
       };
 
-      const parseFiguresMeta = (meta) => {
-        const raw = meta && typeof meta.figures_json === 'string' ? meta.figures_json.trim() : '';
+      const parseMediaMeta = (meta, key) => {
+        const raw = meta && typeof meta[key] === 'string' ? meta[key].trim() : '';
         if (!raw) return [];
         try {
           const parsed = JSON.parse(raw);
@@ -3827,6 +3827,9 @@ window.$docsify = {
         }
       };
 
+      const parseFiguresMeta = (meta) => parseMediaMeta(meta, 'figures_json');
+      const parseTablesMeta = (meta) => parseMediaMeta(meta, 'tables_json');
+
       const resolveDocsAssetUrl = (value) => {
         const url = String(value || '').trim();
         if (!url) return '';
@@ -3837,46 +3840,219 @@ window.$docsify = {
         return `${safeBase}${url.replace(/^\/+/, '')}`;
       };
 
-      const renderFigureCarousel = (figures) => {
-        if (!figures || !figures.length) return '';
-        const slides = figures.map((figure, index) => {
-          const pageText = figure.page ? `PDF 第 ${figure.page} 页` : '';
-          const caption = figure.caption ? `<div class="paper-figure-caption">${escapePaperHtml(figure.caption)}</div>` : '';
+      const renderMediaCarousel = (items, options = {}) => {
+        if (!items || !items.length) return '';
+        const kind = options.kind || 'figure';
+        const title = options.title || 'Figures';
+        const label = options.label || 'Figure';
+        const labelCn = options.labelCn || '插图';
+        const slides = items.map((item, index) => {
+          const pageText = item.page ? `PDF 第 ${item.page} 页` : '';
+          const caption = item.caption ? `<div class="paper-figure-caption">${escapePaperHtml(item.caption)}</div>` : '';
           return [
             `<div class="paper-figure-slide${index === 0 ? ' is-active' : ''}" data-figure-slide="${index}">`,
-            `<img class="paper-figure-image" src="${escapePaperHtml(resolveDocsAssetUrl(figure.url))}" alt="Paper Figure ${index + 1}" loading="lazy">`,
+            '<div class="paper-figure-frame">',
+            `<img class="paper-figure-image" src="${escapePaperHtml(resolveDocsAssetUrl(item.url))}" alt="Paper ${label} ${index + 1}" loading="lazy">`,
+            '</div>',
             '<div class="paper-figure-meta">',
-            `<div class="paper-figure-badge">Figure ${index + 1}${pageText ? ` · ${escapePaperHtml(pageText)}` : ''}</div>`,
+            `<div class="paper-figure-badge">${label} ${index + 1}${pageText ? ` · ${escapePaperHtml(pageText)}` : ''}</div>`,
             caption,
             '</div>',
             '</div>',
           ].join('');
         }).join('');
 
-        const thumbs = figures.map((figure, index) => {
-          const thumbPageText = figure.page ? ` · PDF 第 ${figure.page} 页` : '';
+        const thumbs = items.map((item, index) => {
+          const thumbPageText = item.page ? ` · PDF 第 ${item.page} 页` : '';
           return [
-            `<button class="paper-figure-thumb${index === 0 ? ' is-active' : ''}" type="button" data-figure-thumb="${index}" aria-label="切换到第 ${index + 1} 张插图">`,
-            `<img class="paper-figure-thumb-image" src="${escapePaperHtml(resolveDocsAssetUrl(figure.url))}" alt="Thumbnail ${index + 1}" loading="lazy">`,
-            `<span class="paper-figure-thumb-label">Figure ${index + 1}${thumbPageText ? escapePaperHtml(thumbPageText) : ''}</span>`,
+            `<button class="paper-figure-thumb${index === 0 ? ' is-active' : ''}" type="button" data-figure-thumb="${index}" aria-label="切换到第 ${index + 1} 张${labelCn}">`,
+            `<img class="paper-figure-thumb-image" src="${escapePaperHtml(resolveDocsAssetUrl(item.url))}" alt="${label} Thumbnail ${index + 1}" loading="lazy">`,
+            `<span class="paper-figure-thumb-label">${label} ${index + 1}${thumbPageText ? escapePaperHtml(thumbPageText) : ''}</span>`,
             '</button>',
           ].join('');
         }).join('');
 
         return [
-          '<div class="paper-figure-section" data-paper-figure-carousel>',
+          `<div class="paper-figure-section paper-${escapePaperHtml(kind)}-section" data-paper-figure-carousel data-paper-media-kind="${escapePaperHtml(kind)}">`,
           '<div class="paper-figure-toolbar">',
-          `<div class="paper-figure-counter"><span data-figure-current>1</span> / ${figures.length}</div>`,
+          `<div class="paper-figure-title">${escapePaperHtml(title)}</div>`,
+          `<div class="paper-figure-counter"><span data-figure-current>1</span> / ${items.length}</div>`,
           '</div>',
           '<div class="paper-figure-stage">',
-          figures.length > 1 ? '<button class="paper-figure-nav paper-figure-nav-prev" type="button" data-figure-prev aria-label="上一张">‹</button>' : '',
+          '<div class="paper-figure-main">',
+          items.length > 1 ? '<button class="paper-figure-nav paper-figure-nav-prev" type="button" data-figure-prev aria-label="上一张">‹</button>' : '',
           `<div class="paper-figure-viewport">${slides}</div>`,
-          figures.length > 1 ? '<button class="paper-figure-nav paper-figure-nav-next" type="button" data-figure-next aria-label="下一张">›</button>' : '',
+          items.length > 1 ? '<button class="paper-figure-nav paper-figure-nav-next" type="button" data-figure-next aria-label="下一张">›</button>' : '',
           '</div>',
-          figures.length > 1 ? `<div class="paper-figure-thumbs">${thumbs}</div>` : '',
+          items.length > 1 ? `<div class="paper-figure-thumbs">${thumbs}</div>` : '',
+          '</div>',
           '</div>',
           '',
         ].join('');
+      };
+
+      const renderFigureCarousel = (figures) => renderMediaCarousel(figures, {
+        kind: 'figure',
+        title: 'Figures',
+        label: 'Figure',
+        labelCn: '插图',
+      });
+
+      const renderTableCarousel = (tables) => renderMediaCarousel(tables, {
+        kind: 'table',
+        title: 'Tables',
+        label: 'Table',
+        labelCn: '表格',
+      });
+
+      const renderPaperMediaCarousels = (figures, tables) => {
+        const hasFigures = Array.isArray(figures) && figures.length;
+        const hasTables = Array.isArray(tables) && tables.length;
+        if (!hasFigures && !hasTables) return '';
+        const defaultTab = hasFigures ? 'figures' : 'tables';
+        const figureButton = hasFigures ? [
+          `<button class="paper-media-card${defaultTab === 'figures' ? ' is-primary' : ''}" type="button" data-paper-media-open="figures">`,
+          '<span class="paper-media-card-kicker">Figures</span>',
+          `<span class="paper-media-card-title">${figures.length} 张论文插图</span>`,
+          '<span class="paper-media-card-action">打开轮播</span>',
+          '</button>',
+        ].join('') : '';
+        const tableButton = hasTables ? [
+          `<button class="paper-media-card${defaultTab === 'tables' ? ' is-primary' : ''}" type="button" data-paper-media-open="tables">`,
+          '<span class="paper-media-card-kicker">Tables</span>',
+          `<span class="paper-media-card-title">${tables.length} 张论文表格</span>`,
+          '<span class="paper-media-card-action">打开轮播</span>',
+          '</button>',
+        ].join('') : '';
+        const tabButtons = [
+          hasFigures ? `<button class="paper-media-tab${defaultTab === 'figures' ? ' is-active' : ''}" type="button" data-paper-media-tab="figures">Figures <span>${figures.length}</span></button>` : '',
+          hasTables ? `<button class="paper-media-tab${defaultTab === 'tables' ? ' is-active' : ''}" type="button" data-paper-media-tab="tables">Tables <span>${tables.length}</span></button>` : '',
+        ].join('');
+        const figurePanel = hasFigures ? [
+          `<div class="paper-media-pane${defaultTab === 'figures' ? ' is-active' : ''}" data-paper-media-pane="figures">`,
+          renderFigureCarousel(figures),
+          '</div>',
+        ].join('') : '';
+        const tablePanel = hasTables ? [
+          `<div class="paper-media-pane${defaultTab === 'tables' ? ' is-active' : ''}" data-paper-media-pane="tables">`,
+          renderTableCarousel(tables),
+          '</div>',
+        ].join('') : '';
+        return [
+          '<div class="paper-media-attachments" data-paper-media-root>',
+          '<div class="paper-media-summary">',
+          '<div>',
+          '<div class="paper-media-summary-kicker">Paper Media</div>',
+          '<div class="paper-media-summary-title">图表附件</div>',
+          '</div>',
+          '<div class="paper-media-summary-cards">',
+          figureButton,
+          tableButton,
+          '</div>',
+          '</div>',
+          '<div class="paper-media-modal" data-paper-media-modal aria-hidden="true">',
+          '<div class="paper-media-backdrop" data-paper-media-close></div>',
+          '<div class="paper-media-dialog" role="dialog" aria-modal="true" aria-label="论文图表附件" tabindex="-1">',
+          '<div class="paper-media-dialog-head">',
+          '<div>',
+          '<div class="paper-media-dialog-kicker">Paper Media</div>',
+          '<div class="paper-media-dialog-title">论文图表附件</div>',
+          '</div>',
+          '<button class="paper-media-close" type="button" data-paper-media-close aria-label="关闭">×</button>',
+          '</div>',
+          `<div class="paper-media-tabs">${tabButtons}</div>`,
+          '<div class="paper-media-body">',
+          figurePanel,
+          tablePanel,
+          '</div>',
+          '</div>',
+          '</div>',
+          '</div>',
+          '',
+        ].join('');
+      };
+
+      const bindPaperMediaModals = () => {
+        document.querySelectorAll('[data-paper-media-root]').forEach((root) => {
+          if (root.dataset.mediaBound === '1') return;
+          root.dataset.mediaBound = '1';
+          const modal = root.querySelector('[data-paper-media-modal]');
+          const openButtons = Array.from(root.querySelectorAll('[data-paper-media-open]'));
+          if (!modal) return;
+          if (modal.parentElement !== document.body) {
+            document.body.appendChild(modal);
+          }
+          const dialog = modal.querySelector('.paper-media-dialog');
+          const closeButtons = Array.from(modal.querySelectorAll('[data-paper-media-close]'));
+          const tabs = Array.from(modal.querySelectorAll('[data-paper-media-tab]'));
+          const panes = Array.from(modal.querySelectorAll('[data-paper-media-pane]'));
+          let savedScrollY = 0;
+          let closeTimer = 0;
+          let lastTrigger = null;
+          const activate = (name) => {
+            tabs.forEach((tab) => tab.classList.toggle('is-active', tab.dataset.paperMediaTab === name));
+            panes.forEach((pane) => pane.classList.toggle('is-active', pane.dataset.paperMediaPane === name));
+          };
+          const restorePageScroll = () => {
+            const top = Number.isFinite(savedScrollY) ? savedScrollY : window.scrollY || 0;
+            try {
+              window.scrollTo({ top, left: 0, behavior: 'instant' });
+            } catch (_err) {
+              window.scrollTo(0, top);
+            }
+          };
+          const open = (name, trigger) => {
+            if (closeTimer) {
+              clearTimeout(closeTimer);
+              closeTimer = 0;
+            }
+            savedScrollY = window.scrollY || document.documentElement.scrollTop || document.body.scrollTop || 0;
+            lastTrigger = trigger || document.activeElement || null;
+            if (name) activate(name);
+            modal.classList.remove('is-closing');
+            modal.classList.add('is-open');
+            modal.setAttribute('aria-hidden', 'false');
+            if (dialog) {
+              setTimeout(() => {
+                try {
+                  dialog.focus({ preventScroll: true });
+                } catch (_err) {
+                  dialog.focus();
+                  restorePageScroll();
+                }
+              }, 0);
+            }
+          };
+          const close = () => {
+            if (!modal.classList.contains('is-open')) return;
+            if (closeTimer) clearTimeout(closeTimer);
+            modal.classList.add('is-closing');
+            modal.classList.remove('is-open');
+            modal.setAttribute('aria-hidden', 'true');
+            closeTimer = setTimeout(() => {
+              modal.classList.remove('is-closing');
+              restorePageScroll();
+              if (lastTrigger && typeof lastTrigger.focus === 'function') {
+                try {
+                  lastTrigger.focus({ preventScroll: true });
+                } catch (_err) {
+                  // ignore focus failures; scroll restoration above is the important part.
+                }
+              }
+              closeTimer = 0;
+            }, 190);
+          };
+          openButtons.forEach((button) => {
+            button.addEventListener('click', () => open(button.dataset.paperMediaOpen || 'figures', button));
+          });
+          closeButtons.forEach((button) => button.addEventListener('click', close));
+          tabs.forEach((tab) => {
+            tab.addEventListener('click', () => activate(tab.dataset.paperMediaTab || 'figures'));
+          });
+          modal.addEventListener('keydown', (event) => {
+            if (event.key === 'Escape') close();
+          });
+        });
       };
 
       const bindPaperFigureCarousels = () => {
@@ -4116,8 +4292,9 @@ window.$docsify = {
         }
 
         const figures = parseFiguresMeta(meta);
-        if (figures.length) {
-          lines.push(renderFigureCarousel(figures));
+        const tables = parseTablesMeta(meta);
+        if (figures.length || tables.length) {
+          lines.push(renderPaperMediaCarousels(figures, tables));
         }
 
         // 注意：在 Markdown 中插入 HTML block（如 <hr>）后，需要一个“空行”才能让后续的 `##` 等 Markdown 正常解析。
@@ -4218,6 +4395,10 @@ window.$docsify = {
         const isLandingLikePage = isHomePage || isReportPage;
         syncPageTypeClasses({ isHomePage, isReportPage, isPaperPage });
         closePdfPreview();
+        document.querySelectorAll('[data-paper-media-modal]').forEach((modal) => {
+          modal.classList.remove('is-open', 'is-closing');
+          modal.setAttribute('aria-hidden', 'true');
+        });
 
         // A. 对正文区域进行一次全局公式渲染（支持 $...$ / $$...$$）
         const mainContent = document.querySelector('.markdown-section');
@@ -4270,6 +4451,7 @@ window.$docsify = {
         }
 
         bindPaperFigureCarousels();
+        bindPaperMediaModals();
 
         // ----------------------------------------------------
         // E. 小屏点击侧边栏条目后自动收起

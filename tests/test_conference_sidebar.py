@@ -150,6 +150,39 @@ class ConferenceSidebarTest(unittest.TestCase):
             self.assertNotIn("First Title", text)
             self.assertIn("Second Title", text)
 
+    def test_conference_markdown_writes_media_json_front_matter(self):
+        paper = {
+            "id": "openreview-icml-2025-media",
+            "title": "Media Paper",
+            "authors": ["Ada"],
+            "published": "2025-07-01",
+            "pdf_url": "https://openreview.net/pdf?id=media",
+            "source": "ICML-2025-Accepted",
+            "abstract": "Media abstract.",
+            "_figure_assets": [
+                {"url": "assets/figures/openreview/media/fig-001.webp", "index": 1}
+            ],
+            "_table_assets": [
+                {"url": "assets/tables/openreview/media/table-001.webp", "index": 1}
+            ],
+        }
+        ranked = {
+            "paper_id": "openreview-icml-2025-media",
+            "score": 4,
+            "canonical_evidence": "相关。",
+            "matched_query_tag": "query:media",
+        }
+
+        md = self.mod.build_conference_markdown(paper, ranked, "ICML", "2025")
+        meta = self.mod.parse_front_matter(md)
+
+        self.assertIn("figures_json", meta)
+        self.assertIn("tables_json", meta)
+        figures = self.mod.parse_json_front_matter_value(meta["figures_json"])
+        tables = self.mod.parse_json_front_matter_value(meta["tables_json"])
+        self.assertEqual(figures[0]["url"], "assets/figures/openreview/media/fig-001.webp")
+        self.assertEqual(tables[0]["url"], "assets/tables/openreview/media/table-001.webp")
+
 
 if __name__ == "__main__":
     unittest.main()

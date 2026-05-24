@@ -29,6 +29,8 @@ DEFAULT_FILTER_MODEL = (
 DEFAULT_DEEPSEEK_BASE_URL = os.getenv("DEEPSEEK_BASE_URL") or os.getenv("SUMMARY_BASE_URL") or "https://api.deepseek.com"
 DEFAULT_FILTER_CONCURRENCY = 4
 MAX_FILTER_RETRIES = 3
+MIN_RELEVANT_TLDR_CN_CHARS = 130
+MIN_RELEVANT_OVERVIEW_CN_CHARS = 30
 
 
 class FilterOutputTruncatedError(ValueError):
@@ -409,7 +411,7 @@ def call_filter(
         "Papers:\n"
         f"{json.dumps(docs, ensure_ascii=False)}\n\n"
         "Output JSON format example:\n"
-        "{\"results\": [{\"id\": \"paper_id\", \"matched_requirement_index\": 1, \"evidence_en\": \"short English phrase\", \"evidence_cn\": \"简短中文短语\", \"tldr_en\": \"one-sentence TLDR\", \"tldr_cn\": \"一句话 TLDR\", \"title_zh\": \"中文论文标题\", \"motivation_cn\": \"中文研究动机\", \"method_cn\": \"中文方法概括\", \"result_cn\": \"中文结果概括\", \"conclusion_cn\": \"中文结论\", \"score\": 7}]}\n\n"
+        "{\"results\": [{\"id\": \"paper_id\", \"matched_requirement_index\": 1, \"evidence_en\": \"short English phrase\", \"evidence_cn\": \"简短中文短语\", \"tldr_en\": \"one-sentence TLDR\", \"tldr_cn\": \"中文摘要式 TLDR\", \"title_zh\": \"中文论文标题\", \"motivation_cn\": \"中文研究动机\", \"method_cn\": \"中文方法概括\", \"result_cn\": \"中文结果概括\", \"conclusion_cn\": \"中文结论\", \"score\": 7}]}\n\n"
         "Requirement: You MUST return exactly one result for every input paper. "
         "The results length must match the papers length, and every input id must appear once.\n\n"
         "Output must be a single-line JSON string. "
@@ -424,12 +426,17 @@ def call_filter(
         "They should be short phrases linking the paper to the matched requirement; "
         "they do NOT need to be direct quotes. "
         "Also generate TLDR in both languages: tldr_en and tldr_cn. "
-        "TLDR should be one sentence summarizing what the paper does and why it matters. "
-        "Keep TLDR concise: <= 120 characters in English and <= 60 Chinese characters. "
+        "tldr_cn is not a one-line slogan; write it in the same style as a paper-page TLDR abstract. "
+        "For relevant papers with score > 0, tldr_cn should be 150-220 Chinese characters, usually 3-4 short Chinese sentences, "
+        "covering the problem setting, core method, key result, and why the result matters. "
+        "Reference style: first say what limitation/problem the paper addresses; then say what method it proposes; then say what experiments/results show; finally mention the broader contribution. "
+        "Keep tldr_en concise but informative: 160-240 English characters. "
         "Also generate title_zh as a concise Chinese translation of the paper title. "
         "title_zh must always be a real translated title based on the input title, even when the paper is unrelated. "
         "Also generate four Chinese-only overview fields: motivation_cn, method_cn, result_cn, conclusion_cn. "
-        "Each overview field must be one concise Chinese sentence. Do not put English sentences in these Chinese fields. "
+        "For relevant papers with score > 0, each overview field should be 30-70 Chinese characters, normally one concrete Chinese sentence. "
+        "Match the style of a paper page overview: concise but not a bare phrase; include concrete content from the title/abstract. "
+        "Do not put English sentences in these Chinese fields. "
         "method_cn should summarize the method from the title and abstract, not copy the English abstract. "
         "Then give a score (0-10). "
         "If unrelated, use evidence_en=\"not relevant\", evidence_cn=\"不相关\", "
@@ -534,6 +541,28 @@ def _normalize_filter_result_item(item: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _plain_cn_len(value: Any) -> int:
+    text = _norm_text(value)
+    text = re.sub(r"\s+", "", text)
+    return len(text)
+
+
+def _validate_relevant_field_lengths(item: Dict[str, Any]) -> List[str]:
+    if _coerce_score(item.get("score")) <= 0:
+        return []
+
+    problems: List[str] = []
+    tldr_len = _plain_cn_len(item.get("tldr_cn"))
+    if tldr_len < MIN_RELEVANT_TLDR_CN_CHARS:
+        problems.append(f"tldr_cn too short ({tldr_len}<{MIN_RELEVANT_TLDR_CN_CHARS})")
+
+    for key in ("motivation_cn", "method_cn", "result_cn", "conclusion_cn"):
+        field_len = _plain_cn_len(item.get(key))
+        if field_len < MIN_RELEVANT_OVERVIEW_CN_CHARS:
+            problems.append(f"{key} too short ({field_len}<{MIN_RELEVANT_OVERVIEW_CN_CHARS})")
+    return problems
+
+
 def validate_filter_results(
     batch_docs: List[Dict[str, str]],
     results: Any,
@@ -563,6 +592,10 @@ def validate_filter_results(
         if pid in normalized_by_id:
             problems.append(f"item#{idx}: duplicate id={pid}")
             continue
+        length_problems = _validate_relevant_field_lengths(normalized)
+        if length_problems:
+            problems.append(f"item#{idx} id={pid}: " + ", ".join(length_problems))
+            continue
         normalized_by_id[pid] = normalized
 
     missing_ids = [pid for pid in expected_ids if pid not in normalized_by_id]
@@ -586,7 +619,9 @@ def build_filter_retry_note(
         f"Retry attempt {attempt}. The previous output was invalid: {previous_error}. "
         f"You must return exactly {len(expected_ids)} results for these ids only: {', '.join(expected_ids)}. "
         "Every id must appear once. Do not omit ids. Do not repeat ids. "
-        "Keep matched_requirement_index as an integer and score within 0-10."
+        "Keep matched_requirement_index as an integer and score within 0-10. "
+        f"For relevant papers, tldr_cn must be at least {MIN_RELEVANT_TLDR_CN_CHARS} Chinese characters, "
+        f"and motivation_cn/method_cn/result_cn/conclusion_cn must each be at least {MIN_RELEVANT_OVERVIEW_CN_CHARS} Chinese characters."
     )
 
 

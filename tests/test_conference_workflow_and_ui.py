@@ -79,7 +79,8 @@ class ConferenceWorkflowAndUiTest(unittest.TestCase):
         self.assertIn("data-dpr-workflow-log", runner)
         self.assertIn("logEl.scrollTop = logEl.scrollHeight", runner)
         self.assertIn("refreshLocalRun(r.runId)", runner)
-        self.assertIn("runConferenceRetrieval(conf, years)", manager)
+        self.assertIn("runConferenceRetrieval(conf, years, {", manager)
+        self.assertIn("profile_tag: profileTags.join(',')", manager)
         self.assertIn("会议论文检索", manager)
         self.assertNotIn("runConferenceMaintain(conf, years)", manager)
 

@@ -16,6 +16,8 @@ const {
   __setQuickRunMsgEl,
   __setQuickRunConferenceBtn,
   __setUnsavedChanges,
+  __setRunSelectionState,
+  runSelectedQuickFetch,
 } = global.window.SubscriptionsManager.__test;
 
 function buildBaseConfig() {
@@ -123,7 +125,7 @@ function testNormalizeSubscriptionsConvertsChineseTagToEnglishFallback() {
   ];
 
   const normalized = normalizeSubscriptions(config);
-  assert.equal(normalized.subscriptions.intent_profiles[0].tag, 'reinforcement-learning');
+  assert.equal(normalized.subscriptions.intent_profiles[0].tag, 'rl');
 }
 
 function testRunProfileQuickFetchPassesProfileTagToWorkflow() {
@@ -133,6 +135,7 @@ function testRunProfileQuickFetchPassesProfileTagToWorkflow() {
       calls.push({ days, options });
     },
   };
+  global.window.confirm = () => true;
 
   const ok = global.window.SubscriptionsManager.runProfileQuickFetch('GENE', 30, {
     fetchMode: 'skims',
@@ -149,8 +152,10 @@ function testConferenceCurrentYearDisabledForPendingSources() {
   const currentYear = String(new Date().getFullYear());
   const previousYear = String(new Date().getFullYear() - 1);
 
+  assert.equal(isConferenceYearSelectable('NeurIPS', currentYear), false);
   assert.equal(isConferenceYearSelectable('NIPS', currentYear), false);
   assert.equal(isConferenceYearSelectable('ICML', currentYear), false);
+  assert.equal(isConferenceYearSelectable('NeurIPS', previousYear), true);
   assert.equal(isConferenceYearSelectable('NIPS', previousYear), true);
   assert.equal(isConferenceYearSelectable('ICML', previousYear), true);
 }
@@ -199,7 +204,13 @@ function buildMockButton() {
 
 function testConferenceRunDisabledWhenUnsaved() {
   const btn = buildMockButton();
+  global.window.SubscriptionsSmartQuery = {
+    getSelectedProfileTags() {
+      return ['GENE'];
+    },
+  };
   __setQuickRunConferenceBtn(btn);
+  __setRunSelectionState({ conference: true, conferencePairs: ['ICML:2025'] });
   __setUnsavedChanges(true);
   refreshQuickRunButtons();
 
@@ -214,6 +225,51 @@ function testConferenceRunDisabledWhenUnsaved() {
   assert.equal(btn.classList.contains('chat-quick-run-item--disabled'), false);
   assert.equal(btn.title, '一次性触发会议论文拉取任务');
   __setQuickRunConferenceBtn(null);
+  __setRunSelectionState({});
+  delete global.window.SubscriptionsSmartQuery;
+}
+
+function testQuickFetchSkipsPausedAndConferenceOnlyProfiles() {
+  const calls = [];
+  const msgEl = {
+    textContent: '',
+    style: {
+      color: '',
+    },
+  };
+  global.window.DPRWorkflowRunner = {
+    runQuickFetchByDays(days, options) {
+      calls.push({ days, options });
+    },
+  };
+  global.window.SubscriptionsSmartQuery = {
+    getSelectedProfilesForRun() {
+      return [
+        { tag: 'ACTIVE', temporary: false, paused: false },
+        { tag: 'PAUSED', temporary: false, paused: true },
+        { tag: 'CONF', temporary: true, paused: false },
+      ];
+    },
+  };
+  __setQuickRunMsgEl(msgEl);
+  __setUnsavedChanges(false);
+
+  assert.equal(runSelectedQuickFetch(10), true);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].options.dispatchInputs.profile_tag, 'ACTIVE');
+
+  global.window.SubscriptionsSmartQuery.getSelectedProfilesForRun = () => [
+    { tag: 'PAUSED', temporary: false, paused: true },
+    { tag: 'CONF', temporary: true, paused: false },
+  ];
+  assert.equal(runSelectedQuickFetch(10), false);
+  assert.equal(calls.length, 1);
+  assert.equal(msgEl.textContent, '请先勾选至少一个已启用的常规词条。仅会议和日常停用词条不会参与快速抓取。');
+
+  __setQuickRunMsgEl(null);
+  delete global.window.DPRWorkflowRunner;
+  delete global.window.SubscriptionsSmartQuery;
+  delete global.window.confirm;
 }
 
 testNormalizeSubscriptionsAddsBiorxivBackend();
@@ -223,5 +279,6 @@ testRunProfileQuickFetchPassesProfileTagToWorkflow();
 testConferenceCurrentYearDisabledForPendingSources();
 testQuickRunUnsavedMessageClearsAfterSave();
 testConferenceRunDisabledWhenUnsaved();
+testQuickFetchSkipsPausedAndConferenceOnlyProfiles();
 
 console.log('subscriptions manager tests passed');
