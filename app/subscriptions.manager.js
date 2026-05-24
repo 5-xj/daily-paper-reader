@@ -20,8 +20,16 @@ window.SubscriptionsManager = (function () {
   let quickRunMsgEl = null;
   let quickRunSelectionCountEl = null;
   let conferenceSelectionCountEl = null;
+  let dailyProfilePickerEl = null;
+  let conferenceProfilePickerEl = null;
+  let dailySelectAllBtn = null;
+  let dailyClearAllBtn = null;
+  let conferenceSelectAllBtn = null;
+  let conferenceClearAllBtn = null;
+  let quickRunStartBtn = null;
   let quickRunHintEl = null;
   let conferenceHintEl = null;
+  let quickRunMode = '10';
   const selectedConferenceYearPairs = new Set();
   let resetContentBtn = null;
   let resetContentMsgEl = null;
@@ -96,6 +104,12 @@ window.SubscriptionsManager = (function () {
   ]);
 
   const normalizeText = (v) => String(v || '').trim();
+  const escapeHtml = (str) => String(str || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
   const MAX_PROFILE_TAG_CHARS = 12;
   const sanitizeProfileTag = (value) => {
     const base = normalizeText(value);
@@ -438,13 +452,13 @@ window.SubscriptionsManager = (function () {
 
   const initializeConferenceChoices = () => {
     if (!selectedConferenceYearPairs.size) {
-      const defaultConference = QUICK_RUN_CONFERENCES[0] || '';
-      const defaultYear = getConferenceYearOptions().find((year) =>
-        isConferenceYearSelectable(defaultConference, year),
-      );
-      if (defaultConference && defaultYear) {
-        selectedConferenceYearPairs.add(`${defaultConference}:${defaultYear}`);
-      }
+      QUICK_RUN_CONFERENCES.forEach((conference) => {
+        getConferenceYearOptions().forEach((year) => {
+          if (isConferenceYearSelectable(conference, year)) {
+            selectedConferenceYearPairs.add(`${conference}:${year}`);
+          }
+        });
+      });
     }
   };
 
@@ -510,6 +524,130 @@ window.SubscriptionsManager = (function () {
       .filter((profile) => !profile.temporary && !profile.paused)
       .map((profile) => normalizeText(profile && profile.tag))
       .filter(Boolean);
+  const getProfilesForRun = () => {
+    if (window.SubscriptionsSmartQuery && typeof window.SubscriptionsSmartQuery.getProfilesForRun === 'function') {
+      return window.SubscriptionsSmartQuery.getProfilesForRun();
+    }
+    return getSelectedProfilesForRun().map((profile) => ({
+      id: toStableId(profile.tag),
+      ...profile,
+      selected: true,
+    }));
+  };
+  const isDailyRunnableProfile = (profile) => !!profile && !profile.temporary && !profile.paused;
+  const renderProfilePicker = (targetEl, mode) => {
+    if (!targetEl) return;
+    const profiles = getProfilesForRun();
+    const filtered = mode === 'daily'
+      ? profiles.filter(isDailyRunnableProfile)
+      : profiles;
+    if (!filtered.length) {
+      targetEl.innerHTML = `<div class="dpr-profile-picker-empty">${
+        mode === 'daily' ? '暂无可抓取的常规词条。' : '暂无可检索的词条。'
+      }</div>`;
+      return;
+    }
+    targetEl.innerHTML = filtered.map((profile) => {
+      const selected = !!profile.selected;
+      const tag = normalizeText(profile.tag);
+      const desc = normalizeText(profile.description);
+      return `<button
+        class="dpr-profile-picker-chip${selected ? ' is-selected' : ''}"
+        type="button"
+        data-profile-id="${escapeHtml(profile.id)}"
+        data-picker-mode="${mode}"
+        aria-pressed="${selected ? 'true' : 'false'}"
+        title="${escapeHtml(desc || tag)}"
+      >
+        <span class="dpr-profile-picker-check" aria-hidden="true">${selected ? '✓' : ''}</span>
+        <span class="dpr-profile-picker-tag">${escapeHtml(tag)}</span>
+        ${desc ? `<span class="dpr-profile-picker-desc">${escapeHtml(desc)}</span>` : ''}
+      </button>`;
+    }).join('');
+  };
+  const renderProfilePickers = () => {
+    renderProfilePicker(dailyProfilePickerEl, 'daily');
+    renderProfilePicker(conferenceProfilePickerEl, 'conference');
+  };
+  const setProfileSelection = (profileId, selected) => {
+    if (!window.SubscriptionsSmartQuery || typeof window.SubscriptionsSmartQuery.setProfileSelection !== 'function') {
+      return;
+    }
+    window.SubscriptionsSmartQuery.setProfileSelection(profileId, selected);
+  };
+  const selectProfilesByMode = (mode, selected) => {
+    if (!window.SubscriptionsSmartQuery || typeof window.SubscriptionsSmartQuery.selectProfilesForRun !== 'function') {
+      return;
+    }
+    window.SubscriptionsSmartQuery.selectProfilesForRun((profile) => {
+      const isTemporary = !!(
+        profile &&
+        (
+          profile.temporary === true ||
+          profile.conference_only === true ||
+          normalizeText(profile.scope).toLowerCase() === 'conference'
+        )
+      );
+      if (mode === 'daily') return !isTemporary && !profile.paused;
+      return true;
+    }, selected);
+  };
+  const showWorkflowSuccessEffects = () => {
+    if (!document || !document.body || typeof document.createElement !== 'function') return;
+    const layer = document.createElement('div');
+    layer.className = 'dpr-firework-layer';
+    const colors = ['#ff7ab6', '#7cdbff', '#ffe27a', '#9ff0bd', '#b69cff'];
+    for (let idx = 0; idx < 18; idx += 1) {
+      const burst = document.createElement('span');
+      burst.className = 'dpr-firework-burst';
+      burst.style.left = `${12 + Math.random() * 76}%`;
+      burst.style.top = `${14 + Math.random() * 56}%`;
+      burst.style.setProperty('--dpr-firework-color', colors[idx % colors.length]);
+      burst.style.animationDelay = `${Math.random() * 0.35}s`;
+      layer.appendChild(burst);
+    }
+    document.body.appendChild(layer);
+    setTimeout(() => {
+      layer.remove();
+    }, 1700);
+  };
+  const showPrettyConfirm = ({ title, body, confirmText = '确认', cancelText = '取消' }) =>
+    new Promise((resolve) => {
+      if (!document || typeof document.createElement !== 'function') {
+        resolve(typeof window.confirm === 'function' ? window.confirm(title || body || '') : true);
+        return;
+      }
+      const modal = document.createElement('div');
+      modal.className = 'dpr-run-confirm-overlay';
+      modal.innerHTML = `
+        <div class="dpr-run-confirm-panel" role="dialog" aria-modal="true">
+          <div class="dpr-run-confirm-kicker">Quick Run</div>
+          <div class="dpr-run-confirm-title">${escapeHtml(title)}</div>
+          <div class="dpr-run-confirm-body">${body}</div>
+          <div class="dpr-run-confirm-actions">
+            <button class="arxiv-tool-btn dpr-run-confirm-cancel" type="button">${escapeHtml(cancelText)}</button>
+            <button class="arxiv-tool-btn dpr-run-confirm-ok" type="button">${escapeHtml(confirmText)}</button>
+          </div>
+        </div>
+      `;
+      const close = (value) => {
+        modal.classList.remove('is-open');
+        setTimeout(() => {
+          modal.remove();
+          resolve(value);
+        }, 160);
+      };
+      modal.addEventListener('click', (event) => {
+        if (event.target === modal || event.target.closest('.dpr-run-confirm-cancel')) {
+          close(false);
+        }
+        if (event.target.closest('.dpr-run-confirm-ok')) {
+          close(true);
+        }
+      });
+      document.body.appendChild(modal);
+      requestAnimationFrame(() => modal.classList.add('is-open'));
+    });
 
   const syncRunSelectionMode = () => {
     if (!window.SubscriptionsSmartQuery || typeof window.SubscriptionsSmartQuery.setRunSelectionMode !== 'function') {
@@ -527,10 +665,9 @@ window.SubscriptionsManager = (function () {
     const dailyBlocked = hasUnsavedChanges || dailySelectedProfileCount < 1;
     const conferenceBlocked =
       hasUnsavedChanges || selectedProfileCount < 1 || selectedConferenceYearPairs.size < 1;
+    renderProfilePickers();
     [
-      [quickRun10dBtn, dailyBlocked],
-      [quickRun30dBtn, dailyBlocked],
-      [quickRun30dStandardBtn, dailyBlocked],
+      [quickRunStartBtn, dailyBlocked],
       [quickRunConferenceBtn, conferenceBlocked],
     ].forEach(([btn, blocked]) => {
       if (!btn) return;
@@ -550,27 +687,15 @@ window.SubscriptionsManager = (function () {
       }
       btn.title = title;
     });
-    if (quickRunSelectionCountEl) {
-      quickRunSelectionCountEl.textContent = dailySelectedProfileCount > 0
-        ? `${dailySelectedProfileCount} 个常规词条`
-        : '未选择';
-      quickRunSelectionCountEl.classList.toggle('is-empty', dailySelectedProfileCount < 1);
-    }
-    if (conferenceSelectionCountEl) {
-      conferenceSelectionCountEl.textContent = selectedProfileCount > 0
-        ? `${selectedProfileCount} 个词条`
-        : '未选择';
-      conferenceSelectionCountEl.classList.toggle('is-empty', selectedProfileCount < 1);
-    }
     if (quickRunHintEl) {
       quickRunHintEl.textContent = dailySelectedProfileCount > 0
-        ? '对已选常规词条执行。'
-        : '先在上方勾选常规词条。';
+        ? `已选 ${dailySelectedProfileCount} 个常规词条。`
+        : '请选择至少一个常规词条。';
     }
     if (conferenceHintEl) {
       conferenceHintEl.textContent = selectedProfileCount > 0
-        ? '选择年份后开始检索。'
-        : '先勾选词条，再选年份。';
+        ? `已选 ${selectedProfileCount} 个词条。`
+        : '先勾选词条，再勾选年份。';
     }
     if (hasUnsavedChanges && quickRunMsgEl) {
       quickRunMsgEl.textContent = '有未保存修改，请先保存。';
@@ -644,7 +769,7 @@ window.SubscriptionsManager = (function () {
     syncAdminPanelTabs();
   };
 
-  const runQuickFetch = (days, msgEl, tipText, runOptions) => {
+  const runQuickFetch = async (days, msgEl, tipText, runOptions) => {
     if (hasUnsavedChanges) {
       const text = '检测到未保存修改，请先点击“保存”后再发起快速抓取。';
       if (msgEl) {
@@ -664,7 +789,16 @@ window.SubscriptionsManager = (function () {
       return false;
     }
     const options = runOptions && typeof runOptions === 'object' ? runOptions : {};
-    window.DPRWorkflowRunner.runQuickFetchByDays(days, options);
+    const result = await window.DPRWorkflowRunner.runQuickFetchByDays(days, options);
+    if (result === false) {
+      const text = '工作流未成功触发，请检查权限或工作流配置。';
+      if (msgEl) {
+        msgEl.textContent = text;
+        msgEl.style.color = '#c00';
+      }
+      setQuickRunMessage(text, '#c00');
+      return false;
+    }
     const finalTip = (typeof tipText === 'string' ? tipText : null) || `已发起 ${days} 天内抓取任务。`;
     if (msgEl) {
       msgEl.textContent = finalTip;
@@ -674,7 +808,7 @@ window.SubscriptionsManager = (function () {
     return true;
   };
 
-  const runProfileQuickFetch = (profileTag, days, runOptions) => {
+  const runProfileQuickFetch = async (profileTag, days, runOptions) => {
     const normalizedTag = normalizeText(profileTag);
     if (!normalizedTag) {
       setQuickRunMessage('词条标签为空，无法发起单词条抓取。', '#c00');
@@ -694,7 +828,7 @@ window.SubscriptionsManager = (function () {
     return runQuickFetch(days, quickRunMsgEl || msgEl, tip, options);
   };
 
-  const runSelectedQuickFetch = (days, runOptions = {}) => {
+  const runSelectedQuickFetch = async (days, runOptions = {}) => {
     const tags = getDailySelectedProfileTagsForRun();
     if (!tags.length) {
       setQuickRunMessage('请先勾选至少一个已启用的常规词条。仅会议和日常停用词条不会参与快速抓取。', '#c00');
@@ -705,7 +839,11 @@ window.SubscriptionsManager = (function () {
     const modeText = fetchMode === 'standard'
       ? '30 天全标准 / 精读'
       : (fetchMode === 'skims' ? '30 天全速览' : `${days} 天`);
-    const ok = window.confirm(`确认对 ${tags.length} 个词条发起「${modeText}」抓取？\n\n${tags.join(', ')}`);
+    const ok = await showPrettyConfirm({
+      title: modeText,
+      body: `<p>确认对 <strong>${tags.length}</strong> 个词条发起抓取？</p><div class="dpr-run-confirm-tags">${tags.map((tag) => `<span>${escapeHtml(tag)}</span>`).join('')}</div>`,
+      confirmText: '开始抓取',
+    });
     if (!ok) return false;
     const options = runOptions && typeof runOptions === 'object' ? cloneDeep(runOptions) : {};
     const dispatchInputs = isPlainObject(options.dispatchInputs) ? options.dispatchInputs : {};
@@ -714,10 +852,21 @@ window.SubscriptionsManager = (function () {
       profile_tag: tags.join(','),
     };
     const tip = `已对 ${tags.length} 个词条发起${modeText}抓取任务。`;
-    return runQuickFetch(days, quickRunMsgEl || msgEl, tip, options);
+    const success = await runQuickFetch(days, quickRunMsgEl || msgEl, tip, options);
+    if (success) showWorkflowSuccessEffects();
+    return success;
+  };
+  const runSelectedQuickFetchByMode = () => {
+    if (quickRunMode === '30-skims') {
+      return runSelectedQuickFetch(30, { fetchMode: 'skims' });
+    }
+    if (quickRunMode === '30-standard') {
+      return runSelectedQuickFetch(30, { fetchMode: 'standard' });
+    }
+    return runSelectedQuickFetch(10);
   };
 
-  const runQuickConferenceRetrieval = (msgEl) => {
+  const runQuickConferenceRetrieval = async (msgEl) => {
     if (hasUnsavedChanges) {
       const text = '检测到未保存修改，请先点击“保存”后再发起会议论文检索。';
       if (msgEl) {
@@ -760,19 +909,25 @@ window.SubscriptionsManager = (function () {
       return false;
     }
     const groupText = groups.map(([conf, years]) => `${conf} ${years.join(', ')}`).join('；');
-    const ok = window.confirm(`确认对 ${profileTags.length} 个词条发起会议论文检索？\n\n词条：${profileTags.join(', ')}\n会议年份：${groupText}`);
-    if (!ok) return false;
-    groups.forEach(([conf, years]) => {
+    const results = await Promise.all(groups.map(([conf, years]) =>
       window.DPRWorkflowRunner.runConferenceRetrieval(conf, years, {
         dispatchInputs: {
           profile_tag: profileTags.join(','),
         },
-      });
-    });
+      }),
+    ));
+    if (results.some((item) => item === false)) {
+      if (msgEl) {
+        msgEl.textContent = '部分会议检索工作流未成功触发，请检查权限或配置。';
+        msgEl.style.color = '#c00';
+      }
+      return false;
+    }
     if (msgEl) {
       msgEl.textContent = `已发起 ${groupText} 会议论文检索任务。`;
       msgEl.style.color = '#080';
     }
+    showWorkflowSuccessEffects();
     return true;
   };
 
@@ -975,6 +1130,15 @@ window.SubscriptionsManager = (function () {
     msgEl.textContent = text || '';
     msgEl.style.color = color || '#666';
   };
+  const updateSaveReminder = () => {
+    if (!msgEl) return;
+    if (hasUnsavedChanges) {
+      msgEl.innerHTML = '<span class="dpr-save-reminder">⚠ 有未保存修改，请点击右上角「保存」。</span>';
+      msgEl.style.color = '#9a6500';
+    } else if (/未保存修改/.test(msgEl.textContent || '')) {
+      setMessage('', '#666');
+    }
+  };
 
   const ensureOverlay = () => {
     if (overlay && panel) return;
@@ -1049,27 +1213,35 @@ window.SubscriptionsManager = (function () {
             <div class="dpr-bulk-bar-head">
               <div>
                 <div class="chat-quick-run-title">快速抓取</div>
-                <div id="arxiv-admin-quick-run-selection-count" class="dpr-bulk-selection-count is-empty">未选择</div>
+                <div id="arxiv-admin-quick-run-hint" class="dpr-task-hint">默认全选常规词条。</div>
               </div>
+              <button id="arxiv-admin-open-workflow-panel-btn" class="arxiv-tool-btn dpr-task-workflow-btn" type="button">打开工作流</button>
             </div>
-            <div id="arxiv-admin-quick-run-hint" class="dpr-task-hint">先在上方勾选常规词条。</div>
+            <div class="dpr-task-picker-tools">
+              <button id="arxiv-admin-daily-select-all-btn" class="arxiv-tool-btn" type="button">全选</button>
+              <button id="arxiv-admin-daily-clear-all-btn" class="arxiv-tool-btn" type="button">取消全选</button>
+            </div>
+            <div id="arxiv-admin-daily-profile-picker" class="dpr-profile-picker-row"></div>
             <div class="dpr-task-content-row">
               <div class="dpr-task-primary-column">
-                <button id="arxiv-admin-open-workflow-panel-btn" class="arxiv-tool-btn dpr-task-workflow-btn" type="button">打开工作流</button>
-                <div class="dpr-task-action-grid">
-                  <button id="arxiv-admin-quick-run-10d-btn" class="chat-quick-run-item" type="button">
-                    <span class="dpr-task-action-title">10 天论文</span>
+                <div class="dpr-task-action-grid dpr-task-action-grid--radio" role="radiogroup" aria-label="快速抓取模式">
+                  <label class="chat-quick-run-item dpr-task-radio-card">
+                    <input type="radio" name="dpr-quick-run-mode" value="10" checked>
+                    <span class="dpr-task-action-title">立即抓取十天论文</span>
                     <span class="dpr-task-action-cost">约 ¥0.10</span>
-                  </button>
-                  <button id="arxiv-admin-quick-run-30d-btn" class="chat-quick-run-item" type="button">
-                    <span class="dpr-task-action-title">30 天速览</span>
+                  </label>
+                  <label class="chat-quick-run-item dpr-task-radio-card">
+                    <input type="radio" name="dpr-quick-run-mode" value="30-skims">
+                    <span class="dpr-task-action-title">立即抓取三十天速览</span>
                     <span class="dpr-task-action-cost">约 ¥0.20</span>
-                  </button>
-                  <button id="arxiv-admin-quick-run-30d-standard-btn" class="chat-quick-run-item" type="button">
-                    <span class="dpr-task-action-title">30 天精读</span>
+                  </label>
+                  <label class="chat-quick-run-item dpr-task-radio-card">
+                    <input type="radio" name="dpr-quick-run-mode" value="30-standard">
+                    <span class="dpr-task-action-title">立即抓取三十天精读</span>
                     <span class="dpr-task-action-cost">约 ¥0.50</span>
-                  </button>
+                  </label>
                 </div>
+                <button id="arxiv-admin-quick-run-start-btn" class="chat-quick-run-run-btn dpr-task-start-btn" type="button">开始检索</button>
                 <div id="arxiv-admin-quick-run-msg" class="chat-quick-run-msg"></div>
               </div>
 
@@ -1098,14 +1270,18 @@ window.SubscriptionsManager = (function () {
             <div class="dpr-conference-pane">
               <div class="dpr-bulk-bar-head">
                 <div>
-                  <div class="chat-quick-run-title">会议论文检索</div>
-                  <div id="arxiv-admin-conference-selection-count" class="dpr-bulk-selection-count is-empty">未选择</div>
+                  <div class="dpr-title-inline">
+                    <div class="chat-quick-run-title">会议论文检索</div>
+                    <div id="arxiv-admin-conference-hint" class="dpr-conference-note">默认全选词条。</div>
+                  </div>
                 </div>
               </div>
 
-              <div id="arxiv-admin-conference-hint" class="dpr-conference-note">
-                先勾选词条，再选年份。
+              <div class="dpr-task-picker-tools">
+                <button id="arxiv-admin-conference-select-all-btn" class="arxiv-tool-btn" type="button">全选</button>
+                <button id="arxiv-admin-conference-clear-all-btn" class="arxiv-tool-btn" type="button">取消全选</button>
               </div>
+              <div id="arxiv-admin-conference-profile-picker" class="dpr-profile-picker-row"></div>
 
               <div class="dpr-choice-field">
                 <div class="chat-quick-run-title">会议年份</div>
@@ -1113,7 +1289,7 @@ window.SubscriptionsManager = (function () {
               </div>
               <button
                 id="arxiv-admin-quick-run-conference-run-btn"
-                class="chat-quick-run-run-btn"
+                class="chat-quick-run-run-btn dpr-task-start-btn"
                 type="button"
               >
                 开始检索
@@ -1182,7 +1358,7 @@ window.SubscriptionsManager = (function () {
         window.SubscriptionsSmartQuery.clearPendingDeletedProfileIds();
       }
       renderFromDraft();
-      setMessage('已加载配置，可开始编辑。', '#666');
+      setMessage('', '#666');
     } catch (e) {
       console.error(e);
       setMessage('加载配置失败，请确认 GitHub Token 可用。', '#c00');
@@ -1326,18 +1502,25 @@ window.SubscriptionsManager = (function () {
       });
     }
 
-    quickRun10dBtn = document.getElementById('arxiv-admin-quick-run-10d-btn');
-    quickRun30dBtn = document.getElementById('arxiv-admin-quick-run-30d-btn');
-    quickRun30dStandardBtn = document.getElementById('arxiv-admin-quick-run-30d-standard-btn');
+    quickRun10dBtn = null;
+    quickRun30dBtn = null;
+    quickRun30dStandardBtn = null;
+    quickRunStartBtn = document.getElementById('arxiv-admin-quick-run-start-btn');
     quickRunOpenWorkflowPanelBtn = document.getElementById('arxiv-admin-open-workflow-panel-btn');
     quickRunConferenceBtn = document.getElementById(
       'arxiv-admin-quick-run-conference-run-btn',
     );
     quickRunMsgEl = document.getElementById('arxiv-admin-quick-run-msg');
-    quickRunSelectionCountEl = document.getElementById('arxiv-admin-quick-run-selection-count');
-    conferenceSelectionCountEl = document.getElementById('arxiv-admin-conference-selection-count');
+    quickRunSelectionCountEl = null;
+    conferenceSelectionCountEl = null;
     quickRunHintEl = document.getElementById('arxiv-admin-quick-run-hint');
     conferenceHintEl = document.getElementById('arxiv-admin-conference-hint');
+    dailyProfilePickerEl = document.getElementById('arxiv-admin-daily-profile-picker');
+    conferenceProfilePickerEl = document.getElementById('arxiv-admin-conference-profile-picker');
+    dailySelectAllBtn = document.getElementById('arxiv-admin-daily-select-all-btn');
+    dailyClearAllBtn = document.getElementById('arxiv-admin-daily-clear-all-btn');
+    conferenceSelectAllBtn = document.getElementById('arxiv-admin-conference-select-all-btn');
+    conferenceClearAllBtn = document.getElementById('arxiv-admin-conference-clear-all-btn');
     resetContentBtn = document.getElementById('arxiv-admin-reset-content-btn');
     resetContentMsgEl = document.getElementById('arxiv-admin-reset-content-msg');
     if (quickRunConferenceBtn) {
@@ -1346,39 +1529,62 @@ window.SubscriptionsManager = (function () {
     }
     initializeConferenceChoices();
     renderConferenceChoiceButtons();
-    [quickRun10dBtn, quickRun30dBtn, quickRun30dStandardBtn].forEach((btn) => {
-      if (!btn) return;
-      if (!btn.dataset.defaultTitle) {
-        btn.setAttribute('data-default-title', btn.textContent || '');
-      }
-    });
+    if (quickRunStartBtn && !quickRunStartBtn.dataset.defaultTitle) {
+      quickRunStartBtn.setAttribute('data-default-title', quickRunStartBtn.textContent || '');
+    }
     refreshQuickRunButtons();
 
-    if (quickRun10dBtn && !quickRun10dBtn._bound) {
-      quickRun10dBtn._bound = true;
-      quickRun10dBtn.addEventListener('click', () => {
-        runSelectedQuickFetch(10);
+    if (quickRunStartBtn && !quickRunStartBtn._bound) {
+      quickRunStartBtn._bound = true;
+      quickRunStartBtn.addEventListener('click', () => {
+        runSelectedQuickFetchByMode();
       });
     }
 
-    if (quickRun30dBtn && !quickRun30dBtn._bound) {
-      quickRun30dBtn._bound = true;
-      quickRun30dBtn.addEventListener('click', () => {
-        runSelectedQuickFetch(
-          30,
-          { fetchMode: 'skims' },
-        );
+    document
+      .querySelectorAll('input[name="dpr-quick-run-mode"]')
+      .forEach((input) => {
+        if (input._bound) return;
+        input._bound = true;
+        input.addEventListener('change', () => {
+          if (input.checked) {
+            quickRunMode = input.value || '10';
+          }
+        });
       });
-    }
 
-    if (quickRun30dStandardBtn && !quickRun30dStandardBtn._bound) {
-      quickRun30dStandardBtn._bound = true;
-      quickRun30dStandardBtn.addEventListener('click', () => {
-        runSelectedQuickFetch(
-          30,
-          { fetchMode: 'standard' },
-        );
+    [
+      [dailyProfilePickerEl, 'daily'],
+      [conferenceProfilePickerEl, 'conference'],
+    ].forEach(([picker]) => {
+      if (!picker || picker._bound) return;
+      picker._bound = true;
+      picker.addEventListener('click', (event) => {
+        const chip = event.target && event.target.closest
+          ? event.target.closest('.dpr-profile-picker-chip[data-profile-id]')
+          : null;
+        if (!chip) return;
+        const profileId = chip.getAttribute('data-profile-id') || '';
+        const selected = chip.getAttribute('aria-pressed') !== 'true';
+        setProfileSelection(profileId, selected);
       });
+    });
+
+    if (dailySelectAllBtn && !dailySelectAllBtn._bound) {
+      dailySelectAllBtn._bound = true;
+      dailySelectAllBtn.addEventListener('click', () => selectProfilesByMode('daily', true));
+    }
+    if (dailyClearAllBtn && !dailyClearAllBtn._bound) {
+      dailyClearAllBtn._bound = true;
+      dailyClearAllBtn.addEventListener('click', () => selectProfilesByMode('daily', false));
+    }
+    if (conferenceSelectAllBtn && !conferenceSelectAllBtn._bound) {
+      conferenceSelectAllBtn._bound = true;
+      conferenceSelectAllBtn.addEventListener('click', () => selectProfilesByMode('conference', true));
+    }
+    if (conferenceClearAllBtn && !conferenceClearAllBtn._bound) {
+      conferenceClearAllBtn._bound = true;
+      conferenceClearAllBtn.addEventListener('click', () => selectProfilesByMode('conference', false));
     }
 
     if (quickRunOpenWorkflowPanelBtn && !quickRunOpenWorkflowPanelBtn._bound) {
@@ -1470,6 +1676,7 @@ window.SubscriptionsManager = (function () {
     markConfigDirty: () => {
       hasUnsavedChanges = true;
       refreshQuickRunButtons();
+      updateSaveReminder();
     },
     updateDraftConfig: (updater) => {
       const base = draftConfig || {};
@@ -1477,6 +1684,7 @@ window.SubscriptionsManager = (function () {
       draftConfig = normalizeSubscriptions(next);
       hasUnsavedChanges = true;
       refreshQuickRunButtons();
+      updateSaveReminder();
     },
     getDraftConfig: () => cloneDeep(draftConfig || {}),
     validateDraftConfig: () => validateIntentProfiles(draftConfig || {}),

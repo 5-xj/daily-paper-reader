@@ -4,11 +4,11 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import html
 import importlib.util
 import json
 import re
-import shutil
 import sys
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Tuple
@@ -29,7 +29,7 @@ def norm_text(value: Any) -> str:
 
 def parse_conference_result_name(path: Path) -> Tuple[str, str]:
     name = path.name
-    match = re.match(r"^conference-([a-z0-9-]+)-([0-9,-]+)\.supabase\.(?:llm|rerank|rrf)\.json$", name)
+    match = re.match(r"^conference-([a-z0-9-]+?)-([0-9]{4}(?:-[0-9]{4})*)\.supabase\.(?:llm|rerank|rrf)\.json$", name)
     if not match:
         raise ValueError(f"无法从会议结果文件名解析会议和年份：{path}")
     conference = match.group(1).upper()
@@ -51,6 +51,36 @@ def build_conference_label(conference: str, years: str) -> str:
 def build_conference_key(conference: str, years: str) -> str:
     key = f"{norm_text(conference).lower()}-{norm_text(years).replace(',', '-')}"
     return re.sub(r"[^a-z0-9-]+", "-", key).strip("-") or "conference"
+
+
+def build_topic_key(kind: str, label: str) -> str:
+    raw = f"{norm_text(kind).lower() or 'query'}-{norm_text(label).lower() or 'general'}"
+    key = re.sub(r"[^a-z0-9-]+", "-", raw).strip("-")
+    if key:
+        return key
+    digest = hashlib.sha1(raw.encode("utf-8")).hexdigest()[:8]
+    return f"topic-{digest}"
+
+
+def build_conference_topic_marker(conference: str, years: str, kind: str, label: str) -> str:
+    return f"<!--dpr-conference-topic:{build_conference_key(conference, years)}:{build_topic_key(kind, label)}-->"
+
+
+def topic_from_ranked_item(item: Dict[str, Any]) -> Tuple[str, str]:
+    matched_tag = norm_text(item.get("matched_query_tag"))
+    if matched_tag:
+        kind, label = normalize_sidebar_tag(matched_tag)
+        if label:
+            return kind or "query", label
+    return "query", "General"
+
+
+def topic_from_profile_tag(profile_tag: str) -> Tuple[str, str]:
+    text = norm_text(profile_tag)
+    if not text:
+        return "query", "General"
+    kind, label = normalize_sidebar_tag(text)
+    return kind or "query", label or text
 
 
 def slugify(value: str) -> str:
@@ -559,21 +589,22 @@ def cleanup_conference_outputs(
     conference: str,
     years: str,
 ) -> None:
-    conference_dir = docs_dir / "conference" / build_conference_key(conference, years)
-    if conference_dir.exists() and conference_dir.is_dir():
-        shutil.rmtree(conference_dir)
+    # 会议检索会被不同 profile/tag 反复触发。这里不能删除整个 conference/year
+    # 目录，否则新词条会覆盖旧词条已经生成的正文页和图表资源。
+    return None
 
-    kept_ids = {norm_text(item.get("paper_id")) for item in kept_ranked if norm_text(item.get("paper_id"))}
-    for paper_id, paper in papers.items():
-        if paper_id in kept_ids:
-            continue
-        source_key = source_key_for_figures(paper)
-        asset_key = norm_text(paper.get("id")) or slugify(norm_text(paper.get("title")))
-        if not asset_key:
-            continue
-        figure_dir = docs_dir / "assets" / "figures" / source_key / asset_key
-        if figure_dir.exists() and figure_dir.is_dir():
-            shutil.rmtree(figure_dir)
+
+def group_ranked_by_topic(ranked: List[Dict[str, Any]]) -> List[Tuple[str, str, List[Dict[str, Any]]]]:
+    grouped: Dict[Tuple[str, str], List[Dict[str, Any]]] = {}
+    order: List[Tuple[str, str]] = []
+    for item in ranked:
+        kind, label = topic_from_ranked_item(item)
+        key = (kind, label)
+        if key not in grouped:
+            grouped[key] = []
+            order.append(key)
+        grouped[key].append(item)
+    return [(kind, label, grouped[(kind, label)]) for kind, label in order]
 
 
 def build_conference_block(
@@ -593,7 +624,6 @@ def build_conference_block(
         if isinstance(item, dict) and norm_text(item.get("id"))
     }
     ranked = collect_ranked_ids(data, limit, min_score=display_min_score)
-    cleanup_conference_outputs(docs_dir, papers, ranked, conference, years)
     route_by_id = write_conference_docs(
         docs_dir,
         papers,
@@ -604,20 +634,23 @@ def build_conference_block(
     )
 
     lines = [f"  * {label} {marker}\n"]
-    for item in ranked:
-        paper_id = norm_text(item.get("paper_id"))
-        paper = papers.get(paper_id)
-        if not paper:
-            continue
-        title = norm_text(paper.get("title")) or paper_id
-        route = route_by_id.get(paper_id) or build_conference_paper_route(paper, conference, years)
-        href = f"#/{route}"
-        payload = build_sidebar_payload(paper, item, conference, years)
-        lines.append(
-            "    * "
-            f'<a class="dpr-sidebar-item-link dpr-sidebar-item-structured" href="{html.escape(href, quote=True)}" '
-            f'data-sidebar-item="{payload}">{html.escape(title)}</a>\n'
-        )
+    for kind, topic_label, topic_ranked in group_ranked_by_topic(ranked):
+        topic_marker = build_conference_topic_marker(conference, years, kind, topic_label)
+        lines.append(f"    * {html.escape(topic_label)} {topic_marker}\n")
+        for item in topic_ranked:
+            paper_id = norm_text(item.get("paper_id"))
+            paper = papers.get(paper_id)
+            if not paper:
+                continue
+            title = norm_text(paper.get("title")) or paper_id
+            route = route_by_id.get(paper_id) or build_conference_paper_route(paper, conference, years)
+            href = f"#/{route}"
+            payload = build_sidebar_payload(paper, item, conference, years)
+            lines.append(
+                "      * "
+                f'<a class="dpr-sidebar-item-link dpr-sidebar-item-structured" href="{html.escape(href, quote=True)}" '
+                f'data-sidebar-item="{payload}">{html.escape(title)}</a>\n'
+            )
     return lines
 
 
@@ -651,6 +684,144 @@ def remove_existing_conference_block(lines: List[str], marker: str) -> None:
     del lines[block_idx:end]
 
 
+def find_conference_block(lines: List[str], marker: str) -> Tuple[int, int]:
+    heading_idx = find_conference_heading(lines)
+    if heading_idx < 0:
+        return -1, -1
+    block_idx = -1
+    for idx in range(heading_idx + 1, len(lines)):
+        if lines[idx].startswith("* "):
+            break
+        if marker in lines[idx]:
+            block_idx = idx
+            break
+    if block_idx < 0:
+        return -1, -1
+    end = block_idx + 1
+    while end < len(lines):
+        if lines[end].startswith("  * ") and not lines[end].startswith("    * "):
+            break
+        if lines[end].startswith("* "):
+            break
+        end += 1
+    return block_idx, end
+
+
+def extract_conference_paper_lines(lines: List[str], marker: str) -> List[str]:
+    block_idx, block_end = find_conference_block(lines, marker)
+    if block_idx < 0:
+        return []
+
+    paper_lines: List[str] = []
+    for line in lines[block_idx + 1:block_end]:
+        if "dpr-sidebar-item-link" not in line:
+            continue
+        paper_lines.append(line)
+    return paper_lines
+
+
+def sidebar_line_keys(line: str) -> List[str]:
+    href_re = re.compile(r'href="([^"]+)"')
+    link_re = re.compile(r'&quot;link&quot;:\s*&quot;([^&]+)&quot;')
+    keys: List[str] = []
+    href_match = href_re.search(line)
+    if href_match:
+        keys.append(f"href:{href_match.group(1)}")
+    link_match = link_re.search(line)
+    if link_match:
+        keys.append(f"link:{html.unescape(link_match.group(1))}")
+    return keys
+
+
+def infer_topic_from_sidebar_line(line: str) -> Tuple[str, str]:
+    match = re.search(r'data-sidebar-item="([^"]+)"', line)
+    if match:
+        try:
+            payload = json.loads(html.unescape(match.group(1)))
+            tags = payload.get("tags") if isinstance(payload, dict) else []
+            if isinstance(tags, list) and tags:
+                tag = tags[0]
+                if isinstance(tag, dict):
+                    kind = norm_text(tag.get("kind")) or "query"
+                    label = norm_text(tag.get("label")) or "General"
+                    return kind, label
+        except Exception:
+            pass
+    return "query", "General"
+
+
+def topic_line_for(conference: str, years: str, kind: str, label: str) -> str:
+    safe_label = html.escape(norm_text(label) or "General")
+    return f"    * {safe_label} {build_conference_topic_marker(conference, years, kind, label)}\n"
+
+
+def normalize_conference_paper_line(line: str) -> str:
+    return re.sub(r"^\s*\*\s+", "      * ", line)
+
+
+def merge_conference_paper_lines(
+    new_block: List[str],
+    existing_paper_lines: List[str],
+    conference: str,
+    years: str,
+) -> List[str]:
+    if not new_block:
+        return []
+
+    header = new_block[0]
+    topic_order: List[str] = []
+    topic_lines: Dict[str, str] = {}
+    topic_papers: Dict[str, List[str]] = {}
+    seen_keys = set()
+    current_topic_key = ""
+
+    def add_topic(kind: str, label: str, line: str = "") -> str:
+        key = build_conference_topic_marker(conference, years, kind, label)
+        if key not in topic_lines:
+            topic_lines[key] = line or topic_line_for(conference, years, kind, label)
+            topic_papers[key] = []
+            topic_order.append(key)
+        return key
+
+    def add_paper(topic_key: str, line: str) -> None:
+        keys = sidebar_line_keys(line)
+        if keys and any(key in seen_keys for key in keys):
+            return
+        seen_keys.update(keys)
+        topic_papers.setdefault(topic_key, []).append(normalize_conference_paper_line(line))
+
+    for line in new_block:
+        if line == header:
+            continue
+        if "<!--dpr-conference-topic:" in line:
+            marker_match = re.search(r"(<!--dpr-conference-topic:[^>]+-->)", line)
+            current_topic_key = marker_match.group(1) if marker_match else ""
+            if current_topic_key and current_topic_key not in topic_lines:
+                topic_lines[current_topic_key] = line
+                topic_papers[current_topic_key] = []
+                topic_order.append(current_topic_key)
+            continue
+        if "dpr-sidebar-item-link" in line:
+            if not current_topic_key:
+                kind, label = infer_topic_from_sidebar_line(line)
+                current_topic_key = add_topic(kind, label)
+            add_paper(current_topic_key, line)
+
+    for line in existing_paper_lines:
+        kind, label = infer_topic_from_sidebar_line(line)
+        topic_key = add_topic(kind, label)
+        add_paper(topic_key, line)
+
+    merged: List[str] = [header]
+    for topic_key in topic_order:
+        papers = topic_papers.get(topic_key) or []
+        if not papers:
+            continue
+        merged.append(topic_lines[topic_key])
+        merged.extend(papers)
+    return merged
+
+
 def ensure_conference_heading(lines: List[str]) -> int:
     heading_idx = find_conference_heading(lines)
     if heading_idx >= 0:
@@ -681,8 +852,7 @@ def update_sidebar_with_conference(
     lines = sidebar_path.read_text(encoding="utf-8").splitlines(keepends=True) if sidebar_path.exists() else []
     conference, years = parse_conference_result_name(result_path)
     marker = build_conference_marker(conference, years)
-    remove_existing_conference_block(lines, marker)
-    heading_idx = ensure_conference_heading(lines)
+    existing_paper_lines = extract_conference_paper_lines(lines, marker)
     block = build_conference_block(
         result_path,
         docs_dir=docs_dir,
@@ -690,6 +860,9 @@ def update_sidebar_with_conference(
         deep_min_score=deep_min_score,
         display_min_score=display_min_score,
     )
+    remove_existing_conference_block(lines, marker)
+    heading_idx = ensure_conference_heading(lines)
+    block = merge_conference_paper_lines(block, existing_paper_lines, conference, years)
     lines[heading_idx + 1:heading_idx + 1] = block
     sidebar_path.write_text("".join(lines), encoding="utf-8")
 

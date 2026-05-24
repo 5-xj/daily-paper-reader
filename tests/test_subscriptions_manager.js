@@ -128,7 +128,7 @@ function testNormalizeSubscriptionsConvertsChineseTagToEnglishFallback() {
   assert.equal(normalized.subscriptions.intent_profiles[0].tag, 'rl');
 }
 
-function testRunProfileQuickFetchPassesProfileTagToWorkflow() {
+async function testRunProfileQuickFetchPassesProfileTagToWorkflow() {
   const calls = [];
   global.window.DPRWorkflowRunner = {
     runQuickFetchByDays(days, options) {
@@ -137,7 +137,7 @@ function testRunProfileQuickFetchPassesProfileTagToWorkflow() {
   };
   global.window.confirm = () => true;
 
-  const ok = global.window.SubscriptionsManager.runProfileQuickFetch('GENE', 30, {
+  const ok = await global.window.SubscriptionsManager.runProfileQuickFetch('GENE', 30, {
     fetchMode: 'skims',
   });
 
@@ -170,7 +170,7 @@ function testQuickRunUnsavedMessageClearsAfterSave() {
   __setQuickRunMsgEl(msgEl);
   __setUnsavedChanges(true);
   refreshQuickRunButtons();
-  assert.equal(msgEl.textContent, '检测到未保存修改，请先保存后再发起快速抓取。');
+  assert.equal(msgEl.textContent, '有未保存修改，请先保存。');
   assert.equal(msgEl.style.color, '#c00');
 
   __setUnsavedChanges(false);
@@ -216,7 +216,7 @@ function testConferenceRunDisabledWhenUnsaved() {
 
   assert.equal(btn.disabled, true);
   assert.equal(btn.classList.contains('chat-quick-run-item--disabled'), true);
-  assert.equal(btn.title, '请先点击“保存”后再发起会议论文检索。');
+  assert.equal(btn.title, '请先保存后再检索会议论文。');
 
   __setUnsavedChanges(false);
   refreshQuickRunButtons();
@@ -229,7 +229,7 @@ function testConferenceRunDisabledWhenUnsaved() {
   delete global.window.SubscriptionsSmartQuery;
 }
 
-function testQuickFetchSkipsPausedAndConferenceOnlyProfiles() {
+async function testQuickFetchSkipsPausedAndConferenceOnlyProfiles() {
   const calls = [];
   const msgEl = {
     textContent: '',
@@ -254,7 +254,7 @@ function testQuickFetchSkipsPausedAndConferenceOnlyProfiles() {
   __setQuickRunMsgEl(msgEl);
   __setUnsavedChanges(false);
 
-  assert.equal(runSelectedQuickFetch(10), true);
+  assert.equal(await runSelectedQuickFetch(10), true);
   assert.equal(calls.length, 1);
   assert.equal(calls[0].options.dispatchInputs.profile_tag, 'ACTIVE');
 
@@ -262,7 +262,7 @@ function testQuickFetchSkipsPausedAndConferenceOnlyProfiles() {
     { tag: 'PAUSED', temporary: false, paused: true },
     { tag: 'CONF', temporary: true, paused: false },
   ];
-  assert.equal(runSelectedQuickFetch(10), false);
+  assert.equal(await runSelectedQuickFetch(10), false);
   assert.equal(calls.length, 1);
   assert.equal(msgEl.textContent, '请先勾选至少一个已启用的常规词条。仅会议和日常停用词条不会参与快速抓取。');
 
@@ -272,13 +272,18 @@ function testQuickFetchSkipsPausedAndConferenceOnlyProfiles() {
   delete global.window.confirm;
 }
 
-testNormalizeSubscriptionsAddsBiorxivBackend();
-testNormalizeSubscriptionsPreservesCustomBiorxivBackendFields();
-testNormalizeSubscriptionsConvertsChineseTagToEnglishFallback();
-testRunProfileQuickFetchPassesProfileTagToWorkflow();
-testConferenceCurrentYearDisabledForPendingSources();
-testQuickRunUnsavedMessageClearsAfterSave();
-testConferenceRunDisabledWhenUnsaved();
-testQuickFetchSkipsPausedAndConferenceOnlyProfiles();
+(async () => {
+  testNormalizeSubscriptionsAddsBiorxivBackend();
+  testNormalizeSubscriptionsPreservesCustomBiorxivBackendFields();
+  testNormalizeSubscriptionsConvertsChineseTagToEnglishFallback();
+  await testRunProfileQuickFetchPassesProfileTagToWorkflow();
+  testConferenceCurrentYearDisabledForPendingSources();
+  testQuickRunUnsavedMessageClearsAfterSave();
+  testConferenceRunDisabledWhenUnsaved();
+  await testQuickFetchSkipsPausedAndConferenceOnlyProfiles();
 
-console.log('subscriptions manager tests passed');
+  console.log('subscriptions manager tests passed');
+})().catch((error) => {
+  console.error(error);
+  process.exit(1);
+});

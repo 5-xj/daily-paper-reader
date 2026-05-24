@@ -315,6 +315,44 @@ window.SubscriptionsSmartQuery = (function () {
     renderMain();
     notifySelectionChange();
   };
+  const setProfileSelection = (profileId, selected) => {
+    const profile = findCurrentProfile(profileId);
+    if (!profile || !canSelectProfileForRunMode(profile)) return;
+    const key = getProfileKey(profile);
+    if (!key) return;
+    if (selected) {
+      selectedProfileKeys.add(key);
+    } else {
+      selectedProfileKeys.delete(key);
+    }
+    renderMain();
+    notifySelectionChange();
+  };
+  const selectProfilesForRun = (filterFn, selected = true) => {
+    (currentProfiles || []).forEach((profile) => {
+      if (!canSelectProfileForRunMode(profile)) return;
+      if (typeof filterFn === 'function' && !filterFn(profile)) return;
+      const key = getProfileKey(profile);
+      if (!key) return;
+      if (selected) {
+        selectedProfileKeys.add(key);
+      } else {
+        selectedProfileKeys.delete(key);
+      }
+    });
+    renderMain();
+    notifySelectionChange();
+  };
+  const getProfilesForRun = () =>
+    (currentProfiles || []).map((profile) => ({
+      id: getProfileKey(profile),
+      tag: normalizeText(profile && profile.tag),
+      description: normalizeText(profile && profile.description),
+      scope: normalizeText(profile && profile.scope),
+      temporary: isConferenceOnlyProfile(profile),
+      paused: !!(profile && profile.paused),
+      selected: selectedProfileKeys.has(getProfileKey(profile)),
+    })).filter((profile) => profile.id && profile.tag);
 
   const filterVisiblePaperSources = (values) => {
     const visible = new Set(VISIBLE_PAPER_SOURCES);
@@ -2819,6 +2857,10 @@ window.SubscriptionsSmartQuery = (function () {
     Array.from(selectedProfileKeys).forEach((key) => {
       if (!liveKeys.has(key)) selectedProfileKeys.delete(key);
     });
+    currentProfiles.forEach((profile) => {
+      const key = getProfileKey(profile);
+      if (key) selectedProfileKeys.add(key);
+    });
     renderMain();
   };
   const setRunSelectionMode = (mode, onSelectionChange) => {
@@ -2854,6 +2896,9 @@ window.SubscriptionsSmartQuery = (function () {
     getSelectedProfilesForRun,
     getSelectedProfileTags,
     clearRunSelection,
+    setProfileSelection,
+    selectProfilesForRun,
+    getProfilesForRun,
     __test: {
       buildPromptFromTemplate,
       defaultPromptTemplate,

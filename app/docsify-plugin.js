@@ -2001,20 +2001,37 @@ window.$docsify = {
           }
         };
 
+        const buildNodeKey = (rootLi, li, label) => {
+          if (li === rootLi) return 'root:conference-papers';
+          const labels = [];
+          let current = li;
+          while (current && current !== rootLi) {
+            const currentLabel = getToggleLabel(current);
+            if (currentLabel) labels.unshift(normalizeKeyPart(currentLabel));
+            const parentUl = current.parentElement;
+            current = parentUl ? parentUl.closest('li.sidebar-conference-node, li') : null;
+          }
+          const path = labels.filter(Boolean).join('/');
+          return `conference:${path || normalizeKeyPart(label)}`;
+        };
+
+        const setupConferenceTree = (rootLi, li) => {
+          if (!li || !li.querySelector(':scope > ul')) return;
+          const label = li === rootLi ? 'Conference Papers' : getToggleLabel(li);
+          if (!label) return;
+          ensureToggle(li, label, buildNodeKey(rootLi, li, label));
+          Array.from(li.querySelectorAll(':scope > ul > li')).forEach((childLi) => {
+            setupConferenceTree(rootLi, childLi);
+          });
+        };
+
         const rootItems = Array.from(nav.querySelectorAll('li')).filter((li) => {
           if (!li.querySelector(':scope > ul')) return false;
           return getToggleLabel(li) === 'Conference Papers';
         });
 
         rootItems.forEach((rootLi) => {
-          ensureToggle(rootLi, 'Conference Papers', 'root:conference-papers');
-          const childLis = Array.from(rootLi.querySelectorAll(':scope > ul > li'));
-          childLis.forEach((li) => {
-            if (!li.querySelector(':scope > ul')) return;
-            const label = getToggleLabel(li);
-            if (!label) return;
-            ensureToggle(li, label, `conference:${normalizeKeyPart(label)}`);
-          });
+          setupConferenceTree(rootLi, rootLi);
         });
 
         requestAnimationFrame(() => {
