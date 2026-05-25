@@ -53,6 +53,7 @@ class ConferenceWorkflowAndUiTest(unittest.TestCase):
         root = pathlib.Path(__file__).resolve().parents[1]
         runner = (root / "app" / "workflows.runner.js").read_text(encoding="utf-8")
         manager = (root / "app" / "subscriptions.manager.js").read_text(encoding="utf-8")
+        css = (root / "app" / "app.css").read_text(encoding="utf-8")
 
         self.assertIn("conference-paper-retrieval.yml", runner)
         self.assertIn("runConferenceRetrieval", runner)
@@ -97,6 +98,9 @@ class ConferenceWorkflowAndUiTest(unittest.TestCase):
         self.assertIn("runConferenceRetrieval(conf, years, {", manager)
         self.assertIn("profile_tag: profileTags.join(',')", manager)
         self.assertIn("会议论文检索", manager)
+        self.assertNotIn("showPrettyConfirm", manager)
+        self.assertNotIn("确认对 <strong>", manager)
+        self.assertNotIn("dpr-run-confirm", css)
         self.assertNotIn("runConferenceMaintain(conf, years)", manager)
 
     def test_local_debug_uses_browser_config_override(self):

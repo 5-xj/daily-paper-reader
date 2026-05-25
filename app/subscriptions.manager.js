@@ -614,44 +614,6 @@ window.SubscriptionsManager = (function () {
       layer.remove();
     }, 1700);
   };
-  const showPrettyConfirm = ({ title, body, confirmText = '确认', cancelText = '取消' }) =>
-    new Promise((resolve) => {
-      if (!document || typeof document.createElement !== 'function') {
-        resolve(typeof window.confirm === 'function' ? window.confirm(title || body || '') : true);
-        return;
-      }
-      const modal = document.createElement('div');
-      modal.className = 'dpr-run-confirm-overlay';
-      modal.innerHTML = `
-        <div class="dpr-run-confirm-panel" role="dialog" aria-modal="true">
-          <div class="dpr-run-confirm-kicker">Quick Run</div>
-          <div class="dpr-run-confirm-title">${escapeHtml(title)}</div>
-          <div class="dpr-run-confirm-body">${body}</div>
-          <div class="dpr-run-confirm-actions">
-            <button class="arxiv-tool-btn dpr-run-confirm-cancel" type="button">${escapeHtml(cancelText)}</button>
-            <button class="arxiv-tool-btn dpr-run-confirm-ok" type="button">${escapeHtml(confirmText)}</button>
-          </div>
-        </div>
-      `;
-      const close = (value) => {
-        modal.classList.remove('is-open');
-        setTimeout(() => {
-          modal.remove();
-          resolve(value);
-        }, 160);
-      };
-      modal.addEventListener('click', (event) => {
-        if (event.target === modal || event.target.closest('.dpr-run-confirm-cancel')) {
-          close(false);
-        }
-        if (event.target.closest('.dpr-run-confirm-ok')) {
-          close(true);
-        }
-      });
-      document.body.appendChild(modal);
-      requestAnimationFrame(() => modal.classList.add('is-open'));
-    });
-
   const syncRunSelectionMode = () => {
     if (!window.SubscriptionsSmartQuery || typeof window.SubscriptionsSmartQuery.setRunSelectionMode !== 'function') {
       return;
@@ -842,12 +804,6 @@ window.SubscriptionsManager = (function () {
     const modeText = fetchMode === 'standard'
       ? '30 天全标准 / 精读'
       : (fetchMode === 'skims' ? '30 天全速览' : `${days} 天`);
-    const ok = await showPrettyConfirm({
-      title: modeText,
-      body: `<p>确认对 <strong>${tags.length}</strong> 个词条发起抓取？</p><div class="dpr-run-confirm-tags">${tags.map((tag) => `<span>${escapeHtml(tag)}</span>`).join('')}</div>`,
-      confirmText: '开始抓取',
-    });
-    if (!ok) return false;
     const options = runOptions && typeof runOptions === 'object' ? cloneDeep(runOptions) : {};
     const dispatchInputs = isPlainObject(options.dispatchInputs) ? options.dispatchInputs : {};
     options.dispatchInputs = {
