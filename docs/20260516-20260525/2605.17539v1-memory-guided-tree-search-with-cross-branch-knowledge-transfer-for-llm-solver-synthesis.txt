@@ -1,0 +1,740 @@
+Title: Memory-Guided Tree Search with Cross-Branch Knowledge Transfer for LLM Solver Synthesis
+
+URL Source: https://arxiv.org/pdf/2605.17539v1
+
+Published Time: Tue, 19 May 2026 01:47:03 GMT
+
+Number of Pages: 32
+
+Markdown Content:
+# Memory-Guided Tree Search with Cross-Branch Knowledge Transfer for LLM Solver Synthesis 
+
+Fatemeh Haji, Javier Delarosa Quiros, Peyman Najafirad 
+
+Secure AI and Autonomy Lab The University of Texas at San Antonio 
+
+{fatemeh.haji, javier.delarosaquiros, peyman.najafirad}@utsa.edu 
+
+## Abstract 
+
+Combinatorial optimization (CO) underlies decision-making from logistics to chip design, where infeasible solutions are operationally unusable and small quality gains translate into substantial economic value. Recent work uses large language models (LLMs) to automate solver synthesis : generating executable solver pro-grams from natural-language specifications. However, existing tree-search and evolutionary agents refine candidate trajectories in parallel without explicit knowl-edge transfer, reintroducing the same constraint violations and converging on similar algorithm families. We introduce MEMOIR, a memory-guided tree-search framework with a two-level memory hierarchy: branch-local memory preserves execution-grounded refinement details within a branch as it iterates on a single algorithmic design, while global memory stores compressed algorithmic and failure-mode summaries across branches. A reflection step at branch termination distills these summaries, enabling cross-branch transfer without polluting future contexts with low-level debugging traces. Across seven CO problems spanning scheduling, routing, packing, and geometric design, MEMOIR achieves 96.7% solution validity (a 9.2 point gap over the strongest baseline) and improves the average normalized score by 7.3 points at matched per-method execution budget. Over three indepen-dent runs on four problems, MEMOIR’s run-to-run validity standard deviation is more than an order of magnitude below that of every baseline we evaluated in this setting, suggesting that memory-guided exploration yields consistent improvements rather than reflecting sampling variance. 
+
+## 1 Introduction 
+
+Combinatorial optimization problems are ubiquitous, spanning domains from logistics and scheduling to chip design and resource allocation. Because these problems are NP-hard, finding optimal solutions is computationally prohibitive [Bengio et al., 2021], and practitioners have historically relied on hand-crafted, expert-designed heuristics to obtain practical solutions [Burke et al., 2013]. Two operational realities make automation particularly attractive: in deployment, infeasible solutions are unusable, and even marginal performance improvements translate into substantial economic gains. Yet hand-crafted heuristics are expensive to develop, brittle to problem variants, and difficult to transfer across domains. A recent line of work addresses these limitations by using LLMs for automated solver synthesis , in which generative models produce, from a natural-language problem description or formal program template, a self-contained heuristic program that runs on any instance of the problem class to return a feasible solution [Romera-Paredes et al., 2024, Ye et al., 2024]. Recent agents explore this program space through iterative sampling and execution-grounded feedback, spanning tree-search methods (AIDE [Jiang et al., 2025], MCTS-AHD [Zheng et al., 2025]), evolutionary frameworks (FunSearch [Romera-Paredes et al., 2024]), and reflective evolutionary approaches (ReEvo [Ye et al., 2024]). 
+
+> Preprint.
+> arXiv:2605.17539v1 [cs.AI] 17 May 2026
+
+These agents maintain multiple candidate trajectories in parallel, but without explicit knowledge transfer across trajectories they repeatedly reintroduce the same constraint violations and revisit equivalent algorithm families across runs, yielding redundant exploration and limited cumulative progress. Naive transfer is not a fix: reusing raw execution histories pollutes the LLM’s context with low-level details and biases generation toward local fixes rather than qualitatively new designs. Existing approaches sit on either side of this tension without resolving it: ReEvo’s reflective memory captures refinements within a single algorithm design but does not transfer insights across qualitatively different designs [Ye et al., 2024], while AIDE explores a tree of code variants but treats its trajectory journal uniformly, without separating branch-local debugging detail from globally useful algorithmic insight [Jiang et al., 2025]. The two signals must be kept apart: branch-specific refinement traces matter only while a single design is being iterated on, whereas algorithmic and failure-mode lessons should travel across the entire search. We introduce MEMOIR, a memory-guided tree-search framework for LLM-based solver synthesis that realizes this separation through a two-level memory hierarchy and a reflection step that compresses each branch’s trajectory before it enters global memory. Tree search is well suited here: each branch corresponds to a single algorithmic design, and branch termination provides a natural point at which to distill branch-local refinements into cross-design lessons. Our contributions are as follows. • Two-level memory for solver synthesis. Branch-local memory retains execution-grounded refinements that prevent repeated within-branch failures; global memory stores compressed algorithmic and failure-mode summaries that steer subsequent branches toward distinct designs. • Reflection-based cross-branch knowledge transfer. A branch-termination reflection distills each trajectory into algorithmic design, failure modes, and avoidance directives, transferring knowledge across branches without low-level debugging traces. • Reliability under equal budgets. Across seven classical CO problems at a matched 16-execution budget, MEMOIR reaches 96.7% validity (+9.2 points over the strongest baseline) and improves normalized score by 7.3 points, with run-to-run standard deviation well below every baseline. 
+
+## 2 Related Work 
+
+Neural combinatorial optimization. Neural methods train models to directly output solutions for combinatorial optimization problems. Early approaches used RL with policy gradients to learn constructive heuristics [Bello et al., 2016], later adopting attention mechanisms [Kool et al., 2019] and graph neural networks [Khalil et al., 2017, Joshi et al., 2019] for routing problems like TSP and VRP. Symmetry-aware training schemes, POMO [Kwon et al., 2020] and Sym-NCO [Kim et al., 2022], further improved solution quality. However, these learned policies generalize poorly to instance sizes outside their training distribution and become computationally expensive at scale [Joshi et al., 2022]. 
+
+Automated modeling. A parallel line translates natural-language problems into solver-ready formu-lations consumed by off-the-shelf optimizers, from structured formulation with interactive correction [Ramamonjison et al., 2022] to modular multi-stage agents [Ahmaditeshnizi et al., 2024, Wang et al., 2025], hierarchical tree search [Liu et al., 2025], and search-based model synthesis [Astorga et al., 2025]. Formulation correctness remains the bottleneck: small modeling errors invalidate the model and propagate through later stages without clear localization signals [Astorga et al., 2025]. 
+
+Evolutionary and tree search for solver synthesis. A growing line of work synthesizes executable solver code directly from problem specifications, scoring candidates with execution-grounded signals. FunSearch applies evolutionary program search over LLM-generated programs [Romera-Paredes et al., 2024], EoH co-evolves heuristic descriptions and code with LLMs [Liu et al., 2024], ReEvo augments evolution with short- and long-term reflections [Ye et al., 2024], and MCTS-AHD performs Monte Carlo Tree Search over algorithm-design states for heuristic synthesis [Zheng et al., 2025]. More broadly, self-refinement loops improve a single candidate via self-feedback without an explicit search structure [Madaan et al., 2023], tree-search methods structure exploration by branching over intermediate design states [Yao et al., 2023], AIDE models iterative coding as tree search guided by evaluation [Jiang et al., 2025], and execution-based verification filters candidates using run-time outcomes [Ni et al., 2023]. Despite differences in search structure, these approaches share a common limitation: each candidate trajectory explores the algorithm space largely in isolation, with selection 2Figure 1: MEMOIR overview. Each branch starts from a proposed algorithmic design, then runs up to n refinement steps: repair while no valid solver exists in the branch (gray), improve once one does (green). At branch end, reflection compresses the trajectory into a single global-memory entry that steers later branches toward distinct designs. After the execution budget is spent, the highest-scoring valid solver is returned. as the only signal that crosses trajectories. As a result, they repeatedly rediscover failure patterns such as infeasibility bugs or weak algorithmic templates, rather than systematically transferring lessons across iterations. 
+
+Memory-augmented agents. Memory mechanisms have proven valuable in general agent settings. Generative Agents use memory for reflective behavior [Park et al., 2023], while Voyager maintains a skill library for lifelong learning [Wang et al., 2024]. Reflexion maintains an episodic buffer of self-generated reflections to improve future decisions [Shinn et al., 2023], and ReEvo distinguishes short-term and long-term reflections within its evolutionary loop [Ye et al., 2024]. Closer to our hierarchy, Coarse-to-Fine Grounded Memory grounds coarse focus points and fine-grained tips for LLM planning agents [Yang et al., 2025], but targets interactive planning rather than execution-grounded solver synthesis. However, these approaches do not separate high-level algorithmic design choices that should transfer across iterations from the low-level debugging details that pollute context: Generative Agents and Voyager target general domains, and ReEvo’s memory operates within a fixed algorithmic structure. MEMOIR addresses these challenges through a tree-search–based framework with a two-level memory hierarchy that separates global algorithmic lessons from branch-local implementation details, coupled with reflective compression of design choices and failure modes at branch termination. This enables cross-branch learning without context pollution. 
+
+## 3 Method 
+
+3.1 Problem Setting 
+
+We study automated synthesis of heuristic solvers for combinatorial optimization. A CO problem is specified by a natural-language description P , an instance space X , and an instance-level evaluator EVAL : Y × X → R≥0 ∪ {⊥} , where Y denotes the solution space and ⊥ marks infeasibility. We are given a development set Ddev ⊂ X used for synthesis and a held-out test set Dtest ⊂ X used only for final reporting. A solver is a Python program s ∈ S that, on input instance x ∈ X and within a fixed per-instance timeout T , generates a stream of candidate solutions y1, y 2, · · · ∈ Y via Python’s yield mechanism. We denote by s(x) ∈ Y ∪{⊥} the last successfully yielded candidate before timeout, with s(x) = ⊥ if the solver crashes or yields nothing. For brevity, write h(s, x ) = EVAL (s(x), x ), with the convention 
+
+h(s, x ) = ⊥ whenever s(x) = ⊥, and let h⋆(x) denote the best-known objective for x. For each instance, define the validity indicator and normalized score 
+
+v(s, x ) = 1 h(s, x )̸ = ⊥ , f (s, x ) = 
+
+
+
+min |h(s, x )|, |h⋆(x)|
+
+max |h(s, x )|, |h⋆(x)| if v(s, x ) = 1 ,
+
+0 otherwise. (1) 3The symmetric min/max form yields f (s, x ) ∈ [0 , 1] regardless of whether the underlying prob-lem is minimization or maximization, with f = 1 when the solver matches the best-known objective and f → 0 as the relative gap grows in either direction; in the degenerate case 
+
+|h(s, x )| = |h⋆(x)| = 0 we set f = 1 (exact match). Per-dataset metrics average these over 
+
+D: V ALID (s; D) = |D| −1 P 
+
+> x∈D
+
+v(s, x ) and ¯f (s; D) = |D| −1 P 
+
+> x∈D
+
+f (s, x ).
+
+Solver synthesis under a query budget A solver synthesizer A is granted a budget of B executions 
+
+on Ddev , where one execution evaluates a single candidate solver on every instance of Ddev . Within this budget, A iteratively constructs candidate solvers, each conditioned on prior execution feedback, and returns a final selection ˆs ∈ S . We measure synthesis quality by ¯f (ˆ s; Dtest ) and VALID (ˆ s; Dtest ).
+
+3.2 MEMOIR: Memory-Guided Tree Search 
+
+MEMOIR formulates solver synthesis as a tree search that separates exploration across branches (each instantiating a distinct algorithmic design) from exploitation within a branch, refining a single design through targeted edits (Figure 1). Given an execution budget B on Ddev , the search exposes two budget knobs: a per-branch depth cap n (exploitation: maximum branch depth, with the initial proposal at depth 1) and a branch count m (exploration: distinct designs tried). At any point during search, MEMOIR maintains a memory state  Mglobal , {M (i)
+
+> local
+
+}mi=1 
+
+. Each node produced within branch i is a refinement record 
+
+u = ( πu, ρ u, v u, f u, E u), (2) where πu is the natural-language algorithmic description of the solver su ∈ S produced at this node, 
+
+ρu a critic-generated diagnostic comparing u to its parent, vu ∈ { 0, 1} a flag indicating that su
+
+executed cleanly on every instance of Ddev , fu = ¯f (su; Ddev ) ∈ [0 , 1] its average normalized score (only the per-instance score in Eq. (1) is zeroed on a failed instance, so fu remains positive whenever some instance executes successfully), and Eu the per-instance execution and evaluation outputs. The solver code su itself is retained in a separate artifact store for execution and final return, and is not astored field of branch-local memory. Branch-local memory M(i) 
+
+> local
+
+accumulates all records produced within branch i and guides repair and improvement of that design; global memory Mglobal holds compressed branch-level entries produced by reflection at each branch’s termination and acts as a curriculum across designs. 
+
+Operators Search proceeds via five LLM-implemented operators plus an EXECUTE routine, each conditioned on the relevant memory: PROPOSE : P, Mglobal −→ (s0, π 0) (branch initialization) (3) REPAIR : P, u par , M(i) 
+
+> local
+
+−→ (s′, π ′) (validity recovery) (4) IMPROVE : P, u par , M(i) 
+
+> local
+
+−→ (s′, π ′) (performance refinement) (5) CRITIC : s, s par , E, E par −→ ρ (parent–child diagnostic) (6) REFLECT : M(i) 
+
+> local
+
+−→ gi (branch summary) (7) We write EXECUTE (s; Ddev ) → (v, f, E ) for the evaluation that runs s on every instance of Ddev 
+
+under timeout T and returns the validity flag, average normalized score, and per-instance outputs. Algorithm 1 (Appendix B) composes these operators into the full procedure. 
+
+3.2.1 Branch Initialization: Algorithm Proposer 
+
+Each branch begins with a call to the Algorithm Proposer, which jointly generates a high-level algorithmic description π0 and a corresponding solver s0 conditioned on P and Mglobal :
+
+(s0, π 0) ∼ PROPOSE (P, Mglobal ). (8) Conditioning on Mglobal steers the proposer away from previously explored designs and their failure modes, encouraging algorithmically distinct branches rather than incremental variants of an earlier candidate. We then execute the initial solver to populate branch i’s first record: 
+
+(v0, f 0, E 0) ← EXECUTE (s0; Ddev ),ρ0 ← CRITIC (s0, ∅, E 0, ∅),u0 = ( π0, ρ 0, v 0, f 0, E 0), M(i) 
+
+> local
+
+← { u0}.
+
+(9) 43.2.2 Within-Branch Refinement: Repair and Improve 
+
+After initialization, branch i proceeds with successive refinement steps while further within-design improvement remains plausible from the branch-local memory, up to a maximum branch depth of n.At each step, MEMOIR selects a parent record upar ∈ M (i) 
+
+> local
+
+and applies one of two operators based on the branch’s current validity: 
+
+(s′, π ′) = 
+
+(REPAIR 
+
+ P, u par , M(i)
+
+> local
+
+ if vu = 0 ∀u ∈ M (i)
+
+> local
+
+,
+
+IMPROVE 
+
+ P, u par , M(i)
+
+> local
+
+ otherwise. (10) In the repair case, upar is sampled from invalid records in proportion to fu; in the improve case, 
+
+upar = arg max u∈M (i) 
+
+> local , v u=1
+
+fu is the highest-scoring valid record. The new solver is then executed and critiqued: 
+
+(v′, f ′, E ′) ← EXECUTE (s′; Ddev ),ρ′ ← CRITIC (s′, s upar , E ′, E upar ),u′ = ( π′, ρ ′, v ′, f ′, E ′), M(i) 
+
+> local
+
+← M (i) 
+
+> local
+
+∪ { u′}.
+
+(11) 
+
+Repair operator REPAIR receives an invalid parent record, its critic diagnostic, and the full branch-local history; the history lets the operator avoid edits that previously failed to restore validity. Among invalid records, MEMOIR samples the parent in proportion to fu, biasing repair toward solvers that came closest to feasibility; when all invalid records have fu = 0 (no instance executed successfully) we fall back to uniform sampling. 
+
+Improve operator IMPROVE activates once any valid solver exists. Each invocation applies a single focused modification intended to increase ¯f while preserving v = 1 . Branch-local memory conditions the operator to avoid edits that prior records show reduced f or invalidated previously valid solvers. This single-edit discipline yields incremental, attributable improvements within one algorithmic design and makes regressions easy to localize. 
+
+3.2.3 Cross-Branch Knowledge Transfer: Reflection 
+
+Once branch i terminates, its trajectory is compressed into a single global-memory entry via the reflection operator 
+
+gi = REFLECT 
+
+ M(i)
+
+> local
+
+, Mglobal ← M global ∪ { gi}. (12) Each entry gi contains three fields: (i) the branch’s algorithmic design and core heuristics, (ii) observed failure or stagnation modes that limited improvement, and (iii) explicit avoidance directives stated as negative constraints for subsequent proposers. All three fields are derived from the branch’s execution trace and critic diagnostics rather than from a free-form LLM read of the code, so the entry summarizes observed behavior rather than asserted properties of the program. By design, gi contains 
+
+no per-instance traces, intermediate code, or low-level debugging artifacts, which is what allows global memory to grow across branches without polluting the proposer’s context. Empirically, entries average ∼272 tokens across our seven domains, so |M global | scales as O(m) with a small constant and remains bounded under larger branch budgets. 
+
+3.2.4 Final Selection 
+
+After the search terminates, MEMOIR selects the highest-scoring valid record on Ddev , u⋆ =arg max u∈U , v u=1 fu with U = S 
+
+> i
+
+M(i)
+
+> local
+
+, and returns its associated solver ˆs from the artifact store. If no fully valid record exists, we fall back to u⋆ = arg max u∈U fu, returning the partially valid solver with the highest average score. We then evaluate ˆs once on Dtest under the same timeout T ,reporting ¯f (ˆ s; Dtest ) and V ALID (ˆ s; Dtest ).
+
+## 4 Experiments 
+
+4.1 Experimental Setup 
+
+We describe the problem domains, baselines, evaluation protocol, and the matched search budget shared by all methods. 54.1.1 Problem Domains 
+
+We evaluate MEMOIR on seven combinatorial optimization problems chosen to stress two axes: 
+
+hard-constraint pressure , where infeasibility dominates if constraints are mishandled, and tightly coupled combinatorial structure , where decisions interact across subproblems. The problems are Aircraft Landing [Beasley et al., 2000], Periodic Vehicle Routing [Christofides and Beasley, 1984], Container Loading [Bischoff and Ratcliff, 1995], Container Loading with Weight Restrictions [Ratcliff and Bischoff, 1998], Resource Constrained Shortest Path [Beasley and Christofides, 1989], Crew Scheduling [Beasley and Cao, 1996], and Euclidean Steiner [Beasley, 1992]. We adopt CO-Bench’s natural-language specifications, instance-level evaluators (returning h(s, x ), normalized via Eq. (1) against the best-known h⋆), and dev/test splits ( Ddev , Dtest ) for comparability with prior solver-synthesis work [Sun et al., 2026]; full specifications appear in Appendix A. 
+
+4.1.2 Baselines 
+
+We compare MEMOIR against three categories of baselines, with LLM-agent methods run under the matched execution budget specified in Section 4.1.4. 
+
+Classical Solver. Published scores from expert-designed solvers for each problem, serving as a non-LLM reference. 
+
+Direct LLM solver synthesis. Base LLMs (Llama-3.3-70B-Instruct, Qwen2.5-Coder-32B, GPT-5 Chat) and reasoning LLMs (o3-mini-high, DeepSeek-R1-Distill-Llama-70B, QwQ-32B, GPT-5-mini) are prompted to produce a solver in a single pass, with no iterative search. 
+
+LLM-agent methods. GreedyRefine [Sun et al., 2026] iteratively rewrites the current best solver, replacing it on improvement; AIDE [Jiang et al., 2025] performs tree search over prior attempts, selecting a parent by score and editing it with a single flat trajectory journal as memory; FunSearch 
+
+[Romera-Paredes et al., 2024] runs an islands evolutionary loop, sampling new solvers from top-scoring members of each island; ReEvo [Ye et al., 2024] augments evolutionary search with reflective memory; and MCTS-AHD [Zheng et al., 2025] performs Monte Carlo Tree Search over algorithm-design states. 
+
+4.1.3 Evaluation Protocol 
+
+We report two metrics defined in Eqs. (1) – (3.1) : Avg , the mean per-instance normalized score 
+
+¯f (s; D) ∈ [0 , 1] , with score 0 assigned to program errors or infeasible solutions; and Valid , the fraction of instances where the solver executes successfully and returns a feasible solution. 
+
+4.1.4 Implementation and Search Budget Budget and per-method search. All methods share an execution budget of B = 16 on Ddev , a compute-limited setting that isolates each method’s search efficiency rather than its ability to draw many candidate solvers and pick the best. At evaluation, the final synthesized solver is allotted a per-instance timeout of T = 10 s to return a solution for a single test instance, matching the low-latency inference regime relevant to test-time deployment. Hyperparameters are fixed across domains (no per-domain tuning), and solvers execute in a sandboxed Linux environment with Python 3.10.18 (CPU only). For MEMOIR, the per-branch depth cap is n = 5 , but branches terminate early when further improvement is unlikely; we keep opening new branches with the remaining budget, and in our setup branches typically use most of the cap, so B = 16 yields about m = 4 branches per run. Per-run token counts and dollar costs are reported in Appendix E; synthesis stays under $1 per run for every method. 
+
+Models and baseline configuration. Table 1 reports four MEMOIR variants: MEMOIR (GPT-5-mini w/ GPT-5 critic) , which uses gpt-5-mini for Propose, Repair, and Improve and gpt-5 for Critic and Reflect, since diagnostic and reflection quality bound the quality of memory entries while solver generation is held to gpt-5-mini for parity with all baselines; and three single-backbone variants 
+
+MEMOIR (GPT-5-mini) , MEMOIR (Llama-3.3-70B-Instruct) , and MEMOIR (Qwen2.5-Coder-32B) ,which run all five operators on the named backbone. For baselines, GreedyRefine, ReEvo, and MCTS-AHD use gpt-5-mini , and FunSearch uses gpt-5-mini with 3 islands. AIDE [Jiang et al., 2025] uses gpt-5-mini for code drafting/modification and gpt-5 for execution analysis, matched 6Table 1: Per-domain test-set performance across the seven CO problems under a shared execution budget B=16 . Average normalized score (Avg, higher is better) and validity rate (Valid, fraction of instances with feasible solutions); bold marks the best Overall within each method category.                                                      
+
+> Dataset Aircraft Landing Periodic Vehicle Routing Container Loading Container Loading with Weight Restrictions Resource Constrained Shortest Path Crew Scheduling Euclidean Steiner Overall Method Avg Valid Avg Valid Avg Valid Avg Valid Avg Valid Avg Valid Avg Valid Avg Valid
+> Classical Solver 0.5985 –0.1244 –0.0970 –0.0092 –0.7509 –0.4550 –0.9780 –0.4304 –
+> Base LLMs
+> Llama-3.3-70B-Instruct 0.0002 0.1379 0.0000 0.0000 0.0000 0.0000 0.0000 0.0000 0.7508 0.9167 0.0000 0.0000 0.0312 0.2969 0.1117 0.1931 Qwen2.5-Coder-32B 0.0000 0.0000 0.0000 0.0000 0.0000 0.0000 0.0000 0.0000 0.7508 0.9167 0.0000 0.0000 0.0000 0.0000 0.1073 0.1310 GPT-5 Chat 0.0345 0.0348 0.0000 0.0000 0.0000 0.0000 0.0000 0.0000 0.7508 0.9167 0.5165 0.7586 0.0000 0.0000 0.1860 0.2443
+> Reasoning LLMs
+> o3-mini-high 0.8093 0.9655 0.0000 0.0000 0.6542 1.0000 0.0274 0.1057 0.7508 0.9167 0.4412 0.6552 0.4541 0.9922 0.4481 0.6622 DeepSeek-R1-Distill-Llama-70B 0.1670 0.9310 0.0000 0.0000 0.0000 0.0000 0.0000 0.0000 0.7508 0.9167 0.0000 0.0000 0.0156 0.9922 0.1333 0.4057 QwQ-32B 0.1249 0.9310 0.0000 0.0000 0.0441 0.0550 0.1026 0.4171 0.7039 0.7500 0.0000 0.0000 0.2795 1.0000 0.1793 0.4504 GPT-5-mini 0.6190 0.9310 0.1350 0.2000 0.2888 0.9791 0.0170 0.0743 0.7508 0.9167 0.5735 0.6552 0.3038 0.9922 0.3840 0.6784
+> LLM Agents
+> GreedyRefine 0.8035 0.9655 0.3780 0.4000 0.7253 1.0000 0.1015 0.4114 0.7039 0.7500 0.5545 0.6207 0.7167 0.9922 0.5691 0.7343 AIDE 0.8228 0.9310 0.1058 0.2000 0.7748 1.0000 0.0975 0.6457 0.7508 0.9167 0.5600 0.7241 0.6337 0.9922 0.5351 0.7728 MCTS-AHD 0.8187 0.9655 0.2990 0.4000 0.6205 1.0000 0.0161 0.4857 0.7508 0.9167 0.6353 0.8621 0.5917 0.9922 0.5332 0.8032 ReEvo 0.8063 0.9310 0.3130 0.4000 0.8338 1.0000 0.1355 0.6543 0.7508 0.9167 0.5274 0.6552 0.6886 0.9922 0.5793 0.7928 FunSearch 0.8788 0.9655 0.7178 0.8000 0.8141 1.0000 0.2961 1.0000 0.7039 0.7500 0.5564 0.6207 0.6318 0.9922 0.6570 0.8755 MEMOIR (Llama-3.3-70B-Instruct) 0.1132 0.2258 0.1468 0.4000 0.0119 1.0000 0.0000 0.0000 0.7508 0.9167 0.0000 0.0000 0.0543 0.9922 0.1539 0.5050
+> MEMOIR (Qwen2.5-Coder-32B) 0.0071 0.2727 0.0000 0.0000 0.0162 1.0000 0.0058 0.5400 0.8447 1.0000 0.3155 0.5500 0.3124 0.7544 0.2145 0.5882
+> MEMOIR (GPT-5-mini) 0.8751 0.9655 0.7642 0.8000 0.8084 1.0000 0.3180 1.0000 0.7508 0.9167 0.5783 0.7586 0.7243 1.0000 0.6884 0.9201 MEMOIR (GPT-5-mini w/ GPT-5 critic) 0.8668 0.9655 0.8690 1.0000 0.8364 1.0000 0.3453 1.0000 0.7508 0.9167 0.6240 0.8966 0.8183 0.9922 0.7301 0.9673
+
+to MEMOIR’s Critic and Reflect so any gap reflects memory design, not feedback quality. Prompts for all MEMOIR operators appear in Appendix C. 
+
+4.2 Main Results Overall performance. Across seven domains (Table 1), MEMOIR ( gpt-5-mini w/ gpt-5 critic) attains the highest overall Avg ( .7301 ) and Valid ( .9673 ). The five LLM-agent baselines span 
+
+[.5332 , . 6570] Avg and [.7343 , . 8755] Valid; the strongest, FunSearch, trails by 7.31 /9.18 points, and the non-LLM Classical Solver achieves .4304 Avg. The single-backbone variant MEMOIR (GPT-5-mini) also surpasses every baseline on both overall metrics ( .6884 /. 9201 ), suggesting the gain is not solely attributable to a stronger critic. MEMOIR leads or matches the best LLM-agent on Avg on five of the seven domains; on the remaining two, FunSearch edges Aircraft Landing on Avg ( .8788 vs. .8668 ) at matched Valid and MCTS-AHD edges Crew Scheduling on Avg ( .6353 vs. 
+
+.6240 ) but at lower Valid ( .8621 vs. .8966 ), so no baseline dominates MEMOIR on both metrics in any single domain. Figure 2 corroborates this picture, with per-instance score distributions that are generally higher, and often tighter, than the baselines and with fewer infeasible outputs, and Figure 3 shows within-branch improvement and later branches typically reaching higher peaks than earlier ones on Aircraft Landing and Periodic Vehicle Routing, with development and test curves tracking each other. 
+
+MEMOIR delivers consistent gains across backbones. Direct synthesis without an agent loop is unreliable on combinatorial structure: the best direct-synthesis backbone (o3-mini-high) reaches only .4481 overall Avg. Embedding any backbone in MEMOIR’s full pipeline consistently lifts both metrics; with gpt-5-mini , this yields +30 .44 Avg and +24 .17 Valid over matched direct synthesis. The absolute level depends on the backbone’s underlying coding capability, since solver synthesis for constraint-heavy CO problems is a demanding programming task, but the loop adds value at every capability tier we tested: notably, MEMOIR (Qwen) overtakes the open-source reasoning baselines DeepSeek-R1-Distill-Llama-70B and QwQ-32B on both overall metrics, showing that structured memory makes a mid-tier coding backbone competitive with stronger reasoning models used without an agent loop. 
+
+Memory quality and hierarchy both matter. Two design checks isolate the role of memory. 
+
+(i) Memory entry quality matters: Critic produces the diagnostic field of each branch-local record and Reflect produces global entries, so upgrading only those two from gpt-5-mini to gpt-5 (moving from MEMOIR (GPT-5-mini) to MEMOIR ( gpt-5-mini w/ gpt-5 critic), with solver generation fixed to gpt-5-mini in both) lifts overall Avg by +4 .17 and Valid by +4 .72 (.6884 /. 9201 →
+
+7Figure 2: Per-instance test-set score distributions across the seven CO problems. Red crosses mark invalid solutions (score =0 ). 
+
+.7301 /. 9673 ), so the gain comes from sharper diagnostics and reflections yielding better-grounded memory. (ii) Hierarchy itself matters: on MEMOIR ( gpt-5-mini w/ gpt-5 critic), a flat-memory variant that collapses branch-local and global memory into a single shared memory drops Avg by 
+
+8.5 points and Valid by 4.4 points relative to the full method, indicating that the branch-local/global separation, not merely the presence of memory, drives the gains. 
+
+Gains are stable across runs and instance difficulty. Two checks probe robustness. (i) Run-to-run stability: across three independent runs on four domains (Aircraft Landing, Periodic Vehicle Routing, Container Loading, Resource Constrained Shortest Path; one representative per problem family), MEMOIR has the lowest variability among LLM-agent methods (Avg stdev 0.0098 , Valid stdev 
+
+0.0005 , arithmetic means across the four domains; full per-method table in Appendix F). (ii) Difficulty stratification: stratifying test instances into ordinal difficulty bins for Aircraft Landing and Periodic Vehicle Routing using instance-derived proxies (Appendix D; per-bin distributions in Appendix D.3), MEMOIR remains competitive with FunSearch across all Aircraft Landing bins, including the hardest, and sustains perfect validity across every Periodic Vehicle Routing bin, indicating that the improvements persist as constraints tighten. 
+
+4.3 Ablation Study 
+
+We ablate MEMOIR’s memory components while keeping search procedure, prompts, models, and execution budget fixed, evaluating three variants in Table 2: (i) w/o Global Memory , which removes 
+
+Figure 3: Convergence on the development set for MEMOIR ( gpt-5-mini w/ gpt-5 critic). Avg (left) and Valid (right) over the B=16 executions on Aircraft Landing (top) and Periodic Vehicle Routing (bottom); alternating shaded regions mark branch boundaries. “Final” denotes the test-set score of the selected solver. 8Table 2: Ablation of MEMOIR’s memory components. Average normalized score (Avg) and validity rate (Valid) across the seven CO problems.                                                                                   
+
+> Dataset Aircraft Landing Periodic Vehicle Routing Container Loading Container Loading with Weight Restrictions Resource Constrained Shortest Path Crew Scheduling Euclidean Steiner Overall Method Avg Valid Avg Valid Avg Valid Avg Valid Avg Valid Avg Valid Avg Valid Avg Valid
+> MEMOIR (GPT-5-mini w/ GPT-5 critic) 0.8668 0.9655 0.8690 1.0000 0.8364 1.0000 0.3453 1.0000 0.7508 0.9167 0.6240 0.8966 0.8183 0.9922 0.7301 0.9673 MEMOIR w/o Global Memory 0.8623 0.9655 0.5196 0.8000 0.7914 1.0000 0.3578 1.0000 0.7508 0.9167 0.5754 0.7241 0.7765 0.9922 0.6620 0.9141 MEMOIR w/o Branch-Local Memory 0.8263 0.9655 0.4802 0.6000 0.8094 1.0000 0.1448 0.4143 0.7508 0.9167 0.5983 0.7241 0.6544 0.9922 0.6092 0.8018 MEMOIR w/o Failed Nodes 0.8459 0.9655 0.7328 0.8000 0.7718 1.0000 0.2935 1.0000 0.7508 0.9167 0.4552 0.6207 0.6748 0.9922 0.6464 0.8993
+
+global memory and reflection so branches initialize independently; (ii) w/o Branch-Local Memory ,which disables branch-local memory so refinement has no access to prior modifications or execution feedback within a branch; and (iii) w/o Failed Nodes , which retains branch-local memory but stores only valid records, excluding invalid solvers and their diagnostics so the loop cannot avoid repeating previously encountered failures. Removing global memory ( w/o Global Memory ) reduces overall Avg by 6.81 points and Valid by 5.32 
+
+points. Disabling branch-local memory ( w/o Branch-Local Memory ) causes the largest drop (Avg: 
+
+−12 .09 , Valid: −16 .55 ), with validity collapsing on Container Loading with Weight Restrictions (1.0000 → 0.4143 ): refinement without execution history cannot reliably recover from constraint violations. Restricting branch-local memory to valid records ( w/o Failed Nodes ) reduces Avg by 
+
+8.37 and Valid by 6.80 points, confirming that failure information is essential for avoiding repeated infeasible designs. 
+
+## 5 Conclusion 
+
+We introduced MEMOIR, a memory-guided tree-search framework for LLM-based solver synthesis whose two-level memory hierarchy separates branch-local execution-grounded refinement from compressed cross-branch algorithmic summaries, with a reflection step that distills each branch into transferable lessons before they enter global memory. Across seven classical CO problems under a fixed 16-execution budget, MEMOIR reaches 96.7% validity (a 9.2-point gap over the strongest LLM baseline) and improves average normalized score by 7.3 points, with run-to-run validity standard deviation over an order of magnitude below every baseline. Ablations attribute the gains to all three components: removing branch-local memory hurts most, while excluding failure records or removing global memory each causes meaningful drops. The broader takeaway is that separating transferable algorithmic insight from low-level execution detail is an effective design principle for LLM-based search agents, particularly where infeasibility is the primary bottleneck. 
+
+Limitations and Future Work. LLM-agent methods are evaluated only at the matched low budget 
+
+B=16 , which isolates search efficiency but does not characterize behavior at evolutionary-scale budgets. The rule that splits the budget across branches is heuristic rather than learned. Beyond search efficiency, our seven problems span scheduling, routing, packing, and geometric design, and MEMOIR treats each problem independently without transferring knowledge across problem types. Reflection itself relies on LLM summarization, which we mitigate by grounding global entries in the branch’s execution trace and critic diagnostics rather than a free-form read of the code; even so, a misrepresented failure mode could in principle rule out a useful heuristic family. Future work includes scaling to evolutionary-scale budgets, replacing the heuristic branch-budget rule with a learned policy, persisting Mglobal across structurally related problems, hierarchical memory at multiple abstraction levels, and automated validation of global memory entries to improve reflection robustness. 
+
+## Impact Statement 
+
+This work targets automated solver synthesis for combinatorial optimization, with potential to broaden access to high-quality solutions in domains such as logistics, healthcare scheduling, and resource allocation. As with any optimization tool, synthesized solvers can in principle be applied to objectives that conflict with societal values; MEMOIR is a tool for well-specified problems, not a decision-making system, and the choice of objectives and constraints rests with domain experts. MEMOIR also inherits the compute and energy costs of LLM inference; by avoiding repeated failures and redundant exploration of similar algorithmic families within a fixed budget, our memory-guided design uses each execution more productively, supporting stronger solver quality without scaling up compute. 9References 
+
+Ali Ahmaditeshnizi, Wenzhi Gao, and Madeleine Udell. Optimus: Scalable optimization modeling with (mi) lp solvers and large language models. In International Conference on Machine Learning ,pages 577–596. PMLR, 2024. Nicolás Astorga, Tennison Liu, Yuanzhang Xiao, and Mihaela van der Schaar. Autoformulation of mathematical optimization models using LLMs. In Forty-second International Conference on Machine Learning , 2025. URL https://openreview.net/forum?id=33YrT1j0O0 .John E Beasley. A heuristic for euclidean and rectilinear steiner problems. European Journal of Operational Research , 58(2):284–292, 1992. John E Beasley and B Cao. A tree search algorithm for the crew scheduling problem. European Journal of Operational Research , 94(3):517–526, 1996. John E Beasley and Nicos Christofides. An algorithm for the resource constrained shortest path problem. Networks , 19(4):379–394, 1989. John E Beasley, Mohan Krishnamoorthy, Yazid M Sharaiha, and David Abramson. Scheduling aircraft landings—the static case. Transportation science , 34(2):180–197, 2000. Irwan Bello, Hieu Pham, Quoc V Le, Mohammad Norouzi, and Samy Bengio. Neural combinatorial optimization with reinforcement learning. arXiv preprint arXiv:1611.09940 , 2016. Yoshua Bengio, Andrea Lodi, and Antoine Prouvost. Machine learning for combinatorial optimization: a methodological tour d’horizon. European Journal of Operational Research , 290(2):405–421, 2021. Eberhard E Bischoff and MSW Ratcliff. Issues in the development of approaches to container loading. 
+
+Omega , 23(4):377–390, 1995. Edmund K Burke, Michel Gendreau, Matthew Hyde, Graham Kendall, Gabriela Ochoa, Ender Özcan, and Rong Qu. Hyper-heuristics: A survey of the state of the art. Journal of the Operational Research Society , 64(12):1695–1724, 2013. Nicos Christofides and John E Beasley. The period routing problem. Networks , 14(2):237–256, 1984. Zhengyao Jiang, Dominik Schmidt, Dhruv Srikanth, Dixing Xu, Ian Kaplan, Deniss Jacenko, and Yuxiang Wu. Aide: Ai-driven exploration in the space of code. arXiv preprint arXiv:2502.13138 ,2025. Chaitanya K Joshi, Thomas Laurent, and Xavier Bresson. An efficient graph convolutional network technique for the travelling salesman problem. arXiv preprint arXiv:1906.01227 , 2019. Chaitanya K Joshi, Quentin Cappart, Louis-Martin Rousseau, and Thomas Laurent. Learning the travelling salesperson problem requires rethinking generalization. Constraints , 27(1):70–98, 2022. Elias Khalil, Hanjun Dai, Yuyu Zhang, Bistra Dilkina, and Le Song. Learning combinatorial optimization algorithms over graphs. In Advances in neural information processing systems ,volume 30, 2017. Minsu Kim, Junyoung Park, and Jinkyoo Park. Sym-NCO: Leveraging symmetricity for neu-ral combinatorial optimization. In Alice H. Oh, Alekh Agarwal, Danielle Belgrave, and Kyunghyun Cho, editors, Advances in Neural Information Processing Systems , 2022. URL 
+
+https://openreview.net/forum?id=kHrE2vi5Rvs .Wouter Kool, Herke van Hoof, and Max Welling. Attention, learn to solve routing problems! In 
+
+International Conference on Learning Representations , 2019. URL https://openreview.net/ forum?id=ByxBFsRqYm .10 Yeong-Dae Kwon, Jinho Choo, Byoungjip Kim, Iljoo Yoon, Youngjune Gwon, and Seung-jai Min. Pomo: Policy optimization with multiple optima for reinforcement learning. In H. Larochelle, M. Ranzato, R. Hadsell, M.F. Balcan, and H. Lin, editors, Advances in Neural Information Processing Systems , volume 33, pages 21188–21198. Curran Associates, Inc., 2020. URL https://proceedings.neurips.cc/paper_files/paper/2020/file/ f231f2107df69eab0a3862d50018a9b2-Paper.pdf .Fei Liu, Xialiang Tong, Mingxuan Yuan, Xi Lin, Fu Luo, Zhenkun Wang, Zhichao Lu, and Qingfu Zhang. Evolution of heuristics: Towards efficient automatic algorithm design using large language model. In Proceedings of the 41st International Conference on Machine Learning , 2024. Haoyang Liu, Jie Wang, Yuyang Cai, Xiongwei Han, Yufei Kuang, and Jianye HAO. Optitree: Hierarchical thoughts generation with tree search for LLM optimization modeling. In The Thirty-ninth Annual Conference on Neural Information Processing Systems , 2025. URL https:// openreview.net/forum?id=Ej20yjWMCj .Aman Madaan, Niket Tandon, Prakhar Gupta, Skyler Hallinan, Luyu Gao, Sarah Wiegreffe, Uri Alon, Nouha Dziri, Shrimai Prabhumoye, Yiming Yang, et al. Self-refine: Iterative refinement with self-feedback. Advances in Neural Information Processing Systems , 36:46534–46594, 2023. Ansong Ni, Srini Iyer, Dragomir Radev, Veselin Stoyanov, Wen-tau Yih, Sida Wang, and Xi Victoria Lin. Lever: Learning to verify language-to-code generation with execution. In International Conference on Machine Learning , pages 26106–26128. PMLR, 2023. Joon Sung Park, Joseph O’Brien, Carrie Jun Cai, Meredith Ringel Morris, Percy Liang, and Michael S Bernstein. Generative agents: Interactive simulacra of human behavior. In Proceedings of the 36th annual acm symposium on user interface software and technology , pages 1–22, 2023. Rindra Ramamonjison, Haley Li, Timothy Yu, Shiqi He, Vishnu Rengan, Amin Banitalebi-dehkordi, Zirui Zhou, and Yong Zhang. Augmenting operations research with auto-formulation of op-timization models from problem descriptions. In Yunyao Li and Angeliki Lazaridou, editors, 
+
+Proceedings of the 2022 Conference on Empirical Methods in Natural Language Processing: Industry Track , pages 29–62, Abu Dhabi, UAE, December 2022. Association for Computational Linguistics. doi: 10.18653/v1/2022.emnlp-industry.4. URL https://aclanthology.org/ 2022.emnlp-industry.4/ .MSW Ratcliff and Eberhard E Bischoff. Allowing for weight considerations in container loading. 
+
+Operations-Research-Spektrum , 20(1):65–71, 1998. Bernardino Romera-Paredes, Mohammadamin Barekatain, Alexander Novikov, Matej Balog, M Pawan Kumar, Emilien Dupont, Francisco JR Ruiz, Jordan S Ellenberg, Pengming Wang, Omar Fawzi, et al. Mathematical discoveries from program search with large language models. 
+
+Nature , 625(7995):468–475, 2024. Noah Shinn, Federico Cassano, Ashwin Gopinath, Karthik R Narasimhan, and Shunyu Yao. Reflexion: language agents with verbal reinforcement learning. In Thirty-seventh Conference on Neural Infor-mation Processing Systems , 2023. URL https://openreview.net/forum?id=vAElhFcKW6 .Weiwei Sun, Shengyu Feng, Shanda Li, and Yiming Yang. CO-Bench: Benchmarking language model agents in algorithm search for combinatorial optimization. In Proceedings of the AAAI Conference on Artificial Intelligence , volume 40, pages 33126–33134, 2026. Guanzhi Wang, Yuqi Xie, Yunfan Jiang, Ajay Mandlekar, Chaowei Xiao, Yuke Zhu, Linxi Fan, and Anima Anandkumar. Voyager: An open-ended embodied agent with large lan-guage models. Transactions on Machine Learning Research , 2024. ISSN 2835-8856. URL 
+
+https://openreview.net/forum?id=ehfRiF0R3a .Zhiyuan Wang, Bokui Chen, Yinya Huang, Qingxing Cao, Ming He, Jianping Fan, and Xiaodan Liang. ORMind: A cognitive-inspired end-to-end reasoning framework for operations research. In Georg Rehm and Yunyao Li, editors, Proceedings of the 63rd Annual Meeting of the Association for Computational Linguistics (Volume 6: Industry Track) , pages 104–131, Vienna, Austria, July 2025. Association for Computational Linguistics. ISBN 979-8-89176-288-6. doi: 10.18653/v1/ 2025.acl-industry.10. URL https://aclanthology.org/2025.acl-industry.10/ .11 Wei Yang, Jinwei Xiao, Hongming Zhang, Qingyang Zhang, Yanna Wang, and Bo Xu. Coarse-to-fine grounded memory for LLM agent planning. In Christos Christodoulopoulos, Tanmoy Chakraborty, Carolyn Rose, and Violet Peng, editors, Proceedings of the 2025 Conference on Empirical Methods in Natural Language Processing , pages 13029–13056, Suzhou, China, November 2025. Associa-tion for Computational Linguistics. ISBN 979-8-89176-332-6. doi: 10.18653/v1/2025.emnlp-main. 659. URL https://aclanthology.org/2025.emnlp-main.659/ .Shunyu Yao, Dian Yu, Jeffrey Zhao, Izhak Shafran, Thomas L. Griffiths, Yuan Cao, and Karthik R Narasimhan. Tree of thoughts: Deliberate problem solving with large language models. In 
+
+Thirty-seventh Conference on Neural Information Processing Systems , 2023. URL https:// openreview.net/forum?id=5Xc1ecxO1h .Haoran Ye, Jiarui Wang, Zhiguang Cao, Federico Berto, Chuanbo Hua, Haeyeon Kim, Jinkyoo Park, and Guojie Song. Reevo: Large language models as hyper-heuristics with reflective evolution. 
+
+Advances in neural information processing systems , 37:43571–43608, 2024. Zhi Zheng, Zhuoliang Xie, Zhenkun Wang, and Bryan Hooi. Monte Carlo tree search for com-prehensive exploration in LLM-based automatic heuristic design. In Proceedings of the 42nd International Conference on Machine Learning , 2025. 12 A Problem Domains 
+
+A.1 Aircraft Landing 
+
+The problem is to schedule landing times for a set of planes across one or more runways such that each landing occurs within its prescribed time window and all pairwise separation requirements are satisfied; specifically, if plane i lands at or before plane j on the same runway, then the gap between their landing times must be at least the specified separation time provided in the input. In a multiple-runway setting, each plane must also be assigned to one runway, and if planes land on different runways, the separation requirement (which may differ) is applied accordingly. Each plane has an earliest, target, and latest landing time, with penalties incurred proportionally for landing before (earliness) or after (lateness) its target time. The objective is to minimize the total penalty cost while ensuring that no constraints are violated—if any constraint is breached, the solution receives no score. 
+
+Inputs An instance provides num_planes and num_runways . For each plane, planes con-tains its time window ( earliest , latest ), its preferred time ( target ), and its penalty rates (penalty_early , penalty_late ). The instance also includes a matrix separation where 
+
+separation[i][j] specifies the minimum required time gap if plane i lands before plane j on the same runway. 
+
+Outputs (solution format) The solver returns a dictionary schedule with one entry per plane. For each plane, the entry is a small dictionary containing its landing time and assigned runway. 
+
+Feasibility constraints A schedule is feasible only if every plane lands within its allowed window, and every runway assignment is an integer between 1 and num_runways . In addition, for any two different planes assigned to the same runway, if plane i is scheduled no later than plane j, then their landing times must be separated by at least separation[i][j] . Any violation makes the solution infeasible and yields no score. 
+
+Objective value For each plane, landing earlier than target incurs a penalty proportional to how early it lands and penalty_early ; landing later incurs a penalty proportional to how late it lands and penalty_late . The objective value returned by the evaluator is the total penalty summed over all planes, and the goal is to minimize this total. 
+
+A.2 Periodic Vehicle Routing 
+
+The Periodic Vehicle Routing Problem requires planning delivery routes over a multi-day planning period. Each customer (other than the depot, whose id is 0) is provided with a list of candidate service schedules. A schedule is represented by a binary vector of length equal to the period (e.g., [1, 0, 1] for a 3-day period), where a 1 in a given position indicates that the customer must be visited on that day. The decision maker must select exactly one candidate schedule for each customer. For every day in the planning period, if a customer’s chosen schedule indicates a delivery (i.e., a 1), then exactly one vehicle must visit that customer on that day. Otherwise, the customer should not be visited. The decision maker must also design, for each day, the tours for the vehicles. Each tour is a continuous route that starts at the depot (id 0) and, after visiting a subset of customers, returns to the depot. Each vehicle is only allowed to visit the depot once per day—namely, as its starting and ending point—and it is not allowed to return to the depot in the middle of a tour. Moreover, each vehicle route must obey a capacity constraint: the total demand of the customers visited on that tour must not exceed the vehicle capacity each day. Although multiple vehicles are available per day (as specified by the input), not all available vehicles have to be used, but the number of tours in a given day cannot exceed the provided number of vehicles. In addition, the tours on each day must cover exactly those customers who require service per the selected schedules, and no customer may be visited more than once in a given day. 
+
+13 The objective is to choose a schedule for every customer and plan the daily tours so as to minimize the overall distance traveled by all vehicles during the entire planning period. Distances are measured using Euclidean distance. 
+
+Inputs An instance provides the depot location depot (id 0) and a list of customers customers ,each with coordinates, a demand demand , and a list of candidate service schedules schedules .It also provides the planning horizon period_length , the number of vehicles available each day 
+
+vehicles_per_day (one value per day), and the per-vehicle capacity vehicle_capacity .
+
+Outputs (solution format) The solver returns two objects. First, selected_schedules maps each customer id to exactly one chosen schedule from that customer’s candidate list. Second, tours 
+
+maps each day to a list of tours, where each tour is a list of vertex ids that starts at the depot (0), visits some customers, and ends at the depot (0). 
+
+Feasibility constraints The solution is feasible only if each customer is assigned a chosen schedule that is exactly one of its candidates and has length period_length . For each day, the set of customers visited across all tours must match exactly the customers whose chosen schedule has a 1 on that day: every required customer is visited exactly once, and no other customer is visited. Each tour must start and end at the depot and may not include the depot in the middle of the route, and it may not visit the same customer more than once. Finally, each tour must respect the capacity limit: the sum of demands of customers on that tour must not exceed vehicle_capacity . If any constraint is violated, the solution is infeasible and yields no score. 
+
+Objective value The evaluator computes the total travel distance over all tours on all days using Euclidean distances between consecutive vertices in each tour. The objective is to minimize this total distance. 
+
+A.3 Container Loading 
+
+Solves a container loading problem: Given a 3D container of specified dimensions and multiple box types—each defined by dimensions, orientation constraints, and available quantity—the goal is to optimally place these boxes within the container to maximize the volume utilization ratio. Each box placement must respect orientation constraints (vertical alignment flags), fit entirely within container boundaries, and avoid overlaps. The solution returns precise coordinates and orientations for each box placement, quantified by a volume utilization score calculated as the total volume of placed boxes divided by the container volume. Invalid placements result in a score of 0.0. 
+
+Inputs An instance provides the container dimensions container as ( container_length ,
+
+container_width , container_height ). It also provides a set of box types box_types . For each box type, the input specifies its three side lengths dims = [d1,d2,d3], a binary vector flags 
+
+= [f1,f2,f3] indicating which side length is allowed to be the vertical dimension, and an available quantity count .
+
+Outputs (solution format) The solver returns a dictionary with key placements . Each placement is one packed box and is represented by seven integers: box_type , container_id , x, y, z, v, hswap .Here ( x,y,z) is the lower-left-bottom corner of the box inside the container; v selects which dimension index (0,1,2) is used as the vertical side length; and hswap indicates whether the remaining two horizontal side lengths are swapped. 
+
+Feasibility constraints A placement is feasible only if its chosen vertical index v is allowed (flags[v] = 1). Given v, the vertical side length is dims[v] ; the other two side lengths form the horizontal footprint, and hswap determines their order. Each placed box must lie entirely within the container bounds (nonnegative coordinates and not exceeding the container length, width, and height). Any two placed boxes in the same container_id must be non-overlapping (touching faces/edges is allowed). Finally, the number of placements of each box type may not exceed its available count . If any constraint is violated, the solution is invalid and receives score 0.0.14 Objective value If the packing is valid, the evaluator returns the volume utilization ratio: the total volume of all placed boxes divided by the container volume. The goal is to maximize this ratio. 
+
+A.4 Container Loading with Weight Restrictions 
+
+The Container Loading with Weight Restrictions problem aims to maximize the utilization of a container’s volume by selecting and strategically placing boxes inside it. Given a container with specified dimensions (length, width, height) and multiple types of boxes, each characterized by their dimensions, quantities, weights, and load-bearing constraints, the optimization goal is to determine the placement and orientation of these boxes (with each box allowed three possible orientations) that maximizes the ratio of total occupied box volume to container volume. The solution must strictly adhere to spatial constraints (boxes must fit entirely within the container without overlapping), load-bearing constraints (boxes must support the weight of boxes stacked above them according to given limits), and orientation restrictions. The optimization quality is evaluated by the achieved utilization metric, defined as the total volume of successfully placed boxes divided by the container volume; if any constraint is violated, the utilization score is zero. 
+
+Inputs An instance provides the container dimensions container as (L, W, H) in cm. It also provides box_types , a list of box-type specifications. For each box type, the input includes its dimensions ( length , width , height ), binary orientation flags ( length_flag , width_flag ,
+
+height_flag ) that indicate which side is allowed to be vertical, an available quantity count , a box weight weight , and three load-bearing parameters lb1 , lb2 , lb3 (one for each orientation choice). The fields n, instance , and cargo_vol appear in the input interface (and cargo_vol is not used in evaluation). 
+
+Outputs (solution format) The solver returns a list placements of placed boxes. Each placement specifies a box type ( box_type , 1-indexed), an orientation ( orientation in {1,2,3}), and the position ( x, y, z) of the lower-left-front corner in cm. 
+
+Feasibility constraints Each placement must use a valid box type index and an allowed orientation (an orientation is allowed only if the corresponding vertical-flag is 1). Given the chosen orientation, the box has fixed axis-aligned dimensions inside the container. Every placed box must lie entirely within the container bounds, and the number of used boxes of each type may not exceed its available 
+
+count . Boxes must not overlap in space (touching is allowed). Any box that is not on the floor must be fully supported from below by exactly one other box: its bottom face must sit exactly on the top face of a single supporting box, and its horizontal footprint must be contained within the supporter’s top face. Finally, load-bearing constraints must hold: each supporting box must be able to carry the total weight of all boxes stacked above it (including indirect stacks), subject to its orientation-specific load-bearing limit. If any constraint is violated, the solution is invalid and receives score 0.0.
+
+Objective value If the packing is valid, the evaluator returns the utilization ratio: the total volume of all placed boxes (using their original dimensions) divided by the container volume. The goal is to maximize this utilization. 
+
+A.5 Resource Constrained Shortest Path 
+
+This problem involves finding the shortest path from vertex 1 to vertex n in a directed graph while satisfying resource constraints. Specifically, each vertex and arc has associated resource consumptions, and the cumulative consumption for each resource must fall within the provided 
+
+lower_bounds and upper_bounds . The input includes the number of vertices ( n), arcs ( m), resource types ( K), resource consumption at each vertex, and a graph represented as a mapping from vertices to lists of arcs (each arc being a tuple of end vertex, cost, and arc resource consumptions). The optimization objective is to minimize the total arc cost of the path, with the condition that the path is valid—meaning it starts at vertex 1, ends at vertex n, follows defined transitions in the graph, and respects all resource bounds; if any of these constraints are not met, the solution receives no score. 
+
+15 Inputs An instance provides the number of vertices n, the number of directed arcs m, and the number of resource types K. For each resource, it provides a lower bound lower_bounds and an upper bound 
+
+upper_bounds . It also provides vertex_resources , which gives the resource consumption of each vertex, and a directed graph graph that lists outgoing arcs for each vertex. Each arc is represented as (end_vertex, cost, arc_resources) , where cost is the arc cost and arc_resources is a length-K list of resource consumptions on that arc. 
+
+Outputs (solution format) The solver returns a dictionary with a path , which is a list of vertex indices describing the chosen route from vertex 1 to vertex n. The output also includes a total_cost 
+
+field, but the evaluator recomputes the cost from the arcs along path .
+
+Feasibility constraints A solution is feasible only if path starts at vertex 1 and ends at vertex n.Every consecutive pair of vertices in path must correspond to a directed arc that exists in graph .Resource consumption is accumulated by adding the resource vector of every visited vertex and also adding the resource vector of every traversed arc. For each resource type k ∈ { 1, . . . , K}, the final total consumption must lie within the interval [lower_bounds [k], upper_bounds [k]] . If any of these checks fail, the solution is invalid and receives no score. 
+
+Objective value If the path is valid, the evaluator returns the total arc cost along the path, computed by summing the cost values of the arcs used. The goal is to minimize this total cost. 
+
+A.6 Crew Scheduling 
+
+The Crew Scheduling Problem involves assigning each task—with defined start and finish times— to exactly one crew, aiming to minimize the total transition costs between consecutive tasks. Each crew’s schedule must satisfy three constraints: tasks within a crew must not overlap; valid transitions (with associated costs) must exist between every consecutive pair of tasks; and the crew’s total duty time (from the start of the first task to the finish of the last) cannot exceed a specified time limit. Additionally, no more than K crews can be used to cover all tasks. Solutions violating any of these constraints are considered infeasible and receive no score. The optimization objective is therefore to determine assignments of tasks to no more than K crews that minimize the sum of transition costs while strictly adhering to all constraints, yielding a feasible and cost-effective scheduling solution. 
+
+Inputs An instance provides the number of tasks N, the crew limit K, and a duty-time limit 
+
+time_limit . Task times are given by tasks , which maps each task id to its ( start_time ,
+
+finish_time ). Transition information is given by arcs , which maps a pair ( from_task , to_task )to a transition cost. 
+
+Outputs (solution format) The solver returns a list crews . Each element is an ordered list of task ids, representing the sequence of tasks assigned to one crew. 
+
+Feasibility constraints Every task must appear exactly once across all crew lists. The solution may use at most K crews (i.e., len(crews) ≤ K), and no crew list may be empty. Within each crew, tasks must be in non-overlapping time order: the finish time of a task may not exceed the start time of the next task in the same crew. For every consecutive pair of tasks in a crew, there must be a valid transition arc in arcs . The duty time of each crew, defined as the finish time of its last task minus the start time of its first task, must not exceed time_limit . If any constraint is violated, the solution is infeasible and receives no score. 
+
+Objective value If the assignment is feasible, the evaluator returns the total transition cost, com-puted by summing the costs of all consecutive task transitions across all crews. The goal is to minimize this total cost. 16 A.7 Euclidean Steiner Tree 
+
+Given a set of 2D points (terminals), the goal of the Euclidean Steiner Problem is to compute a tree connecting all terminals with minimum total length. The total length is measured as the sum of Euclidean distances (where the Euclidean distance between two points (x1,y1) and (x2,y2) is sqrt((x1-x2)² + (y1-y2)²)). Unlike a Minimum Spanning Tree (MST) computed solely on the given terminals, a Steiner tree may introduce extra points, called Steiner points, to reduce the overall length. In this formulation, it is assumed that the final candidate tree’s total length is given by the MST computed on the union of the original terminals and the reported Steiner points. A lower ratio (candidate_tree_length/MST_original_length) indicates a better solution. 
+
+Inputs An instance provides points , a list of terminal coordinates. Each terminal is a pair (x, y) 
+
+of floating-point values. 
+
+Outputs (solution format) The solver returns steiner_points , a list of additional 2D points. Each Steiner point is also a pair (x, y) .
+
+Feasibility constraints A solution is valid if the minimum spanning tree computed on the union of the terminals and the returned Steiner points is not longer than the minimum spanning tree computed on the terminals alone (within a small tolerance). If this check fails, the solution is invalid and receives no score. 
+
+Objective value Let mst_original be the total length of the minimum spanning tree on the terminals, and let candidate_value be the total length of the minimum span-ning tree on the terminals plus the returned Steiner points. The evaluator com-putes the ratio candidate_value /mst_original and converts it into a score as 1 −
+
+candidate_value /mst_original . Smaller candidate length (and therefore a smaller ratio) yields a higher score. 17 B MEMOIR Procedure 
+
+Algorithm 1 gives the full procedure introduced in Section 3.2. The five operators (P ROPOSE , R EPAIR ,IMPROVE , C RITIC , R EFLECT ) are realized by the prompts in Appendix C. 
+
+Algorithm 1 MEMOIR: Memory-Guided Tree Search for Solver Synthesis. Each branch is seeded by a proposal conditioned on global memory, refined by Repair/Improve with branch-local memory, and summarized by Reflect into a single global-memory entry; the highest-scoring valid solver on Ddev is returned. 
+
+1: Input: Problem description P ; development set Ddev ; test set Dtest ; execution budget B; per-branch depth cap n; per-instance timeout T .
+
+2: Initialize: Mglobal ← ∅ ; U ← ∅ ; i ← 0; remaining budget b ← B. {open new branches while ≥ 2
+
+executions remain} 
+
+3: while b ≥ 2 do 
+
+4: i ← i + 1 
+
+5: {Exploration: initialize a new branch with a distinct algorithmic design }
+
+6: M(i)local ← ∅ 
+
+7: (s0, π 0) ← PROPOSE (P, Mglobal )
+
+8: (v0, f 0, E 0) ← EXECUTE (s0; Ddev ); ρ0 ← CRITIC (s0, ∅, E 0, ∅); b ← b − 1
+
+9: M(i)local ← { (π0, ρ 0, v 0, f 0, E 0)}
+
+10: for t = 2 to n do 
+
+11: {Exploitation: extend the branch to depth t via one repair or improve step; stop early when no further gain is expected or budget is spent }
+
+12: if b = 0 or ¬ IMPROVEMENT EXPECTED (M(i)local ) then 
+
+13: break 
+
+14: end if 
+
+15: if vu = 0 for all u ∈ M (i)local then 
+
+16: Sample invalid parent upar ∈ M (i)local in proportion to fu (uniform if all fu = 0 )
+
+17: (s′, π ′) ← REPAIR (P, u par , M(i)local )
+
+18: else 
+
+19: upar ← arg max u∈M (i)local , v u=1 fu
+
+20: (s′, π ′) ← IMPROVE (P, u par , M(i)local )
+
+21: end if 
+
+22: (v′, f ′, E ′) ← EXECUTE (s′; Ddev ); ρ′ ← CRITIC (s′, s upar , E ′, E upar ); b ← b − 1
+
+23: M(i)local ← M (i)local ∪ { (π′, ρ ′, v ′, f ′, E ′)}
+
+24: end for 
+
+25: {Cross-branch transfer: compress the branch into a single global-memory entry }
+
+26: gi ← REFLECT (M(i)local )
+
+27: Mglobal ← M global ∪ { gi}; U ← U ∪ M (i)local 
+
+28: end while 
+
+29: {Final selection on dev (fall back to highest-scoring partial record if no fully valid solver was found); one-shot test evaluation }
+
+30: if {u ∈ U : vu = 1 }̸ = ∅ then 
+
+31: u⋆ ← arg max u∈U , v u=1 fu
+
+32: else 
+
+33: u⋆ ← arg max u∈U fu
+
+34: end if 
+
+35: ˆs ← su⋆
+
+36: Return ˆs and report ¯f (ˆ s; Dtest ), V ALID (ˆ s; Dtest )
+
+## C Prompt Templates 
+
+This section lists the prompt templates used by MEMOIR’s core components. 
+
+Algorithm Proposer Prompt 
+
+You are an expert in Operation Research problem and combinatorial optimization solving a combinatorial optimization problem. In order to solve this problem 
+
+18 more effectively, you need to come up with an excellent and creative algorithm for a solution and then implement this solution in Python. We will now provide a description of the problem. Task description 
+
+[CO-Bench problem description goes here] 
+
+Past Failures & Constraints 
+
+[Global memory summary goes here] 
+
+Instructions Response format Your response should be a brief outline/sketch of your proposed solution in natural language (3–5 sentences), followed by a single markdown code block (wrapped in “‘) which implements this solve function and yields the required formatted output. There should be no additional headings or text in your response. Just natural language text followed by a newline and then the markdown code block. Solution sketch guideline This is a NEW exploration phase. Review the Past Failures & Constraints section carefully. You MUST propose an algorithm design that DIFFERS from failed attempts and is NOT simply a repetition of previous successful ones. This first solution design should be relatively simple. The solution sketch should be 3–5 sentences. Enclose all your code within a code block: “‘ ... “‘ and name the main function def solve(**kwargs). Your function has a 10-second timeout; aim to yield the best possible results within this limit. Implementation guideline The code should implement the proposed solution and yield solutions over time as in the template solve function. Use Python’s yield keyword repeatedly to produce a stream of solutions. Each yielded solution should be better than the previous one. You can end the generator early by using return if you’ve found an optimal solution. The evaluation will be performed on the last solution you yielded before timeout. Note that you don’t need to handle timeout –- the system will automatically use the last solution you yielded before timeout. If your function doesn’t yield any solution before timeout, it will be considered a timeout failure. The code should be a single-file python program that is self-contained and can be executed as-is. No parts of the code should be skipped, don’t terminate before finishing the script. Your response should only contain a single code block. Be aware of the running time of the code, it should complete within 10 seconds. You only need to implement the def solve(**kwargs) function. The data loading and evaluation are all done in the grading system. Installed Packages You may use any standard Python libraries and general-purpose packages (e.g., numpy, pandas); they are already installed. Do NOT use any optimization or solver libraries, including ortools, gurobi, pulp, pyomo, cvxpy, mip, z3, scip, cplex, or similar. 
+
+Improve Prompt 
+
+You are an expert in Operation Research problem and combinatorial optimization, solving a combinatorial optimization problem. You are provided with a previously developed solution below and should improve it in order to further increase the performance of algorithm. For this you should first outline a brief plan in natural language for how the algorithm can be improved and then implement this improvement in Python based on the provided previous solution. Task description 
+
+[CO-Bench problem description goes here] 
+
+19 Memory 
+
+[Branch-local history for the current branch goes here] 
+
+Previous solution 
+
+[Previous solver code goes here] 
+
+Instructions Response format Your response should be a brief outline/sketch of your proposed solution in natural language (3–5 sentences), followed by a single markdown code block (wrapped in “‘) which implements this solve function and yields the required formatted output. There should be no additional headings or text in your response. Just natural language text followed by a newline and then the markdown code block. Solution improvement sketch guideline The solution sketch should be a brief natural language description of how the previous solution can be improved. Review the Memory section. Identify patterns in No bugs, worsened score or No change. DO NOT repeat those strategies. If the Memory shows a previously successful approach, you must SIGNIFICANTLY vary it; do not just re-apply the exact same logic. You should be very specific and should only propose a single actionable improvement. This improvement should be atomic. The solution sketch should be 3–5 sentences. Implementation guideline The code should implement the proposed solution and yield solutions over time as in the template solve function. Use Python’s yield keyword repeatedly to produce a stream of solutions. Each yielded solution should be better than the previous one. You can end the generator early by using return if you’ve found an optimal solution. The evaluation will be performed on the last solution you yielded before timeout. Note that you don’t need to handle timeout –- the system will automatically use the last solution you yielded before timeout. If your function doesn’t yield any solution before timeout, it will be considered a timeout failure. The code should be a single-file python program that is self-contained and can be executed as-is. No parts of the code should be skipped, don’t terminate before finishing the script. Your response should only contain a single code block. Be aware of the running time of the code, it should complete within 10 seconds. You only need to implement the def solve(**kwargs) function. The data loading and evaluation are all done in the grading system. Installed Packages You may use any standard Python libraries and general-purpose packages (e.g., numpy, pandas); they are already installed. Do NOT use any optimization or solver libraries, including ortools, gurobi, pulp, pyomo, cvxpy, mip, z3, scip, cplex, or similar. 
+
+Debug Prompt 
+
+You are an expert in Operation Research problem and combinatorial optimization, solving a combinatorial optimization problem. Your previous solution had a bug, so based on the information below, you should revise it in order to fix this bug. Your response should be an implementation outline in natural language, followed by a single markdown code block which implements the bugfix/solution. Task description 
+
+[CO-Bench problem description goes here] 
+
+Memory 
+
+[Branch-local history for the current branch goes here] 
+
+20 Previous (buggy) implementation 
+
+[Buggy solver code goes here] 
+
+Execution output 
+
+[Runtime logs / constraint violations go here] 
+
+Instructions Response format Your response should be a brief outline/sketch of your proposed solution in natural language (3–5 sentences), followed by a single markdown code block (wrapped in “‘) which implements this solve function and yields the required formatted output. There should be no additional headings or text in your response. Just natural language text followed by a newline and then the markdown code block. Bugfix improvement sketch guideline Review the Execution output and identify the first concrete failure (e.g., missing key, wrong return format, constraint violation, crash). If the Memory shows a similar bug or a previously attempted fix, do not repeat the same fix if it did not work; try a different approach. Focus on restoring correctness first: fix the bug with the smallest possible change, without redesigning the whole algorithm. The sketch should be 3–5 sentences. Implementation guideline The code should implement the proposed solution and yield solutions over time as in the template solve function. Use Python’s yield keyword repeatedly to produce a stream of solutions. Each yielded solution should be better than the previous one. You can end the generator early by using return if you’ve found an optimal solution. The evaluation will be performed on the last solution you yielded before timeout. Note that you don’t need to handle timeout –- the system will automatically use the last solution you yielded before timeout. If your function doesn’t yield any solution before timeout, it will be considered a timeout failure. The code should be a single-file python program that is self-contained and can be executed as-is. No parts of the code should be skipped, don’t terminate before finishing the script. Your response should only contain a single code block. Be aware of the running time of the code, it should complete within 10 seconds. You only need to implement the def solve(**kwargs) function. The data loading and evaluation are all done in the grading system. Installed Packages You may use any standard Python libraries and general-purpose packages (e.g., numpy, pandas); they are already installed. Do NOT use any optimization or solver libraries, including ortools, gurobi, pulp, pyomo, cvxpy, mip, z3, scip, cplex, or similar. 
+
+Trajectory Critic Prompt 
+
+You are an expert in combinatorial optimization. You have written code to solve this task and now need to evaluate the output. You must compare the Previous Version Execution Output with the Current Execution Output. Determine if the changes fixed previous bugs, introduced new ones, or improved performance. Task description 
+
+[CO-Bench problem description goes here] 
+
+Previous Version Implementation 
+
+[Parent solver code goes here, or write: No previous implementation (Initial Draft)] 
+
+Current Implementation 
+
+[Current solver code goes here] 
+
+21 Previous Version Execution Output 
+
+[Previous logs go here, or write: No previous logs (Initial Draft)] 
+
+Current Version Execution Output 
+
+[Current logs go here] 
+
+Instructions Return a JSON object with the following fields. is_bug: true if the output log shows that execution failed or has some bug, otherwise false. Note that timeout is not a bug; in that case set is_bug to false. summary: compare previous and current logs. If there is a bug, propose a fix. If fixed, explain what improved. If the score changed, mention the delta. Write 2–3 sentences. Your response must contain only the JSON object. 
+
+Reflection Prompt 
+
+Analyze the provided Trajectory History (a sequence of coding attempts) which failed to yield a satisfactory solution. Your goal is to extract a reusable lesson that prevents repeating the same suboptimal approach in the next fresh attempt. Trajectory History 
+
+[Full branch-local memory for the finished branch goes here] 
+
+Instructions Return a JSON object with exactly the following keys. algorithmic design: identify the core algorithmic approach that was attempted and refined throughout this branch. failure and stagnation reason: explain the fundamental reason this approach failed or plateaued. constraint: write a negative constraint (what NOT to do) that forces the next draft to take a meaningfully different approach. Your response must contain only the JSON object. 
+
+## D Performance by Instance Complexity 
+
+This appendix specifies the instance-derived difficulty proxies used to stratify test instances in Section 4.2. For each domain, we define a scalar hardness score h(x) ≥ 0 computed from the instance data alone (no solver execution involved) and partition the test set into K=3 ordinal bins by the empirical terciles of {h(x) : x ∈ D test }. Because h depends only on the instance, the binning is independent of any solver, the synthesis budget, or the method under evaluation. 
+
+D.1 Aircraft Landing: Separation Pressure 
+
+Aircraft Landing becomes harder when more aircraft share each runway (congestion) and required separations are large relative to available time-window slack (tightness). For an instance x, let P be the number of planes and R the number of runways. Each plane i has an allowed window [ei, ℓ i];define the mean window width 
+
+w = 1
+
+P
+
+> P
+
+X
+
+> i=1
+
+(ℓi − ei).
+
+22 (a) Aircraft Landing , stratified by separation pressure (runway congestion and separation tightness relative to time windows).  
+
+> (b) Periodic Vehicle Routing , stratified by balanced peak load ratio (demand relative to daily vehicle capac-ity).
+
+Figure 4: Performance by instance difficulty. Test-set score distributions on each domain stratified into K=3 ordinal bins by an instance-only hardness proxy (Section D). Let sep 90 denote the 90th percentile of the off-diagonal entries of the pairwise separation matrix. We define the separation pressure hardness score as 
+
+hAL (x) = PR|{z} 
+
+> congestion
+
+· sep 90 
+
+w| {z } 
+
+> relative tightness
+
+.
+
+Intuitively, hAL (x) increases when each runway must accommodate more planes and when typical required separations consume a larger fraction of the feasible time windows. 
+
+D.2 Periodic Vehicle Routing: Balanced Peak Load Ratio 
+
+Periodic Vehicle Routing becomes harder as total demand approaches daily capacity, especially because feasibility depends on selecting one service schedule per customer. For an instance x with 
+
+n customers over D days, each customer i has demand qi and a set of candidate binary schedules 
+
+Si ⊆ { 0, 1}D indicating the service days. Let Vd be the number of vehicles available on day d and 
+
+cap be the per-vehicle capacity, so daily capacity is Cd = Vd · cap . For any schedule selection 
+
+(si)ni=1 with si ∈ S i, the induced demand on day d is 
+
+Ld =
+
+> n
+
+X
+
+> i=1
+
+qi si,d .
+
+We define the balanced peak load ratio hardness score as the best-achievable peak utilization over days: 
+
+hPRVP (x) = min 
+
+> si∈S i
+
+max 
+
+> d∈{ 1,...,D }
+
+Ld
+
+Cd
+
+.
+
+Larger hPRVP (x) indicates tighter capacity. 
+
+D.3 Per-Bin Score Distributions 
+
+Using the proxies above, we partition each domain’s test set into K = 3 ordinal bins and report per-bin score distributions in Figures 4a and 4b. For Aircraft Landing, MEMOIR matches or surpasses FunSearch on the hardest bin, so the small aggregate-Avg gap reported in Table 1 reflects easy-instance variation rather than degradation under tight separations. For Periodic Vehicle Routing, MEMOIR sustains perfect validity across all bins while remaining competitive in score; GreedyRefine occasionally achieves higher Avg on hard instances but collapses to near-zero validity on easy and medium bins, and FunSearch produces infeasible solutions on the hardest bin. 
+
+## E Token Consumption and Synthesis Cost Analysis 
+
+This appendix accounts for LLM token consumption and dollar cost of a synthesis run. All numbers reflect the one-time cost of synthesizing a solver on a CO problem under the shared execution budget 
+
+B = 16 ; once synthesized, MEMOIR and every baseline emit a self-contained Python solver that is evaluated on every test instance with zero further LLM calls. 23 For each (method, problem) pair we report input and output token counts and the corresponding dollar cost. All methods use gpt-5-mini for solver code generation (Propose, Repair, Improve). 
+
+MEMOIR (GPT-5-mini w/ GPT-5 critic) and AIDE use gpt-5 for their diagnostic operators (Critic and Reflect for MEMOIR, execution analysis for AIDE), while the single-backbone variant MEMOIR (GPT-5-mini) runs all five operators on gpt-5-mini .Across methods, synthesis cost stays under $1 per run on every problem with wall-clock times of ∼ 20 –40 minutes (Table 3), so differences are measured in cents. MEMOIR ( gpt-5-mini w/ 
+
+gpt-5 critic) and AIDE share a similar cost envelope ( ∼ $0 .52 and ∼ $0 .53 per run), reflecting their shared use of a gpt-5 diagnostic operator. The single-backbone MEMOIR ( gpt-5-mini )variant costs $0.06 per run on average, placing it among the cheapest methods while running the full memory-guided pipeline. Table 3: Method-level token and time summary, averaged across the seven CO problems. Input and output tokens are reported per synthesis run (in thousands); time is wall-clock minutes per run.                                 
+
+> GreedyRefine AIDE FunSearch MEMOIR (w/ GPT-5 critic) ReEvo MCTS-AHD MEMOIR (GPT-5-mini)
+> Avg. Input Tokens (K) 110.6 159.5 139.3 168.6 467.7 164.5 178.6 Avg. Output Tokens (K) 94.2 57.5 74.1 62.6 76.4 87.1 60.6 Avg. Cost ($) 0.07 0.53 0.07 0.52 0.12 0.08 0.06 Avg. Synthesis Time (min) 29 33 27 36 21 24 27
+
+## F Stability Across Runs 
+
+Table 4 reports the per-method run-to-run stability summarized in Section 4.2: arithmetic means of per-domain Avg and Valid standard deviation across three independent runs on the four representative problems listed in the caption. MEMOIR is markedly more consistent than every baseline. Table 4: Standard deviation across 3 independent runs on four CO problems. 
+
+Method Avg Stdev Valid Stdev 
+
+GreedyRefine 0.1043 0.1054 AIDE 0.0295 0.0338 FunSearch 0.0456 0.0579 ReEvo 0.0973 0.0916 MCTS-AHD 0.1349 0.1002 MEMOIR 0.0098 0.0005 
+
+## G Additional Search Dynamics Plots 
+
+24 Figure 5: Convergence on the development set for the five CO problems not shown in Figure 3: 
+
+top to bottom, Container Loading, Container Loading with Weight Restrictions, Crew Scheduling, Euclidean Steiner, and Resource-Constrained Shortest Path. Axes, shading, and the “Final” marker follow Figure 3. 25 NeurIPS Paper Checklist 
+
+1. Claims 
+
+Question: Do the main claims made in the abstract and introduction accurately reflect the paper’s contributions and scope? Answer: [Yes] Justification: The abstract and introduction state three contributions (two-level memory hierarchy, reflection-based cross-branch transfer, and reliability under matched 16-execution budgets); each is supported by Section 3 (method) and Section 4 (experiments and ablations). The headline numbers (96.7% validity, 7.3-point Avg gap, 9.2-point validity gap) match Table 1. Guidelines: • The answer [N/A] means that the abstract and introduction do not include the claims made in the paper. • The abstract and/or introduction should clearly state the claims made, including the contributions made in the paper and important assumptions and limitations. A [No] or [N/A] answer to this question will not be perceived well by the reviewers. • The claims made should match theoretical and experimental results, and reflect how much the results can be expected to generalize to other settings. • It is fine to include aspirational goals as motivation as long as it is clear that these goals are not attained by the paper. 2. Limitations 
+
+Question: Does the paper discuss the limitations of the work performed by the authors? Answer: [Yes] Justification: Section 5 discusses limitations of MEMOIR, including the low-budget eval-uation regime ( B=16 , which isolates search efficiency but does not characterize behavior at evolutionary-scale budgets), the heuristic (rather than learned) branch-budget split, the restricted evaluation scope (seven CO problems spanning scheduling, routing, packing, and geometric design, with each problem treated independently and no cross-problem memory transfer), and the reliance of the reflection step on LLM summarization, where a misrepresented failure mode could in principle rule out a useful heuristic family. Guidelines: • The answer [N/A] means that the paper has no limitation while the answer [No] means that the paper has limitations, but those are not discussed in the paper. • The authors are encouraged to create a separate “Limitations” section in their paper. • The paper should point out any strong assumptions and how robust the results are to violations of these assumptions (e.g., independence assumptions, noiseless settings, model well-specification, asymptotic approximations only holding locally). The authors should reflect on how these assumptions might be violated in practice and what the implications would be. • The authors should reflect on the scope of the claims made, e.g., if the approach was only tested on a few datasets or with a few runs. In general, empirical results often depend on implicit assumptions, which should be articulated. • The authors should reflect on the factors that influence the performance of the approach. For example, a facial recognition algorithm may perform poorly when image resolution is low or images are taken in low lighting. Or a speech-to-text system might not be used reliably to provide closed captions for online lectures because it fails to handle technical jargon. • The authors should discuss the computational efficiency of the proposed algorithms and how they scale with dataset size. • If applicable, the authors should discuss possible limitations of their approach to address problems of privacy and fairness. 26 • While the authors might fear that complete honesty about limitations might be used by reviewers as grounds for rejection, a worse outcome might be that reviewers discover limitations that aren’t acknowledged in the paper. The authors should use their best judgment and recognize that individual actions in favor of transparency play an impor-tant role in developing norms that preserve the integrity of the community. Reviewers will be specifically instructed to not penalize honesty concerning limitations. 3. Theory assumptions and proofs 
+
+Question: For each theoretical result, does the paper provide the full set of assumptions and a complete (and correct) proof? Answer: [N/A] Justification: The paper presents an empirical method evaluated on existing CO problems; it does not state formal theorems or claim theoretical results. Guidelines: • The answer [N/A] means that the paper does not include theoretical results. • All the theorems, formulas, and proofs in the paper should be numbered and cross-referenced. • All assumptions should be clearly stated or referenced in the statement of any theorems. • The proofs can either appear in the main paper or the supplemental material, but if they appear in the supplemental material, the authors are encouraged to provide a short proof sketch to provide intuition. • Inversely, any informal proof provided in the core of the paper should be complemented by formal proofs provided in appendix or supplemental material. • Theorems and Lemmas that the proof relies upon should be properly referenced. 4. Experimental result reproducibility 
+
+Question: Does the paper fully disclose all the information needed to reproduce the main ex-perimental results of the paper to the extent that it affects the main claims and/or conclusions of the paper (regardless of whether the code and data are provided or not)? Answer: [Yes] Justification: Section 3 specifies the full memory state, the five LLM operators, and the search procedure (formalized in Algorithm 1). Section 4 lists the budget ( B = 16 ), execution timeout ( T = 10 s), backbones ( gpt-5-mini for code generation, gpt-5 for the diagnostic critic, plus open-weight runs), runtime environment (Python 3.10.18, Linux sandbox, no GPU), and the public CO-Bench dev/test split. Full prompts appear in Appendix C and per-domain specifications in Appendix A. Guidelines: • The answer [N/A] means that the paper does not include experiments. • If the paper includes experiments, a [No] answer to this question will not be perceived well by the reviewers: Making the paper reproducible is important, regardless of whether the code and data are provided or not. • If the contribution is a dataset and/or model, the authors should describe the steps taken to make their results reproducible or verifiable. • Depending on the contribution, reproducibility can be accomplished in various ways. For example, if the contribution is a novel architecture, describing the architecture fully might suffice, or if the contribution is a specific model and empirical evaluation, it may be necessary to either make it possible for others to replicate the model with the same dataset, or provide access to the model. In general. releasing code and data is often one good way to accomplish this, but reproducibility can also be provided via detailed instructions for how to replicate the results, access to a hosted model (e.g., in the case of a large language model), releasing of a model checkpoint, or other means that are appropriate to the research performed. • While NeurIPS does not require releasing code, the conference does require all submis-sions to provide some reasonable avenue for reproducibility, which may depend on the nature of the contribution. For example 27 (a) If the contribution is primarily a new algorithm, the paper should make it clear how to reproduce that algorithm. (b) If the contribution is primarily a new model architecture, the paper should describe the architecture clearly and fully. (c) If the contribution is a new model (e.g., a large language model), then there should either be a way to access this model for reproducing the results or a way to reproduce the model (e.g., with an open-source dataset or instructions for how to construct the dataset). (d) We recognize that reproducibility may be tricky in some cases, in which case authors are welcome to describe the particular way they provide for reproducibility. In the case of closed-source models, it may be that access to the model is limited in some way (e.g., to registered users), but it should be possible for other researchers to have some path to reproducing or verifying the results. 5. Open access to data and code 
+
+Question: Does the paper provide open access to the data and code, with sufficient instruc-tions to faithfully reproduce the main experimental results, as described in supplemental material? Answer: [Yes] Justification: An anonymized code repository is provided as supplementary material, includ-ing prompts and configuration files needed to reproduce the main experimental results. Guidelines: • The answer [N/A] means that paper does not include experiments requiring code. • Please see the NeurIPS code and data submission guidelines ( https://neurips.cc/ public/guides/CodeSubmissionPolicy ) for more details. • While we encourage the release of code and data, we understand that this might not be possible, so [No] is an acceptable answer. Papers cannot be rejected simply for not including code, unless this is central to the contribution (e.g., for a new open-source benchmark). • The instructions should contain the exact command and environment needed to run to reproduce the results. See the NeurIPS code and data submission guidelines ( https: //neurips.cc/public/guides/CodeSubmissionPolicy ) for more details. • The authors should provide instructions on data access and preparation, including how to access the raw data, preprocessed data, intermediate data, and generated data, etc. • The authors should provide scripts to reproduce all experimental results for the new proposed method and baselines. If only a subset of experiments are reproducible, they should state which ones are omitted from the script and why. • At submission time, to preserve anonymity, the authors should release anonymized versions (if applicable). • Providing as much information as possible in supplemental material (appended to the paper) is recommended, but including URLs to data and code is permitted. 6. Experimental setting/details 
+
+Question: Does the paper specify all the training and test details (e.g., data splits, hyperpa-rameters, how they were chosen, type of optimizer) necessary to understand the results? Answer: [Yes] Justification: Section 4.1 specifies the dev/test split (public CO-Bench release), execution budget, per-instance timeout, MEMOIR’s search hyperparameters (per-branch depth cap 
+
+n = 5 with adaptive early-stopping, about m = 4 branches under B = 16 ), and LLM identifiers; all methods invoke their respective providers with default decoding parameters. Guidelines: • The answer [N/A] means that the paper does not include experiments. • The experimental setting should be presented in the core of the paper to a level of detail that is necessary to appreciate the results and make sense of them. • The full details can be provided either with the code, in appendix, or as supplemental material. 28 7. Experiment statistical significance 
+
+Question: Does the paper report error bars suitably and correctly defined or other appropriate information about the statistical significance of the experiments? Answer: [Yes] Justification: Per-domain Avg and Valid in Table 1 are single-run point estimates; we additionally report per-method run-to-run standard deviations across three independent runs on four domains in Appendix F, and per-instance score distributions (box plots) in Figure 2. Guidelines: • The answer [N/A] means that the paper does not include experiments. • The authors should answer [Yes] if the results are accompanied by error bars, confidence intervals, or statistical significance tests, at least for the experiments that support the main claims of the paper. • The factors of variability that the error bars are capturing should be clearly stated (for example, train/test split, initialization, random drawing of some parameter, or overall run with given experimental conditions). • The method for calculating the error bars should be explained (closed form formula, call to a library function, bootstrap, etc.) • The assumptions made should be given (e.g., Normally distributed errors). • It should be clear whether the error bar is the standard deviation or the standard error of the mean. • It is OK to report 1-sigma error bars, but one should state it. The authors should preferably report a 2-sigma error bar than state that they have a 96% CI, if the hypothesis of Normality of errors is not verified. • For asymmetric distributions, the authors should be careful not to show in tables or figures symmetric error bars that would yield results that are out of range (e.g., negative error rates). • If error bars are reported in tables or plots, the authors should explain in the text how they were calculated and reference the corresponding figures or tables in the text. 8. Experiments compute resources 
+
+Question: For each experiment, does the paper provide sufficient information on the com-puter resources (type of compute workers, memory, time of execution) needed to reproduce the experiments? Answer: [Yes] Justification: Section 4.1 states that synthesized solvers run on Python 3.10.18 in a Linux sandbox without GPU. Appendix E reports per-synthesis-run token consumption, dollar cost, and wall-clock time for every method. Guidelines: • The answer [N/A] means that the paper does not include experiments. • The paper should indicate the type of compute workers CPU or GPU, internal cluster, or cloud provider, including relevant memory and storage. • The paper should provide the amount of compute required for each of the individual experimental runs as well as estimate the total compute. • The paper should disclose whether the full research project required more compute than the experiments reported in the paper (e.g., preliminary or failed experiments that didn’t make it into the paper). 9. Code of ethics 
+
+Question: Does the research conducted in the paper conform, in every respect, with the NeurIPS Code of Ethics https://neurips.cc/public/EthicsGuidelines ?Answer: [Yes] Justification: The work uses publicly available combinatorial-optimization benchmarks, involves no human subjects or personally identifiable data, and complies with the NeurIPS Code of Ethics throughout. 29 Guidelines: • The answer [N/A] means that the authors have not reviewed the NeurIPS Code of Ethics. • If the authors answer [No], they should explain the special circumstances that require a deviation from the Code of Ethics. • The authors should make sure to preserve anonymity (e.g., if there is a special consid-eration due to laws or regulations in their jurisdiction). 10. Broader impacts 
+
+Question: Does the paper discuss both potential positive societal impacts and negative societal impacts of the work performed? Answer: [Yes] Justification: The Impact Statement discusses positive impacts (broader access to high-quality optimization for logistics, healthcare scheduling, and resource allocation), potential negative impacts (misapplication to objectives that conflict with societal values, computa-tional and environmental cost of LLM inference), and emphasizes that responsibility for objective and constraint design remains with domain experts. Guidelines: • The answer [N/A] means that there is no societal impact of the work performed. • If the authors answer [N/A] or [No], they should explain why their work has no societal impact or why the paper does not address societal impact. • Examples of negative societal impacts include potential malicious or unintended uses (e.g., disinformation, generating fake profiles, surveillance), fairness considerations (e.g., deployment of technologies that could make decisions that unfairly impact specific groups), privacy considerations, and security considerations. • The conference expects that many papers will be foundational research and not tied to particular applications, let alone deployments. However, if there is a direct path to any negative applications, the authors should point it out. For example, it is legitimate to point out that an improvement in the quality of generative models could be used to generate Deepfakes for disinformation. On the other hand, it is not needed to point out that a generic algorithm for optimizing neural networks could enable people to train models that generate Deepfakes faster. • The authors should consider possible harms that could arise when the technology is being used as intended and functioning correctly, harms that could arise when the technology is being used as intended but gives incorrect results, and harms following from (intentional or unintentional) misuse of the technology. • If there are negative societal impacts, the authors could also discuss possible mitigation strategies (e.g., gated release of models, providing defenses in addition to attacks, mechanisms for monitoring misuse, mechanisms to monitor how a system learns from feedback over time, improving the efficiency and accessibility of ML). 11. Safeguards 
+
+Question: Does the paper describe safeguards that have been put in place for responsible release of data or models that have a high risk for misuse (e.g., pre-trained language models, image generators, or scraped datasets)? Answer: [N/A] Justification: The paper releases neither pretrained generative models nor scraped datasets. The synthesized artifacts are deterministic Python solvers for well-defined CO benchmarks, which do not pose a high misuse risk requiring dedicated safeguards. Guidelines: • The answer [N/A] means that the paper poses no such risks. • Released models that have a high risk for misuse or dual-use should be released with necessary safeguards to allow for controlled use of the model, for example by requiring that users adhere to usage guidelines or restrictions to access the model or implementing safety filters. 30 • Datasets that have been scraped from the Internet could pose safety risks. The authors should describe how they avoided releasing unsafe images. • We recognize that providing effective safeguards is challenging, and many papers do not require this, but we encourage authors to take this into account and make a best faith effort. 12. Licenses for existing assets 
+
+Question: Are the creators or original owners of assets (e.g., code, data, models), used in the paper, properly credited and are the license and terms of use explicitly mentioned and properly respected? Answer: [Yes] Justification: All baselines and problem domains are cited in Sections 2 and 4 and Ap-pendix A, and the language models are named in Section 4. We use the publicly released CO-Bench problems and the baseline implementations (FunSearch, ReEvo, MCTS-AHD, AIDE, GreedyRefine) under their respective open-source licenses (Apache 2.0 / MIT, as applicable), and the language models ( gpt-5-mini , gpt-5 , Llama-3.3-70B-Instruct, Qwen2.5-Coder-32B) under their respective terms of use and model licenses. Guidelines: • The answer [N/A] means that the paper does not use existing assets. • The authors should cite the original paper that produced the code package or dataset. • The authors should state which version of the asset is used and, if possible, include a URL. • The name of the license (e.g., CC-BY 4.0) should be included for each asset. • For scraped data from a particular source (e.g., website), the copyright and terms of service of that source should be provided. • If assets are released, the license, copyright information, and terms of use in the package should be provided. For popular datasets, paperswithcode.com/datasets 
+
+has curated licenses for some datasets. Their licensing guide can help determine the license of a dataset. • For existing datasets that are re-packaged, both the original license and the license of the derived asset (if it has changed) should be provided. • If this information is not available online, the authors are encouraged to reach out to the asset’s creators. 13. New assets 
+
+Question: Are new assets introduced in the paper well documented and is the documentation provided alongside the assets? Answer: [N/A] Justification: The paper does not release new datasets or pretrained models. An anonymized code repository implementing MEMOIR is provided as supplementary material. Guidelines: • The answer [N/A] means that the paper does not release new assets. • Researchers should communicate the details of the dataset/code/model as part of their submissions via structured templates. This includes details about training, license, limitations, etc. • The paper should discuss whether and how consent was obtained from people whose asset is used. • At submission time, remember to anonymize your assets (if applicable). You can either create an anonymized URL or include an anonymized zip file. 14. Crowdsourcing and research with human subjects 
+
+Question: For crowdsourcing experiments and research with human subjects, does the paper include the full text of instructions given to participants and screenshots, if applicable, as well as details about compensation (if any)? Answer: [N/A] 31 Justification: The paper does not involve crowdsourcing or research with human subjects. Guidelines: • The answer [N/A] means that the paper does not involve crowdsourcing nor research with human subjects. • Including this information in the supplemental material is fine, but if the main contribu-tion of the paper involves human subjects, then as much detail as possible should be included in the main paper. • According to the NeurIPS Code of Ethics, workers involved in data collection, curation, or other labor should be paid at least the minimum wage in the country of the data collector. 15. Institutional review board (IRB) approvals or equivalent for research with human subjects 
+
+Question: Does the paper describe potential risks incurred by study participants, whether such risks were disclosed to the subjects, and whether Institutional Review Board (IRB) approvals (or an equivalent approval/review based on the requirements of your country or institution) were obtained? Answer: [N/A] Justification: The paper does not involve human subjects, so no IRB approval is required. Guidelines: • The answer [N/A] means that the paper does not involve crowdsourcing nor research with human subjects. • Depending on the country in which research is conducted, IRB approval (or equivalent) may be required for any human subjects research. If you obtained IRB approval, you should clearly state this in the paper. • We recognize that the procedures for this may vary significantly between institutions and locations, and we expect authors to adhere to the NeurIPS Code of Ethics and the guidelines for their institution. • For initial submissions, do not include any information that would break anonymity (if applicable), such as the institution conducting the review. 16. Declaration of LLM usage 
+
+Question: Does the paper describe the usage of LLMs if it is an important, original, or non-standard component of the core methods in this research? Note that if the LLM is used only for writing, editing, or formatting purposes and does not impact the core methodology, scientific rigor, or originality of the research, declaration is not required. Answer: [Yes] Justification: LLMs are central to the proposed method: Section 3 defines five LLM-driven operators (Propose, Repair, Improve, Critic, Reflect) that together drive solver synthesis, and Section 4.1 names the specific backbones used ( gpt-5-mini for code generation, gpt-5 for the diagnostic critic, plus Llama-3.3-70B-Instruct and Qwen2.5-Coder-32B for open-weight runs). Guidelines: • The answer [N/A] means that the core method development in this research does not involve LLMs as any important, original, or non-standard components. • Please refer to our LLM policy in the NeurIPS handbook for what should or should not be described. 32

@@ -1,0 +1,1131 @@
+Title: Beyond Inference-Time Search: Reinforcement Learning Synthesizes Reusable Solvers
+
+URL Source: https://arxiv.org/pdf/2605.18374v1
+
+Published Time: Tue, 19 May 2026 03:00:09 GMT
+
+Number of Pages: 37
+
+Markdown Content:
+# BEYOND INFERENCE -T IME SEARCH : R EINFORCEMENT 
+
+# LEARNING SYNTHESIZES REUSABLE SOLVERS 
+
+A P REPRINT 
+
+Soheyl Massoudi 
+
+ETH Zürich Zürich, Switzerland 
+
+smassoudi@ethz.ch 
+
+Gabriel Apaza 
+
+University of Maryland College Park, MD, USA 
+
+Milad Habibi 
+
+University of Maryland College Park, MD, USA 
+
+Mark Fuge 
+
+ETH Zürich Zürich, Switzerland May 19, 2026 
+
+## ABSTRACT 
+
+Large language models (LLMs) typically approach combinatorial optimization as an inference-time procedure, solving each instance separately through sampling, search, or repeated prompting. We ask whether reinforcement learning can instead shift part of this reasoning cost into the weights of a code LLM, so that the model synthesizes a reusable solver for an entire problem family. We study this question on Synergistic Dependency Selection (SDS), a controlled variant of constrained Quadratic Knapsack designed to expose a specific failure mode: local signals and strict feasibility constraints make greedy heuristics attractive but unreliable. Under identical scaffolding, Best-of-64 
+
+base-model sampling saturates at a ≈ 28 .7% gap to the global Virtual Best Solver (VBS); code audits show that the base model often retrieves Simulated Annealing templates but misimplements the Metropolis acceptance rule. We fine-tune Qwen2.5-Coder-14B-Instruct with Group Relative Policy Optimization (GRPO) using a feasibility-gated reward and light structural scaffolding. The resulting policy converges to a constraint-aware Simulated Annealing template in 99.8% of feasible SDS outputs, achieves a 5.0% gap to that VBS, and is 91 × cheaper in post-generation execution/search cost than cumulative Best-of-64 evaluation. A compile-once check shows that one best frozen solver per seed remains highly competitive when reused unchanged across the SDS test set, while an additional-domain evaluation on Job Shop Scheduling provides narrower but positive evidence that the scaffold transfers beyond SDS. Negative ablations reveal the limits of this recipe: standard stabilizers degrade performance, a soft feasibility gate fails, and results remain sensitive to reward normalization and domain-specific design choices. 
+
+Keywords large language models · code generation · reinforcement learning · solver synthesis · combinatorial optimization 
+
+## 1 Introduction 
+
+The prevailing paradigm in Machine Learning for Code treats the Large Language Model (LLM) as an intelligent agent that solves problems instance-by-instance, either by acting directly as a learned heuristic or by repeatedly translating the problem into executable tool calls [Kool et al., 2018, Manchanda et al., 2020, Gao et al., 2023, Pan et al., 2023]. In this view, “reasoning” is a marginal cost incurred every time a new query is submitted. However, a distinct frontier exists where the model functions not as an interpreter, but as a compiler : it analyzes a problem class once and synthesizes a standalone executable that can be reused across the distribution. We investigate the limits of this synthesis capability in the context of recent work on program-space search, amortized solver discovery, and the debate over whether RL mainly sharpens an existing distribution or can also repair behavior that naive sampling does not reliably recover [Romera-Paredes et al., 2024, Ye et al., 2024, Novikov et al., 2025, Wang et al., 2025, Yue et al., 2025]. Our core question is therefore not only whether RL can improve code generation quality, but whether it can move a code LLM across a qualitatively different regime: from repeated per-instance search to 
+
+> arXiv:2605.18374v1 [cs.LG] 18 May 2026
+
+Beyond Inference-Time Search A P REPRINT 
+
+reusable solver synthesis. To test that claim cleanly, we need a domain in which surface template retrieval is insufficient and executable algorithmic logic matters. We use our custom Synergistic Dependency Selection (SDS) benchmark, a strongly NP-hard variant of the Quadratic Knapsack Problem, as that primary stress test. We do not position SDS as a replacement for established Operations Research benchmarks. Instead, we use it as a controlled instrument for deceptive optimization: its rugged reward landscape and strict constraints make it easy to retrieve plausible solver templates yet difficult to operationalize them correctly. It also serves as a cleaner out-of-distribution test of solver synthesis than canonical benchmark families already well represented in model pre-training, reducing the chance that strong behavior can be explained by straightforward benchmark-template recall alone. Under the identical Hero scaffold, the base model still saturates at a 28.7% gap, so the prompt names a useful reasoning mode but does not operationalize the solver by itself. This lets us ask whether RL can push a code model beyond surface retrieval and into executable search behavior. We focus on three research questions. (1) Competence Wall: Can extensive test-time sampling recover the performance of an RL-trained policy in deceptive landscapes, or does the base model hit a ceiling even when it retrieves superficially relevant templates? (2) Semantic Repair: When RL succeeds, is it merely sharpening the frequency of already-correct solutions, or is it repairing executable algorithmic logic that naive sampling does not reliably recover? (3) Amortized Solver Synthesis: Can training-time optimization distill reasoning cost into a lightweight, reusable program that outperforms repeated per-instance search in the intended deployment regime? To study those questions, we use a feasibility-centric RL protocol that deliberately strips away many common stabilizers (e.g., KL penalties, oracle anchoring, or diversity bonuses). We train a general-purpose coder (Qwen2.5-Coder-14B) [Hui et al., 2024] using GRPO [Shao et al., 2024] with a simple feasibility-gated reward and light structural scaffolding. This deliberately minimalist setup is useful precisely because it lets us isolate what such a recipe is already sufficient to produce. 
+
+Contributions. Our contributions are empirical and mechanistic rather than algorithmic. First, we identify a 
+
+competence wall : under identical prompting, Best-of-64 base-model sampling saturates at a 28 .7% SDS gap to VBS even though the model often retrieves superficially appropriate solver templates. Second, we show a semantic-repair effect : RL drives our learned policy, Hero , toward an almost ubiquitous constraint-aware Simulated Annealing template (99 .8% convergence on feasible SDS outputs) and repairs the executable logic that base-model samples frequently misimplement. This is not explained away by a larger one-shot search over base samples alone: even an adaptive tournament across 191,699 unique base codes still fails to recover a reusable solver close to Hero on SDS. Third, we directly validate amortized solver synthesis : the learned policy occupies a distinct Pareto region on SDS ( 5.0% gap to VBS, 6.3× faster than CP-SAT in post-generation execution cost), and a frozen compile-once evaluation shows that one generated solver per seed remains highly competitive when reused unchanged across the SDS test set. The same prompt alone does not produce this behavior: Base Best-of-64 still plateaus badly under the Hero scaffold, whereas RL makes the named procedure executable on SDS. Additional JSSP experiments provide narrower evidence that the scaffold extends beyond SDS, while negative ablations make clear that the current recipe still depends on explicit feasibility-first design choices. 
+
+## 2 Related Work 
+
+From Neural Solvers to Solver Synthesis. Traditional Neural Combinatorial Optimization (NCO) trains models to act as black-box heuristics, learning a direct mapping from instances to solutions ( x = fθ (c)), [Kool et al., 2018, Manchanda et al., 2020]. These methods function as interpreters , requiring the neural network to be active during inference for every new problem instance. In contrast, we frame optimization as a code synthesis task ( p = πθ (c)). Our policy acts as a compiler : it generates an explicit algorithmic artifact p that can be inspected, executed, and potentially reused without keeping the neural network in the inference loop. Our novelty claim is therefore not a new NCO architecture, but a direct empirical study of when a code LLM can cross from per-instance solving into reusable solver synthesis. 
+
+Reinforcement Learning for Code. Using execution feedback to ground LLMs is an emerging frontier. While approaches like CodeRL [Le et al., 2022], RLTF [Liu et al., 2023], RLEF [Gehring et al., 2025], and AutoTriton [Li et al., 2025] optimize for binary correctness or kernel latency, we target the mathematical quality of the produced solver inside a deceptive optimization landscape. We do not claim a new RL algorithm. Rather, we use a deliberately simple GRPO-based recipe to study whether sparse feasibility-first feedback can change the executable logic of generated solvers in a way that naive sampling does not. 2Beyond Inference-Time Search A P REPRINT 
+
+Neuro-Symbolic Reasoning. Frameworks like PAL [Gao et al., 2023] and Logic-LM [Pan et al., 2023] delegate computation to an external Python interpreter or symbolic solver. These methods typically treat the LLM as a translator and the solver as a fixed black box. Our approach diverges by training the LLM to generate the solver itself, including the algorithmic logic for constraint verification and search. This makes the produced artifact a white-box object that can be audited for both failure and repair, which is central to our competence-wall and semantic-repair analysis. 
+
+Generative Hyper-Heuristics. Modern hyper-heuristics use LLMs to search the program space, often employing evolutionary strategies in the prompt space (e.g., FunSearch [Romera-Paredes et al., 2024], ReEvo [Ye et al., 2024], AlphaEvolve [Novikov et al., 2025]) or test-time training loops (e.g., ThetaEvolve [Wang et al., 2025]). While powerful, these methods generally rely on extensive inference-time search, incurring high marginal costs per instance. Our comparison point is therefore not simply “better numbers,” but a different compute allocation: reasoning effort is pushed offline into policy weights so that the deployment object is a reusable solver rather than a fresh search process for every instance. 
+
+The Reasoning Capacity Debate. The nature of LLM “reasoning” remains contested, often framed as a tension between approximate retrieval and genuine planning [Huang et al., 2024, Valmeekam et al., 2023]. Recently, Yue et al. [2025] argued that RL with Verifiable Rewards (RLVR) primarily acts as a “distribution sharpener”, effectively just improving the efficiency of finding solutions that the base model could already access via sampling. Our work directly engages with this hypothesis by investigating deceptive optimization landscapes—environments where immediate gradient signals mislead heuristics away from the global optimum. This serves as a critical test case for whether RL merely filters existing solutions or synthesizes algorithmic behavior that the base model does not reliably reach via naive sampling on this benchmark. 
+
+## 3 Problem Formulation 
+
+We focus on Synergistic Dependency Selection (SDS), a constrained variant of the Quadratic Knapsack Problem (QKP). Unlike the standard Knapsack Problem which is solvable in pseudo-polynomial time, SDS generalizes the Maximum Independent Set problem [Karp, 2010], rendering it strongly NP-hard [Pisinger, 2007]. We use SDS as a controlled stress test for solver synthesis under deceptive local signals, for two strategic reasons: 1. Out-Of-Distribution (OOD) Challenge: Unlike canonical problems (e.g., TSP, Standard Knapsack) present in pre-training, SDS presents a novel task structure. This reduces the chance that strong performance can be explained by straightforward template recall alone, and instead pressures the model to compose search and constraint-handling primitives into executable logic. 2. Deceptive Landscapes: We generate instances where quadratic interaction terms dominate linear weights (|Wij | ≫ | wi|). This creates a landscape where local gradients actively contradict global optimality, making SDS a useful test of whether RL can repair solver behavior beyond the greedy or superficially plausible trajectories favored by next-token prediction. 
+
+3.1 Formal Definition 
+
+Let x ∈ { 0, 1}n be the binary selection vector. The goal is to maximize total utility S(x), defined as the sum of linear weights wi (intrinsic value) and pairwise quadratic interactions Wij (synergistic/antagonistic effects): Maximize S(x) = 
+
+> n−1
+
+X
+
+> i=0
+
+wixi + X
+
+> (i,j )∈E
+
+Wij xixj . (1) A solution is valid if and only if it satisfies the strict constraints C: (1) Cardinality: Selection size is bounded by 
+
+L ≤ Pn−1 
+
+> i=0
+
+xi ≤ U ; (2) Precedence: Dependent items require prerequisites ( ∀(i, j ) ∈ P , x j ≤ xi); (3) Mutual Exclusion: Conflicting pairs are exclusive ( ∀(a, b ) ∈ M , x a + xb ≤ 1); and (4) Group Limits: At most one item per group g ∈ G (P 
+
+> i∈g
+
+xi ≤ 1). 
+
+## 4 Methodology 
+
+We present Hero , a policy fine-tuned via Group Relative Policy Optimization (GRPO) [Shao et al., 2024]. Hero is intentionally minimalist: it drops oracle anchoring and diversity bonuses in favor of scaffolded verification —a hierarchical reward structure that separates executable structure from objective quality. Hero also uses a scaffolded 3Beyond Inference-Time Search A P REPRINT 
+
+system prompt whose core loop is Deconstruct-Hypothesize-Critique; see Appendix A. We emphasize this simplicity because the scientific question is not whether a heavily engineered recipe can work, but what a comparatively lean feasibility-first recipe is already sufficient to induce. 
+
+4.1 Policy Optimization 
+
+Following Yu et al. [2025], we use a group size G = 64 with no KL regularization ( β = 0 .0). GRPO stabilizes updates by standardizing rewards within each sampled group, enabling the model to discern relative policy improvements even when absolute rewards remain sparse. 
+
+4.2 Hierarchical Reward Design 
+
+We define a composite reward r(o) to enforce functional priority: 
+
+r(o) = λ1Rformat + λ2Rexec + λ3Rnom (2) where λ = (0 .1, 0.2, 0.7) . This weighting ensures structural compliance bootstraps the policy without overriding the primary optimization objective. 
+
+4.2.1 Structural Scaffolding 
+
+The auxiliary terms Rformat and Rexec function as semantic type-checks. Rformat ensures the model follows a reasoning-action trace ( ⟨think ⟩ . . . ⟨code ⟩). Rexec provides dense feedback on code validity: 
+
+Rexec = Rsyntax + Rschema + Rstruct + Rfeas (3) A pivotal element is an explicit anti-lazy sorting penalty applied within Rexec . This penalizes the pre-trained prior’s tendency to adopt linear greedy heuristics (e.g., sorting by weight) while ignoring quadratic interaction terms. Separately, the positive graph-structure bonus inside Rstruct is subject to curriculum fading α(t) as training progresses. 
+
+4.2.2 Feasibility-Gated Optimality 
+
+The nominal reward, Rnom , is the primary signal for objective maximization but is subject to a feasibility cliff: 
+
+Rnom =
+
+Norm (Score (o)) if Nvio = 0 0 if Nvio > 0 (4) where Nvio is the count of constraint violations. This gating forces the policy to prioritize hard constraint satisfaction (e.g., mutex or precedence) before optimizing the objective value. Details in Appendix B. 
+
+## 5 Experiments 
+
+5.1 Setup Models and Training. We initialize our policy with Qwen2.5-Coder-14B-Instruct [Hui et al., 2024], selected for its robust base coding and reasoning performance despite lacking native test-time compute scaling. Preliminary experiments with the 7B variant yielded insufficient policy stability, necessitating the 14B capacity for complex SDS tasks. To evaluate sample efficiency, we train Hero for a restricted budget of 90 global steps ( ≈4 hours) on 12 NVIDIA GH200 GPUs. Due to memory constraints (4 prompts per step), the model observes only 360 prompts, or about 4.5% of a full prompt-level epoch ( ≈ 8,000 prompts), while still synthesizing 23,040 reasoning traces. This regime specifically evaluates the capacity for deep exploration over broad exposure. 
+
+The Syndeopt Benchmark. We evaluate on Syndeopt , a controlled SDS stress-test benchmark of 10,000 instances stratified to penalize greedy behavior. We use it as a scientific instrument rather than as a replacement for standard OR suites: the goal is to isolate settings where plausible template retrieval is easy but executable search logic is hard to operationalize correctly. It includes Dense Deceptive instances, where strong interactions ( |Wij | ≫ | wi|) trap gradient-following heuristics, and Structural Traps involving deep dependency chains. We use a held-out set of 1,000 instances for evaluation. 4Beyond Inference-Time Search A P REPRINT 
+
+Baselines. Hero is compared against four baseline families that answer different scientific questions. Naive-sampling baselines test the competence-wall hypothesis using the base model under Best-of-N . Frontier test-time-search baselines such as ShinkaEvolve [Lange et al., 2025] represent stronger program-space search at deployment time. 
+
+Reusable-solver baselines such as our manually specified Simulated Annealing implementation test whether Hero only recovers what a competent human would already write. Finally, classical optimization baselines including Greedy Search, Local Search, a time-limited Branch-and-Bound heuristic, and CP-SAT [Perron et al., 2023] anchor solution quality and runtime against standard non-neural methods. All methods are subject to a 5-second execution limit per instance. 
+
+Metrics. Success is measured via three primary metrics: 1. Pass Rate: The percentage of instances yielding a strictly feasible solution ( Nvio = 0 ). 2. Gap to VBS: (VBS − max(0 , S )) /VBS , where S is the achieved score (clipped to non-negative) and VBS is the Virtual Best Solver score. Here VBS is the best feasible score observed across all compared methods, not a certified distance to the true optimum. To decouple validity from optimization quality, mean gaps in Table 1 are computed conditionally on feasibility. For global robustness profiles (Fig. 1b), infeasible solutions are assigned a gap of 1.0. 3. Computational Cost: Total CPU-seconds excluding LLM inference. For the Base model, this is the cumulative per-instance search-and-evaluation cost across sampled candidates ( PNi=1 ti for Best-of-N ). For Hero and ShinkaEvolve, it is single-solver execution cost after code generation ( t1). For CP-SAT, it reflects aggregate parallel load. Comprehensive details regarding the experimental protocol and implementation are provided in Appendices C and D. 
+
+5.2 Main Results 
+
+We evaluate our method across three independent seeds (101, 202, 303). Figure 1 summarizes the aggregate evidence for the three main claims: a competence wall for naive sampling, semantic repair under RL, and amortized solver synthesis through reusable generated code. 
+
+The Efficiency Frontier. As shown in Figure 1a, Hero occupies a distinct Pareto-optimal region. It achieves a 
+
+5.0 ± 1.3% gap to VBS, lower than Local Search ( 10 .0 ± 0.7%), while also outperforming the refreshed ShinkaEvolve baseline that uses strong proprietary mutation/search models at deployment time [Singh et al., 2025]. We interpret this not simply as “RL wins on SDS,” but as evidence that a specialized policy can amortize search into a reusable solver artifact more effectively than repeated deployment-time search on this benchmark. For generated-solver methods such as Hero and ShinkaEvolve, the plotted times measure solver execution after code generation. For Base Best-of-64, the plotted cost is instead the cumulative per-instance execution/selection cost across the sampled candidate programs, still excluding LLM inference. We therefore interpret these timings as amortized execution/search costs rather than end-to-end deployment latency. A direct compile-once check strengthens that interpretation: the frozen Hero solver remains highly competitive when reused unchanged across the test set, and the freshest timing comparison shows that reusable compiled solvers are far cheaper than repeated Best-of-64 search in this amortized setting. 
+
+Stochastic Dominance. The performance profile (Figure 1b) shows that the generated Hero solver family dominates the greedy-style baselines over a wide range of tolerances. The sharp rise near 0% gap to VBS indicates that RL is not merely increasing feasibility; it is concentrating mass on near-optimal executable behavior. 
+
+Robustness Across Seeds. Our method is also consistent across all three seeds (Table 1). With a standard deviation of only 0.2% for pass rate and 1.3% for gap to VBS, the result is not driven by a single lucky run. This matters for interpretation: the competence-wall and semantic-repair story is visible at the level of repeated training outcomes, not only within one selected checkpoint. 
+
+Efficiency vs. Optimality. While CP-SAT achieves a near-zero gap to VBS, Hero trades only a modest 5.0% gap to VBS for a 6.3 × improvement in post-generation execution cost relative to CP-SAT and dramatically lower sampled-candidate evaluation cost than Base Best-of-64. A strict compile-once check confirms solver reuse: one frozen Hero solver per seed reaches 97.87% pass rate and 4.34% mean gap when executed unchanged across the SDS test set (Appendix C.5, Table 2). 5Beyond Inference-Time Search A P REPRINT 10 3 10 2 10 1 10 0 10 1
+
+Inference Cost (Core × s) 
+
+0
+
+20 
+
+40 
+
+60 
+
+80 
+
+100 
+
+> Optimality Gap (%)
+> Ours
+> Base (Best-of-64)
+> BnB
+> CP-SAT
+> Greedy
+> Local Search
+> Ours (+Diversity)
+> Ours (+Oracle)
+> Ours (Hero)
+> Ours (w/o Prompt)
+> Ours (w/o Structure)
+> ShinkaEvolve
+
+(a) Efficiency Frontier. Hero dominates the Pareto frontier —second only to CP-SAT, achieving lower gaps to VBS than the refreshed ShinkaEvolve deployment-time search baseline. Note the log-scale x-axis: our specialized policy is ≈ 91 × cheaper than the Base Model when comparing solver execution against cumulative Best-of-64 sampling cost. Gap to VBS is reported only on feasible solutions. 0% 10% 20% 30% 40% 50% 
+
+Optimality Gap ( )
+
+0.4 
+
+0.6 
+
+0.8 
+
+1.0 
+
+> Fraction Solved
+> Ours (Hero)
+> Base (Best-of-64)
+> Local Search
+> Greedy
+> ShinkaEvolve
+> CP-SAT
+> BnB
+
+(b) Robustness Profile. Cumulative fraction of problems with gap to VBS ≤ τ . Our method (Blue) dominates the upper-left region, indicating high reliability. Infeasible solutions are included with gap = 100% .
+
+Figure 1: Main Performance Analysis. Aggregated results across 3 seeds ( N = 3000 instances). Error bars and shaded regions indicate standard deviation. Table 1: Aggregated Results (Mean ± Std). Comparison across 3 seeds. Our Hero configuration achieves 97.8% pass rate and a 5.0% gap to VBS, surpassing standard heuristics and approaching the strongest time-limited classical reference (CP-SAT). Gap to VBS is calculated only on feasible solutions using the global VBS (maximum feasible score across all compared methods). *Time denotes Computational Cost (CPU-sec): aggregate parallel load for CP-SAT, cumulative sampled-candidate search/evaluation cost for Base selection, and single-solver execution for Hero/ShinkaEvolve. LLM inference is excluded from this column for all methods, so these values should be interpreted as post-generation amortized execution/search costs rather than end-to-end wall-clock costs. 
+
+Method Pass Rate (%) ↑ Gap to VBS (%) ↓ Time (s) ↓ *
+
+Ours (Hero) 97 .8±0.2 5.0±1.3 0.191 ±0.131 
+
+Base (Best-of-64) 85 .6±1.3 28 .7±2.3 17 .434 ±0.793 
+
+Ours (+Oracle) 65 .3±11 .5 40 .6±3.1 0.247 ±0.128 
+
+Ours (+Diversity) 61 .3±9.8 44 .6±14 .0 0.195 ±0.103 
+
+Ours (w/o Structure) 74 .8±19 .2 34 .7±14 .1 0.115 ±0.018 
+
+Ours (w/o Prompt) 64 .4±7.8 47 .8±1.9 0.400 ±0.548 
+
+ShinkaEvolve 91 .6±1.2 14 .4±2.0 0.127 ±0.029 
+
+CP-SAT 98 .3±0.3 1.0±0.0 1.212 ±0.054 
+
+Local Search 98 .3±0.3 10 .0±0.7 0.165 ±0.005 
+
+Greedy 98 .3±0.3 22 .8±1.3 0.001 
+
+BnB 97 .3±0.4 19 .1±1.1 3.301 ±0.048 
+
+5.3 Ablation: The Necessity of Structural Scaffolding 
+
+To isolate what is actually load-bearing in the recipe, we compare Hero against both “High-Interference” (Oracle/-Diversity) and “Zero-Scaffold” (Pure Minimalist) baselines. The goal of this ablation suite is not only to show that alternatives perform worse, but to identify which ingredients drive competence-wall crossing and semantic repair. Results in the bottom section of Table 1 reveal that effective learning requires a delicate balance: strong feasibility-first guardrails without dense outcome shaping. We reserve that table for the primary configuration ablations that directly change the training recipe. Additional matched studies are still important, but they play different roles: the soft gate is a 6Beyond Inference-Time Search A P REPRINT 
+
+Table 2: Compile-Once Evidence for Reusable Solvers. Standard Hero regenerates one solver per instance, whereas Frozen Hero and Manual SA execute one fixed solver unchanged across the full SDS test split. Base Best-of-64 re-runs cumulative multi-sample search per instance. Pass rate and gap use the fixed-code comparison bundle; wall-clock totals are representative seed101 evaluation totals.                
+
+> Method Pass (%) Gap (%) Wall-Clock (s) Standard Hero 97.83 4.82 2731 Frozen Hero 97.87 4.34 2342 Manual SA 95.63 5.32 3103 Base Best-of-64 85.6 28.7 25480
+
+matched alternative reward configuration, the normalization study is a matched sensitivity analysis on one load-bearing Hero component, and the feasibility-sparsity and timeout analyses are diagnostics of why the recipe behaves as it does. 
+
+Hero Configuration (Scaffolded Verification). The Hero configuration uses a hierarchical reward designed to distinguish valid syntax from valid reasoning: • Format & Syntax ( 30% ): Strict formatting and execution checks to ensure valid Python generation. • Structural Scaffolding ( Rexec ): A critical guardrail that detects graph-theoretic awareness. This component applies a negative penalty to “lazy sort” heuristics (sorting by weight while ignoring interactions), explicitly suppressing the base model’s greedy prior. • Nominal Optimality ( 70% ): The feasibility-gated objective value, devoid of relative oracle shaping. 
+
+Why Complexity Failed. Adding standard RL stabilizers consistently degraded performance. Oracle Anchoring (65 .3% pass): While intended to guide optimization, the relative reward created a fatal signal conflict . The high variance of the oracle signal drowned out the strict feasibility gate, teaching the model to gamble on high-scoring but invalid solutions. Diversity Penalties ( 61 .3% pass): Penalizing low entropy failed because valid algorithmic templates are sparse in highly constrained domains. Forcing diversity actively pushed the policy away from the valid Simulated Annealing template into infeasible syntax regions. 
+
+Why Pure Minimalism Failed. Most critically, the w/o Structure ablation reveals that removing scaffolding leads to an “Implementation Wall”. While the policy attempted meta-heuristics (Simulated Annealing) in two seeds out of three, it failed to adapt them to the constrained landscape. Code analysis reveals a brittle pattern: passive constraint filtering (see comparative code analysis in Appendix F.3). Unlike the Hero policy, which more often synthesized robust constraint verification (using either active retry loops or tuned rejection sampling), the minimalist policy simply discarded invalid neighbors while continuing to cool the temperature. This resulted in brittle searches that, lacking the hyperparameter alignment of the Hero policy, exhausted their compute budget on invalid states. Combined with a 
+
+34 .5% rate of invalid greedy solutions (the pre-training prior), this confirms that structural scaffolding is essential not just for algorithm selection, but for the robust operationalization of those algorithms. 
+
+Guidance and Failure Modes. The system prompt acts as the second pillar of our scaffold. Removing it (“w/o Prompt”) caused a unique spike in runtime errors to 29 .8% (Table 8). We therefore interpret this as an ablation of the full deployed prompt package, not a perfectly isolated cognitive-scaffolding intervention: the minimal prompt also removes some environment reminders, so the result is consistent with prompt-level scaffolding being important for generating executable Python. The failure mode analysis (Figure 7 in Appendix E) reveals distinct error profiles: the Hero configuration fails exclusively via timeouts ( 2.2% ) with zero logic errors, indicating structurally sound but computationally expensive code. In contrast, the “w/o Structure” ablation suffers primarily from constraint violations (34 .5% ). This confirms that our structural scaffold does not merely slow the model down—it fundamentally enforces the constraint-satisfaction barrier that the minimalist ablation fails to respect. We also evaluated a soft-gated nominal reward that replaces Hero’s hard feasibility cliff with a graded penalty on simulator-reported violations while keeping the rest of the recipe fixed. Concretely, the normalized nominal score is reduced by a fixed per-violation penalty and clipped to [0 , 1] , instead of collapsing infeasible samples directly to zero. Across seeds 101/202/303, this soft-gate variant underperforms canonical Hero on both feasibility (57.4% vs. 97.8% average pass rate) and shared-VBS mean gap (43.50% vs. 4.09%). Because infeasible solutions incur 100% gap under this shared-VBS comparison, the gap degradation is partly driven by the sharp increase in infeasible outputs, which is why we interpret pass rate and gap jointly. Its dominant failure mode remains precedence violations. This negative result suggests that, on SDS, the hard gate is not merely an overly sparse signal; it provides a useful feasibility-first training pressure. We treat the remaining 7Beyond Inference-Time Search A P REPRINT 
+
+matched analyses differently on purpose. The normalization experiment is not a separate row in Table 1 because it is not a new recipe family like “+Oracle” or “w/o Structure”; it is a matched sensitivity study that perturbs one specific Hero design choice while keeping the rest of the stack fixed. Likewise, the feasibility-sparsity and timeout studies are diagnostics rather than ablations: they explain whether the hard gate starves GRPO of signal and where Hero’s residual failures concentrate. Appendix B.3 organizes these three experiment types explicitly so that the paper reads as one coherent evaluation package rather than a sequence of add-ons. 
+
+Difficulty Scaling. Figure 2 decomposes performance by problem difficulty. Instances are classified as Trivial ,
+
+Moderate , or Hard based on the relative performance gap between a greedy baseline and the Virtual Best Solver (VBS): Trivial instances have < 1% gap (greedy is nearly optimal), Moderate have 1–10% gap, and Hard have 
+
+≥ 10% gap (greedy fails significantly). On Trivial instances, all methods perform well. However, on Hard instances (characterized by deceptive landscapes), greedy heuristics collapse (median gap > 30% ). Figure 2 shows the Base Model’s performance variance explodes on Hard instances, whereas the RL policy remains tight. In contrast, our RL-trained policy maintains a median gap < 5% , demonstrating that the learned search strategies generalize to unseen structural complexity. Trivial Moderate Hard 
+
+> Difficulty
+> 0
+> 10
+> 20
+> 30
+> 40
+> 50
+> Optimality Gap (%)
+> ShinkaEvolve
+> Ours (Hero)
+> Greedy
+> Local Search
+> CP-SAT
+> BnB
+> Base (Best-of-64)
+
+Figure 2: Performance Scaling by Difficulty. Distribution of gaps to VBS across Trivial, Moderate, and Hard instances. While baselines degrade on Hard problems (red/green boxes shift up), our method (blue) maintains low gaps to VBS, validating the emergence of robust search heuristics. Infeasible solutions are included with gap = 1 .0.
+
+5.4 Robustness and Generalization No Catastrophic Forgetting. A common failure mode in RL fine-tuning on narrow tasks is overfitting to the target syntax at the expense of general capabilities. To quantify this risk, we evaluated our checkpoints on HumanEval [Chen et al., 2021] and MBPP [Austin et al., 2021] using the BigCode Evaluation Harness. We utilized greedy decoding (T = 0 , N = 1 ) to ensure strict comparability with the Qwen2.5-Coder technical report [Hui et al., 2024]. As shown in Appendix E (Table 9), our Hero policy achieves an 80 .9% Pass@1 on HumanEval, statistically tied with the Base model ( 82 .3% ) given the variance ( ±0.8). This confirms that our scaffolded training paradigm acts as a 
+
+capability sharpener : the model learns to context-switch effectively, generating strict SDS solvers when prompted with the SDS scaffold, while retaining standard Python fluency for general tasks. 
+
+Evaluation Beyond SDS. To test whether the solver-synthesis recipe extends beyond SDS, we applied the same GRPO setup, reward-stack structure (format / execution / nominal with weights 0.10 / 0.20 / 0.70), and solver-writing prompt philosophy to JSSP, a standard Job Shop Scheduling Problem benchmark. Under one frozen JSSP training/evaluation regime and the same final-checkpoint rule for all three seeds, Hero attains 99 .3% ± 1.2% pass rate and 6.12% ± 3.80% 
+
+mean gap to a JSSP VBS over 3,000 held-out instances. Across all three seeds, Hero outperforms the heuristic JSSP baselines (Local Search, Most Work Remaining (MWKR), Most Operations Remaining (MOPR), Shortest Processing Time (SPT), and Longest Processing Time (LPT)) and trails only OR-Tools. We treat JSSP as additional evidence of cross-domain viability for the scaffold, not as proof of domain-agnostic transfer: the high-level training recipe carries over, while the simulator, solver contract, and light semantic shaping remain domain-specific. Appendix C.6 details this setup. 8Beyond Inference-Time Search A P REPRINT 
+
+Latent Capacity Limit. We next test whether RL merely distills latent knowledge. Recent work argues that RLVR primarily acts as a “distribution sharpener,” improving sampling efficiency without expanding the reasoning boundary [Yue et al., 2025]. To probe that claim, we evaluate the Base model using Best-of-N sampling ( N = 64 ) with the identical scaffolded “Hero” prompt. As shown in Figure 3, the Base model saturates at a ≈ 28 .7% gap to VBS. To diagnose this competence wall, we audited the same raw Base Best-of-64 code pool used by universal search: 192,000 generations collapse to 191,699 unique extracted codes across the three seeds (Appendix C.11). The Base model 
+
+does access the right surface family at a superficial level: 21.9% of those unique codes are SA-like under a structural heuristic. However, presence ̸ = competence. Within that SA-like subset, 28.8% exhibit the global-best acceptance bug, and among the remaining SA-like codes only 23.8% appear structurally complete under a coarse static audit. This is also not an artifact of inspecting only a small slice of the search pool. To search more exhaustively for a correct reusable solver, we conducted an adaptive tournament across the same 191,699 unique base codes (Appendix C.10). The single best code still achieved only a 24.04% gap to VBS ( 5× worse than Hero’s 5.0%). On SDS, the combined audit and tournament results strengthen the case that RL is doing more than distribution sharpening: it appears to repair the executable logic required for valid optimization. 1 2 4 8 16 32 64 
+
+Number of Samples (k) 
+
+0
+
+20 
+
+40 
+
+60 
+
+80 
+
+100 
+
+> Optimality Gap (%)
+> Algorithmic
+> Gap
+> Ours (Greedy, k=1)
+> Greedy Baseline
+> Base Model
+
+Figure 3: Scaling Limitations of the Base Model. Gap to VBS vs. sample count k (log 2 scale). Even with the full Hero prompt, the Base model saturates at ≈ 28 .7% gap to VBS, showing severe diminishing returns. The plotted curve uses the unconditional SDS gap metric, so subsamples with no feasible solution contribute 100% gap. In contrast, our RL policy (dashed line, k = 1 ) achieves 5.0% gap via greedy decoding, far surpassing the constructive Greedy baseline (dotted). This “Algorithmic Gap” indicates that, on SDS, RL reaches solver behavior that naive sampling does not recover in practice. 
+
+5.5 Case Study: Semantic Repair in Generated Solvers 
+
+To investigate whether the model merely memorizes surface-level patterns or actually assembles functional optimization algorithms, we analyzed the Hero solutions across the full test set ( N = 1000 per seed). The main question in this section is not philosophical “discovery,” but whether RL changes the executable behavior of retrieved solver templates in a way that explains the competence-wall gap. 
+
+Algorithmic Convergence. We quantified structural convergence using static analysis on N = 2 , 935 feasible solutions aggregated across three seeds. We found that 99.8% ± 0.3% of generated solutions adhere to a functionally equivalent template: Simulated Annealing with a “Constraint Guard” mechanism (using either active while loops or strict conditional filtering). This near-perfect convergence indicates that the RL process does not merely increase solution diversity or scatter across many heuristics; it concentrates on a reusable solver family that is both simple enough to emit reliably and expressive enough to survive deceptive landscapes. We hypothesize that this convergence is helped by an inductive bias toward compact search programs: compared with Genetic Algorithms or Tabu Search, Simulated Annealing offers high optimization leverage per token of generated code and per millisecond of execution time. 9Beyond Inference-Time Search A P REPRINT 
+
+Base Model Failure (Logic Hallucination) 
+
+> # ... [Standard setup matches Hero] ... # LOGIC HALLUCINATION: Global Best Bug # Compares neighbor against BEST_value, # not CURRENT_value. if neighbor_value > best_value or \ random.random() < math.exp( \ (neighbor_value - best_value) / T): solution = neighbor_solution[:] if neighbor_value > best_value: best_value = neighbor_value # Result: The search "freezes" once a # local optimum is found.
+
+Hero Success (Correct Physics) 
+
+> # ... [Initialization of T=1000, cooling=0.99] ... # Constraint Guard (Active Verification) while not is_feasible(neighbor): idx = random.randint(0, n_vars - 1) neighbor[idx] = not neighbor[idx] # CORRECT PHYSICS: Metropolis Criterion # Compares neighbor against CURRENT (Delta). n_score = calculate_score(neighbor) delta = n_score - current_score if delta > 0 or \ random.random() < math.exp(delta/T): current_sol = neighbor current_score = n_score # Result: The search correctly anneals # to escape local traps.
+
+Figure 4: Visualizing the Logic Hallucination Gap. Both models retrieve the Simulated Annealing template. However, the Base Model (Top) hallucinates the acceptance logic, comparing neighbors to the running global best found so far rather than the current state, which effectively freezes exploration once the search reaches a local maximum. The Hero policy (Bottom) synthesizes the correct physics ( ∆ = Snew − Scurr ) and active constraint guards, enabling functional optimization. 
+
+The Logic Hallucination Gap. Why does the Base Model’s SA fail (28.7% gap) while Hero’s succeeds (5.0% gap) despite using the same high-level template? We compared the Base-model SA-like code pool against Hero and identified a substantial Global Best Bug bucket (28.8% of SA-like unique codes; Appendix C.11), visualized in Figure 4: 
+
+if new > best or rand < exp((new - best)/T): 
+
+By comparing neighbors to the running global best found so far rather than the current state, the Base Model’s heuristics effectively “freeze” the search once it reaches a local maximum under the current neighborhood. Hero corrects this to 
+
+∆ = Snew − Scurr , enabling true annealing. The appendix audit shows that this bug is important but not exhaustive: the remaining SA-like codes are still dominated by missing best-solution tracking, ambiguous acceptance logic, and weak neighborhood structure rather than by a single isolated mistake. This is the central semantic-repair result of the paper: on SDS, RL does not just retrieve a solver family more often; it repairs the executable logic that makes that family actually work in a deceptive landscape. 
+
+Code Implementation Analysis. The generated code (Figure 8 in Appendix F) consistently implements three ingredients that explain the behavioral jump: (1) a Constraint Guard (using while not feasible() or conditional rejection) to prevent wasted evaluations; (2) a correct Metropolis Criterion for probabilistic acceptance ( P =exp(∆ S/T )); and (3) Generalization via standard streams, decoupling the compiled solver from a single fixed problem instance. Together, these support the interpretation that RL produces a reusable solver artifact rather than a one-off answer generator. 10 Beyond Inference-Time Search A P REPRINT 
+
+## 6 Discussion 
+
+Synthesizing Reasoning Behavior from Standard Weights. A critical finding is that our policy—initialized from a standard coder-instruct model (Qwen 2.5-Coder) rather than a dedicated reasoning model—outperforms baselines that rely on stronger proprietary search models at deployment time. The refreshed ShinkaEvolve baseline uses stronger mutation models, yet without the same feasibility-first alignment these deployment-time search systems still underperform on deceptive SDS instances (14.4% gap under the fairer rerun). We therefore interpret Hero not as evidence that frontier models lack raw capability, but as evidence that a comparatively small coder model can be pushed into a distinct behavioral regime by RL and verification scaffolds. 
+
+Breaking the Greedy Attractor. Our ablation analysis reveals that the primary driver of solver synthesis is not rich positive guidance, but control over the base model’s easiest failure mode. The “w/o Structure” ablation confirms that without the lazy-sort penalty, the model settles into a local optimum of greedy construction ( 34 .7% gap). By blocking this path of least resistance, the structural scaffold forces the policy to escape the greedy basin and converge on a more robust solver family. This suggests that in RL for Code, negative constraints on bad executable behavior can be more important than dense hints toward good outcomes. 
+
+Scaffolding as a Contextual Key. Our ablation analysis (Table 1) also confirms that the scaffold alone is insufficient. The Base 14B model, even when provided with the identical Hero prompt, still saturates at a 28.7% gap. The prompt is therefore not the solution by itself; it is a contextual key whose intended procedure must still be operationalized by training. This is another way to see the competence wall: the instructions name a useful mode of behavior, but RL is what makes that mode executable on SDS. 
+
+Amortized Intelligence and Verification. Recent frameworks like ShinkaEvolve [Lange et al., 2025] and ThetaEvolve [Wang et al., 2025] rely on intensive test-time search. In contrast, our approach acts as a compiler , paying the reasoning cost once during synthesis. The generated code adheres to a Simulated Annealing template ( 99 .8% convergence) and operates on dynamic inputs, enabling a reusable deployment object instead of a fresh search loop per instance. We now directly validate that framing with a strict compile-once evaluation: extracting one fixed Hero-generated solver per seed and executing it unchanged across the full SDS test set yields 97.87% pass rate with 4.34% mean gap to VBS, compared with 97.83% pass rate and 4.82% mean gap to VBS for the standard per-instance Hero evaluation. On SDS, the learned process does produce a reusable solver rather than only a per-instance generation policy. 
+
+Stronger Non-Neural Baseline. We also added a manually specified, constraint-aware Simulated Annealing baseline evaluated through the same fixed-code path. It reaches 95.63% pass rate with 5.32% mean gap to VBS across the three SDS seeds, but the frozen Hero solver still outperforms it on both feasibility and solution quality (97.87%, 4.34%). This shows that Hero remains competitive even against a competent manually specified heuristic from the same algorithmic family. 
+
+Breaking the Sampling Ceiling. Our results offer a critical nuance to the “sampling hypothesis” [Yue et al., 2025]. While we confirm that the algorithmic primitives exist within the base distribution (e.g., 21.9% SA-like template retrieval in the canonical raw-code audit), naive sampling fails to assemble them into a functional solver. The Base Model’s failure is semantic: it retrieves the correct syntax but hallucinates the acceptance logic (Global Best Bug). Extensive sampling ( N = 64 ) merely yields variations of this broken physics. RL acts as a functional compiler , bridging the gap between latent capability and operational validity by correcting the algorithm’s mechanics (aligning constraint guards and Metropolis criteria). In our current experiments, RL is the method that closes this gap relative to naive sampling; evaluating other repair-oriented procedures remains an important direction for future work. 
+
+Contextual Specialization. The negligible catastrophic forgetting observed in Section 5.4 suggests that our scaffolded training protocol acts as a specific mode-switch rather than a destructive overwrite. Because the training utilized a distinct, scaffolded system prompt (“...expert engineering reasoning engine...”), the policy likely learned to associate the specialized search behaviors (Simulated Annealing) strictly with this context. When evaluated on general benchmarks (HumanEval) using standard prompts, the model gracefully reverts to its pre-trained distribution, offering a “best of both worlds” capability profile. 
+
+Process Constraints vs. Outcome Shaping. Our results clarify a critical distinction between outcome shaping (e.g., oracles) and process verification (e.g., Rexec ). While we discard oracle signals to reduce reward hacking around the metric, we retain the structural scaffold as a necessary negative constraint on bad executable behavior. The failure of the “w/o Structure” ablation demonstrates that simply removing the oracle is insufficient; the objective must actively 11 Beyond Inference-Time Search A P REPRINT 
+
+devalue the base model’s pre-trained bias toward linear approximations. In this sense, the scaffold is less a teacher of the final algorithm than a filter that prevents the policy from staying in the greedy basin. 
+
+Feasibility Density During Training. We also instrumented fresh Hero-style SDS training to measure feasibility density at the true GRPO group level. Across 1,284 reconstructed groups of 64 completions, 85.83% already contain at least one feasible sample, and the average feasible count rises from 23.32 / 64 early in training to 50.94 / 64 late in training. On SDS, the hard nominal gate therefore does not mainly create an all-zero-group regime. 
+
+Normalization Sensitivity. A further limitation is that the SDS recipe is sensitive to the nominal reward normalization heuristic. In a matched 3-seed ablation that changes only the interaction-normalization estimate, the treatment aggregate drops from Hero’s 97.83% ± 0.15% pass rate and 4.08% ± 1.31% mean gap to VBS to 70.40% ± 24.36% pass rate and 31.07% ± 22.83% mean gap to VBS. We therefore view the current normalization rule as a consequential part of the method design. 
+
+Limitations. Important limitations remain. SDS is still a custom benchmark/testbed, so the strongest conclusions remain SDS-specific even after the JSSP validation. The recipe is not domain-agnostic without adaptation, and the SDS setup also depends materially on benchmark-specific design choices, especially the nominal reward normalization heuristic. We therefore view the paper as evidence for a disciplined solver-synthesis recipe under explicit scaffolding, not as a claim of universal robustness across optimization domains or reward parameterizations. 
+
+## 7 Conclusion 
+
+We presented an empirical study of when RL can move a code LLM from per-instance search toward reusable solver synthesis. On SDS, naive sampling encounters a clear competence wall even when the base model retrieves superficially appropriate templates. RL closes that gap not only by concentrating on a better solver family, but by repairing the executable logic required for that family to function in a deceptive landscape. The resulting policy produces a reusable solver artifact that remains highly competitive under a strict compile-once evaluation, while additional JSSP experiments provide narrower evidence that the scaffold extends beyond SDS. At the same time, our negative ablations and limitations make clear that this is not yet a domain-agnostic recipe: the current method still depends on explicit feasibility-first scaffolding and consequential design choices such as reward normalization. 
+
+## Acknowledgements 
+
+This work was supported by a grant from the Swiss National Supercomputing Centre (CSCS) under project ID a0105 on Alps. 
+
+## Software and Data 
+
+Code, datasets, checkpoints, and experiment artifacts are provided through the linked public repositories associated with this preprint. Appendix D lists the dependency versions, ablation configurations, and numerical non-determinism notes needed to understand the experiments. 
+
+## Impact Statement 
+
+This work introduces a methodology for synthesizing standalone combinatorial solvers using LLMs. While we reduce the computational cost of reasoning, we acknowledge that automated solver synthesis carries risks if deployed in safety-critical infrastructure without formal verification. The achieved 5.0% gap to VBS indicates these solvers are not yet exact. Users should monitor for dual-use risks in domains involving resource disruption. We have mitigated the environmental footprint of our research by utilizing a parsimonious training regime (4 hours on 12 GPUs). 
+
+## References 
+
+Wouter Kool, Herke van Hoof, and Max Welling. Attention, Learn to Solve Routing Problems! In International Conference on Learning Representations , 2018. URL https://openreview.net/forum?id=ByxBFsRqYm .Sahil Manchanda, Akash Mittal, Anuj Dhawan, Sourav Medya, Sayan Ranu, and Ambuj Singh. GCOMB: Learning Budget-constrained Combinatorial Algorithms over Billion-sized Graphs. In Advances in Neural Information 
+
+12 Beyond Inference-Time Search A P REPRINT 
+
+Processing Systems , volume 33, pages 20000–20011. Curran Associates, Inc., 2020. URL https://papers.nips. cc/paper/2020/hash/e7532dbeff7ef901f2e70daacb3f452d-Abstract.html .Luyu Gao, Aman Madaan, Shuyan Zhou, Uri Alon, Pengfei Liu, Yiming Yang, Jamie Callan, and Graham Neubig. PAL: Program-aided Language Models. In Proceedings of the 40th International Conference on Machine Learning ,pages 10764–10799. PMLR, 2023. URL https://proceedings.mlr.press/v202/gao23f.html .Liangming Pan, Alon Albalak, Xinyi Wang, and William Yang Wang. Logic-LM: Empowering Large Language Models with Symbolic Solvers for Faithful Logical Reasoning. In The 2023 Conference on Empirical Methods in Natural Language Processing , 2023. URL https://openreview.net/forum?id=nWXMv949ZH&noteId=qt0t8SsVvT .Bernardino Romera-Paredes, Mohammadamin Barekatain, Alexander Novikov, Matej Balog, M. Pawan Kumar, Emilien Dupont, Francisco J. R. Ruiz, Jordan S. Ellenberg, Pengming Wang, Omar Fawzi, et al. Mathematical discoveries from program search with large language models. Nature , 625(7995):468–475, 2024. doi:10.1038/s41586-023-06924-6. Haoran Ye, Jiarui Wang, Zhiguang Cao, Federico Berto, Chuanbo Hua, Haeyeon Kim, Jinkyoo Park, and Guojie Song. ReEvo: Large Language Models as Hyper-Heuristics with Reflective Evolution. In Advances in Neural Information Processing Systems , 2024. URL https://openreview.net/forum?id=483IPG0HWL .Alexander Novikov, Ngân V ˜u, Marvin Eisenberger, Emilien Dupont, Po-Sen Huang, Adam Zsolt Wagner, Sergey Shirobokov, Borislav Kozlovskii, Francisco J. R. Ruiz, Abbas Mehrabian, et al. AlphaEvolve: A coding agent for scientific and algorithmic discovery, 2025. URL https://arxiv.org/abs/2506.13131 .Yiping Wang, Shao-Rong Su, Zhiyuan Zeng, Eva Xu, Liliang Ren, Xinyu Yang, Zeyi Huang, Xuehai He, Luyao Ma, Baolin Peng, et al. ThetaEvolve: Test-time Learning on Open Problems, 2025. URL https://arxiv.org/abs/ 2511.23473 .Yang Yue, Zhiqi Chen, Rui Lu, Andrew Zhao, Zhaokai Wang, Yang Yue, Shiji Song, and Gao Huang. Does Reinforcement Learning Really Incentivize Reasoning Capacity in LLMs Beyond the Base Model?, 2025. URL 
+
+https://arxiv.org/abs/2504.13837 .Binyuan Hui, Jian Yang, Zeyu Cui, Jiaxi Yang, Dayiheng Liu, Lei Zhang, Tianyu Liu, Jiajun Zhang, Bowen Yu, Keming Lu, et al. Qwen2.5-Coder Technical Report, 2024. URL https://arxiv.org/abs/2409.12186 .Zhihong Shao, Peiyi Wang, Qihao Zhu, Runxin Xu, Junxiao Song, Xiao Bi, Haowei Zhang, Mingchuan Zhang, Y. K. Li, Y. Wu, et al. DeepSeekMath: Pushing the Limits of Mathematical Reasoning in Open Language Models, 2024. URL https://arxiv.org/abs/2402.03300 .Hung Le, Yue Wang, Akhilesh Deepak Gotmare, Silvio Savarese, and Steven C. H. Hoi. CodeRL: Mastering Code Generation through Pretrained Models and Deep Reinforcement Learning. In Advances in Neural Information Processing Systems , 2022. URL https://openreview.net/forum?id=WaGvb7OzySA .Jiate Liu, Yiqin Zhu, Kaiwen Xiao, Qiang Fu, Xiao Han, Wei Yang, and Deheng Ye. RLTF: Reinforcement Learning from Unit Test Feedback, 2023. URL https://arxiv.org/abs/2307.04349 .Jonas Gehring, Kunhao Zheng, Jade Copet, Vegard Mella, Quentin Carbonneaux, Taco Cohen, and Gabriel Synnaeve. RLEF: Grounding Code LLMs in Execution Feedback with Reinforcement Learning, 2025. URL https://arxiv. org/abs/2410.02089 .Shangzhan Li, Zefan Wang, Ye He, Yuxuan Li, Qi Shi, Jianling Li, Yonggang Hu, Wanxiang Che, Xu Han, Zhiyuan Liu, et al. AutoTriton: Automatic Triton Programming with Reinforcement Learning in LLMs, 2025. URL 
+
+https://arxiv.org/abs/2507.05687 .Jie Huang, Xinyun Chen, Swaroop Mishra, Huaixiu Steven Zheng, Adams Wei Yu, Xinying Song, and Denny Zhou. Large Language Models Cannot Self-Correct Reasoning Yet, 2024. URL https://arxiv.org/abs/2310.01798 .Karthik Valmeekam, Matthew Marquez, Alberto Olmo, Sarath Sreedharan, and Subbarao Kambhampati. PlanBench: An Extensible Benchmark for Evaluating Large Language Models on Planning and Reasoning about Change. Advances in Neural Information Processing Systems , 36:38975–38987, 2023. URL https://proceedings.neurips. cc/paper_files/paper/2023/hash/7a92bcdede88c7afd108072faf5485c8-Abstract-Datasets_and_ Benchmarks.html .Richard M. Karp. Reducibility Among Combinatorial Problems. In 50 Years of Integer Programming 1958-2008: From the Early Years to the State-of-the-Art , pages 219–241. Springer, 2010. doi:10.1007/978-3-540-68279-0_8. David Pisinger. The quadratic knapsack problem—a survey. Discrete Applied Mathematics , 155(5):623–648, 2007. doi:10.1016/j.dam.2006.08.007. Qiying Yu, Zheng Zhang, Ruofei Zhu, Yufeng Yuan, Xiaochen Zuo, Yu Yue, Weinan Dai, Tiantian Fan, Gaohong Liu, Juncai Liu, et al. DAPO: An Open-Source LLM Reinforcement Learning System at Scale. In The Thirty-ninth Annual Conference on Neural Information Processing Systems , 2025. URL https://openreview.net/forum? id=2a36EMSSTp .13 Beyond Inference-Time Search A P REPRINT 
+
+Robert Tjarko Lange, Yuki Imajuku, and Edoardo Cetin. ShinkaEvolve: Towards Open-Ended And Sample-Efficient Program Evolution, 2025. URL https://arxiv.org/abs/2509.19349 .Laurent Perron, Frédéric Didier, and Steven Gay. The CP-SAT-LP Solver. In 29th International Conference on Principles and Practice of Constraint Programming (CP 2023) , volume 280, pages 3:1–3:2. Schloss Dagstuhl – Leibniz-Zentrum für Informatik, 2023. doi:10.4230/LIPIcs.CP.2023.3. Aaditya Singh, Adam Fry, Adam Perelman, Adam Tart, Adi Ganesh, Ahmed El-Kishky, Aidan McLaughlin, Aiden Low, AJ Ostrow, et al. OpenAI GPT-5 System Card, 2025. URL https://arxiv.org/abs/2601.03267 .Mark Chen, Jerry Tworek, Heewoo Jun, Qiming Yuan, Henrique Ponde de Oliveira Pinto, Jared Kaplan, Harri Edwards, Yuri Burda, Nicholas Joseph, Greg Brockman, et al. Evaluating Large Language Models Trained on Code, 2021. URL https://arxiv.org/abs/2107.03374 .Jacob Austin, Augustus Odena, Maxwell Nye, Maarten Bosma, Henryk Michalewski, David Dohan, Ellen Jiang, Carrie Cai, Michael Terry, Quoc Le, et al. Program Synthesis with Large Language Models, 2021. URL https: //arxiv.org/abs/2108.07732 .Hugging Face. Open R1: A fully open reproduction of DeepSeek-R1, January 2025. URL https://github.com/ huggingface/open-r1 .Mistral-AI, Abhinav Rastogi, Albert Q. Jiang, Andy Lo, Gabrielle Berrada, Guillaume Lample, Jason Rute, Joep Barmentlo, Karmesh Yadav, Kartik Khandelwal, et al. Magistral, 2025. URL https://arxiv.org/abs/2506. 10910 .Maxime Martinasso, Mark Klein, and Thomas C. Schulthess. Alps, a versatile research infrastructure, 2025. URL 
+
+https://arxiv.org/abs/2507.02404 .Sadaf R. Alam, Miguel Gila, Mark Klein, Maxime Martinasso, and Thomas C. Schulthess. Versatile software-defined HPC and cloud clusters on Alps supercomputer for diverse workflows. The International Journal of High Performance Computing Applications , 37(3–4):288–305, 2023. doi:10.1177/10943420231167811. 14 Beyond Inference-Time Search A P REPRINT 
+
+Box C.1: Hero System Prompt (Scaffolded) 
+
+You are an expert engineering reasoning engine specialized in combinatorial optimization. Your task is to write a high-performance Python script to solve Synergistic Dependency Selection (SDS) problems. FORMATTING RULES: 1. Begin with a <think> block. 2. End with a single <code> block containing the JSON-processing Python script. 3. No other text is allowed outside these blocks. THINKING GUIDELINES: Inside the <think> block, you must engage in a rigorous algorithm design process: - **Deconstruct**: Analyze the objective landscape. Acknowledge that simple heuristics (like greedy selection) will likely get stuck in local optima due to negative interaction weights and complex constraints. - **Hypothesize**: Propose a search strategy capable of exploring the solution space effectively. Consider how to balance "exploitation" (improving a good solution) with "exploration" (escaping bad local optima). - **Critique**: Question your approach. "Does my algorithm just pick the next best item? If so, it will fail on deceptive landscapes. How do I add lookahead, backtracking, or iterative improvement?" - **Simulate**: Mentally dry-run the logic to ensure constraints (mutex, precedence) are strictly satisfied during the search. - **Finalize**: Verify I/O requirements. GOAL: Your code must aim for **Global Optimality**, while being feasible. You must write a self-contained solver (no external black-box libraries like OR-Tools) that intelligently searches for the best possible score under constraints. 
+
+Box C.2: Ablated System Prompt (Minimal) 
+
+You are a coding assistant. Write a Python script to solve the Synergistic Dependency Selection (SDS) optimization problem. FORMATTING RULES: 1. Begin with a <think> block. 2. End with a single <code> block containing the JSON-processing Python script. 3. No other text is allowed outside these blocks. IO CONTRACT: - Read JSON from stdin with keys {"requirements": {...}, "catalog": {...}}. - Print JSON to stdout with key {"selection": {"variables": [...]}}. - Use the python ‘json‘ library. 
+
+Figure 5: System Prompt Comparison. The Hero prompt (left) enforces a scaffolded reasoning loop whose core is “Deconstruct-Hypothesize-Critique”, which we find essential for escaping local optima. The Ablated prompt (right) relies solely on the model’s pre-trained priors, leading to greedy failures. 
+
+## A System Prompt Analysis 
+
+To understand the mechanism behind the model’s performance, we compare the “Hero” system prompt (which provides algorithmic scaffolding) against the “Ablated” prompt (which provides only task definitions). 
+
+A.1 The Necessity of Scaffolding 
+
+As shown in the main text, removing the detailed prompt causes the pass rate to drop from 97.8% to 64.4% (Table 1). This significant degradation suggests that the base model (Qwen2.5-Coder) benefits heavily from explicit meta-cognitive instructions .As shown in Box C.1, the Hero prompt does not tell the model which algorithm to use (e.g., it never mentions “Simulated Annealing”). Instead, it enforces a reasoning structure :1. Deconstruct: Force acknowledgment of the landscape’s deceptiveness. 2. Hypothesize: Explicitly ask for a search strategy that balances exploration/exploitation. 3. Critique: Pre-emptively flag greedy approaches as failure modes. In contrast, the Ablated prompt (Box C.2) treats the task as a standard code generation problem. Without the “Critique” step, the model often defaults to greedy construction, which fails on the deceptive test set. 15 Beyond Inference-Time Search A P REPRINT 
+
+## B Reward Function Details 
+
+B.1 Complete Mathematical Formulation 
+
+The composite reward function R for the Hero configuration is defined as: 
+
+R = 0 .10 · Rformat + 0 .20 · Rexec + 0 .70 · Rnom (5) Here Rformat , Rexec , and Rnom denote the raw reward-function outputs passed to GRPO, while the coefficients in Eq. 5 are the trainer-level weights specified in the YAML configuration. In particular, Rexec is an intentionally shaped, unnormalized execution reward composed of syntax, schema, structure, and feasibility terms; its internal subcomponent weights are therefore implementation-level shaping choices, not a second normalized decomposition of the final scalar reward. where Rnom is the nominal reward (normalized score on the prompt’s mission). Note that the Hero configuration explicitly excludes oracle anchoring to minimize variance. 
+
+B.1.1 Format Reward ( Rformat )
+
+The format reward is a binary indicator enforcing a strict output structure: 
+
+Rformat = I(exactly one ⟨think ⟩ block ) · I(exactly one ⟨code ⟩ block ) · I(correct ordering ) (6) 
+
+B.1.2 Code Execution Reward ( Rexec )
+
+We decompose the execution-validity reward into four sub-components: 
+
+Rexec = Rsyntax + Rschema + Rstructure + Rfeasibility . (7) 
+
+Indicator Definitions. We define the indicator events used in Eq. (10) (main text) as follows. • Syntax Valid (I(syntax valid )): after extracting the <code> block and passing a lightweight structural validator, the code is executed in a sandbox with a fixed timeout. We set 
+
+I(syntax valid ) = I(run_candidate returns without an “error ′′ field ).
+
+If execution fails (runtime error / timeout), Rexec is set to 0 for that sample. • Schema Valid (I(schema valid )): given successful execution, we require the program to output a JSON object containing a selection field. Concretely, 
+
+I(schema valid ) = I(“selection” ∈ result ),
+
+where result is the parsed output returned by the evaluator. (This is intentionally a minimal schema check used for dense shaping; full feasibility is enforced separately via Nvio .) • Graph-Theoretic Structure (I(graph-theoretic structure )): a lightweight static feature detector encourages non-degenerate SDS solvers early in training. Let code_lower be the lowercased generated code. We set 
+
+I(graph-theoretic structure ) = I
+
+
+
+∃k ∈ K graph such that k ∈ code_lower 
+
+
+
+,
+
+where Kgraph is a fixed keyword set defined as: 
+
+Kgraph = {networkx , adjacency , neighbor , interactions , precedence ,
+
+mutex , recursion , memoization , backtrack ,
+
+graph , edge , vertex , topological , dag }.
+
+Additionally, we apply an explicit anti-mode-collapse penalty for “lazy sort” solutions: if “sorted” and 
+
+“weight” appear in code_lower while “interactions” does not , we subtract 0.2 from Rexec .
+
+Component Formulation. With these indicators, the reward components are: 
+
+Rsyntax = 0 .1 · I(syntax valid ), (8) 
+
+Rschema = 0 .1 · I(schema valid ), (9) 
+
+Rstructure = 0 .2 · α(t) · I(graph-theoretic structure ), (10) 
+
+Rfeasibility = 0 .3 · I(Nvio = 0) − min(0 .2, 0.03 · Nvio ) · I(Nvio > 0) . (11) 16 Beyond Inference-Time Search A P REPRINT 
+
+Curriculum Fading. We use curriculum fading to emphasize structured, non-hallucinated code early in training: 
+
+α(t) = 
+
+1.0 if t < 0.4,
+
+0.2 otherwise ,
+
+where t ∈ [0 , 1] is normalized training progress (current step divided by total steps). 
+
+Violation Count. Nvio is the number of constraint violations computed by a lightweight checker over the SDS constraints (precedence, mutex, group constraints, and cardinality bounds) applied to the produced 
+
+selection.variables .
+
+B.1.3 Nominal Reward ( Rnom )
+
+The primary optimization signal, gated by feasibility. 
+
+Rnom =
+
+Normalize (Score (o)) ∈ [0 , 1] if Nvio = 0 0.0 if Nvio > 0 (12) where Normalize (·) maps the raw SDS objective value to [0 , 1] via the simulator’s reward registry. This strict gating forces the model to prioritize constraint satisfaction over greedy reward hacking, creating a “feasibility cliff” that prevents mode collapse into invalid solution regions. 
+
+Normalization Heuristic. The normalization function Normalize (·) uses a robust heuristic to map raw SDS scores to [0 , 1] without requiring exact knowledge of the global optimum. Given a raw score s, weights w = {w1, . . . , w n},interactions I = {Iij : ( i, j ) ∈ E} , and cardinality bounds [L, U ], the normalization proceeds as follows: 
+
+Case 1: Meaningful Objective Structure (P 
+
+> i
+
+|wi| > ϵ or P 
+
+> (i,j )
+
+|Iij | > ϵ ): 1. Weight Contribution Estimate: Let w+ = {wi : wi > 0} be the positive weights, sorted in descending order. The maximum weight contribution is estimated as: 
+
+Wmax = 
+
+> min( |w+|,U )
+
+X
+
+> i=1
+
+w+ 
+
+> i
+
+(13) where w+ 
+
+> i
+
+denotes the i-th largest positive weight. This assumes we can select up to U variables with the highest positive weights. 2. Interaction Contribution Estimate: Let I+ = {Iij : Iij > 0} be the positive interactions. With U selected variables, at most  U
+
+> 2
+
+ = U (U − 1) /2 pairs can contribute. The maximum interaction contribution is estimated as: 
+
+Imax = ¯I+ · min 
+
+
+
+|I+|,
+
+U
+
+2
+
+ 
+
+(14) where ¯I+ = 1
+
+> |I+|
+
+P  
+
+> Iij ∈I+
+
+Iij is the average positive interaction value when |I+| > 0, and ¯I+ = 0 when 
+
+|I+| = 0 . This heuristic assumes we can achieve roughly the average positive interaction for each feasible pair. 3. Normalization: The normalization baseline is B = Wmax + Imax . If B > ϵ , the normalized score is: Normalize (s) = sB (15) Otherwise, we fall back to absolute normalization: Normalize (s) = s/ max( P 
+
+> i
+
+|wi| + P 
+
+> (i,j )
+
+|Iij |, 1) .
+
+Case 2: Degenerate Objective (P 
+
+> i
+
+|wi| ≤ ϵ and P 
+
+> (i,j )
+
+|Iij | ≤ ϵ): When the problem has no clear objective structure, we use magnitude-based normalization: Normalize (s) = 
+
+(
+
+0.5 ·
+
+
+
+1 + s
+
+> 1+ |s|
+
+
+
+if |s| > ϵ 
+
+0.5 if |s| ≤ ϵ (16) This sigmoid-like transformation maps large positive scores to ≈ 1.0, large negative scores to ≈ 0.0, and zero scores to 
+
+0.5, without requiring a maximum estimate. 17 Beyond Inference-Time Search A P REPRINT 
+
+Intermediate Score Processing: After normalization, we compute an intermediate score by clamping to [0 , 1] and applying a constraint penalty: 
+
+eRscore = max (0 , min (1 , Normalize (s) − min( Nvio , 1.0))) (17) where Nvio is the number of constraint violations. This intermediate score remains in [0 , 1] , but the authoritative definition of Rnom is still the hard feasibility gate in the main methodology: if Nvio > 0, then Rnom = 0 regardless of 
+
+eRscore .This heuristic provides stable normalization across diverse problem structures without requiring expensive global optimization to determine exact maxima, enabling efficient reward computation during training. 
+
+B.2 Rationale for Reward Composition Hierarchical Weight Selection. We selected the composite weighting λ = (0 .1, 0.2, 0.7) based on a principle of 
+
+hierarchical stability rather than exhaustive grid search. The weighting schema enforces a functional priority: • Dominance of Optimality ( 0.7): The nominal reward Rnom is set as the dominant term to ensure that valid-but-suboptimal solutions cannot outscore invalid-but-promising candidates purely on auxiliary signals. This prevents the policy from “gaming” the auxiliary rewards. • Structural Bootstrapping ( 0.2): The execution reward serves as a non-dominant bootstrapping signal. It provides just enough gradient mass to lift the policy out of the “syntax-only” local optima (where the model writes valid Python that does nothing useful) without overriding the primary optimization objective. • Format Compliance ( 0.1): A minimal signal is sufficient to maintain the <think> /<code> structure once learned. 
+
+Justification of Structural Scaffolding. We emphasize that Rstructure acts as a semantic type-check , not a solution leak. Specifically, the anti-mode-collapse penalty (subtracting 0.2 if code sorts by weight but ignores interactions ) is the decisive factor for overcoming the pre-trained prior, and in the implementation this penalty is applied directly within 
+
+Rexec while the positive graph-structure bonus is the faded Rstructure term. Without this negative constraint, models default to linear approximations (“lazy sorting”) which satisfy basic syntax but fail on deceptive landscapes. Our “w/o Structure” ablation (Table 1) confirms this: removing the structural signal caused the gap to VBS to degrade from 5.0% 
+
+to 34 .7% , as the policy reverted to safe but suboptimal greedy heuristics. Thus, the structural reward does not teach the model how to solve the problem (e.g., SA vs. DFS), but rather what not to do (ignore interactions), creating the necessary pressure for advanced meta-heuristics to emerge. 
+
+B.3 Ablations, Sensitivity, and Diagnostics 
+
+To validate our scaffolded-verification hypothesis, we separate three experiment types. First, we run configuration ablations , which directly modify the Hero recipe and therefore belong in Table 3. Second, we run a matched sensitivity analysis on reward normalization, which perturbs one load-bearing Hero design choice while holding the rest of the stack fixed. Third, we run diagnostics such as feasibility sparsity and timeout analysis, which explain why the recipe succeeds or fails but are not alternative training configurations. Table 3 therefore summarizes the five primary configuration ablations: +Oracle, +Diversity, +Soft Gate, w/o Structure, and w/o Prompt. The normalization and training-dynamics studies are discussed separately below because they are not parallel recipe rows. Table 3: Primary configuration ablations: Hero vs. matched recipe changes (additions and subtractions). This table excludes the separate normalization sensitivity study and training diagnostics, which are discussed below because they are not parallel recipe configurations.                                    
+
+> Configuration Format Exec Reward Nominal/Gen Diversity System Prompt Hero (Baseline) 0.10 Base (0.20) Nominal (0.70) None Scaffolding + Oracle 0.10 Base + Anchor Nominal (0.70) None Scaffolding + Diversity 0.10 Base (0.20) Nominal (0.60) 0.10 Scaffolding + Soft Gate 0.10 Base (0.20) Soft Nominal (0.70) None Scaffolding w/o Structure 0.10 Minimal (0.20) Nominal (0.70) None Scaffolding w/o Prompt 0.10 Base (0.20) Nominal (0.70) None Minimal
+
+18 Beyond Inference-Time Search A P REPRINT 
+
+B.3.1 + Oracle Anchoring (Addition) 
+
+The Oracle Anchoring ablation adds a relative performance term to the base reward. It uses a piecewise function: 
+
+Ranchoring =
+
+
+
+1.0 + 10 .0 · δnorm if δnorm > 0.001 (beating greedy) 
+
+0.0 if |δnorm | ≤ 0.001 
+
+−0.5 if δnorm < −0.001 (losing to greedy) (18) where δnorm is the normalized score difference relative to the greedy baseline. As noted in the main text, this creates a signal conflict with the feasibility-gated nominal reward, inflating variance in GRPO’s standardized advantages and causing training instability. 
+
+B.3.2 + Diversity Penalty (Addition) 
+
+The Diversity ablation adds a penalty Rdiv using 4-gram Jaccard similarity to penalize low entropy within the generation group ( G = 64 ). 
+
+B.3.3 + Soft Gate (Alternative) 
+
+The Soft Gate ablation keeps Hero’s format reward, execution reward, prompt, dataset, and training setup fixed, but replaces the hard nominal feasibility cliff with a graded penalty on simulator-reported violations. Concretely, it uses 
+
+Rsoft = max (0 , min (1 , Normalize( s) − 0.15 · Nvio )) . (19) This ablation asks whether partial credit for mildly infeasible yet high-scoring candidates improves learning. It does not: over seeds 101/202/303, the soft-gate variant reaches a lower average pass rate than canonical Hero (57.40% vs. 97.83%) and a worse shared-VBS mean gap (43.50% vs. 4.09%). Because infeasible solutions incur 100% gap in this comparison, the larger gap is partly a consequence of the much higher infeasibility rate; accordingly, we interpret pass rate and gap jointly. Its dominant failure mode remains constraint violations, especially precedence violations. On SDS, this suggests that the hard gate is not merely a source of harmful reward sparsity; it provides a useful feasibility-first learning signal. 
+
+B.3.4 Matched Sensitivity Study: Reward Normalization 
+
+We also ran a matched 3-seed ablation that changes only the SDS nominal reward normalization heuristic while keeping the prompt, reward-stack structure, reward weights, dataset family, training budget, and SDS evaluation pipeline fixed. The control uses the normalization described in Appendix B, in which the positive interaction term is estimated as the average positive interaction value times the maximum feasible number of pairs. The treatment keeps the weight term unchanged but replaces that interaction estimate with the sum of the largest feasible positive interactions, i.e., 
+
+Ialt  
+
+> max
+
+=
+
+> min( |I+|,
+
+(U 
+
+> 2
+
+))
+
+X
+
+> k=1
+
+I+(k), (20) where I+(k) denotes the k-th largest positive interaction. Under this ablation, canonical Hero achieves 97.83% ± 0.15% pass rate and 4.08% ± 1.31% mean gap to VBS across seeds 101/202/303, whereas the treatment reaches 70.40% 
+
+± 24.36% pass rate and 31.07% ± 22.83% mean gap to VBS. The seed-level treatment results are 57.50% / 42.95% (seed101), 55.20% / 45.51% (seed202), and 98.50% / 4.75% (seed303). The dominant degradation mode is feasibility and constraint satisfaction: aggregated treatment errors are none=2112, constraint=829, and timeout=59. Because our standard SDS gap metric assigns infeasible rows an effective score of zero, those rows contribute 100% gap whenever the VBS score is positive, so the gap degradation is partly a consequence of the increased infeasibility rate. We therefore do not interpret this ablation as evidence of robustness. Instead, it indicates that the current normalization heuristic is a consequential, load-bearing design choice, and that the SDS recipe is strongly seed-sensitive to perturbations of that term. 
+
+B.3.5 Training Diagnostic: Feasibility Sparsity During GRPO Training 
+
+An important concern with a feasibility-gated nominal reward is that it could be too sparse to drive learning if a GRPO comparison group of 64 completions often contains no feasible samples at all. We first attempted to recover this statistic from historic logs and cached artifacts, but those artifacts did not preserve a stable SDS mission identity sufficient for exact reconstruction of the original 64-sample groups. We therefore instrumented fresh Hero-style SDS training and reran seeds 101 / 202 / 303 with rank-sharded logging inside open-r1 . Each rank logged lossless feasibility 19 Beyond Inference-Time Search A P REPRINT 
+
+shards and raw generation traces, after which we reconstructed the global 64-sample groups offline by matching on 
+
+reward_call_index and stable problem identity. Across 1,284 reconstructed GRPO groups of size 64, 85.83% of groups contain at least one feasible completion, the average group contains 37.94 feasible completions, and the pooled feasible completion rate is 59.27%. In a pooled early / middle / late view, the fraction of groups with any feasible completion is 88.76%, 82.48%, and 86.25%, while the mean feasible count per group rises from 23.32 / 64 to 39.48 / 64 to 50.94 / 64. Thus, the nominal signal is not sparse in the sense of an all-infeasible-group regime dominating training. The more important learning-dynamics change is that feasible completions become denser within each GRPO group over time. This does not mean every early group is already rich in feasible candidates, but it does indicate that the hard nominal gate is not simply starving GRPO of comparisons on SDS. 
+
+B.3.6 w/o Structure (Subtraction) 
+
+The w/o Structure ablation removes the graph-theoretic structure detection and curriculum fading components from the execution reward. While the Hero configuration uses a composite execution reward that includes syntax validation (0.1), schema correctness (0.1), graph-theoretic structure detection with curriculum fading (0.2), and constraint satisfaction (0.3), the Minimalist execution reward (‘minimal_feasibility_reward‘) strips away the structural checks and curriculum mechanisms. It provides a simplified three-tier reward: 1.0 for valid feasible solutions, 0.5 for execution success with constraint violations, 0.1 for syntax success with wrong schema, and 0.0 otherwise. This ablation tests whether the structural detection and curriculum fading components are necessary for learning effective search strategies. Results show that removing these components causes pass rates to drop to 74 .8 ± 19 .2% (compared to Hero’s 97 .8 ± 0.2% ), with a 34 .7 ± 14 .1% gap to VBS, indicating that the structural guidance in the execution reward is beneficial for constraint satisfaction and optimization quality. 
+
+## C Experimental Details 
+
+C.1 Hyperparameters 
+
+We employ the open-r1 framework [Hugging Face, 2025], which leverages the trl library’s implementation of GRPO. This open-source framework provides a robust training recipe which we adapted for our specific reward structure. Table 4 lists the complete configuration. Table 4: Complete GRPO hyperparameter configuration for the 14B model.                              
+
+> Parameter Value Base Model Qwen2.5-Coder-14B-Instruct Precision bfloat16 (Flash Attention 2) Algorithm GRPO
+> β(KL Coeff) 0.0 Group Size ( G)64 Clip Range Lower ( ϵ)0.10 Clip Range Upper ( ϵhigh )0.26 [Mistral-AI et al., 2025] Loss Type BNPO Learning Rate 2×10 −6
+> Scheduler Cosine (No Warmup) Effective Batch Size 4 Prompts (Limited by G= 64 memory footprint) Training GPU Configuration 8 Training GPUs + 4 vLLM Server GPUs Samples Seen 360 Prompts ( ≈4.5% of full prompt-level epoch) Episodes Generated 23,040 ( 360 ×64 )Max Sequence Length 3072 Training Steps 90 Total Duration ≈48 GPU-Hours (4h ×12 GPUs)
+
+C.2 Dataset Details 
+
+The training dataset consists of 10,000 instances. Table 5 details the generation parameters used to ensure landscape diversity. 20 Beyond Inference-Time Search A P REPRINT 
+
+Table 5: Problem type distribution and parameters for SDS dataset generation.                                         
+
+> Problem Type Weight Key Parameters Dense Deceptive 20% wi∈[−2,2] ,Wij ∈[−20 ,20]
+> Structural Trap 15% Chain length 4–7, bait 100.0, trap -10.0 BnB Showcase 15% wi∈[−1,1] ,Wij ∈[−25 ,25]
+> Random SDS 5% N∈[50 ,100] (scaling test) Tree-Structured 5% Weight scale 5.0, pair scale 15.0 Greedy-Easy 5% Designed for greedy success Decomposable 10% 4 disjoint clusters Local Optima 10% Multiple local optima Planted QUBO 10% Signal 5.0, noise 2.0 Max-Cut QUBO 5% Edge prob 0.6
+
+C.3 Difficulty Classification Methodology 
+
+The evaluation pipeline classifies problem instances into three difficulty categories ( Trivial , Moderate , Hard ) based on how well a simple greedy heuristic performs relative to the best-known solution. This classification enables stratified analysis to understand how different methods perform across varying problem complexity. 
+
+C.3.1 Virtual Best Solver (VBS) Calculation 
+
+The Virtual Best Solver (VBS) represents the best score achieved by any solver (LLM or baseline) on a given problem instance. There are two levels of VBS calculation: 
+
+Per-Experiment VBS (Individual Evaluation): During individual evaluation runs, for each instance we collect all feasible scores from: • The LLM solution (if feasible) • All baseline solvers (Greedy, Local Search, BnB, CP-SAT) The per-experiment VBS is the maximum of these feasible scores: VBS exp = max {SLLM , S Greedy , S Local Search , S BnB , S CP-SAT } (21) 
+
+Global VBS (Aggregation): When aggregating results across multiple methods and experiments, we compute a global VBS per problem instance to ensure fair comparison. The global VBS is the maximum across all methods (all LLM methods, all baselines, and the union of all N = 64 Base model samples): VBS global = max {SMethod 1 , S Method 2 , . . . , S Baseline 1 , . . . , S Base 1.. 64 } (22) All reported SDS gaps in aggregated results (tables and plots) use the global VBS. This prevents methods from appearing artificially optimal simply because they found a better solution than deterministic baselines but worse than the best feasible score observed anywhere in the comparison set. We therefore interpret VBS-relative gaps as gaps to the strongest observed feasible reference, not as certified distances to the true optimum. Only feasible solutions are considered; infeasible solutions are excluded. If all solvers fail, VBS is set to −∞ and the instance is classified as “Hard.” 
+
+C.3.2 Hardness Metric 
+
+The hardness metric measures the relative gap between the greedy baseline and the VBS: hardness = VBS − SGreedy 
+
+max( |VBS |, ϵ ) (23) where ϵ = 10 −10 prevents division by zero. Edge cases: • If all solvers fail: hardness = 1 .0 (maximum difficulty) • If greedy fails but VBS succeeds: hardness = 1 .0 (greedy completely failed) • If VBS ≤ 0: Uses |VBS | in denominator to handle negative objectives 21 Beyond Inference-Time Search A P REPRINT 
+
+C.3.3 Classification Thresholds 
+
+Instances are classified into three categories: • Trivial : hardness < 0.01 (greedy is nearly optimal, < 1% gap) • Moderate : 0.01 ≤ hardness < 0.10 (1–10% gap) • Hard : hardness ≥ 0.10 (greedy fails significantly, ≥ 10% gap) This classification is used in the stratified box plot (Figure 2) to visualize how methods perform across different problem difficulty levels. 
+
+C.4 Hardware and Compute 
+
+• Training: 3 nodes of NVIDIA GH200 GPUs (12 GPUs total) on Alps at CSCS [Martinasso et al., 2025, Alam et al., 2023]. • Cost: The final Hero model required approx. 48 GPU-hours to train. • Evaluation: 32 CPU cores per evaluation job. 
+
+C.5 Appendix Support for Amortized Solver Synthesis Fixed-code evaluation protocol. To directly test the compile-once claim, we extended the SDS evaluator with a fixed-code mode that reads one solver file from disk and executes it unchanged across the full held-out SDS test split. This path preserves the same scoring, VBS accounting, and output schema as the standard evaluator, including 
+
+metrics_final.csv , per-method tables, and experiment metadata. We use this same fixed-code path for both the frozen Hero solver and the manually specified Simulated Annealing baseline so that the comparison is matched not only in time budget but also in evaluator semantics. 
+
+Frozen Hero selection rule. We do not hand-pick a favorable solver. For each SDS seed, we load the canonical Hero metrics_final.csv , filter rows to feasible == True and error_type == "none" , sort the surviving rows by uuid , and extract the first code snippet. This deterministic rule yields one frozen solver per seed, which is then executed unchanged across the corresponding 1,000-instance SDS test split. The resulting compile-once evaluation yields 97.87% pass rate with 4.34% mean gap to VBS, compared with 97.83% pass rate and 4.82% mean gap to VBS for standard per-instance Hero evaluation. 
+
+Manually specified Simulated Annealing baseline. We also implemented a manually specified, constraint-aware Simulated Annealing baseline under the same fixed-code evaluator contract. The solver uses feasible initialization, neighborhood proposals that respect or repair SDS constraints, and a standard Metropolis acceptance rule against the 
+
+current state rather than the global best state. We emphasize that this is a separate manually specified implementation in the same high-level algorithm family as the converged Hero template, not a copy of a frozen Hero solver. Under the same fixed-code path, this baseline reaches 95.63% pass rate with 5.32% mean gap to VBS across the three SDS seeds. 
+
+Runtime accounting for the baseline bundle. To clarify cost accounting, we produced fresh representative seed101 timing reruns for five methods: standard Hero, Frozen Hero, the manually specified Simulated Annealing baseline, Base Best-of-64, and a refreshed ShinkaEvolve baseline. For Hero and Base Best-of-64, the timing summary records both generation and evaluation wall-clock. For Frozen Hero, the manually specified Simulated Annealing baseline, and ShinkaEvolve, generation cost is zero at evaluation time and only evaluator-side execution is measured. This wall-clock accounting is separate from the main-text “Time (s)” column: in the main SDS figures/tables, Hero/ShinkaEvolve use post-generation solver execution cost, whereas Base Best-of-64 uses cumulative per-instance sampled-candidate execution/selection cost, still excluding LLM inference. The resulting representative wall-clock totals are 2731s for standard Hero, 2342s for Frozen Hero, 3103s for the manually specified SA baseline, 25480s for Base Best-of-64, and 2109s for refreshed ShinkaEvolve. We therefore interpret the strongest deployment contrast as one between reusable compiled solvers and cumulative multi-sample test-time search, not as a comparison of full training cost. 
+
+C.6 Additional Domain Beyond SDS Why this domain. We use JSSP as the main additional domain because it is a standard combinatorial optimization benchmark, structurally different from SDS, and still compatible with the “LLM writes a standalone solver” framing. The part of the recipe we attempt to carry over is the high-level scaffold: same model family, same GRPO setup, same 22 Beyond Inference-Time Search A P REPRINT 
+
+Figure 6: JSSP robustness profile aggregated across seeds 101 / 202 / 303 in the same style as Figure 1b for SDS. For each method, the line is the mean fraction of held-out JSSP instances with gap to VBS at most τ , and the shaded band shows ±1 standard deviation across seeds. reward-stack structure and weights, and the same prompt philosophy of writing a white-box solver rather than emitting per-instance answers. The parts we still adapt per domain are the public solver contract, simulator/objective, native baselines, and light semantic shaping needed to enforce that contract. We therefore present JSSP as evidence that the recipe extends beyond SDS, not as evidence that no domain adaptation is needed. 
+
+Job Shop Scheduling Problem (JSSP). JSSP consists of J jobs and M machines. Each job is an ordered list of operations, each operation must run on a specified machine for a fixed processing time, and each machine can process at most one operation at a time. Operations are non-preemptive and must respect within-job precedence. The objective is to minimize the makespan, i.e., the completion time of the last operation. In our text-suite evaluator, JSSP is scored against native baselines including OR-Tools, Local Search, Most Work Remaining (MWKR), Most Operations Remaining (MOPR), Shortest Processing Time (SPT), and Longest Processing Time (LPT), with solution quality reported as gap to a domain-specific VBS. 
+
+Additional-domain evaluation package. For the additional-domain evaluation reported here, we freeze one JSSP regime and evaluate the final saved checkpoint for each of seeds 101 / 202 / 303 under the same native-baseline evaluator. This avoids per-seed checkpoint selection and keeps the beyond-SDS claim tied to one consistent recipe. All results are reported as feasibility plus gap to a JSSP-specific VBS, with native baselines OR-Tools, Local Search, Most Work Remaining (MWKR), Most Operations Remaining (MOPR), Shortest Processing Time (SPT), and Longest Processing Time (LPT). 
+
+JSSP additional-domain result. Across the three JSSP seeds, Hero achieves a mean pass rate of 99 .3% ± 1.2% 
+
+and a mean gap to VBS of 6.12% ± 3.80% . The seed-level results are: seed101, 100 .0% pass and 10 .51% gap; seed202, 100 .0% pass and 3.92% gap; seed303, 98 .0% pass and 3.93% gap. In every seed-specific local bundle, Hero outperforms the heuristic JSSP baselines and trails only OR-Tools. This is the main additional-domain result we use to support the claim that the solver-synthesis recipe extends beyond SDS. Figure 6 mirrors the SDS robustness-profile convention: for each method we compute one JSSP robustness curve per seed, then plot the mean coverage across seeds with a ±1 standard-deviation band. The resulting curve shows that Hero maintains the strongest low-gap coverage among the heuristic baselines across the frozen three-seed package, trailing only OR-Tools. 
+
+C.7 ShinkaEvolve Baseline Configuration 
+
+We evaluate against ShinkaEvolve [Lange et al., 2025] using 1000-sample SDS datasets generated by evolving 100 base solutions under a neutral SDS prompt and augmenting them via trace paraphrasing and problem variation. This appendix 23 Beyond Inference-Time Search A P REPRINT 
+
+section makes the fairness story explicit: the manuscript-reported Hero and ShinkaEvolve results are evaluated on the same held-out SDS test split, with the same evaluator and the same global VBS accounting. We keep the initializer, evolution workflow, model family, and search budget fixed, and only neutralize prompt content so that the comparison tests solver-search strength rather than prompt asymmetry. The ‘ShinkaEvolve-SDS-1000-v2-seed{seed}‘ dataset is the Shinka solution corpus used to produce and score evolved candidates, not a distinct easier final evaluation benchmark. 
+
+Evolution Configuration: 
+
+• Generations: 10 per problem instance • LLM Models: GPT-5-nano and GPT-5-mini (OpenAI) were used for code mutations as strong proprietary reasoning models in the deployment-time search baseline. • Patch Types: Diff-based (60%), full replacement (30%), cross-over (10%) • Island Model: 2 parallel populations with migration every 10 generations • Archive Size: 20 elite solutions per island • Selection: Weighted parent selection with λ = 10 .0 selection pressure • Initial Solution: Greedy baseline with constraint-aware selection 
+
+Dataset Generation: 
+
+• Base Samples: 100 problems per seed (50 dense, 50 tree-structured) • Augmentation: Each base sample expanded to 10 variations via: 
+
+– Problem instance variation (new problem, same type) 
+
+– Trace paraphrasing (same reasoning, different wording) 
+
+– Code reuse (same evolved code, new problem) • Final Size: 1000 samples per seed (100 evolved × 10 variations) 
+
+System Prompt: We use a neutral SDS prompt that does not enumerate specific search strategies, while keeping the initializer, evolution workflow, model family, and search budget fixed. The evolution process uses: 
+
+ShinkaEvolve System Prompt 
+
+> You are an expert algorithmist specializing in combinatorial optimization, particularly the Synergistic Dependency Selection (SDS) problem. The SDS problem requires selecting a subset of variables that: 1. Satisfies cardinality bounds (min/max number of items) 2. Respects mutex constraints (cannot select both items in a mutex pair) 3. Respects group constraints (at most one item per group) 4. Satisfies precedence constraints (if j is selected, i must be selected) 5. Maximizes the objective: sum of selected item weights + pairwise interaction values The code should read JSON from stdin with "requirements" and "catalog", and output JSON to stdout with "selection" containing "variables" list. Deceptive interactions can make purely greedy orderings unreliable, so prefer robust search procedures that still respect the execution-time budget. Be creative and find efficient solutions that maximize the objective while respecting all constraints. The code must execute very quickly (within seconds) -prioritize time-efficient algorithms and avoid computationally expensive operations.
+
+Comparison with Hero Prompt: Unlike the Hero system prompt (Appendix A), which uses a scaffolded reasoning structure whose core loop is Deconstruct-Hypothesize-Critique to guide the Qwen-based policy, the ShinkaEvolve prompt is deliberately neutral and does not enumerate specific strategies such as greedy selection, dynamic programming, or backtracking. Since the ShinkaEvolve baseline uses strong proprietary reasoning models at test time (here GPT-5-mini and GPT-5-nano [Singh et al., 2025]), we use a constraint-focused prompt without Hero-specific reasoning steps and keep the initializer, workflow, and budget fixed. Under this fairer setup, the resulting ShinkaEvolve line is 
+
+91 .6% ± 1.2% pass rate with 14 .4% ± 2.0% mean feasible gap and 0.127 ± 0.029 s mean per-instance solve cost, so the qualitative ordering from the main text remains unchanged even after neutralizing the prompt asymmetry. 
+
+Cost: Each seed (100 base samples evolved) required approximately $100 in OpenAI API calls for evolution and trace generation. The total cost for all three seeds (101, 202, 303) was approximately $300. 
+
+C.8 Baseline Implementation Details 
+
+All baseline solvers are implemented in the syndeopt library and follow a unified API: solver.solve(inst, budget_sec, seed) → SolveResult . We provide detailed specifications for each baseline: 24 Beyond Inference-Time Search A P REPRINT 
+
+C.8.1 Greedy Solver 
+
+The greedy solver ( GreedyMarginal ) uses a marginal-gain heuristic: 1. Initialization: Start with empty selection x = 0 
+
+2. Upper Bound Phase: While |x| < U :• For each unselected variable i, compute marginal gain: gi = wi + P 
+
+> j∈selected
+
+Wij 
+
+• Select variable with maximum positive gain that maintains feasibility (excluding lower bound) • Break if no positive gain available 3. Lower Bound Phase: While |x| < L :• Select any feasible variable to satisfy cardinality lower bound 4. Validation: Return solution if feasible, otherwise return −∞ score 
+
+Time Complexity: O(n2) per iteration, bounded by O(n · U ) total operations. 
+
+C.8.2 Local Search Solver 
+
+The local search solver ( LocalSearch1Flip ) implements a 1-flip hill-climber with random restarts: 1. Restart Strategy: Default 20 restarts, scaled linearly with time budget: max(1 , 20 × budget /2.0) 
+
+2. Initial Solution: Random feasible solution (shuffled greedy construction) 3. Local Search: For up to 2000 iterations per restart: • Try all 1-flip neighbors (add/remove each variable) • Accept best improving move (if gain > 10 −12 )• Stop if no improvement found 4. Best Solution: Track best solution across all restarts 
+
+Hyperparameters: restarts=20 , iters=2000 (default values used in evaluation). 
+
+C.8.3 Branch-and-Bound Solver 
+
+The branch-and-bound solver ( BranchAndBound ) uses depth-first search with optimistic bounding: 1. Variable Ordering: Sort variables by degree (descending) to prioritize high-connectivity variables 2. Bound Calculation: For each node (x, idx ):• Current score: S(x)
+
+• Optimistic bound: S(x) + P 
+
+> remaining
+
+max(0 , w i + P 
+
+> j∈x
+
+Wij )
+
+• Prune if bound ≤ best known score +10 −12 
+
+3. Search Strategy: Depth-first with stack-based recursion 4. Termination: Time budget exceeded or search space exhausted 
+
+Pruning: Uses optimistic bound based on remaining variables’ maximum potential contribution. 
+
+C.8.4 CP-SAT Solver 
+
+The CP-SAT solver ( CPSATSolver ) uses Google OR-Tools’ constraint programming solver [Perron et al., 2023]: 1. Model Construction: 
+
+• Binary variables xi ∈ { 0, 1} for each variable • Auxiliary variables yij = xi ∧ xj for pairwise interactions • Constraints: cardinality bounds, precedence, mutex, groups 2. Objective: Maximize P 
+
+> i
+
+wixi + P 
+
+> (i,j )
+
+Wij yij 
+
+3. Solver Configuration: 
+
+25 Beyond Inference-Time Search A P REPRINT 
+
+• Time limit: max_time_in_seconds = budget_sec 
+
+• Random seed: random_seed = seed 
+
+• Parallel workers: num_search_workers = 8 
+
+4. Solution Tracking: Callback records anytime solution trace 
+
+Note: CP-SAT is an exact method in principle, but here it is used under the same time budget as the other baselines and should be read as the strongest time-limited classical reference. It uses multi-threaded search (8 workers) for parallel exploration. 
+
+C.9 Base Model Scaling Analysis (Pass@k) 
+
+To rigorously quantify the latent capacity of the Base model (Section 5.4, Figure 3), we employ a bootstrapped Pass@ k
+
+evaluation protocol. This methodology answers the counterfactual question: "If we were limited to only k attempts per problem, what is the expected performance?" 
+
+Data Generation. For the complete test set ( M = 1000 instances), we generate N = 64 independent code solutions using the untrained Base model (Qwen2.5-Coder-14B-Instruct) with temperature T = 0 .6. Each solution is generated independently, ensuring no cross-contamination between samples. To ensure a fair comparison, the Base model is evaluated with the same system prompt as the Hero model (loaded from config_hero.yaml and formatted using Qwen’s chat template), providing identical instructions and scaffolding. 
+
+Bootstrap Estimation. For each scaling step k ∈ { 1, 2, 4, 8, 16 , 32 , 64 }, we perform a bootstrap analysis with 
+
+B = 500 iterations to estimate performance stability: 1. Sampling: For each iteration b ∈ [1 , B ] and problem i, we draw a random subsample Sbi,k of size k from the pool of N = 64 generations without replacement .2. Metric Computation: We compute the best-found metrics for the subsample: • Pass Rate: I(∃x ∈ S bi,k : is_feasible (x)) , where I is the indicator function. • Gap to VBS: For feasible solutions, min x∈S bi,k ∩F Gap (x), where F is the set of feasible solutions. If no feasible solution exists in the subsample, the gap is recorded as 1.0 (100%). The gap is computed as Gap (x) = ( VBS − max(0 , score (x))) /VBS, where scores are clipped to non-negative values. 3. Aggregation: We compute the mean pass rate and mean gap to VBS across all M = 1000 problems for each bootstrap iteration, then report the mean and standard deviation of these aggregate metrics across the B = 500 
+
+bootstrap iterations. 
+
+Interpretation of Variance. In Figure 3, the error bars represent the standard error of the mean estimate across bootstrap resamples, quantifying the statistical uncertainty of the aggregate performance metric. They do not represent the problem-to-problem variance (the spread of difficulty across the dataset), which is significantly larger and is visualized separately in the Robustness Profile (Figure 1b). With M = 1000 problems, the mean across problems is highly stable across bootstrap resamples, resulting in small error bars even when individual problems exhibit substantial performance variability. 
+
+Virtual Best Solver (VBS) Consistency. To ensure a fair comparison, the Virtual Best Solver (VBS) score used for calculating gaps is the global maximum across all methods, including all baseline solvers (Greedy, Local Search, BnB, CP-SAT) and the union of all N = 64 Base model samples. This prevents the Base model from artificially appearing optimal solely because it found a solution better than the deterministic baselines but worse than the strongest observed feasible score. The VBS is computed separately for each problem instance, considering only feasible solutions. 
+
+Best-of-N Collapsing. For the robustness profile comparison (Figure 1b), we collapse the Base model’s N = 64 
+
+samples to a single “Best-of-N” solution per problem by selecting the best feasible solution (lowest gap to VBS). This enables a fair comparison with fine-tuned models, which generate a single solution per problem. The Pass@ k
+
+scaling analysis (Figure 3) uses the raw N = 64 samples and the unconditional SDS gap metric to demonstrate how performance scales with the number of attempts, while the main SDS table reports feasible-only mean gaps and the robustness profile uses the collapsed Best-of-N to show peak achievable performance. 26 Beyond Inference-Time Search A P REPRINT 
+
+C.10 Universal Solver Search 
+
+To test whether a single code program could remain feasible across the entire 1,000-instance test split while approaching our Hero policy’s 5.0% gap, we conducted an adaptive tournament search across all unique codes generated by the Base model during Best-of-64 evaluation. 
+
+Code Pool. From the Base model’s Best-of-64 evaluation (Section C.9), we extracted code blocks from all 64,000 generations per seed (3 seeds total). After deduplication via canonicalization (normalizing line endings and stripping trailing whitespace) and SHA-256 hashing, we obtained 191,699 unique codes across all seeds. 
+
+Tournament Methodology. We employed a two-stage adaptive tournament: 1. Stage 1 (Discriminative Filtering): Evaluate all unique candidates on 30 missions selected from the test set (60% hardest missions by Base model gap, 40% random for coverage). Filter to candidates that are feasible and complete within timeout (5 seconds) on all 30 missions. 2. Stage 2 (Full Verification): Evaluate top survivors (default: 10) on all 1,000 test missions. 
+
+Evaluation Criteria. Candidates are evaluated using identical semantics as the main evaluation pipeline: same sandbox execution, constraint checking, and VBS reference (per-UUID from Base model’s metrics_final.csv ). Optimality gap is computed as (V BS −max(0 , score )) /V BS for each mission independently, where scores are clipped to non-negative values. 
+
+C.11 Raw Base-Code Audit 
+
+Because the main-text competence-wall argument now leans on properties of the raw Base code pool rather than on an ad hoc feasible-only subset, we audited exactly the same source used by universal search. The raw source consists of the three archived generations.jsonl files from Base Best-of-64 evaluation. Using the same extraction semantics as the universal-search pipeline—extract the <code> block, canonicalize whitespace, and deduplicate by content hash—we recover 192,000 raw generations, 191,699 extractable code blocks, and 191,699 unique codes. 
+
+Audit Methodology. We first mark a code as SA-like if it contains a temperature variable, a cooling schedule, and an exponential Metropolis-style acceptance expression. We then classify acceptance logic into four coarse cases: current-state acceptance, global-best acceptance, mixed signals, or unresolved by heuristic. Finally, for the non-global-best SA-like remainder, we apply an exclusive structural taxonomy based on four ingredients that matter for reusable SDS solvers: (i) explicit feasibility guards, (ii) explicit best-solution tracking, (iii) non-degenerate two-way neighborhood moves rather than one-sided edits, and (iv) non-ambiguous current-state acceptance. This is a structural audit, not a formal proof of semantic correctness, so we use it to characterize failure modes rather than to certify solver quality. 
+
+Results. The Base model frequently retrieves SA-like syntax: 41,903 of the 191,699 unique codes (21.86%) satisfy the SA-like heuristic. Within that SA-like subset, 12,050 codes (28.76%) exhibit the global-best acceptance bug. Removing that bucket still leaves 29,853 SA-like codes, but most remain operationally incomplete: 42.00% of the non-bug remainder lack explicit best-solution tracking, 14.52% have ambiguous acceptance logic, and 14.34% have weak or one-sided neighborhood structure. Only 23.79% of the non-bug remainder appear structurally complete under this coarse audit. Table 6 summarizes the full exclusive split. This is why we interpret the global-best bug as one prominent failure mode rather than as a complete explanation: the broader pattern is incomplete operationalization of an SA template, which is consistent with the universal-search result that even the best reusable Base code remains far from Hero. 
+
+C.12 Code and Data Availability Code Repository: The full repository, including training, evaluation, reward, and dataset-generation code, is publicly available at https://github.com/IDEALLab/neural-solver-synthesis .The complete implementation, including: • Training scripts (GRPO configuration, SLURM job scripts) • Evaluation pipeline (baseline solvers, metrics computation, plotting) • Reward function implementations 27 Beyond Inference-Time Search A P REPRINT 
+
+Table 6: Coarse structural audit of SA-like unique codes from the canonical raw Base pool (191,699 unique codes total; 41,903 SA-like). Percentages are computed within the SA-like subset, and the final column reports the corresponding percentage within the non-best_bug remainder where relevant.                      
+
+> Bucket Count % of SA-like % of non-bug remainder
+> best_bug 12,050 28.76% –
+> ambiguous_acceptance 4,336 10.35% 14.52%
+> current_ok_no_guard 1,597 3.81% 5.35%
+> current_ok_no_best_tracking 12,538 29.92% 42.00%
+> current_ok_guarded_but_weak_moves 4,281 10.22% 14.34%
+> current_ok_structurally_complete 7,101 16.95% 23.79%
+
+• Dataset generation utilities 
+
+Datasets: The SDS and JSSP data bundles used in this work are provided through the Hugging Face artifact collection at https://huggingface.co/collections/IDEALLab/neural-solver-synthesis .• Training datasets • Held-out test datasets • ShinkaEvolve comparison datasets 
+
+Model Checkpoints: Hero and learned-ablation checkpoints are provided through the same Hugging Face collection at 
+
+https://huggingface.co/collections/IDEALLab/neural-solver-synthesis .• Hero and learned-ablation checkpoints 
+
+Experiment Artifacts: Detailed logs, generated code, and training metrics are provided through the public code release and the accompanying Weights & Biases project at https://wandb.ai/neural-solver-synthesis/ qwen-coder-sds-rl?nw=nwusersmassoudi-w .• Training runs • Evaluation results • Generated code samples 
+
+Container: The GH200/ARM64 SDS training container used for the GRPO experiments is available on DockerHub at 
+
+https://hub.docker.com/r/soheylm/gh200-llm-sds-training/tags with tag 25.01 .
+
+ShinkaEvolve Solutions: Pre-evolved code solutions for the comparison baseline are included in the Hugging Face artifact collection (see Section C.7): https://huggingface.co/collections/IDEALLab/ neural-solver-synthesis .
+
+## D Implementation Details 
+
+D.1 Code Structure Codebase: Our implementation is a fork of the open-r1 repository [Hugging Face, 2025]. We utilize their distributed training harness and GRPO trainer integration, modifying the reward functions and system prompts as detailed in Section 4. The implementation is organized as follows: • rewards_unified_v2.py : Main reward computation functions • evaluation/sds/generate.py : Code generation using vLLM • evaluation/sds/evaluate.py : Evaluation pipeline • evaluation/sds/utils.py : Utility functions (code execution, constraint checking) • data/gen_sds_dataset.py : Dataset generation • scripts/train_*.slurm : Training scripts 28 Beyond Inference-Time Search A P REPRINT 
+
+D.2 Reproducibility Checklist 
+
+To reproduce our results: 1. Set environment variable SEED to one of {101, 202, 303} 2. Generate dataset: python data/gen_sds_dataset.py –seed $SEED –num 10000 
+
+3. Run RL training (14B model, 3 nodes): sbatch –nodes=3 –ntasks=3 scripts/train_unified_sds_qwen_coder.slurm –mode grpo_cold –model 14B –seed $SEED –config config_hero.yaml 
+
+4. Evaluate standard SDS results: sbatch scripts/eval_sds_pipeline.slurm –checkpoint-dir <PATH_TO_CHECKPOINT> grpo $SEED 
+
+5. Evaluate fixed-code evidence when needed: sbatch scripts/eval_capstor_sds_fixed_code.slurm <PATH_TO_SOLVER> 
+
+6. For ablation studies, replace config_hero.yaml with config_ablation_oracle.yaml ,
+
+config_ablation_diversity.yaml , config_ablation_soft_gate.yaml ,
+
+config_minimalist.yaml , or config_ablation_prompt.yaml 
+
+Note on Training Scripts. We use train_unified_sds_qwen_coder.slurm for the active SDS training path. The script supports multi-node training via –nodes=3 –ntasks=3 for 14B models. For evaluation, 
+
+eval_sds_pipeline.slurm covers the standard SDS report bundle and eval_capstor_sds_fixed_code.slurm 
+
+covers fixed-code comparisons. Cluster-local wrappers and environment files can vary across systems, so the exact launcher layer may differ even when the underlying evaluator and configuration files remain the same. 
+
+Configuration Files. All configuration files are located in deps/open-r1/recipes/Qwen2. 5-Coder-14B-Instruct/grpo/ :• config_hero.yaml : parsimonious baseline (no oracle, no diversity) • config_ablation_oracle.yaml : Adds oracle anchoring • config_ablation_diversity.yaml : Adds diversity penalty • config_ablation_soft_gate.yaml : Replaces the hard nominal gate with a graded feasibility penalty • config_ablation_reward_normalization.yaml : Perturbs the SDS nominal reward normalization heuris-tic • config_minimalist.yaml : Removes structural scaffolding (uses minimal feasibility reward) • config_ablation_prompt.yaml : Removes detailed system prompt (true ablation) The config files specify reward functions, reward weights, system prompts, and all training hyperparameters. See Table 3 for a comparison of reward function differences. 
+
+Note on Bit-wise Reproducibility. While we fix the random seed for all experiments (data generation, initialization, and sampling), exact bit-wise reproducibility of training dynamics may not be achievable due to the non-deterministic nature of high-performance optimization kernels used on the GH200 hardware. Specifically: • Flash Attention 2 Non-Determinism: We utilize flash_attention_2 for computational efficiency. To maximize parallelism, this implementation employs atomic operations (specifically atomic adds) during the backward pass. The execution order of these atomic operations is not guaranteed, leading to minor variations in gradient calculation ( ≈ ± 10 −6) between runs. • ZeRO-3 Distributed Reduction: Floating point addition is non-associative in BF16 precision (i.e., (a + b) + 
+
+c̸ = a + ( b + c)). We utilize DeepSpeed ZeRO-3, which fully shards parameters and gradients across GPUs. The frequent ReduceScatter and AllGather operations required to reconstruct model states introduce accumulation noise dependent on network timing and reduction order across the cluster interconnect. • TensorFloat-32 (TF32): We enable TF32 optimization to leverage the Hopper architecture’s Tensor Cores. This truncates precision for matrix multiplications to accelerate throughput, introducing an additional layer of acceptable numerical noise compared to FP32. We explicitly opted against enforcing strict determinism (e.g., via torch.use_deterministic_algorithms(True) )as it would preclude the use of these optimized kernels and result in prohibitive training costs (estimated 3×–5×
+
+slowdown). 29 Beyond Inference-Time Search A P REPRINT 
+
+D.3 Dependency Versions 
+
+Table 7: Exact dependency versions for reproducibility.              
+
+> Package Version Base Container NVIDIA PyTorch Release 25.01 Python 3.12 CUDA 12.8.0.038 PyTorch 2.6.0 Transformers 4.51.3 vLLM 0.8.0 DeepSpeed 0.16.7 Syndeopt Local (commit-based) TRL c04e84c4545acfaecdf7e0631ad07a86ab0fb2f6 PEFT 0.15.2 NumPy (from PyTorch container) Pandas (from PyTorch container)
+
+D.4 Computational Complexity Reward Computation (Hero Configuration). The time complexity of reward computation per sample for the Hero configuration: • Code execution: Linear in execution time, bounded by timeout T = 5 seconds. Actual execution time depends on the generated code’s algorithmic complexity (e.g., greedy heuristics are faster than simulated annealing with many iterations). • Score calculation: O(n + |W |) where n is the number of variables and |W | is the number of pairwise interactions. In practice, |W | = O(n2) for dense instances. • Constraint checking: O(n + m) where n is the number of variables and m is the total number of constraints (precedence pairs, mutex pairs, group constraints). For typical instances, m = O(n).• Format/structure validation: O(L) where L is the length of the generated code (typically < 1000 tokens). • Total per sample: Dominated by code execution time, with overhead of O(n + m + |W |) for constraint checking and score calculation. 
+
+Ablation-Specific Complexity. Additional computational overhead for ablation configurations: • + Oracle Anchoring: Adds O(n log n) greedy solver computation per sample (used for normalization baseline). • + Diversity Penalty: Adds O(G · L) computation per batch to compute 4-gram Jaccard similarity across 
+
+G = 64 samples of average length L.
+
+Note on Timeout: Both training and evaluation use a 5-second execution time limit per code sample. Solutions that exceed this limit are marked as timeouts. During training, timeouts receive zero reward (infeasible), encouraging the model to generate efficient code. During evaluation, timeouts are tracked separately from constraint violations (see Table 8). 
+
+Training Time. 
+
+• Global batch size: 4 prompts per step (8 training GPUs × 8 generations/GPU × 4 gradient accumulation = 256 generation slots, divided by 64 generations per prompt) • Completions per step: 256 (4 prompts × 64 generations) • Training samples seen: 360 prompts at checkpoint 90 (0.045 epoch), or ≈ 8,000 prompts for full epoch ( ≈
+
+2,000 steps) • Total training time: 4 hours per experiment (standard ablations) • Evaluation: ≈ 40 minutes–1 hour (for 1000 test problems: LLM inference, code execution, and baseline solvers using 32 parallel workers) 30 Beyond Inference-Time Search A P REPRINT 
+
+D.5 General Coding Evaluation 
+
+For the catastrophic forgetting analysis (Table 9), we utilized the BigCode Evaluation Harness . To ensure a fair comparison with the Qwen2.5-Coder technical report [Hui et al., 2024], we employed the following settings: • Decoding: Greedy (Temperature = 0 , Top-p = 1 .0)• Samples: N = 1 (Pass@1) • Tasks: – HumanEval: 164 hand-written Python programming problems [Chen et al., 2021]. 
+
+– MBPP (Sanitized): 500 crowd-sourced Python programming problems [Austin et al., 2021]. • Qwen-Specific Configuration: We applied the workaround from BigCode issue #308 to preserve trailing newlines in prompts (required for proper indentation in Qwen Coder models) and removed \n# and \nif from stop words to prevent early stopping when models add comments or if __name__ == __main__: blocks. • Prompt Formatting: The BigCode harness uses raw prompts without chat template formatting. This may differ from Qwen’s internal evaluation methodology (which likely applies their chat template), potentially explaining slight discrepancies between our base model results and those reported in the Qwen technical report. Values reported for fine-tuned models are the mean and standard deviation across the 3 independent training seeds (101, 202, 303). 
+
+## E Additional Results 
+
+E.1 Error Analysis Discussion. Ours (+Diversity) 
+
+> Ours (w/o Structure)
+> Ours (w/o Prompt)
+> Ours (+Oracle)
+> Base (Best-of-64)
+> ShinkaEvolve
+> Ours (Hero)
+> 0
+> 10
+> 20
+> 30
+> 40
+> Failure Rate (%)
+> Failure Type
+> Logic Error
+> Timeout
+
+Figure 7: Failure Mode Analysis. Stacked bar chart showing Logic Errors (red) vs. Timeouts (orange) for our methods and ShinkaEvolve. Hero achieves near-zero logic errors, while ablations collapse primarily due to constraint violations, not timeouts. As a diagnostic complement to the configuration ablations and normalization sensitivity study, Table 8 provides a comprehensive breakdown of error types across all methods, aggregated across three seeds. The Hero configuration achieves a 97.8% success rate with only 2.2% timeouts and zero logic errors (syntax, runtime, or constraint violations), demonstrating that the feasibility-gated reward structure successfully guides the model to generate both valid and efficient code. 
+
+Hero Configuration: The near-perfect performance (97.8% valid, 2.2% timeouts, 0.0% logic errors) validates our parsimonious approach. Across the three seeds, 57 of the 65 timeout cases occur on Hard instances and the remaining 8 occur on Moderate instances, with none on Trivial instances. More quantitatively, the timeout rows are significantly 31 Beyond Inference-Time Search A P REPRINT 
+
+Table 8: Diagnostic failure-mode breakdown across all methods (Mean ± Std across 3 seeds). The Hero configuration achieves 97.8% success with only 2.2% timeouts and zero logic errors. Ablations show dramatically higher constraint violation rates, while the “w/o Prompt” ablation uniquely suffers from 29.8% runtime errors. For learned methods, the error columns are diagnostic tags rather than mutually exclusive outcome categories, so rows can sum above 100%. For classical baselines, the “Constraint Violation” column is a coarse non-pass bucket in the current evaluator because detailed error types are not recorded for those methods.                                                                               
+
+> Method None (Valid) (%) ↑Timeout (%) ↓Constraint Violation (%) ↓Syntax Error (%) ↓Runtime Error (%) ↓JSON Parse Error (%) ↓
+> Ours (Hero) 97 .8±0.22.2±0.20.00.00.00.0
+> Base (Best-of-64) 85 .6±1.30.014 .4±1.30.00.00.0
+> Ours (+Oracle) 65 .3±11 .52.9±0.631 .7±11 .80.03.20.0
+> Ours (+Diversity) 61 .3±9.82.6±0.536 .1±9.50.00.00.0
+> Ours (w/o Structure) 74 .8±19 .22.2±0.934 .5±4.00.00.00.0
+> Ours (w/o Prompt) 64 .4±7.80.4±0.425 .4±19 .40.029 .80.0
+> ShinkaEvolve 91 .6±1.90.45.7±0.50.20.5±0.53.0±1.4
+> CP-SAT 98 .3±0.30.01.7±0.30.00.00.0
+> Local Search 98 .3±0.30.01.7±0.30.00.00.0
+> Greedy 98 .3±0.30.01.7±0.30.00.00.0
+> BnB 97 .3±0.40.02.7±0.40.00.00.0
+
+larger and denser than the non-timeout rows: they have mean nvars = 74 .3 versus 22 .8 and mean interaction count 
+
+1518 .7 versus 153 .8, with Mann-Whitney p < 10 −40 for both comparisons; all 65 timeout cases fall in the top decile of both instance size and interaction count. The small timeout rate therefore concentrates on the hardest SDS strata rather than on easy cases. The saved timeout rows do not contain completed selections or violation counts, so the current evidence supports the interpretation that these failures reflect search cost on large, interaction-dense hard instances, but it does not yet isolate a single inner-loop mechanism such as retry-loop behavior. 
+
+Ablation Failure Modes: The error breakdown reveals distinct failure patterns for each ablation. Oracle Anchoring and Diversity ablations exhibit 31.7% and 36.1% constraint violation rates respectively, indicating that these reward modifications cause the model to generate invalid solutions rather than slow but correct ones. Similarly, the “w/o Structure” ablation yields a 34.5% violation rate. This is consistent with the view that without structural scaffolding, the model more often falls back to brittle passive filtering logic rather than synthesizing the necessary robust constraint verification . Finally, the “w/o Prompt” ablation uniquely suffers from 29.8% runtime errors. We interpret this as an ablation of the full deployed prompt package rather than a perfectly isolated cognitive-scaffolding intervention, since the minimal prompt also removes some environment reminders; the result is therefore consistent with algorithmic scaffolding in the system prompt being important for producing executable Python code. 
+
+Baseline Comparison: For classical baselines, the reported “Constraint Violation” rate should be read as a coarse non-pass rate under the evaluation harness, not as evidence that a solver such as CP-SAT explicitly returned an invalid assignment. Baseline rows only preserve success/failure, so any non-pass baseline case is mapped into that column in the current table. In the SDS runs used here, the CP-SAT, Local Search, and Greedy non-pass cases occur only on Hard instances and are recorded with no valid returned solution (score = −∞ ). BnB achieves 97.3% success with 2.7% non-pass cases and additionally differs in that its failures align with the 5-second budget. ShinkaEvolve achieves 91.6% success with 5.7% constraint violations and 3.0% JSON parse errors, indicating that test-time evolution can occasionally produce malformed outputs. The stark contrast between Hero (0.0% logic errors) and ablations (25.4%–36.1% constraint violations) demonstrates that adding complexity fundamentally breaks constraint satisfaction, validating our parsimonious hypothesis. 
+
+E.2 General Coding Robustness E.3 Best Single-Code Search Results 
+
+Table 10 summarizes the best single-code search results across 191,699 unique candidates from 3 seeds. This appendix analysis complements the competence-wall claim by asking whether exhaustive base-model sampling can recover one reusable solver that approaches Hero. While the best single code achieved 98.4% feasible rate (comparable to Hero’s 97.8%), the best candidate (from seed 101) achieved a 24.04% mean gap to VBS, which is nearly 5× worse than our Hero policy’s 5.0% gap to VBS. This demonstrates that even the best single code from 64k samples cannot match the reliability and performance of our RL-trained Hero policy, which synthesizes a specialized solver through training rather than sampling. 32 Beyond Inference-Time Search A P REPRINT 
+
+Table 9: General Coding Robustness (Pass@1). Evaluation on HumanEval and MBPP (Greedy Decoding) across 3 seeds. Our methods show no statistically significant degradation compared to the Base model, indicating that the RL process avoids catastrophic forgetting. Method HumanEval (%) ↑ MBPP (%) ↑
+
+Base 82 .3 74 .8
+
+Ours (Hero) 80 .9±0.9 74 .4±0.2
+
+Ours (+Oracle) 80 .5±1.1 74 .3±0.9
+
+Ours (+Diversity) 80 .3±1.4 74 .9±0.1
+
+Ours (w/o Structure) 80 .9±0.9 73 .7±0.1
+
+Ours (w/o Prompt) 81 .5±0.9 73 .8±0.8
+
+Table 10: Best Single-Code Search Results. Best candidate performance compared to Hero policy.         
+
+> Metric Best Single Code Hero Policy Mean Optimality Gap 24.04% 5.0% Feasible Rate 98.4% 97.8% Timeout Rate 1.6% 2.2%
+
+## F Qualitative Analysis 
+
+F.1 Algorithmic Convergence and Reasoning Traces 
+
+To investigate the generated behaviors of the policy, we analyzed the internal monologue and emitted code. As shown in Figure 8, the model (Seed 303) explicitly identifies the risk of local optima in the <think> block and operationalizes a Simulated Annealing strategy to mitigate it. This qualitative example supports the main-text semantic-repair story by showing how the scaffold is instantiated in executable form. To ensure our findings are not artifacts of a single training run, we analyzed the generated code across all three independent seeds (101, 202, 303). While all seeds converged to the same Simulated Annealing strategy class (99.8% convergence rate), they instantiated it with distinct implementation flavors. 
+
+Convergence Analysis Methodology. We computed the convergence rate using static code analysis on all feasible solutions ( N = 2 , 935 across three seeds). For each solution, we extracted hyperparameters (temperature T , cooling rate α, iteration count) via regex patterns and detected structural components: a constraint guard (rejection sampling pattern while not is_feasible() ) and the Metropolis criterion (probabilistic acceptance exp( ∆/T) ). A solution is classified as matching the Simulated Annealing template if it contains both structural components and valid hyper-parameters ( T ≥ 100 , 0.8 ≤ α < 1.0, iterations ≥ 100 or dynamic termination). This structural matching approach (rather than exact hyperparameter matching) reflects that different seeds converged to different but valid local optima while instantiating the same algorithm class. 
+
+F.2 Cross-Seed Implementation Diversity 
+
+While all seeds converged to the same Simulated Annealing strategy class (99.8% convergence rate), they instantiated it with distinct implementation flavors. This variance supports the view that the model is learning an algorithmic concept 
+
+rather than memorizing a single text snippet. 
+
+Hyperparameter Diversity. As shown in Table 11, the seeds converged to different local optima for the cooling schedule. Seed 303 favored a faster schedule ( α = 0 .99 ) with fixed iterations ( n = 1000 ), while Seed 101 and 202 instantiated a “deeper search” strategy ( α = 0 .995 ) with higher iteration counts (Seed 101: n = 10000 ) or dynamic loop conditions (Seed 202: while T > 1 ). This variance supports the view that the model is learning a robust algorithmic 
+
+concept that can be instantiated in multiple valid ways. 
+
+Full Implementation (Seed 202). Below is the complete, raw code generated by Seed 202. Unlike the fixed for 
+
+loop in Seed 303 (Main Text), this version utilizes a dynamic while T > 1 termination condition and encapsulates the logic in a clean functional structure. This demonstrates the model’s capability to generate complete, executable solvers with varying control flow structures. 33 Beyond Inference-Time Search A P REPRINT 
+
+Reasoning Trace (Seed 303) 
+
+Problem Deconstruction: The SDS problem involves selecting a subset of variables to maximize total value, respecting constraints (cardinality, precedence, mutex, groups). 
+
+Hypothesis: Given the complexity and the need to respect constraints, a simulated annealing approach seems suitable due to its ability to explore the solution space and escape local optima. 
+
+Implementation Plan: Accept the new solution if it improves the objective function, or accept with a certain probability if it decreases (to escape local optima). Cool the temperature according to a cooling schedule. 
+
+Generated Solution (Seed 303) 
+
+# ... [Initialization of T=1000, cooling=0.99] ... for _ in range(n_iterations): # Neighbor generation (1-flip). Renamed # ’neighbor_solution’ to ’neighbor’ for brevity neighbor = current_sol[:] idx = random.randint(0, n_vars - 1) neighbor[idx] = not neighbor[idx] # Constraint Guard (Rejection Sampling) while not is_feasible(neighbor): idx = random.randint(0, n_vars - 1) neighbor[idx] = not neighbor[idx] # Metropolis Acceptance Logic n_score = calculate_score(neighbor) delta = n_score - current_score # Use backslash for clean line continuation if delta > 0 or \ random.random() < math.exp(delta/T): current_sol = neighbor current_score = n_score T *= cooling_rate 
+
+Figure 8: Generated Meta-Heuristic. The model (Seed 303) identifies the risk of local optima and implements a robust Simulated Annealing solver to mitigate it. The “Constraint Guard” loop (lines 11-14) is a critical generated feature that ensures search efficiency. Table 11: Implementation Variations Across Seeds. All seeds converged to Simulated Annealing, but tuned the parameters differently. 
+
+Feature Seed 101 Seed 202 Seed 303 Algorithm Sim. Annealing Sim. Annealing Sim. Annealing Temperature ( T0) 1000 1000 1000 
+
+Cooling Rate ( α) 0.995 0.995 0.99 
+
+Iteration Logic Fixed (10k) Dynamic ( T > 1) Fixed (1k) Constraint Guard ✓ ✓ ✓
+
+Full Solution (Seed 202) 
+
+import sys import random import math import json def solve_sds(): # Read input input_data = sys.stdin.read() data = json.loads(input_data) requirements = data["requirements"] catalog = data["catalog"] n_variables = requirements["n_variables"] min_card, max_card = requirements["cardinality_bounds"] precedence = requirements["precedence"] 
+
+34 Beyond Inference-Time Search A P REPRINT 
+
+mutex = requirements["mutex"] groups = requirements["groups"] variables = catalog["variables"] interactions = catalog["interactions"] # Function to calculate the total value of a selection def calculate_value(selection): total_value = 0 for idx in selection: total_value += variables[idx]["weight"] for i in range(len(selection)): for j in range(i + 1, len(selection)): interaction_key = f"{min(selection[i], selection[j])},{max(selection[i], selection[j])}" if interaction_key in interactions: total_value += interactions[interaction_key] return total_value # Function to check feasibility def is_feasible(selection): # Precedence for i, j in precedence: if j in selection and i not in selection: return False # Mutex for a, b in mutex: if a in selection and b in selection: return False # Groups for group_id, group_vars in groups.items(): selected_in_group = [var for var in group_vars if var in selection] if len(selected_in_group) > 1: return False # Cardinality if not (min_card <= len(selection) <= max_card): return False return True # Simulated Annealing initial_selection = random.sample(list(range(n_variables)), random.randint(min_card, max_card)) while not is_feasible(initial_selection): initial_selection = random.sample(list(range(n_variables)), random.randint(min_card, max_card)) current_selection = initial_selection current_value = calculate_value(current_selection) T = 1000 cooling_rate = 0.995 # Dynamic termination based on Temperature while T > 1: # Propose a new selection new_selection = current_selection[:] if random.random() < 0.5 and len(new_selection) < max_card: candidate = random.choice(list(set(range(n_variables)) - set(new_selection))) new_selection.append(candidate) elif len(new_selection) > min_card: candidate = random.choice(new_selection) new_selection.remove(candidate) # Constraint Guard if is_feasible(new_selection): new_value = calculate_value(new_selection) delta = new_value - current_value # Metropolis Criterion if delta > 0 or random.random() < math.exp(delta / T): current_selection = new_selection current_value = new_value T *= cooling_rate # Output the best found selection print(json.dumps({"selection": {"variables": current_selection}})) if __name__ == "__main__": solve_sds() 
+
+35 Beyond Inference-Time Search A P REPRINT 
+
+F.3 Comparative Analysis: The Implementation Wall 
+
+To rigorously validate the “Implementation Wall” hypothesis, we provide a direct code comparison between the Minimalist (w/o Structure ablated) policy and the Hero policy. Both policies attempted to implement Simulated Annealing, but they differ fundamentally in how they handle invalid states during the search loop. 
+
+The Passive Filtering Failure (Minimalist Policy). The code below (Seed 303, Minimalist Ablation) illustrates passive constraint filtering. The Flaw: The cooling schedule executes regardless of whether a valid neighbor was found. If is_valid_solution returns False , the iteration is wasted, and the temperature decreases. In dense constraint landscapes, this leads to a “frozen” search where the temperature drops to zero before the agent has successfully explored the landscape. 
+
+Minimalist Failure (Passive Filtering) 
+
+> # ... [Setup code omitted] ... # Simulated annealing loop while temperature > 1e-10: # 1. Propose a new solution (Perturbation) new_solution = current_solution[:] # ... [Random mutation logic] ... # 2. PASSIVE CHECK: Only proceed if valid if is_valid_solution(new_solution): new_score = calculate_score(new_solution) # Metropolis Acceptance if new_score > current_score or \ random.uniform(0, 1) < math.exp((new_score - current_score) / temperature): current_solution = new_solution current_score = new_score if current_score > best_score: best_solution = current_solution best_score = current_score # 3. CRITICAL FLAW: Cool down regardless of validity # If the mutation above was invalid, we just wasted # a step of our cooling schedule. temperature *= cooling_rate # ... [Output logic] ...
+
+The Active Guard Success (Hero Policy). In contrast, the Hero policy (Seed 303) implements an active constraint guard. The Fix: The policy uses a while loop to enforce validity before proceeding to the Metropolis step. This ensures that every decrement of the temperature corresponds to a valid evaluation of the objective landscape. 36 Beyond Inference-Time Search A P REPRINT 
+
+Hero Success (Active Guard) 
+
+# ... [Setup code omitted] ... for _ in range(n_iterations): # 1. Propose a new solution neighbor = current_sol[:] idx = random.randint(0, n_vars - 1) neighbor[idx] = not neighbor[idx] # 2. ACTIVE GUARD: Retry until valid # The search does not proceed until a feasible # state is found. while not is_feasible(neighbor): idx = random.randint(0, n_vars - 1) neighbor[idx] = not neighbor[idx] # 3. Metropolis Acceptance n_score = calculate_score(neighbor) delta = n_score - current_score if delta > 0 or random.random() < math.exp(delta/T): current_sol = neighbor current_score = n_score # 4. Cool down only after a valid step attempts T *= cooling_rate 
+
+F.4 Base Model Failure: Logic Hallucination 
+
+While the Base Model frequently retrieves Simulated Annealing-like syntax (21.9% of unique raw codes in the canonical audit), it fails to operationalize the physics correctly. The code below (extracted from a high-scoring Base Model sample) demonstrates the Global Best Bug .
+
+The Flaw: The acceptance probability P = exp(( Snew − Sbest )/T ) compares the neighbor to the running global best found so far, rather than the current state. This causes the acceptance probability to vanish rapidly once the search reaches a decent local maximum under the current neighborhood, effectively freezing the search and preventing the algorithm from accepting downhill moves needed to escape traps. 
+
+Base Model Failure (Logic Hallucination) 
+
+# ... [Standard setup matches Hero] ... # Simulated Annealing Loop for _ in range(max_iterations): # ... [Neighbor generation with Active Guard] ... # Calculate value neighbor_value = calculate_value(neighbor_solution, variables, interactions) # LOGIC HALLUCINATION: # Compares neighbor against BEST_value, not CURRENT_value. # This breaks the annealing physics. if neighbor_value > best_value or \ random.random() < math.exp((neighbor_value - best_value) / temperature): solution = neighbor_solution[:] # Moves current pointer if neighbor_value > best_value: best_value = neighbor_value # Updates best # Cool down temperature *= cooling_rate 
+
+37
