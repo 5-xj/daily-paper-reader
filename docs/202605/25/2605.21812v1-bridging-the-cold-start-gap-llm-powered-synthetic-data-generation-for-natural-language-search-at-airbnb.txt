@@ -1,0 +1,345 @@
+Title: Bridging the Cold-Start Gap: LLM-Powered Synthetic Data Generation for Natural Language Search at Airbnb
+
+URL Source: https://arxiv.org/pdf/2605.21812v1
+
+Published Time: Fri, 22 May 2026 00:20:17 GMT
+
+Number of Pages: 10
+
+Markdown Content:
+# Bridging the Cold-Start Gap: LLM-Powered Synthetic Data Generation for Natural Language Search at Airbnb 
+
+# Wendy Ran Wei, Hao Li, Weiwei Guo, Xiaowei Liu, Xueyin Chen, Dillon Davis, Malay Haldar, Soumyadip Banerjee, Kedar Bellare, Huiji Gao, Stephanie Moyerman, Sanjeev Katariya 
+
+Airbnb San Francisco, CA, USA 
+
+## Abstract 
+
+Deploying natural language search systems presents a critical cold-start challenge: no real user queries to learn linguistic patterns, and no relevance labels to train ranking models. We present a framework for generating synthetic queries and labels using large language models (LLMs), powering model training and evaluation for Airbnb’s natural language search. For query generation, we combine contrastive listing pairs from booking sessions (ground-ing queries in real platform features) with seed queries from user research (ensuring realistic linguistic patterns). We develop three prompt variants to balance realism and diversity, enabling a cold-to-warm start transition as real user data becomes available. For label generation, we introduce contrastive generation that pro-duces topicality labels by construction, and Virtual Judge (VJ) la-beling for broader coverage. We analyze both query length and attribute distributions comparing our approach against a baseline (contrastive generation without seed data). For query length, the baseline produces verbose queries with KL divergence of 4.95 vs. real users; our seed-guided approach achieves 0.66, a 7.5 × improve-ment. For attribute distributions, our approach achieves the lowest KL divergence for attribute types (0.04)—even outperforming seed queries (0.09)—demonstrating that combining seed guidance with contrastive generation produces the most realistic attribute pat-terns. Experiments show our approach produces harder evaluation examples than the baseline (79% vs. 97% accuracy), providing dis-criminative signal for model improvement. We deploy production pipelines generating synthetic examples daily for embedding-based retrieval and ranking evaluation. 
+
+## CCS Concepts 
+
+• Information systems → Information retrieval ; Retrieval models and ranking ; • Computing methodologies → Natural language generation ; Neural networks ; Language resources .
+
+## Keywords 
+
+synthetic data generation, large language models, cold-start prob-lem, natural language search, query generation, learning to rank, contrastive learning, prompt engineering, information retrieval, e-commerce search 
+
+## 1 Introduction 
+
+Airbnb is an online marketplace for short-term stays and experi-ences. Search ranking has been a core focus of optimization [ 6– 9], with models trained on user interactions to predict booking like-lihood. Traditional search relies on structured filters—destination, dates, guest count, amenities—which are precise but limited in ex-pressiveness. Users cannot easily convey preferences like “a quiet retreat for working remotely” through checkboxes. To address this, we are enabling natural language search that complements filters by allowing users to express intent more freely. While e-commerce platforms such as Amazon, Walmart, and Alibaba have long sup-ported natural language queries, travel platforms have tradition-ally relied on structured inputs. The emergence of large language models (LLMs) has made this capability technically feasible, but deploying it presents significant challenges. Launching this new search capability presents a fundamental 
+
+cold-start problem : without historical user data, there is no signal to train or evaluate ranking models. Traditional approaches address this through rule-based systems that collect initial data, or through expensive human labeling campaigns. We take a different approach: using LLMs to generate synthetic training data at scale, enabling model development before real user traffic exists. A key distinction in search ranking is between topicality (whether a listing matches the query’s stated intent) and bookability (whether the user will actually book). Airbnb’s search ranking ultimately optimizes for conversion, predicting which listings users will book. However, booking behavior depends on factors beyond topicality: pricing, availability, photos, reviews, and personal preferences. In a cold-start setting, we have no booking data to learn these pat-terns. Our approach therefore focuses on topicality first: generating synthetic data to train models that understand query-listing rele-vance. As real user data becomes available, these topicality-trained models provide a foundation for warm-start adaptation toward bookability. This paper focuses on the cold-start topicality problem; transitioning to bookability is future work. The cold-start problem manifests as two distinct challenges: (1) No Real Queries —before launch, we cannot observe how users naturally express their needs, what language patterns they use, what attributes they mention, or how verbose or terse they are; without this distribution, we cannot train models that understand natural language intent. (2) No Relevance Labels —even with queries, we lack ground-truth labels indicating which listings are relevant; traditional systems derive relevance from user interactions, but a new search modality has no interaction history. Our framework addresses both challenges while providing a path from cold start to warm start. A key advantage is data effi-ciency : from a small seed set of approximately 500 queries collected through user research surveys, we generate millions of synthetic queries for production-scale model training. Using LLMs, we gen-erate synthetic queries that mimic seed patterns while grounding them in real listing attributes, achieving orders-of-magnitude am-plification from seed to production data. As the system launches  
+
+> 1
+> arXiv:2605.21812v1 [cs.IR] 20 May 2026 Preprint, 2026, Wei et al.
+
+and collects real user queries, the same framework can incorporate this data—generating more synthetic examples that reflect actual user behavior rather than survey responses. Early analysis reveals important gaps: real users are significantly more terse than sur-vey respondents predicted, typing queries like “pet friendly cabin” rather than complete sentences. This cold-to-warm transition capa-bility is essential, as synthetic data serves as a bridge rather than a permanent replacement. Existing approaches to cold-start data generation have significant limitations. Rule-based methods can bootstrap initial systems but cannot capture the nuance and diversity of natural language intent. Human labeling provides high-quality annotations but is expensive, slow, and difficult to scale to the millions of examples needed for modern ranking models. Our LLM-based approach combines the scalability of automated generation with the realism of human-like language, using a small seed set to produce production-scale data that reflects authentic user behavior. In summary, this paper makes the following contributions: 
+
+Synthetic Query Generation (Section 3): We use seed queries from user research to guide LLM generation, producing synthetic queries that mimic realistic user behavior. Generated queries are grounded in Airbnb-specific context by incorporating real listing features and booking session data. To balance realism and diversity, we develop three generation modes with decreasing structural con-straint: template-based (i.e., seed_controlled) generation preserves the exact structure of seed queries, few-shot (i.e., seed_freeform) generation uses seed queries as examples to guide style, and va-riety generation follows only high-level guidelines for maximum diversity. 
+
+Synthetic Label Generation (Section 4): We introduce two complementary approaches for generating relevance labels without human annotation. Contrastive generation combines seed queries from user research with listing pairs to produce both synthetic queries and topicality labels by construction. Virtual Judge label-ing uses LLMs to evaluate arbitrary query-listing pairs, enabling broader coverage. We also develop hard negative mining techniques to ensure training examples are challenging enough to improve model performance. 
+
+## 2 Related Work 
+
+Our work addresses the cold-start problem in natural language search through synthetic data generation. We review three areas: (1) traditional approaches to cold-start problems and their limitations, (2) synthetic query generation techniques, and (3) methods for generating relevance labels without human annotation. 
+
+## 2.1 Cold-Start Approaches in Search 
+
+Launching new search capabilities without historical data is a com-mon challenge. Rule-based methods use hand-crafted heuris-tics to provide initial rankings—for example, sorting by popularity or recency—and collect user interaction data to train ML models over time. While practical for bootstrapping, these methods cannot capture nuanced user intent and may provide suboptimal initial experiences. Human labeling employs annotators to judge query-document relevance, producing high-quality training data but at significant cost. Crowdsourcing platforms can scale labeling [ 1], but quality control remains challenging, and labeling millions of ex-amples is often prohibitively expensive. Transfer learning adapts models trained on related domains [ 3], but domain shift between source and target can limit effectiveness. Our approach offers a mid-dle path: using LLMs to generate synthetic data that is both scalable (like rule-based methods) and realistic (like human labeling), while requiring only a small seed set of authentic examples. 
+
+## 2.2 Synthetic Query Generation 
+
+Synthetic data generation has emerged as a powerful technique for training NLP systems in low-resource scenarios [ 4, 25 ]. Schick and Schütze [20] demonstrated that LLMs can generate training data for text classification, while Wang et al . [23] showed synthetic data from GPT-3 improves few-shot learning. Self-Instruct [ 24 ]and Stanford Alpaca [ 21 ] introduced methods for models to gener-ate their own instruction-following data. For information retrieval specifically, InPars [ 2 ] and InPars-v2 [ 11 ] use LLMs to generate training queries, while Promptagator [ 3] demonstrates few-shot query generation. Query generation has also been studied for docu-ment expansion [ 17 ] and zero-shot retrieval [ 16 ]. Traditional data-to-text systems [ 5 ] employ multi-stage pipelines, but recent work shows pretrained models can perform generation in a unified text-to-text framework [ 13 , 18 ]. Our work extends these ideas to search, where catalog data creates opportunities for grounding generation in real-world entities. 
+
+## 2.3 Relevance Label Generation 
+
+Dense retrieval methods [ 10 , 14 ] require substantial training data with relevance labels, motivating automated labeling approaches. Benchmarks like BEIR [ 22 ] highlight the challenge of zero-shot generalization across domains. Recent work has explored using LLMs to evaluate and label data: Zheng et al . [27] demonstrated that strong LLMs can serve as reliable judges for evaluating model outputs, and Liu et al . [15] showed GPT-4 correlates well with human judgments. The importance of hard negatives for contrastive learning is well established [ 12 , 19 , 26 ], as easy negatives provide little training signal. Our approach combines two labeling strategies: contrastive generation that produces labels by construction, and Virtual Judge labeling using LLMs for broader coverage. We also develop techniques to control example difficulty at generation time. 
+
+## 3 Synthetic Query Generation 
+
+Our framework treats query generation as a text-to-text transforma-tion guided by three core requirements: (1) realism —queries must reflect authentic user linguistic patterns; (2) diversity —coverage across the full breadth of user intents and inventory attributes; and (3) scalability —efficient generation of millions of examples. Effective generation requires understanding how real travelers search. We identify three behavioral patterns: efficiency-oriented —users type terse queries like “beach house surfing” expecting the system to infer defaults; expectation-rich —queries like “romantic getaway” implicitly assume the system understands unstated pref-erences; and natural and imperfect —real queries contain typos, ab-breviations, and mixed languages. Critically, synthetic queries must avoid platform-specific terminology that users rarely type naturally.  
+
+> 2Bridging the Cold-Start Gap: LLM-Powered Synthetic Data Generation for Natural Language Search at Airbnb Preprint, 2026,
+
+Algorithm 1 Contrastive Query Generation 
+
+Require: Seed queries 𝑆 , Listing catalog 𝐿 , Booking sessions 𝐵 
+
+Ensure: Labeled triplet (𝑞, 𝑙 +, 𝑙 − ) 
+
+> 1:
+
+Sample search context (𝑙𝑜𝑐𝑎𝑡𝑖𝑜𝑛, 𝑑𝑎𝑡𝑒𝑠, 𝑔𝑢𝑒𝑠𝑡𝑠 ) from 𝐵  
+
+> 2:
+
+Sample positive listing 𝑙 + (booked/engaged) from context  
+
+> 3:
+
+Sample negative listing 𝑙 − (same search, less engagement)  
+
+> 4:
+
+Populate features for 𝑙 + and 𝑙 − from 𝐿  
+
+> 5:
+
+Sample seed query 𝑡 from 𝑆 as linguistic template  
+
+> 6:
+
+Construct prompt: seed structure + listing attributes + strategy  
+
+> 7:
+
+Generate query 𝑞 via LLM conditioned on (𝑡, 𝑙 +, 𝑙 − ) 
+
+> 8:
+
+Apply consistency checks (deduplication, blocklist)  
+
+> 9:
+
+return (𝑞, 𝑙 +, 𝑙 − )
+
+Table 1 contrasts three generation approaches: naive LLM genera-tion (with platform terms), contrastive-only baseline (verbose), and our seed-guided approach (realistic). 
+
+## 3.1 Method Overview 
+
+Figure 1 illustrates our contrastive query generation pipeline. The system combines two data sources with LLM processing to produce labeled synthetic queries: 
+
+Input Data Sources. The pipeline draws from three primary sources: (1) Search Sessions —historical search and booking logs that capture real user behavior patterns, including which listings users viewed, engaged with, and ultimately booked; (2) Listing Features —structured catalog data including descriptions, titles, amenities, reviews, and other attributes that ground queries in factual platform content; (3) Seed Query Data —example queries from user research surveys (pre-launch) or small-traffic real user queries (post-launch) that provide authentic linguistic patterns for generation. 
+
+Contrastive Pair Sampling. From search sessions with book-ings, we extract contrastive listing pairs: a booked listing (positive) and a sampled non-booked listing (negative) from the same search context. Both listings are then enriched with features from the cat-alog, creating listing pairs with features that capture meaningful attribute differences. 
+
+LLM Processing. The core generation step combines three in-puts: (1) listing pairs with features providing factual grounding; (2) seed queries from user research providing linguistic patterns; and (3) prompting strategies controlling the realism-diversity trade-off. The LLM generates queries where one listing is more topical than the other. 
+
+Output. The pipeline produces a database of generated queries, each associated with a labeled triplet (𝑞, 𝑙 +, 𝑙 − ) where the relevance relationship is known by construction. Algorithm 1 summarizes the generation process. 
+
+## 3.2 Problem Formulation and Baselines 
+
+Let 𝑃 true (𝑞 ) denote the true distribution of user queries—the proba-bility distribution over all possible natural language queries that real users would type when searching. This distribution is unob-served before launch: we cannot sample from it or measure its properties directly. Our objective is to generate a synthetic distri-bution 𝑃 synth (𝑞 ) that approximates the true distribution as closely as possible: 
+
+min 𝐷 KL (𝑃 true (𝑞 )∥ 𝑃 synth (𝑞 )) (1) where 𝐷 KL denotes the Kullback-Leibler divergence, measuring how much 𝑃 synth differs from 𝑃 true in terms of information content. Minimizing this divergence means synthetic queries should be statistically indistinguishable from real queries in their linguistic patterns, attribute distributions, and intent coverage. We decompose query generation into two independent factors: 
+
+• Template 𝑡 ∼ 𝑃 (𝑡 ): An abstract linguistic pattern capturing query structure—length, phrasing style, number of attributes mentioned, and constraint types. Templates are sampled from user research surveys representing how real travelers express their needs. 
+
+• Entity 𝑒 ∼ 𝑃 (𝑒 ): A concrete listing providing factual at-tributes to ground the query—specific amenities, location features, property characteristics. Entities are sampled from the platform’s listing catalog. The synthetic distribution is then: 
+
+𝑃 synth (𝑞 ) = E𝑡 ∼𝑃 (𝑡 ),𝑒 ∼𝑃 (𝑒 ) [𝑃 LLM (𝑞 | 𝑡, 𝑒 )] (2) where 𝑃 LLM (𝑞 | 𝑡, 𝑒 ) is the probability the LLM assigns to generat-ing query 𝑞 given template 𝑡 and entity 𝑒 . This decomposition en-ables independent improvement: refining 𝑃 (𝑡 ) using user research, expanding 𝑃 (𝑒 ) using catalog data, and improving 𝑃 LLM through prompt engineering. Naive LLM generation without platform knowledge (e.g., prompt-ing an LLM directly without Airbnb listing features) is obviously inadequate—it produces queries not grounded in actual inventory and cannot generate meaningful relevance labels. Therefore, for the remainder of this paper, we compare against a more competitive 
+
+baseline : contrastive generation without seed data. This baseline uses listing pairs for factual grounding but lacks guidance on au-thentic linguistic patterns, producing overly verbose queries (e.g., “I am seeking accommodations with swimming pool facilities”) rather than terse natural queries (e.g., “pool near beach”). This comparison isolates the contribution of seed data: our approach combines con-trastive generation with seed queries from user research, producing queries that are both factually grounded and linguistically realistic. Figure 2 illustrates this difference with a concrete example. 
+
+## 3.3 Contrastive Generation 
+
+Contrastive generation grounds synthetic queries in real platform features by using listing pairs sampled from actual user behavior. This ensures generated queries reference attributes that exist in the inventory rather than hallucinated features. 
+
+Listing Pair Sampling. We sample pairs from real booking ses-sions to capture authentic user preference signals. Given a search context (location, dates, guests), we select a positive listing 𝑙 + (booked or highly engaged) and a negative listing 𝑙 − from the same search with less engagement. This ensures the listings share contextual relevance while differing in meaningful attributes. 
+
+Listing Feature Enrichment. Each listing in the pair is en-riched with structured features included in the prompt. Initial exper-iments used only listing titles and descriptions, but limited inputs produce inaccurate labels—a description mentioning “modern” does not mean a listing is objectively more modern than one without such  
+
+> 3Preprint, 2026, Wei et al.
+
+Table 1: Comparison of query generation approaches: naive LLM generation produces platform-specific terminology and ungrounded features; contrastive-only generation grounds queries in listings but produces verbose output; our seed-guided approach produces realistic, terse queries matching real user behavior   
+
+> Naive LLM (no grounding) Baseline: Contrastive Only (no seed) Our Approach (contrastive + seed)
+> Superhost beach house with heated infinity pool near Santa Monica, Guest Favorite badge Luxury house with a private pool in West LA, close to Santa Monica Pier, with modern amenities and easy freeway access pool near beach Entire home cozy A-frame cabin with instant book near Lake Tahoe ski resorts, highly rated Authentic A-Frame cabin in Tahoe with classic design and woodsy feel, close to skiing and the lake, ideal for couples cozy cabin near ski resort Private room listing near UCLA campus with spacious backyard and instant book enabled Airbnb near a university with backyard access and out-door seating backyard near campus
+
+Figure 1: Contrastive query generation pipeline. Left: input data sources include search sessions (with booking logs) and listing features (descriptions, amenities, reviews). Center: sessions with bookings are filtered to extract booked and non-booked listing pairs, which are enriched with catalog features. Right: LLM processing combines listing pairs with seed queries and prompting strategies to generate synthetic queries with topicality labels by construction. 
+
+mention. We systematically expanded the feature set to include: search context (location, dates, guest composition), textual descrip-tions and titles, explicit amenity lists (pool, wifi, parking), review summaries and ratings, property characteristics (bedrooms, bath-rooms, property type), location attributes, and pricing information. These structured features provide the factual grounding that pre-vents hallucination—generated queries can only reference attributes that actually exist. Richer features also enable more nuanced query generation: with basic signals, we generate “pet-friendly apartment near downtown”; with rich signals, “business traveler seeking pet-friendly accommodation with workspace near downtown.” 
+
+Topicality Labels by Construction. While listing pairs are sampled based on booking behavior, the labels we generate are 
+
+topicality labels, not bookability labels. The booking signal is used only to identify realistic listing pairs where users made meaningful comparisons. When generating queries, the prompt instructs the LLM: “Generate a query where Listing 1 is topically more relevant than Listing 2.” The resulting label reflects query-listing semantic relevance, not conversion likelihood. 
+
+## 3.4 Realism and Diversity 
+
+Given contrastive listing pairs, we achieve realistic and diverse queries through two mechanisms: seed data provides authentic linguistic patterns, while prompt engineering controls the realism-diversity trade-off. 
+
+Seed Data. Without seed guidance, LLMs produce verbose, for-mal queries that diverge significantly from real user behavior (KL divergence 4.95 vs. 0.66 with seed; Table 2). Seed data teaches the         
+
+> 4Bridging the Cold-Start Gap: LLM-Powered Synthetic Data Generation for Natural Language Search at Airbnb Preprint, 2026,
+> Listing Description: “Escape to our charming 3-room studio, perfect for solo retreats or romantic escapes. Modern kitchenette, outdoor seat-ing, and free Wi-Fi. Steps from Boardwalk and Beach.” Baseline (no seed): “Charming studio ideal for solo retreats or romantic escapes, fea-turing a modern kitchenette, outdoor seating area, and complimentary Wi-Fi, conveniently located steps from the Boardwalk and Beach” Seed Query: “I’m looking for a family-friendly place with a pool and a big kitchen in a safe neighborhood” Ours (with seed): “romantic escape with Wi-Fi and outdoor space near beach”
+
+Figure 2: Baseline vs. our approach: without seed guidance, LLMs produce verbose queries echoing listing descriptions; with seed templates, queries are terse and natural. 
+
+model how users actually express search intent—their terseness, phrasing patterns, and attribute preferences. Options for seed data include: (1) user research surveys asking “What would you type?”— available pre-launch but tends toward verbose responses; (2) real user queries from production traffic—most authentic but requires launch; (3) search logs from related products —may provide signal if domain overlap exists. We use survey data for cold start and transition to real queries post-launch. 
+
+Prompt Variants. We develop three prompt variants. Seed Con-trolled enforces realism through explicit template following, as illustrated in Figure 2—the LLM analyzes seed query structure and generates new queries preserving the pattern while substituting entity-specific content. To ensure diversity beyond strict template adherence, we add two variants: Seed Freeform uses seed queries as stylistic examples rather than rigid templates, capturing the dis-tribution of user behavior; Variety uses relaxed constraints and higher temperature to explore edge cases like multi-intent queries (“romantic but also good for work”) and unusual attribute combina-tions. In production, we mix these variants to achieve both realism and diversity. 
+
+Prompt Components. Beyond prompt variants, we enforce output quality through reusable prompt components. A platform terms blocklist prevents internal terminology that users rarely type (e.g., “superhost”, “entire home”, “instant book”). Context deduplica-tion rules avoid redundant information—since the ranking model receives search context (location, dates, guests), queries should not repeat exact city names or guest counts. Consistency enforcement 
+
+ensures query-context alignment: a query mentioning “pet-friendly” cannot be generated for a search with no pets. See Appendix D for full prompt specifications. 
+
+Hard Example Generation. Randomly sampled listing pairs often produce “easy” examples. We tune prompts to generate harder examples through: (1) prompt enhancement —leakage guardrails, dif-ficulty buckets, chain-of-thought reasoning, and persona-based gen-eration; (2) hierarchical sampling —selecting pairs with controlled similarity using same-category sampling and embedding distance filtering; (3) counterfactual editing —minimal perturbation and at-tribute substitution to reverse preferences. 
+
+Table 2: Comparison of query characteristics across datasets. Baseline (contrastive without seed) produces verbose queries; our approach with seed guidance achieves better alignment with real user behavior. Metric Baseline Our Approach Seed Real 
+
+Count 4,912 15,742 500 1,546 Length ( 𝜇 ) 13.6 6.0 6.6 5.0 Length (med.) 15 6 5 4Length ( 𝜎 ) 2.0 2.5 4.1 3.96 % 3–8 words 2.4% 84.0% 56.8% 49.8% % Short (1–2) 0.0% 6.0% 15.6% 32.9% % Long (9+) 97.6% 10.0% 27.6% 17.3% 
+
+Distribution Divergence 
+
+KL vs. Real 4.95 0.66 0.15 –KL vs. Seed 3.67 0.38 – 0.15 
+
+## 3.5 Generation Quality Validation 
+
+We validate synthetic query quality by comparing distributions against seed queries from user research, real user queries collected after launch, and a baseline (contrastive generation without seed data). Table 2 compares all four datasets. Figure 3 in Appendix visualizes the word count distributions. Real users are significantly more terse than synthetic queries—the median real query contains only 4 words (e.g., “pet friendly cabin”), compared to 6 words in our synthetic data. Real users show a right-skewed distribution with 33% using 1–2 words. Our seed-guided approach captures some of this terseness (6% short queries). 
+
+Outperforming baseline: The baseline (contrastive generation without seed data) produces verbose queries—mean length 13.6 words with 97.6% exceeding 8 words—resulting in KL divergence of 4.95 vs. real users. Our seed-guided approach reduces this to 0.66, a 7.5 × improvement. The baseline’s verbosity stems from LLMs’ tendency to generate complete, grammatically elaborate sentences when unconstrained, while seed templates guide generation toward the terse patterns real users exhibit. 
+
+Distribution comparisons: We measure distributional simi-larity using KL divergence on word count distributions. The KL divergence from real to seed (0.15) is lower than real to synthetic (0.66), which may seem surprising given that synthetic queries have a mean length (6.0) closer to real users (5.0) than seed queries do (6.6). However, KL divergence measures the shape of the dis-tribution, not just its center. Real users and seed queries share similar distributional characteristics: both exhibit high variance (𝜎 = 3.96 and 4.1), right-skewed distributions (mean > median), and spread-out query lengths (50–57% in the 3–8 word range). In contrast, synthetic queries are tightly concentrated ( 𝜎 = 2.5, 84% in 3–8 words) with a symmetric distribution. This concentration occurs because our generation process, guided by templates and listing features, produces consistently structured outputs. Despite this shape difference, synthetic data remains valuable: attribute cov-erage and semantic content—not query length distribution—drive ranking model performance.  
+
+> 5Preprint, 2026, Wei et al.
+
+Table 3: Distribution comparison of query attribute type. Real users’ top types (ranked): amenity, location, property_type. Metric Baseline Our Approach Seed 
+
+KL vs. Real 0.13 0.04 0.09 Top Types location amenity amenity amenity location location property_type property_type rooms Beyond query length, we analyze attribute distributions —the types of semantic attributes (amenity, location, property type, vibe, etc.) mentioned in queries. Table 3 compares attribute type KL diver-gence across datasets. Our approach achieves the lowest attribute type KL divergence (0.04) among all methods—even lower than seed queries (0.09)—indicating that combining seed guidance with contrastive generation produces queries with the most realistic at-tribute type distribution. Additional attribute statistics are provided in Appendix B. 
+
+Prompt Variant Validation. Table 8 in Appendix validates our prompt design choices by comparing KL divergence across the three prompt variants. An interesting pattern emerges: for query length, 
+
+variety best matches real user behavior (KL 0.13 vs. real), while 
+
+seed_controlled best preserves seed patterns (KL 0.07 vs. seed). How-ever, for attribute distributions, seed_controlled best matches real users (count KL 1.00, type KL 0.11). This suggests seed_controlled produces queries with realistic attribute usage, while variety cap-tures the terse length patterns of real users. This validates our production strategy of mixing prompt variants: seed_controlled for attribute coverage, variety for length diversity. 
+
+Implications: Future iterations should calibrate toward shorter queries. However, the synthetic data successfully enabled model development before launch—the attribute-level alignment meant models learned relevant semantic matching despite length differ-ences. 
+
+## 4 Label Generation 
+
+Training ranking models requires topicality labels —judgments of which listings better match a query. We develop two complementary approaches. 
+
+## 4.1 Method Overview 
+
+Contrastive Label Generation. Our first approach produces la-beled triplets (𝑞, 𝑙 +, 𝑙 − ) by construction—instead of generating la-bels for queries, we generate queries for labels. Given a listing pair, we prompt the LLM: “Generate a query where the first listing is more topical than the second.” This yields high-fidelity labels (the relationship is a deterministic input, not inferred) and a uni-fied pipeline (queries and labels in one step). However, generated queries may be overly specific to the listing pair, limiting diversity. 
+
+Virtual Judge (VJ) Label Generation. Our second approach decouples query and label generation. We first generate queries using contrastive generation, then discard the original labels and re-evaluate against different listings using an LLM judge. The VJ eval-uates attribute matching, implicit intent, and relative comparison. 
+
+Table 4: LLM self-preference: GPT models achieve near-perfect accuracy on GPT-generated contrastive pairs, sug-gesting self-preference bias (sample size: 1,600) GPT-4 GPT-4o GPT-5 
+
+Accuracy 0.994 0.988 0.990 This provides broader coverage and more realistic evaluation sce-narios, though it introduces dependency on LLM judgment quality. We mitigate errors through rich listing features, chain-of-thought prompting, and calibration against human labels. Contrastive gen-eration offers high label fidelity (labels by construction) but limited coverage; VJ provides broader coverage at the cost of moderate fidelity (LLM-dependent). We use contrastive labels for training and VJ labels primarily for evaluation. 
+
+## 4.2 Considerations of LLM Evaluator 
+
+A potential concern with using LLMs to evaluate LLM-generated content is self-preference bias : LLM judges may systematically favor outputs that match their own generation patterns. Liu et al . [15] found that GPT-4-based evaluators consistently assigned higher scores to GPT-3.5 generated summaries compared to human-written summaries, even when human judges preferred the human-written versions. They hypothesize this occurs because LLMs may share similar evaluation criteria during both generation and evaluation phases, leading to self-reinforcing preferences. This concern is particularly relevant for Virtual Judge labeling, where similar LLMs generate both queries and relevance judgments. Table 4 provides empirical evidence of this bias in our setting: when GPT models evaluate contrastive pairs generated by GPT, they achieve 98–99% accuracy—substantially higher than embedding models (76–79%, Table 5). This near-perfect agreement suggests LLMs recognize patterns in their own generations that may not reflect true topicality differences. We address this through several mitigations: (1) attribute ground-ing —judgments are based on explicit, verifiable listing attributes (amenities, location, property type) rather than stylistic preferences, reducing the influence of generation patterns; (2) human calibra-tion —we validate VJ labels against human judgments on a held-out sample, finding 87% agreement; (3) separation of concerns —we use contrastive labels (deterministic by construction) for training, re-serving VJ labels primarily for evaluation where coverage matters more than perfect fidelity; and (4) diverse model usage —when possi-ble, we use different model variants for generation vs. evaluation. While self-preference bias remains an open research question with implications for self-reinforcing LLM training loops, our eval-uation approach based on attribute grounding appears to mitigate its impact in our setting. The high LLM accuracy also validates that our contrastive generation produces consistent, well-formed examples—the concern is using LLM judgments as ground truth rather than as quality checks. In practice, we use contrastive la-bels for model training (where fidelity is critical) and VJ labels for evaluation (where coverage matters more).  
+
+> 6Bridging the Cold-Start Gap: LLM-Powered Synthetic Data Generation for Natural Language Search at Airbnb Preprint, 2026,
+
+Table 5: Retrieval evaluation: Baseline vs. Our Approach— our approach produces harder examples with lower accuracy, providing discriminative evaluation signal Embedding Model Size Baseline Our Approach 
+
+SBERT-MiniLM 384 0.887 0.777 Qwen3 1024 0.967 0.790 OpenAI-text-large 3072 0.993 0.763 
+
+## 4.3 Metrics Choice and Evaluation Results 
+
+Although listing pairs are sampled from booking sessions, the la-bels we generate are topicality judgments—the prompt explicitly instructs the LLM to generate queries where one listing is more topically relevant than the other. This design choice reflects our cold-start focus: without sufficient booking data, we optimize for query-listing semantic relevance rather than conversion predic-tion. We use pairwise accuracy rather than NDCG (Normalized Discounted Cumulative Gain) because NDCG requires booking data to establish graded relevance, which is unavailable in cold-start. Pairwise accuracy is natural for our contrastive setup, which produces (𝑞, 𝑙 +, 𝑙 − ) triplets where the correct ranking is known by construction. Accuracy ranges from 0.5 (random guessing) to 1.0 (perfect), and we compare model performance on baseline (con-trastive without seed) versus our proposed approach. Transitioning to bookability-focused NDCG optimization is future work (Sec-tion 6.2). We evaluate our approach against baseline generation (con-trastive generation without seed data) on two applications: retrieval and ranking. 
+
+Embedding-Based Retrieval. The retrieval system uses em-bedding similarity to identify candidate listings from millions of op-tions. Given a query, we compute embeddings and retrieve listings with highest cosine similarity. Table 5 compares pairwise accuracy between baseline generation (contrastive generation without seed data) and our approach (contrastive generation with seed data and rich listing features). Baseline generation shows uniformly high accuracy (89–99%) across all models, indicating examples are too easy—even simple models solve most cases, providing little signal for improvement. Our approach with seed data and rich features produces substan-tially harder examples (76–79% accuracy), creating a more discrimi-native evaluation. The accuracy drop of 11–23 percentage points confirms that grounding queries in realistic linguistic patterns (via seed data) and detailed listing attributes generates genuinely chal-lenging cases that better differentiate model capabilities. We use Qwen3 in production, which achieves the highest accuracy (79%) among the three embedding models on our approach. 
+
+Ranking. Table 6 shows training results for the first-pass rank-ing model. Our approach shows lower accuracy than baseline generation—this reflects harder examples rather than worse perfor-mance. The lower accuracy (0.792 vs. 0.827) indicates our synthetic data produces more challenging training examples that better dif-ferentiate model capabilities. 
+
+Table 6: Ranking model training: Our approach produces harder examples that improve generalization Dataset Size Accuracy Loss 
+
+Baseline 1.2K 0.827 0.623 Our Approach 1K 0.792 0.657 
+
+## 5 Production Deployment 
+
+We deploy the synthetic data framework in production at Airbnb, supporting retrieval and ranking evaluation. 
+
+Pipeline Overview. The production pipeline refreshes daily, reading from historical search sessions and listing features that are also updated daily—ensuring generated queries are never static. Each day, the pipeline: (1) ingests fresh search sessions with book-ing logs and updated listing catalog features; (2) filters sessions with bookings to extract booked and non-booked listing pairs, en-riched with catalog attributes; (3) combines listing pairs with seed queries using an 80/20 mix of seed-guided (realistic) and variety (exploratory) prompts to generate approximately 10,000 synthetic queries with topicality labels; (4) analyzes generated queries against seed data and computes quality metrics (e.g., KL divergence, length distributions, attribute distributions) to monitor generation qual-ity; and (5) refreshes dashboards for ranking models trained and evaluated on this data. These quality metrics guide iteration on data generation parameters and prompt tuning, combining offline prototyping analysis with online deployment monitoring. 
+
+From Cold Start to Warm Start. The framework supports con-tinuous refinement as the system matures. Cold start (pre-launch) :We use approximately 500 curated queries from user research sur-veys as seed templates—these tend toward verbose responses but provide essential signal about user intent patterns. Warm start (post-launch) : As real user traffic becomes available, we update seed data inputs with representative samples, generate analysis reports com-paring synthetic vs. real query distributions, and adjust generation strategies based on identified gaps. Each batch of real queries im-proves the next generation of synthetic data, gradually closing the distribution gap between synthetic and real user behavior. 
+
+## 6 Discussion 6.1 When Synthetic Data Works 
+
+Synthetic data proves most effective when: (1) applications have clear, well-defined evaluation metrics like pairwise ranking accu-racy; (2) teams need to iterate offline before real traffic exists; and (3) cold-start scenarios require bootstrap training signal. The key insight is that synthetic data need not be perfect—it needs only to be informative enough to guide development in productive directions. Models developed with synthetic data transfer reasonably well to real traffic, though some adaptation is typically needed post-launch. 
+
+## 6.2 Limitations and Future Directions 
+
+Our framework assumes independence between templates and en-tities, though in reality query structures likely correlate with at-tribute types. Future work could model 𝑃 (𝑒 |𝑡 ) to capture these correlations. Distribution shift between synthetic and real queries  
+
+> 7Preprint, 2026, Wei et al.
+
+is inherent—we view synthetic data as a bridge to real data rather than a permanent replacement. LLM limitations propagate into synthetic data; as foundation models improve, generation quality should improve correspondingly. 
+
+From Topicality to Bookability. This paper focuses on topi-cality because cold-start precludes booking-based optimization. As real user data accumulates post-launch, several transitions become possible: (1) metric transition from pairwise accuracy to NDCG, using booking behavior to establish graded relevance; (2) data tran-sition where real user queries replace or augment seed data; and (3) label transition where click and booking signals supplement synthetic labels with ground-truth relevance. 
+
+## 6.3 Practical Lessons Learned 
+
+Our iterative development process yielded several practical insights. 
+
+Start Simple. Our initial implementation used only listing titles and descriptions, with basic contrastive generation. While limited, this baseline enabled downstream development to begin—retrieval engineers could prototype embedding approaches, ranking teams could establish training pipelines. Teams that wait for perfect syn-thetic data may find themselves perpetually blocked. 
+
+Difficulty Calibration. Our initial dataset showed uniformly high accuracy across all models. When all models achieve 90%+ accuracy, there is no signal to guide improvement. Controlled dif-ficulty tiers transformed our evaluation into a nuanced assess-ment that could distinguish incremental model improvements. We achieved this through prompt engineering techniques including leakage guardrails, difficulty buckets, and hierarchical sampling of listing pairs with controlled similarity. 
+
+Production Scale Considerations. Model choice matters for cost and latency—we use smaller models for bulk generation and reserve larger models for quality validation. Feature selection re-quires careful truncation: we limit listing descriptions and select top amenities by relevance, balancing context richness against token costs. Prompt iterations are essential to match product requirements such as query length targets and attribute coverage. Daily refresh ensures generated queries are never static and enables continuous monitoring of generation quality. 
+
+## 7 Conclusion 
+
+This paper presents a framework for generating synthetic search queries and labels to address the cold-start challenge in natural language search. We combine contrastive listing pairs (ground-ing queries in real platform features) with seed queries from user research (ensuring realistic linguistic patterns), developing three prompt variants—seed controlled, seed freeform, and variety—to balance realism and diversity. For label generation, we introduce contrastive generation that produces labels by construction and Virtual Judge labeling for broader coverage. Experiments demonstrate the critical importance of seed data across multiple dimensions. For both query length and attribute distributions, our seed-guided approach significantly outperforms baselines—achieving a synergistic effect where the combination exceeds either component alone. Our approach also produces harder evaluation examples, providing discriminative signal for model improvement. The framework supports both retrieval and ranking evaluation, with a production pipeline that evolves from cold start to warm start as real user data becomes available. Several lessons emerge from our experience. Starting simple en-ables progress even with imperfect data. Difficulty calibration is essential—uniformly high accuracy provides no improvement sig-nal. Production scale requires balancing model cost, feature trunca-tion, and iterative prompt refinement. Future work includes transi-tioning from topicality-based accuracy to bookability-based NDCG as real user data becomes available, and establishing frameworks for graceful transition from synthetic to real user data post-launch. 
+
+## Acknowledgments 
+
+We thank the Relevance & Personalization team at Airbnb for valu-able discussions. 
+
+## References                                  
+
+> [1] Omar Alonso, Daniel E. Rose, and Benjamin Stewart. 2008. Crowdsourcing for Relevance Evaluation. In ACM SIGIR Forum , Vol. 42. 9–15. [2] Luiz Bonifacio, Hugo Abonizio, Marzieh Fadaee, and Rodrigo Nogueira. 2022. InPars: Data Augmentation for Information Retrieval using Large Language Models. arXiv preprint arXiv:2202.05144 (2022). [3] Zhuyun Dai, Vincent Y Zhao, Ji Ma, Yi Luan, Jianmo Ni, Jing Lu, Anton Baber, Kelvin Lee, and Yi Lu. 2023. Promptagator: Few-shot Dense Retrieval From 8 Examples. In International Conference on Learning Representations .[4] Steven Y. Feng, Varun Gangal, Jason Wei, Sarath Chandar, Soroush Vosoughi, Teruko Mitamura, and Eduard Hovy. 2021. A Survey of Data Augmentation Approaches for NLP. In Findings of the Association for Computational Linguistics: ACL-IJCNLP 2021 . 968–988. [5] Albert Gatt and Emiel Krahmer. 2018. Survey of the State of the Art in Natural Language Generation: Core Tasks, Applications and Evaluation. Journal of Artificial Intelligence Research 61 (2018), 65–170. [6] Mihajlo Grbovic and Haibin Cheng. 2018. Real-time Personalization using Em-beddings for Search Ranking at Airbnb. In Proceedings of the 24th ACM SIGKDD International Conference on Knowledge Discovery & Data Mining . 311–320. [7] Malay Haldar, Mustafa Abdool, Prashant Ramanathan, Tao Xu, Shulin Yang, Huizhong Duan, Qing Zhang, Nick Barrow-Williams, Bradley C. Turnbull, Bren-dan M. Collins, and Thomas Legrand. 2019. Applying Deep Learning to Airbnb Search. In Proceedings of the 25th ACM SIGKDD International Conference on Knowledge Discovery & Data Mining . 1927–1935. [8] Malay Haldar, Daochen Zha, Huiji Gao, Liwei He, and Sanjeev Katariya. 2025. Beyond Pairwise Learning-To-Rank At Airbnb. In Proceedings of the 34th ACM International Conference on Information and Knowledge Management . 5707–5714. [9] Malay Haldar, Hongwei Zhang, Kedar Bellare, Sherry Chen, Soumyadip Banerjee, Xiaotang Wang, Mustafa Abdool, Huiji Gao, Pavan Tapadia, Liwei He, and Sanjeev Katariya. 2024. Learning to Rank for Maps at Airbnb. In Proceedings of the 30th ACM SIGKDD Conference on Knowledge Discovery and Data Mining . 5061–5069. [10] Gautier Izacard, Mathilde Caron, Lucas Hosseini, Sebastian Rber, Edouard Grave, Armand Joulin, and Gabriel Synnaeve. 2022. Unsupervised Dense Information Retrieval with Contrastive Learning. In Transactions on Machine Learning Re-search .[11] Vitor Jeronymo, Luiz Bonifacio, Hugo Abonizio, Marzieh Fadaee, Roberto Lotufo, Jakub Zavrel, and Rodrigo Nogueira. 2023. InPars-v2: Large Language Models as Efficient Dataset Generators for Information Retrieval. In Proceedings of the 46th International ACM SIGIR Conference on Research and Development in Information Retrieval . 2299–2303. [12] Yannis Kalantidis, Mert Bulent Sariyildiz, Noe Pion, Philippe Weinzaepfel, and Diane Larlus. 2020. Hard Negative Mixing for Contrastive Learning. In Advances in Neural Information Processing Systems , Vol. 33. 21798–21809. [13] Mihir Kale and Abhinav Rastogi. 2020. Text-to-Text Pre-Training for Data-to-Text Tasks. In Proceedings of the 13th International Conference on Natural Language Generation . 97–102. [14] Vladimir Karpukhin, Barlas Oğuz, Sewon Min, Patrick Lewis, Ledell Wu, Sergey Edunov, Danqi Chen, and Wen-tau Yih. 2020. Dense Passage Retrieval for Open-Domain Question Answering. In Proceedings of the 2020 Conference on Empirical Methods in Natural Language Processing . 6769–6781. [15] Yang Liu, Dan Iter, Yichong Xu, Shuohang Wang, Ruochen Xu, and Chenguang Zhu. 2023. G-Eval: NLG Evaluation using GPT-4 with Better Human Alignment. In Proceedings of the 2023 Conference on Empirical Methods in Natural Language Processing . 2511–2522. [16] Ji Ma, Ivan Korotkov, Yinfei Yang, Keith Hall, and Ryan McDonald. 2021. Zero-shot Neural Passage Retrieval via Domain-targeted Synthetic Question Generation. 8
+
+Bridging the Cold-Start Gap: LLM-Powered Synthetic Data Generation for Natural Language Search at Airbnb Preprint, 2026, 
+
+In Proceedings of the 16th Conference of the European Chapter of the Association for Computational Linguistics . 1075–1088. [17] Rodrigo Nogueira, Wei Yang, Jimmy Lin, and Kyunghyun Cho. 2019. Document Expansion by Query Prediction. arXiv preprint arXiv:1904.08375 (2019). [18] Colin Raffel, Noam Shazeer, Adam Roberts, Katherine Lee, Sharan Narang, Michael Matena, Yanqi Zhou, Wei Li, and Peter J Liu. 2020. Exploring the Limits of Transfer Learning with a Unified Text-to-Text Transformer. Journal of Machine Learning Research 21, 140 (2020), 1–67. [19] Joshua Robinson, Ching-Yao Chuang, Suvrit Sra, and Stefanie Jegelka. 2021. Contrastive Learning with Hard Negative Samples. In International Conference on Learning Representations .[20] Timo Schick and Hinrich Schütze. 2021. Generating Datasets with Pretrained Language Models. In Proceedings of the 2021 Conference on Empirical Methods in Natural Language Processing . 6943–6951. [21] Rohan Taori, Ishaan Gulrajani, Tianyi Zhang, Yann Dubois, Xuechen Li, Carlos Guestrin, Percy Liang, and Tatsunori B. Hashimoto. 2023. Stanford Alpaca: An Instruction-following LLaMA Model. GitHub repository (2023). [22] Nandan Thakur, Nils Reimers, Andreas Rücklé, Abhishek Srivastava, and Iryna Gurevych. 2021. BEIR: A Heterogeneous Benchmark for Zero-shot Evaluation of Information Retrieval Models. In Thirty-fifth Conference on Neural Information Processing Systems Datasets and Benchmarks Track .[23] Shuohang Wang, Yang Liu, Yichong Xu, Chenguang Zhu, and Michael Zeng. 2021. Want To Reduce Labeling Cost? GPT-3 Can Help. Findings of the Association for Computational Linguistics: EMNLP 2021 (2021), 4195–4205. [24] Yizhong Wang, Yeganeh Kordi, Swaroop Mishra, Alisa Liu, Noah A. Smith, Daniel Khashabi, and Hannaneh Hajishirzi. 2023. Self-Instruct: Aligning Language Models with Self-Generated Instructions. arXiv preprint arXiv:2212.10560 (2023). [25] Jason Wei and Kai Zou. 2019. EDA: Easy Data Augmentation Techniques for Boosting Performance on Text Classification Tasks. Proceedings of the 2019 Conference on Empirical Methods in Natural Language Processing (2019), 6382– 6388. [26] Lee Xiong, Chenyan Xiong, Ye Li, Kwok-Fung Tang, Jialin Liu, Paul Bennett, Junaid Ahmed, and Arnold Overwijk. 2021. Approximate Nearest Neighbor Neg-ative Contrastive Learning for Dense Text Retrieval. In International Conference on Learning Representations .[27] Lianmin Zheng, Wei-Lin Chiang, Ying Sheng, Siyuan Zhuang, Zhanghao Wu, Yonghao Zhuang, Zi Lin, Zhuohan Li, Dacheng Li, Eric P. Xing, et al . 2023. Judging LLM-as-a-Judge with MT-Bench and Chatbot Arena. In Advances in Neural Information Processing Systems , Vol. 36. 
+
+## A Query Length Distribution 
+
+Figure 3 shows word count distributions across all four datasets. Real users favor short queries, seed data shows uniform spread, our approach centers at medium length, while the baseline is extremely verbose—demonstrating LLM verbosity without seed guidance. 
+
+## B Query Attribute Count 
+
+Table 7 shows query attribute count statistics and KL divergence across datasets. 
+
+Table 7: Query attribute count across datasets. Real users mention fewer attributes per query (mean 1.96) than syn-thetic data, reflecting their terse style. Metric Baseline Our Approach Seed Real 
+
+Mean Attr. 4.92 3.07 2.90 1.96 Median Attr. 5.0 3.0 3.0 2.0 % with Attr. 100% 100% 99.8% 95.2% 
+
+Attribute Count KL Divergence 
+
+vs. Real 4.21 0.94 0.29 –vs. Seed 2.00 0.50 – 0.29 
+
+## C Prompt Variant Analysis 
+
+Table 8 compares KL divergence across the three prompt variants. For query length, variety best matches real user behavior, while 
+
+seed_controlled best preserves seed patterns. For attribute distribu-tions, seed_controlled best matches real users. 
+
+Table 8: KL divergence by prompt variant 
+
+Length Attr. Cnt Attr. Type Variant Seed Real Seed Real Seed Real 
+
+seed_controlled 0.07 0.18 0.23 1.00 0.02 0.11 seed_freeform 0.29 0.22 1.78 3.50 0.43 0.21 variety 0.26 0.13 4.33 8.69 0.31 0.26 
+
+## D Prompt Templates 
+
+Our prompt system uses modular components that are composed into three main variants: Seed Controlled (template-based gener-ation with explicit three-step instructions), Seed Freeform (direct constraints with flexible attribute selection), and Variety (relaxed constraints with higher temperature for diversity). This modular ar-chitecture enables systematic A/B testing of individual components while maintaining consistency across variants. The following com-ponents are shared across all prompt variants, ensuring consistent behavior regardless of generation mode. 
+
+Core Assumption. This establishes the contrastive generation objective—the LLM must generate a query that makes the specified relevance relationship true: 
+
+Listing 1 is topically more relevant to the ideal query than Listing 2. Your job is to identify what search query would make this true. 
+
+Platform Terms Blocklist. Real users don’t use internal plat-form terminology. This blocklist prevents the LLM from generating queries containing terms that would never appear in authentic user input: 
+
+PLATFORM_TERMS = ["entire home", "private room", "superhost", "guest favorite", "badge", "airbnb", "listing", "instant book"] 
+
+Context Deduplication Rules. Since production ranking mod-els receive both the query text and structured search context (lo-cation, dates, guests), generated queries should not redundantly repeat information already captured in the context: 
+
+- Location: NO exact city/state names If location="Paris" -> DON’T use "Paris" OK: "near Eiffel Tower", "downtown" - Guests: NO exact counts If guests=4 -> DON’T say "for 4 people" OK: "family-friendly", "large group" - Dates: NO specific dates OK: "Christmas stay", "summer retreat" 
+
+Consistency Enforcement. Generated queries must be consis-tent with the search context. A query mentioning “pet-friendly” for a search with no pets would create invalid training examples: 
+
+If pets=0: DO NOT mention "pet-friendly" If children=0: DO NOT mention "family-friendly" 
+
+9Preprint, 2026, Wei et al. 
+
+Figure 3: Query length distribution comparison across datasets. Real users show right-skewed distribution with peak at 2 words; seed data shows uniform spread; our approach concentrates at 5–6 words; baseline is extremely verbose with 57% at 15+ words. Output Format Constraint. Structured JSON output enables automated parsing and quality validation: 
+
+Return ONLY valid JSON with these fields: - "justification": why Listing 1 is more relevant - "generalized_template": abstract pattern - "query": final synthetic query (3-8 words) - "key_attributes": attributes used from Listing 1
