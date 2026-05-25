@@ -30,6 +30,7 @@ PAPERCROPPER_MODEL_ENV = "PAPERCROPPER_MODEL"
 PAPERCROPPER_PYTHON_ENV = "PAPERCROPPER_PYTHON"
 PAPERCROPPER_DISABLE_ENV = "PAPERCROPPER_DISABLE"
 PAPERCROPPER_MODEL_FILENAME = "doclayout_yolo_docstructbench_imgsz1280_2501.pt"
+PAPERCROPPER_LOG_LIMIT = 1200
 
 
 def _safe_asset_key(value: str) -> str:
@@ -119,6 +120,24 @@ def _save_figures_meta(meta_path: str, figures: List[Dict[str, Any]], *, extract
 
 def _save_tables_meta(meta_path: str, tables: List[Dict[str, Any]], *, extractor: str) -> None:
     _save_media_meta(meta_path, tables, extractor=extractor, key="tables")
+
+
+def _warn_papercropper(message: str) -> None:
+    print(f"[WARN] PaperCropper 表格/图表提取降级：{message}", flush=True)
+
+
+def _tail_log_text(text: str, limit: int = PAPERCROPPER_LOG_LIMIT) -> str:
+    compact = re.sub(r"\s+", " ", str(text or "")).strip()
+    if len(compact) <= limit:
+        return compact
+    return "..." + compact[-limit:]
+
+
+def _papercropper_was_configured() -> bool:
+    return any(
+        str(os.getenv(name) or "").strip()
+        for name in [PAPERCROPPER_SCRIPT_ENV, PAPERCROPPER_DIR_ENV, PAPERCROPPER_MODEL_ENV, PAPERCROPPER_PYTHON_ENV]
+    )
 
 
 def _download_pdf_bytes(pdf_url: str, timeout: int = 90) -> bytes:
@@ -277,6 +296,8 @@ def _extract_media_with_papercropper(
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     python_path, script_path, model_path = _resolve_papercropper()
     if not python_path or not script_path or not model_path:
+        if not _truthy_env(PAPERCROPPER_DISABLE_ENV) and _papercropper_was_configured():
+            _warn_papercropper("未找到可用的 PaperCropper 脚本或模型，改用备用图片提取器。")
         return [], []
 
     timeout = int(os.getenv("PAPERCROPPER_TIMEOUT_SECONDS") or "360")
@@ -314,15 +335,22 @@ def _extract_media_with_papercropper(
             "--padding",
             padding,
         ]
-        proc = subprocess.run(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            timeout=max(timeout, 30),
-            check=False,
-        )
+        try:
+            proc = subprocess.run(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=max(timeout, 30),
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            _warn_papercropper(f"执行超时（>{max(timeout, 30)}s），改用备用图片提取器。")
+            return [], []
         if proc.returncode != 0:
+            detail = _tail_log_text("\n".join([proc.stdout or "", proc.stderr or ""]))
+            suffix = f"；输出：{detail}" if detail else ""
+            _warn_papercropper(f"执行失败 returncode={proc.returncode}{suffix}")
             return [], []
 
         doc_output = os.path.join(tmp_root, os.path.splitext(os.path.basename(pdf_path))[0])
@@ -344,6 +372,12 @@ def _extract_media_with_papercropper(
             _save_figures_meta(os.path.join(figure_output_dir, "meta.json"), figures, extractor="papercropper")
         if tables:
             _save_tables_meta(os.path.join(table_output_dir, "meta.json"), tables, extractor="papercropper")
+        if not figures and not tables:
+            detail = _tail_log_text("\n".join([proc.stdout or "", proc.stderr or ""]))
+            suffix = f"；输出：{detail}" if detail else ""
+            _warn_papercropper(f"执行完成但未产出 figure/table{suffix}")
+        else:
+            print(f"[INFO] PaperCropper 提取完成：figures={len(figures)} tables={len(tables)}", flush=True)
         return figures, tables
 
 

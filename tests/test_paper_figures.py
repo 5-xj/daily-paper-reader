@@ -2,6 +2,7 @@ import importlib.util
 import io
 import json
 import os
+import contextlib
 import sys
 import tempfile
 import unittest
@@ -128,6 +129,81 @@ class PaperFiguresTest(unittest.TestCase):
             self.assertTrue((output_dir / "fig-001.webp").exists())
             meta = json.loads((output_dir / "meta.json").read_text(encoding="utf-8"))
             self.assertEqual(meta["extractor"], "pdffigures2")
+
+    def test_papercropper_failure_is_reported_before_fallback(self):
+        with tempfile.TemporaryDirectory() as d:
+            tmp_dir = Path(d)
+            pdf_path = tmp_dir / "sample.pdf"
+            pdf_path.write_bytes(b"%PDF-1.4\n")
+
+            original_resolve = self.mod._resolve_papercropper
+            original_run = self.mod.subprocess.run
+
+            class DummyResult:
+                returncode = 1
+                stdout = "starting"
+                stderr = "ModuleNotFoundError: No module named 'scipy'"
+
+            def fake_run(*args, **kwargs):
+                return DummyResult()
+
+            self.mod._resolve_papercropper = lambda: (sys.executable, "/tmp/extract.py", "/tmp/model.pt")
+            self.mod.subprocess.run = fake_run
+            output = io.StringIO()
+            try:
+                with contextlib.redirect_stdout(output):
+                    figures, tables = self.mod._extract_media_with_papercropper(
+                        str(pdf_path),
+                        str(tmp_dir / "figures"),
+                        "assets/figures/arxiv/sample",
+                        str(tmp_dir / "tables"),
+                        "assets/tables/arxiv/sample",
+                    )
+            finally:
+                self.mod._resolve_papercropper = original_resolve
+                self.mod.subprocess.run = original_run
+
+            self.assertEqual(figures, [])
+            self.assertEqual(tables, [])
+            self.assertIn("PaperCropper 表格/图表提取降级", output.getvalue())
+            self.assertIn("No module named 'scipy'", output.getvalue())
+
+    def test_papercropper_empty_output_is_reported(self):
+        with tempfile.TemporaryDirectory() as d:
+            tmp_dir = Path(d)
+            pdf_path = tmp_dir / "sample.pdf"
+            pdf_path.write_bytes(b"%PDF-1.4\n")
+
+            original_resolve = self.mod._resolve_papercropper
+            original_run = self.mod.subprocess.run
+
+            class DummyResult:
+                returncode = 0
+                stdout = "done"
+                stderr = ""
+
+            def fake_run(*args, **kwargs):
+                return DummyResult()
+
+            self.mod._resolve_papercropper = lambda: (sys.executable, "/tmp/extract.py", "/tmp/model.pt")
+            self.mod.subprocess.run = fake_run
+            output = io.StringIO()
+            try:
+                with contextlib.redirect_stdout(output):
+                    figures, tables = self.mod._extract_media_with_papercropper(
+                        str(pdf_path),
+                        str(tmp_dir / "figures"),
+                        "assets/figures/arxiv/sample",
+                        str(tmp_dir / "tables"),
+                        "assets/tables/arxiv/sample",
+                    )
+            finally:
+                self.mod._resolve_papercropper = original_resolve
+                self.mod.subprocess.run = original_run
+
+            self.assertEqual(figures, [])
+            self.assertEqual(tables, [])
+            self.assertIn("执行完成但未产出 figure/table", output.getvalue())
 
 
 if __name__ == "__main__":

@@ -17,6 +17,8 @@ class ConferenceWorkflowAndUiTest(unittest.TestCase):
         self.assertIn("RERANK_API_KEY", text)
         self.assertIn("SILICONFLOW_API_KEY", text)
         self.assertIn('default: "public-zwwen-rerank"', text)
+        self.assertIn("requirements-paper-media.txt", text)
+        self.assertIn("PaperCropper smoke OK", text)
 
     def test_conference_retrieval_workflow_dispatches_pipeline(self):
         root = pathlib.Path(__file__).resolve().parents[1]
@@ -40,6 +42,8 @@ class ConferenceWorkflowAndUiTest(unittest.TestCase):
         self.assertIn("RERANK_API_KEY", text)
         self.assertIn("SILICONFLOW_API_KEY", text)
         self.assertIn("DEEPSEEK_API_KEY", text)
+        self.assertIn("requirements-paper-media.txt", text)
+        self.assertIn("PaperCropper smoke OK", text)
         self.assertIn("python src/conference_pipeline.py", text)
         self.assertIn("--run-llm-refine", text)
         self.assertIn("--output-dir \"archive/${RUN_DATE}/filtered\"", text)
@@ -69,10 +73,13 @@ class ConferenceWorkflowAndUiTest(unittest.TestCase):
         self.assertTrue((root / "requirements-cpu.txt").exists())
         bootstrap = (root / "scripts" / "bootstrap_local.sh").read_text(encoding="utf-8")
         requirements = (root / "requirements.txt").read_text(encoding="utf-8")
+        paper_media_requirements = (root / "requirements-paper-media.txt").read_text(encoding="utf-8")
         self.assertIn('INSTALL_MODE="${DPR_INSTALL_MODE:-remote}"', bootstrap)
         self.assertIn("python -m pip install -r requirements.txt", bootstrap)
         self.assertIn("PyMuPDF", requirements)
         self.assertIn("opencv-python-headless", requirements)
+        self.assertIn("albumentations", paper_media_requirements)
+        self.assertIn("thop", paper_media_requirements)
         server = (root / "src" / "local_debug_server.py").read_text(encoding="utf-8")
         self.assertIn("src/conference_pipeline.py", server)
         self.assertIn("src/conference_sidebar.py", server)
