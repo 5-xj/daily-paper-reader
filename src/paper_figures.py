@@ -21,9 +21,6 @@ MIN_FIGURE_HEIGHT = 180
 MIN_FIGURE_AREA = 120_000
 WEBP_QUALITY = 82
 FIGURE_META_VERSION = 2
-PDFFIGURES2_JAR_ENV = "PDFFIGURES2_JAR"
-PDFFIGURES2_DEFAULT_CACHE = os.path.expanduser("~/.cache/dpr-tools/pdffigures2/pdffigures2.jar")
-PDFFIGURES2_REPO_CACHE = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "tools", "pdffigures2.jar"))
 PAPERCROPPER_SCRIPT_ENV = "PAPERCROPPER_SCRIPT"
 PAPERCROPPER_DIR_ENV = "PAPERCROPPER_DIR"
 PAPERCROPPER_MODEL_ENV = "PAPERCROPPER_MODEL"
@@ -148,18 +145,6 @@ def _download_pdf_bytes(pdf_url: str, timeout: int = 90) -> bytes:
     )
     resp.raise_for_status()
     return resp.content
-
-
-def _resolve_pdffigures2_jar() -> str:
-    candidates = [
-        str(os.getenv(PDFFIGURES2_JAR_ENV) or "").strip(),
-        PDFFIGURES2_DEFAULT_CACHE,
-        PDFFIGURES2_REPO_CACHE,
-    ]
-    for candidate in candidates:
-        if candidate and os.path.exists(candidate):
-            return candidate
-    return ""
 
 
 def _truthy_env(name: str) -> bool:
@@ -381,113 +366,6 @@ def _extract_media_with_papercropper(
         return figures, tables
 
 
-def _extract_figures_with_pdffigures2(
-    pdf_path: str,
-    output_dir: str,
-    relative_prefix: str,
-) -> List[Dict[str, Any]]:
-    jar_path = _resolve_pdffigures2_jar()
-    java_path = shutil.which("java")
-    if not jar_path or not java_path:
-        return []
-
-    with tempfile.TemporaryDirectory(prefix="pdffigures2_") as tmp_root:
-        input_dir = os.path.join(tmp_root, "input")
-        data_dir = os.path.join(tmp_root, "data")
-        image_dir = os.path.join(tmp_root, "images")
-        os.makedirs(input_dir, exist_ok=True)
-        os.makedirs(data_dir, exist_ok=True)
-        os.makedirs(image_dir, exist_ok=True)
-
-        base_name = os.path.basename(pdf_path)
-        truncated = os.path.splitext(base_name)[0]
-        tmp_pdf = os.path.join(input_dir, base_name)
-        shutil.copy2(pdf_path, tmp_pdf)
-
-        cmd = [
-            java_path,
-            "-Dsun.java2d.cmm=sun.java2d.cmm.kcms.KcmsServiceProvider",
-            "-jar",
-            jar_path,
-            input_dir,
-            "-g",
-            data_dir + os.sep,
-            "-m",
-            image_dir + os.sep,
-            "-f",
-            "png",
-            "-q",
-        ]
-        proc = subprocess.run(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            check=False,
-        )
-        if proc.returncode != 0:
-            return []
-
-        json_path = os.path.join(data_dir, f"{truncated}.json")
-        if not os.path.exists(json_path):
-            return []
-        try:
-            with open(json_path, "r", encoding="utf-8") as f:
-                payload = json.load(f) or {}
-        except Exception:
-            return []
-
-        raw_figures = payload.get("figures") if isinstance(payload, dict) else None
-        if not isinstance(raw_figures, list):
-            return []
-
-        os.makedirs(output_dir, exist_ok=True)
-        figures: List[Dict[str, Any]] = []
-        seen_hash: set[str] = set()
-        fig_index = 1
-        for item in raw_figures:
-            if not isinstance(item, dict):
-                continue
-            render_url = str(item.get("renderURL") or item.get("renderUrl") or "").strip()
-            if not render_url or not os.path.exists(render_url):
-                continue
-            try:
-                width, height = _load_image_size(render_url)
-            except Exception:
-                continue
-            if width < MIN_FIGURE_WIDTH or height < MIN_FIGURE_HEIGHT or width * height < MIN_FIGURE_AREA:
-                continue
-            try:
-                with open(render_url, "rb") as f:
-                    sha = hashlib.sha256(f.read()).hexdigest()
-            except Exception:
-                continue
-            if sha in seen_hash:
-                continue
-            seen_hash.add(sha)
-
-            file_name = f"fig-{fig_index:03d}.webp"
-            abs_path = os.path.join(output_dir, file_name)
-            width, height = _save_webp_from_path(render_url, abs_path)
-            page = int(item.get("page") or 0) + 1
-            caption = str(item.get("caption") or "").strip()
-            figures.append(
-                {
-                    "url": "/".join([relative_prefix.strip("/"), file_name]),
-                    "caption": caption,
-                    "page": page,
-                    "index": fig_index,
-                    "width": width,
-                    "height": height,
-                }
-            )
-            fig_index += 1
-
-        if figures:
-            _save_figures_meta(os.path.join(output_dir, "meta.json"), figures, extractor="pdffigures2")
-        return figures
-
-
 def extract_figures_from_pdf(
     pdf_path: str,
     output_dir: str,
@@ -618,7 +496,4 @@ def ensure_paper_media(
         if figures or tables:
             return figures, tables
 
-        figures = _extract_figures_with_pdffigures2(tmp_pdf.name, figure_dir, figure_relative_prefix)
-        if figures:
-            return figures, []
         return extract_figures_from_pdf(tmp_pdf.name, figure_dir, figure_relative_prefix), []
