@@ -1,0 +1,1376 @@
+Title: Beyond the Frontier: Stochastic Backtracking for Efficient Test-Time Scaling
+
+URL Source: https://arxiv.org/pdf/2605.25143v1
+
+Published Time: Tue, 26 May 2026 01:24:10 GMT
+
+Number of Pages: 31
+
+Markdown Content:
+# Beyond the Frontier: Stochastic Backtracking for Efficient Test-Time Scaling 
+
+Dao Tran ∗
+
+, Duc Anh Le ∗
+
+, Ngoc Luu, Quan Pham, Tung Pham, Hung Bui 
+
+Qualcomm AI Research †
+
+## Abstract 
+
+Test-time scaling improves language-model reasoning by spending additional com-pute to explore multiple solution trajectories. The key challenge is to maximize accuracy while minimizing the total number of generated tokens during reasoning. Recent PRM-guided methods score intermediate prefixes to steer this search, but most are frontier-only: they keep only the current active prefixes and irreversibly prune or resample away the rest using noisy PRM scores. This can cause pre-mature commitment, diversity collapse, and the loss of prefixes that still admit correct continuations. We introduce stochastic backtracking over a persistent pool 
+
+of historical prefixes, allowing test-time compute to revisit previously generated states instead of only expanding the current frontier. To make this efficient, we propose two complementary mechanisms. Subpool Selection strengthens greedy PRM-guided search by applying Top-N selection within random subpools, giving historical prefixes a chance to bypass over-scored frontier candidates. Power Back-track Sequential Monte Carlo extends SMC-style resampling to the persistent pool using powered PRM scores and mixture-corrected weights. Across mathematical reasoning benchmarks and model scales, our methods consistently achieve higher accuracy per token count, and the same level of accuracy using only a fraction of the token count in comparison to strong PRM-guided baselines, demonstrating that persistent-pool stochastic backtracking provides a simple and effective way to improve the accuracy–token trade-off in test-time scaling. 
+
+## 1 Introduction 
+
+Test-time scaling (TTS) [ 34 , 17 , 12 ] improves LLM reasoning by spending additional inference-time compute to explore, verify, or refine reasoning trajectories. This paradigm is especially attractive for mathematical reasoning, where a fixed model may fail under one decoding path but succeed when allowed to explore alternatives [ 26 , 4]. Recent works [ 45 , 19 ] have shown that such compute can substantially improve reasoning performance, but these gains depend on allocating additional tokens effectively rather than spending them on unproductive paths. A common way to allocate test-time compute is to use process reward models (PRMs) [ 58 , 49 , 56 , 29 ]to score prefixes, i.e., partial answers. Unlike outcome reward models [ 46 , 36 , 15 , 57 ], which score only complete solutions, PRMs provide step-level signals that allow beam search [ 45 ], tree search [54 ], and sequential Monte Carlo methods [ 60 , 8, 40 , 10 ] to prioritize promising partial trajectories before a full solution is generated. This makes PRM-guided search more adaptive than Best-of-N [ 4]or self-consistency [ 51 ], which primarily operate over independently generated complete samples. However, PRM scores are imperfect proxies for downstream correctness: they can be noisy, locally ambiguous, and mismatched to the continuation behavior of the deployed generator [58, 39, 61]. 
+
+> ∗Contributed equally
+> †Qualcomm AI Research is an initiative of Qualcomm Technologies, Inc. Preprint.
+> arXiv:2605.25143v1 [cs.AI] 24 May 2026
+
+This imperfection is especially damaging in frontier-only search. Many PRM-guided test-time scaling methods form the next search state only from newly generated children, discarding other previously generated prefixes. This frontier-only memory structure turns noisy intermediate scores into irreversible decisions. An under-scored prefix can be removed from future expansion even if it still admits a correct continuation, while an over-scored incorrect prefix can continue to receive compute. Thus, the failure mode is not merely that PRMs are imperfect, but that frontier-only search makes local errors permanent. We propose stochastic backtracking over a persistent pool of historical prefixes. Instead of restricting the next search state to newly generated children, the search keeps previously generated prefixes eligible for future expansion. Importantly, persistent pooling does not store the full exponentially 
+
+growing search tree. Each expansion round generates a fixed budget of N new prefixes, so after 
+
+t rounds the full persistent pool contains at most N t prefixes. Persistent pooling is therefore a linear-memory alternative to irreversible frontier-only search. Persistence alone, however, is not sufficient. Greedy selection over the full historical pool can still be dominated by a few over-scored incorrect prefixes, while uniform sampling from history wastes tokens on stale or low-quality states. We therefore introduce two stochastic selection rules that preserve access to underestimated prefixes while retaining PRM guidance. Subpool Selection strengthens greedy PRM-guided search by selecting top candidates within random historical subpools, allowing prefixes blocked by frontier nodes to be reconsidered. Power Backtrack SMC extends SMC-style sampling to sequential multiple-importance-sampling over a persistent pool using powered PRM scores and mixture-corrected weights, enabling stochastic recovery from earlier pruning decisions. 
+
+Contributions. We introduce stochastic backtracking over a persistent pool of historical prefixes for token-efficient test-time scaling. We instantiate this framework with two complementary methods: Subpool Selection, which ranks candidates within random shortlists to bypass over-scored blockers, and Power Backtrack SMC, which extends SMC-style sampling to sequential multiple-importance-sampling over historical prefixes using powered PRM scores and mixture-corrected weights. Across mathematical reasoning benchmarks and model scales, our methods improve the accuracy–token trade-off over strong PRM-guided baselines, showing that historical access reduces premature commitment in test-time scaling. 
+
+## 2 Related Work 
+
+Test-Time Scaling. Test-time scaling improves LLM performance by increasing inference-time computation, typically through either parallel or sequential scaling. Parallel scaling generates multiple independent candidates and selects or aggregates among them, as in self-consistency [ 51 , 35 , 6], Best-of-N [ 4, 24 , 45 ], and related sampling-based approaches [ 50 , 30 ]. In contrast, sequential scaling adaptively spends compute within a reasoning process, extending or revising trajectories through longer deliberation or instance-dependent compute [ 17 , 12 , 34 , 38 ]. Hybrid scaling combines these modes by maintaining broad exploration across alternatives while sequentially expanding promising partial trajectories, including beam and lookahead search [ 45 ], Tree of Thoughts or Graph of Thoughts [ 54 , 3], and reward-filtered search procedures [ 45 , 54 , 3 , 55 , 23 ]. Our method belongs to this hybrid family, but focuses on how the search state is retained and revisited under a token-efficiency objective. 
+
+Sequential Monte Carlo. SMC methods maintain a weighted population of particles that are iteratively propagated, weighted, and resampled to approximate complex posterior distributions, making them a natural fit for sequential conditional generation tasks [ 60 ]. For language models, twisted SMC constructs learned proposal distributions that reshape generation toward high-reward completions [ 60 ], with direct application to step-level resampling in mathematical reasoning [ 8, 40 ]. Related work explores controlled generation via posterior inference [ 52 ], adaptive rejection sampling [ 25 ], model ensembling [ 5], and SMC-based steering [ 21 , 11 , 27 ]. Entropic Particle Filter [ 10 ]proposed to anneal the resampling weights of the particle filter, therefore regularize the resampling over the current frontier to avoid premature exploitation in test-time scaling; whereas our PB-SMC changes the support of resampling by keeping historical prefixes eligible across rounds. The persistent pool in our backtracking SMC method is motivated by Persistent Sampling [ 18 ], originally proposed for Bayesian parameter inference. In order to reduce the impoverishment of the set of parameter-represented particles overtime, persistent sampling allows particles from previous iterations to persist in a growing weighted ensemble and resampling from the mixture of past distributions using multiple-importance sampling [ 47 ]. We first extend persistent sampling 2framework to the case of sequential non-Markovian state space inference given a terminal likelihood, and then show its effective application for test-time scaling in LLM reasoning. 
+
+Backtracking in LLMs. Several works train or prompt models to revise their own outputs, either through iterative self-correction or refinement of completed solutions [ 31 , 42 , 13 , 20 ]. These methods learn a corrective policy over one or a few solution attempts, whereas our method keeps the base generator fixed and changes the test-time search state. Other work studies explicit backtracking as sequential search in language, showing that its benefits depend strongly on task structure and training procedure [ 9, 41 ]. Closest to our setting are verifier-guided backtracking methods that use process feedback to revise partial generations: preemptive backtracking identifies a problematic step in a single trace and resamples its suffix [ 44 ], while VGB [ 43 ] treats generation as a verifier-guided random walk on a tree with probabilistic backtracking. In contrast, we maintain a persistent pool of historical prefixes across PRM-guided search and stochastically choose which prefixes to expand next, focusing on history-aware compute allocation rather than self-correction within a trajectory. Our Subpool Selection follows the selective-candidate-set idea in SeeA* [ 59 ], which samples a subset of all nodes and expands the best node within the subset rather than the globally best node; in our setting, the set of nodes becomes a persistent pool of PRM-scored reasoning prefixes, and the sampled subset helps greedy selection to bypass over-scored blockers under noisy PRM guidance. 
+
+## 3 Problem Setup and Frontier-Only Failure 
+
+In this section, we present the problem setup, the mechanism of known TTS methods used in this work and discuss the problem of irreversible frontier-only selection and noisy PRM score. 
+
+3.1 Prefix, traces and PRM scores 
+
+Given a prompt x0, let xt denote the t-th reasoning step generated by LLMs. Denote x1: t =(x1, . . . , x t) be a prefix, the probability of the prefix is calculated by the LLM as follows 
+
+pLLM (x1: t | x0) = 
+
+> t
+
+Y
+
+> s=1
+
+pLLM (xs | x0, x 1: s−1).
+
+For simplicity, we suppress x0 from formulas. Let x1: T denote a complete trace with extracted answer 
+
+Ans( x1: T ) and ϕ(Ans( x1: T )) ∈ { 0, 1} be the correctness indicator of the answer x1: T . The target is to estimate the density of correct answers 
+
+σ(x1: T ) ∝ pLLM (x1: T ) ϕ(Ans( x1: T )) . (1) Let σ(x1: t) = P 
+
+> xt+1: T
+
+σ(x1: T ). If the marginal σ(x1: t) is positive, then the prefix x1: t is correct up until time t and we can roll out to obtain a final correct answer. Otherwise if it equals zero, then all of the continuation from x1: t will produce wrong answer. Subsequently, we also use the short notation z
+
+to refer to a prefix when the context is clear. In practice, PRMs such as Qwen2.5-Math-PRM-7B [ 58 ] are trained on binary labels rather than on the probability that the deployed base LLM will complete a prefix correctly. Therefore, the PRM score rPRM (x1: t) should be viewed as a learned proxy for prefix correctness, sensitive to the PRM labeling procedure, not as the ideal prefix target σ(x1: t) = P 
+
+> xt+1: T
+
+σ(x1: T ) or as a calibrated value function for the generator [ 48 , 28 ]. This proxy mismatch can affect test-time search. A prefix may receive a high PRM score because it can be completed by the stronger rollout policy used during PRM supervision, even though the deployed base LLM is unlikely to complete it correctly. Conversely, a prefix that the base LLM could complete may be under-scored because of rollout variance, annotation noise, or PRM generalization error. Frontier-only pruning is therefore brittle: it can turn a local mismatch between PRM score and the ideal prefix target into an irreversible search decision. 
+
+3.2 PRM-guided search as prefix selection 
+
+The Best-of-N method samples independent complete traces and make decision based on the PRM’s evaluation only on terminal candidates. The Beam search keeps a frontier of prefixes, expands selected parents, and deterministically retains the top-scoring children. Meanwhile, at step t, the SMC has in hand a pool of weighted frontiers Pt−1, from the previous step. The SMC samples from this pool to obtain a multiset and use LLM to extend it to obtain a new set of prefixes denote by Bt.This multiset with normalized weights will become the new pool Pt for the next step. 3Figure 1: Schematic comparison of frontier-only search and persistent-pool backtracking. Frontier-only methods keep only the newly generated children Bt, so prefixes not selected into the next frontier cannot be revisited. Greedy Selection keeps a persistent pool and applies global top ranking, but older correct prefixes are blocked by (always scored lower than) prefixes already selected at t − 1.SPS resolves this by ranking only inside a random subpool, giving blocked historical prefixes another chance to be expanded. Power Backtrack SMC keeps historical prefixes through weighted resampling, combining a retained historical multiset St with newly generated children Bt.
+
+3.3 Irreversible frontier-only selection 
+
+The above-mentioned methods have a weakness that is if a prefix z is not in the frontier Bt, then it will be absent in next pool Pt. Consequently, it will be never considered again. However, because the PRM could be noisy, thus its score for correct prefix could lower compared to that of incorrect prefixes, there is a chance that prefix is missed out due to its low score. Then the loss of missing a correct answer is incurred permanently just because the mechanism of frontier-only selection. To solve this problem, we introduce the persistent-pool and backtracking mechanisms in the next section. 
+
+## 4 Persistent-Pool Stochastic Backtracking 
+
+4.1 Master Algorithm 
+
+At step t, the algorithm maintains a multiset Pt−1 of prefixes, PRM scores rPRM (z), and selection weights Wt−1(z) ≥ 0 for any z ∈ P t−1. A selection rule ft chooses a multiset of M parents 
+
+At = ft(Pt−1; Wt−1). Each selected parent is expanded by the base LLM to produce B = N/M 
+
+children, so there will be exactly N new prefixes; we denote this child multiset by Bt. An update rule Gt is to construct a new pool of prefixes (Pt, W t) = Gt(Pt−1, Bt) with new weights Wt.Since the new pool Pt could consist of prefixes from pool Pt−1 of the previous step, we name it the persistent pool . In our proposed algorithms Subpool Selection and backtracking SMC, we use different mechanisms to build the persistent pool. 
+
+Algorithm 1 Persistent-Pool Master Algorithm 
+
+Require: prompt x0, child budget N , parent budget M , horizon T , selection rules ft, memory updates Gt. 
+
+> 1:
+
+Initialize P0 with N one-step samples from pLLM (· | x0) and set W0(z) ← rPRM (z) for all 
+
+z ∈ P 0. 
+
+> 2:
+
+for t = 1 , . . . , T do  
+
+> 3:
+
+Select parents At ← ft(Pt−1; Wt−1) as a multiset of size M . 
+
+> 4:
+
+Generate Bt ← S 
+
+> c∈A t
+
+LLM-E XPAND (c, B ) with B = N/M children per parent.  
+
+> 5:
+
+For every z ∈ B t compute its PRM score rPRM (z). 
+
+> 6:
+
+Update memory and weights: Pt, W t ← Gt(Pt−1, Bt). 
+
+> 7:
+
+end for  
+
+> 8:
+
+Return final candidates from PT by terminal ranking. Figure 1 summarizes the key idea: stochastic backtracking preserves PRM guidance, but changes the memory and selection mechanism so that historical prefixes remain eligible for future compute. To keep peak memory bounded, we store KV caches only for prefixes currently being expanded. At step t, we maintain KV states only for the generated children Bt. Historical prefixes in Pt are kept 4as text states and PRM scores, not as live KV states. When the search backtracks to an older prefix 
+
+z = x1: i, we recompute its KV state before expansion. Thus backtracking adds a small compute overhead, but peak KV memory remains bounded by the N rather than by |P t|. Our experiment results in 6.3 show that the compute overhead is negligible compared to the gain in accuracy. A persistent pool will grow with time and the low-quality prefixes could remain in the pool because of the selectors. For example, a naive global top M selection rule will keep choosing the over-scored incorrect prefixes overtime, meanwhile a uniform sampling method could select low-score incorrect prefixes. These observations motivate us to introduce two types of algorithms based on adjusting searching and sampling. More particular, we introduce Subpool Selection to search for potential correct prefixes (Section 5.1) . For sampling direction, we introduce Power Backtrack SMC by sampling with replacement from a powered, mixture-corrected persistent pool (Section 5.2). 
+
+4.2 Instantiations of the master algorithm 
+
+Algorithm 1 is a generalized algorithm covering both frontier-only baselines and our persistent-pool variants. In Table 1, the selection rule Top( Pt−1, W t−1, M ) means we choose top M elements from the pool Pt−1 based on the associated weights Wt−1, and sample with replacement with M = N
+
+means sampling from multinominal distribution built on pool Pt−1 with normalized weights Wt.In our PB-SMC, we set M = N : each selected parent generates one child, matching the standard resample-and-propagate particle update. For a newly generated prefix z ∈ B t, let pa( z) denote the parent prefix of z.                                                         
+
+> Method Parent selection ftMemory update Gt
+> Beam search Top( Pt−1, W t−1, M ).Frontier-only: Pt=Btand Wt(z) = rPRM (z)for z∈ B t.Standard SMC Sample with replacement with M=
+> Nfrom Pt−1with weights Wt−1.Frontier-only: Pt=Btwith incremental weights, e.g.
+> Wt(z) = rPRM (z)/r PRM (pa( z)) .Greedy Selection Top( Pt−1, W t−1, M ).Persistent union: Pt=Pt−1⊎ B tand Wt(z) = rPRM (z).Subpool Selection (SPS) sample Dt⊆Pt−1,then
+> Top( Dt, W t−1, M ).Same persistent union and weights as Greedy Selection; only the selection rule changes; see (2). Power Backtrack SMC Sample with replacement with M=
+> Nfrom Pt−1with weights Wt−1.Sample with replacement N t particles from (Pt−1;Wt−1)
+> and union with Bt; assign mixture-proposal weights by (4).
+
+Table 1: Instantiation of Algorithm 1. Beam search and standard SMC are frontier-only because their next pool contains only Bt. Greedy Selection, SPS, and Power Backtrack SMC keep historical prefixes selectable, either by multiset union or by resampling historical particles. 
+
+## 5 Algorithms 
+
+We now describe our two algorithms in details: Subpool Selection and Power Backtrack SMC. 
+
+5.1 Subpool Selection 
+
+We first introduce persistent Greedy Selection algorithm and explain the blocker problem. Then we present our Subpool Sampling algorithm. 
+
+5.1.1 Greedy Selection and the blocker problem 
+
+Let us consider the simple case where Top( Pt−1, W t−1, M ) as selection rule is greedy; at each round, it simply selects M parents by deterministic top M ranking of the scores, expands each selected parent to generate B = N/M children, and retains both old and new prefixes by updating 
+
+Pt = Pt−1 ⊎ B t. It then assigns Wt(z) = rPRM (z) to every retained prefix and selects the next parents as At+1 = Top( Pt ; Wt ; M ). The full procedure is given in algorithm 2 (see the Appendix). Now suppose that the selected parents at time t are the current global top M prefixes. Because their scores are at least as large as the scores of all unselected previous particles, the next global top M
+
+prefixes will be chosen from only those parents and their newly generated children. Hence, greedy selection can never revisit or backtrack to any prefix older than the parents. We name this the greedy selection blocker problem. To deal address this, we next present our proposed algorithm named Subpool Selection (SPS) combining random subpool and top M selection. 55.1.2 Subpool Selection (SPS) 
+
+SPS constructs a persistent pool, but instead selecting top prefixes from the whole pool, it does the selection on a random subpool Dt ⊆ P t−1 of size 
+
+Kt = |D t| = max {M, ⌊ρt|P t−1|⌋} , , (2) where ρt is the subpooling ratio at time step t. In practice, the PRM takes value between [0 , 1] , we use an adaptive subpooling ratio as the PRM mean ρt = |P t−1|−1 P 
+
+> z∈P t−1
+
+rPRM (z). By selecting the top M candidates within a random subpool, a correct prefix that is poorly ranked in the global pool has a higher chance of being selected. This mirrors selective-sampling heuristic search such as SeeA ∗, where the expanded node is best in a sampled subset rather than necessarily best in a larger set [ 59 ]. The size of subpool depends on parameter ρt. A smaller value ρt means that the PRM has weak confidence over the whole pool, then we should keep a smaller subpool to avoid the high-score incorrect prefixes and otherwise. 
+
+5.2 Power Backtrack SMC 
+
+We now describe our approach to introduce backtracking to SMC-sampling methods. 
+
+5.2.1 Persistent-pool target 
+
+In Power Backtrack SMC (PB-SMC), the initial pool P0 consists of one-step samples, after round 
+
+t the pool can contain prefixes with length at most t + 1 ; see Algorithm 4 (Appendix). Let Xs
+
+be the set of prefixes with exactly s reasoning steps. In step t, our algorithm will sample from 
+
+X≤t+1 := St+1  
+
+> s=1
+
+Xs. This is the key departure from standard frontier-only SMC, whose prefixes at step t are restricted to the current frontier Xt+1 .Recall that pLLM (z) is the LLM prefix probability and and rPRM (z) > 0 is the PRM score of prefix 
+
+z. For any prefix z, we use function len to indicate the length of z . For βt ≥ 0 and z ∈ X ≤T +1 , we define the powered density function at step tπ(βt) 
+
+> t
+
+(z) := eπ(βt) 
+
+> t
+
+(z)
+
+P  
+
+> y∈X ≤T+1
+
+eπ(βt) 
+
+> t
+
+(y) where eπ(βt) 
+
+> t
+
+(z) := pLLM (z)rPRM (z)βt 1{len( z) ≤ t + 1 }.
+
+(3) Using the power βt on the PRM score will downweight low-score prefixes and accenturate high-score prefixes before normalizing and sampling. 
+
+5.2.2 Expansion and memory 
+
+At round t, we sample N parents with replacement from Pt−1 using normalized weights Wt−1 and expands each selected parent to produce the new-child multiset Bt. To keep a pool of size N t of important historical prefixes, PB-SMC samples a retained multiset St of size N t with replacement from Pt−1 with normalized weights Wt−1. Then we form a joint pool of historical prefixes and newly-generated prefixes Pt = St ⊎ B t with |P t| = N (t + 1) . At time t, we have a mixture proposal, qmix  
+
+> t
+
+= αtqnew  
+
+> t
+
++ (1 − αt)qhist  
+
+> t
+
+, similar to multiple-importance-sampling [ 47 ]. The qnew 
+
+> t
+
+is the distribution of prefix from the previous powered distribution and applies one LLM expansion step, while the qhist  
+
+> t
+
+is distribution of existing prefix from the previous powered distribution without expansion. The coefficient αt controls the balance between newly generated children and retained historical particles. Appendix B gives the formulas for the weights and the parameters αt and βt.
+
+5.2.3 Mixture-corrected weights 
+
+For prefix z ∈ P t, let pa( z) denote its parent prefix, if pa( z) = x0, then len( z) = 1 . Set rPRM (x0) = 1. The weight update assigns unnormalized weights inductively 
+
+Wt(z) := 
+
+
+
+αtFt(z), z ∈ B t,
+
+(1 − αt) Ft(z)
+
+t , z ∈ S t, (4) 6where 
+
+Ft(z) := 
+
+ rPRM (z)
+
+rPRM (pa( z)) 
+
+βt−1
+
+rPRM (z)βt−βt−1
+
+αt1{len( z) ≥ 2} + (1 − αt)
+
+ rPRM (z)
+
+rPRM (pa( z)) 
+
+βt−1
+
+1{len( z) ≤ t}
+
+. (5) 
+
+Theorem 1 (PB-SMC targets the powered proxy distribution) . Fix horizon T and a finite prefix space X≤T +1 . Assume 0 < R min ≤ rPRM (z) ≤ Rmax < ∞ for some constants Rmin and Rmax ,
+
+0 < α t < 1, and the LLM expansion kernel is normalized. Let bπNt be the weighted empirical distribution (produced by PB-SMC) with support Pt and associated weight Wt. Then, for every fixed 
+
+t ≤ T and bounded function f : X≤T +1 → R,
+
+Ebπ(N )
+
+> t
+
+[f (X)] := 
+
+P 
+
+> z∈P t
+
+Wt(z)f (z)
+
+P 
+
+> z∈P t
+
+Wt(z)
+
+> p
+
+−−−−→  
+
+> N→∞
+
+Eπ(βt)
+
+> t
+
+[f (X)] .
+
+If βt is computed by the schedule in Appendix B.4, the same statement holds for the adaptive powers. 
+
+Theorem 1 says that the Power Backtrack SMC estimator converges in probability to the powered PRM-defined proxy target at each fixed round, ensuring asymptotic correctness with respect to the proxy objective. 
+
+## 6 Experiments 
+
+We evaluate whether persistent-pool backtracking improves the accuracy–compute trade-off in PRM-guided test-time scaling. Section 6.1 summarizes our experimental setup. We then report main results across four mathematical reasoning benchmarks, analyze scaling behavior under varying token and runtime budgets, and study the effects of historical backtracking and stochastic persistent-pool access. 
+
+6.1 Experimental Setup Datasets. We evaluate on MATH500 [ 24 ], AMC23 [ 32 ], AIME24 [ 33 ], and Minerva Math [ 22 ], covering intermediate to advanced mathematical reasoning tasks. Full details are in Appendix C.1. 
+
+Models and PRMs. We conduct experiments with three language models of varying scales: Qwen2.5-7B-Instruct, Qwen2.5-3B-Instruct [ 53 ], and Phi-4-mini-Instruct [ 1]. In the main paper, we use Qwen2.5-Math-PRM-7B [58] as the default PRM. 
+
+Baselines and Implementation. We compare with model-default decoding, Self-Consistency [ 51 ], Best-of-N [ 4], Beam Search [ 45 ], SMC [ 40 ], MCTS [ 16 ], and DVTS [ 2 ]. We additionally report Pass@32 [ 7 ], computed over 32 independently sampled solutions, as a reference for the performance attainable with a larger sampling budget. All sampling methods use temperature 0.7. Baselines use N = 32 expansions per step, whereas PB-SMC uses N = 8 . For all main experiments with SPS, we set M = N = 8 , allowing us to evaluate whether persistent-pool backtracking can achieve competitive performance under a smaller expansion budget. Results are averaged over 5 seeds for AMC23 and AIME24, and 3 seeds for Minerva Math and MATH500. 
+
+6.2 Main Results 
+
+Table 2 presents our main experimental results comparing PB-SMC and SPS against competitive baselines across four mathematical reasoning benchmarks. We report results for two representative LLMs in the main paper; more results including all three LLMs are provided in Appendix C.2. Across the reported model–benchmark pairs, our proposed methods consistently match or outperform com-petitive baselines while using substantially fewer tokens. Notably, both methods achieve competitive accuracy using only N = 8 candidates compared to N = 32 candidates for all baselines. Averaged across all model–benchmark pairs (Appendix C.2), SPS improves accuracy while reducing token consumption by 49.4%, and PB-SMC improves accuracy with a 36.7% token reduction. On Qwen2.5-7B-Instruct, SPS achieves the best overall performance, reaching 54 .66% average accuracy and outperforming strong PRM-guided baselines such as DVTS ( 51 .40% ) and Beam Search (52 .12% ) while consuming fewer generated tokens. On Phi-4-mini-Instruct, PB-SMC obtains the highest overall accuracy ( 48 .69% ). These results show that the two proposed backtracking methods provide consistent gains across different LLMs, with SPS performing strongest on Qwen2.5-7B-Instruct and PB-SMC performing strongest on Phi-4-mini-Instruct. 7Table 2: Comparison of test time scaling methods across benchmarks and models. We report accuracy (Acc, ↑ better) and token usage (#Tokens, ↓ better) across four benchmarks. Results include mean and standard deviation over 5 random seeds for AMC23 vs AIME24 and 3 random seeds for Minerva vs MATH500. Bold indicates best performance; underline indicates runner-up. 
+
+Minerva Math500 AMC23 AIME24 Average Method N Accuracy ↑ #Tokens ↓ Accuracy ↑ #Tokens ↓ Accuracy ↑ #Tokens ↓ Accuracy ↑ #Tokens ↓ Accuracy ↑ #Tokens ↓
+
+Qwen2.5-7B-Instruct 
+
+Base Model 1 34.68 ±1.12 617 76.00 ±0.80 584 54.50 ±2.92 874 11.33 ±1.63 1039 44.13 779 Pass@ k† 32 52.33 ±0.21 19765 93.67 ±0.12 18788 90.50 ±2.45 27979 31.33 ±3.40 33262 66.96 24949 Self-Consistency 32 38.85 ±0.56 19765 83.27 ±0.31 18788 62.00 ±1.87 27979 16.67 ±0.00 33262 50.20 24949 Best-of-N 32 38.48 ±0.42 19765 86.40 ±0.20 18788 65.00 ±1.58 27564 20.67 ±1.33 33344 52.64 24865 Beam Search 32 40.20 ±0.56 23900 86.27 ±0.31 22771 62.00 ±2.92 39195 20.00 ±2.11 55150 52.12 35254 DVTS 32 39.22 ±0.43 23549 86.73 ±0.23 22978 63.00 ±1.00 34670 16.67 ±2.11 46725 51.41 31981 MCTS 32 36.27 ±0.87 25208 78.47 ±0.81 22006 58.00 ±1.00 30328 16.67 ±1.33 35644 47.35 28297 SMC 32 40.32 ±0.94 21642 86.67 ±0.41 23307 62.00 ±3.54 35546 18.65 ±2.66 41031 51.91 30382 
+
+PB-SMC (ours) 8 41.79 ±0.56 13216 87.47 ±0.31 10628 66.50 ±2.85 17637 19.33 ±1.50 27581 53.77 17266 
+
+SPS (ours) 8 43.26 ±0.77 9387 87.87 ±0.70 9076 67.50 ±2.50 22446 20.00 ±2.37 24347 54.66 16314 Phi-4-mini-Instruct 
+
+Base Model 1 23.90 ±1.11 535 62.80 ±0.80 525 42.50 ±3.54 781 7.33 ±3.27 948 34.13 697 Pass@ k† 32 54.53 ±0.21 17119 91.07 ±0.12 16774 79.00 ±3.39 25003 28.67 ±5.81 30316 63.32 22303 Self-Consistency 32 33.70 ±0.21 17119 77.00 ±0.40 16774 53.50 ±2.55 25003 13.33 ±0.00 30316 44.38 22303 Best-of-N 32 34.80 ±0.42 17119 80.80 ±0.20 16774 50.50 ±4.30 25003 14.67 ±2.67 30316 45.19 22303 Beam Search 32 33.46 ±0.37 23768 81.20 ±0.20 21397 56.50 ±4.06 37513 16.00 ±3.89 39635 46.79 30578 DVTS 32 33.82 ±0.74 22140 81.53 ±0.12 20956 55.00 ±2.24 36815 16.00 ±3.27 37532 46.59 29361 MCTS 32 32.75 ±2.08 23108 73.20 ±0.56 28036 55.00 ±1.50 33320 14.67 ±1.66 30316 43.91 28695 SMC 32 34.44 ±0.75 24907 81.40 ±0.59 25459 54.50 ±3.32 42574 14.00 ±0.98 45448 46.09 34597 
+
+PB-SMC (ours) 8 37.87 ±0.37 13198 82.07 ±0.50 10422 57.50 ±3.06 15547 17.33 ±3.89 21258 48.69 15106 
+
+SPS (ours) 8 35.42 ±0.56 9832 82.67 ±0.50 7959 57.00 ±2.92 13497 16.00 ±1.33 15056 47.77 11586 
+
+(a) Accuracy vs token budget. (b) Accuracy vs runtime. 
+
+Figure 2: Accuracy–compute trade-off on MATH500 using Qwen2.5-7B-Instruct. Each curve varies the number of parallel trajectories from N = 4 to N = 64 . Panel (a) reports accuracy versus generated tokens, while panel (b) reports accuracy versus wall-clock runtime. PB-SMC and SPS improve the Pareto front under both compute measures, achieving higher accuracy at a fixed budget or requiring less compute for a target accuracy. 
+
+6.3 Accuracy vs Compute Budget 
+
+To understand how our methods scale with token budget, we vary the number of parallel trajectories 
+
+N ∈ { 4, 8, 16 , 24 , 32 , 48 , 64 } and plot accuracy versus average number of generated tokens on MATH500 using Qwen2.5-7B-Instruct (Fig. 2). This visualization reveals the accuracy-token Pareto front: better methods lie higher and further left, achieving higher accuracy with fewer tokens. 
+
+Backtracking methods improve the accuracy–token trade-off on MATH500. Figure 2(a) shows that PB-SMC and SPS consistently achieve significantly more favorable accuracy–token trade-off than the baselines on MATH500. Across the evaluated compute range, these methods often obtain higher accuracy under comparable token budgets, or reach similar accuracy with fewer generated tokens. The gains are most visible in the moderate-compute regime (10K–25K tokens), where improving token efficiency can be particularly useful for practical deployment. 
+
+Backtracking enables efficient compute allocation. Figure 2(b) shows that the benefits of PB-SMC and SPS persist under wall-clock runtime, not only under generated-token counts. As discussed 8Table 3: Ablation of historical backtracking and stochastic persistent-pool access with Qwen2.5-7B-Instruct. We report accuracy (Acc, %, ↑ better), and average token usage (#Tokens, ↓ better). 
+
+Bold indicates best accuracy; underline indicates runner-up.                                                                                            
+
+> Minerva MATH500 AMC23 AIME24 Average Method NAcc ↑#Tokens ↓Acc ↑#Tokens ↓Acc ↑#Tokens ↓Acc ↑#Tokens ↓Acc ↑#Tokens ↓
+> SMC 16 38.73 ±0.56 10841 84.20 ±0.40 10228 59.50 ±5.70 14740 14.00 ±3.67 18725 49.11 13634 Backtrack SMC 842.89 ±0.76 13765 85.00 ±0.60 13332 62.50 ±5.59 19238 18.67 ±1.83 24228 52.27 17641 Power SMC 16 39.22 ±0.21 13274 86.00 ±0.20 11911 63.00 ±4.11 19260 16.00 ±2.80 24988 51.06 17358 Power Backtrack SMC 841.79 ±0.56 13216 87.47 ±0.31 10628 66.50 ±2.85 17637 19.33 ±1.50 27581 53.77 17266 Greedy Selection 840.07 ±0.37 9972 87.20 ±0.20 9031 62.50 ±4.68 20953 16.67 ±4.07 34033 51.61 18497
+> SPS 843.26 ±0.77 9387 87.87 ±0.70 9076 67.50 ±2.50 22446 20.00 ±2.37 24347 54.66 16314
+
+in Section 4.1, backtracking may require recomputing KV caches for historical prefixes, introducing additional overhead relative to frontier-only methods; we analyze this trade-off in more detail in Appendix C.4. Nevertheless, both methods remain competitive in runtime and the gain becomes more significant in the higher time/accuracy region, indicating that their improved selection of prefixes outweighs the cost of occasional recomputation. Thus, persistent-pool backtracking improves practical compute allocation with an acceptable compute overhead. 
+
+6.4 Effect of Backtracking 
+
+Table 3 compares frontier-only variants with their historical-pool counterparts across four mathemat-ical reasoning benchmarks. We organize the comparison into three pairs: SMC versus Backtrack SMC, Power SMC versus Power Backtrack SMC, and Greedy Selection versus SPS. Here, Greedy Selection is the deterministic historical-pool ranking rule in Section 5.1.1: it keeps the persistent pool but selects parents by global ranking. Power SMC is the frontier-only counterpart of Power Backtrack SMC in Section 5.2: it uses the same powered PRM weighting but sets Pt = Bt, without retaining historical prefixes. Thus the first two pairs isolate adding backtracking to SMC-style sampling, while the last pair isolates replacing global with stochastic subpool selection. Backtracking consistently improves SMC-style search. Backtrack SMC outperforms standard SMC on all four benchmarks, improving average accuracy from 49 .11% to 52 .27% . The same pattern holds under powered weighting: Power Backtrack SMC improves over Power SMC on every benchmark and increases average accuracy from 51 .06% to 53 .77% . These results indicate that retaining historical prefixes provides consistent gains over frontier-only resampling. Powering the PRM weights further improves SMC-style methods, suggesting that sharper reward-weighted resampling is complementary to historical backtracking. Backtracking via Subpooling in SPS improves over Greedy Selection on all four benchmarks, increasing average accuracy from 51 .61% to 54 .66% . It also achieves the highest accuracy on every benchmark, with especially large gains over standard SMC on AMC23 and AIME24. Overall, these results show that both historical backtracking and stochastic persistent-pool access contribute to the strong performance of SPS. 
+
+## 7 Conclusion 
+
+We identified irreversible frontier-only selection as a potential failure mode in PRM-guided test-time scaling: noisy intermediate scores can permanently discard prefixes that still admit correct continuations. We then introduced persistent-pool stochastic backtracking, a linear-memory alterna-tive that keeps historical prefixes eligible for future expansion without storing the full search tree. We instantiated this framework with Subpool Selection for greedy PRM-guided search and Power Backtrack SMC with mixture-corrected historical resampling for sampling-based search. Across mathematical reasoning benchmarks, our methods improve the accuracy–token trade-off over strong frontier-only baselines. One limitation is that our methods can incur additional runtime overhead when backtracking requires recomputing KV caches for historical prefixes, however empirically we show that this overhead is small comparing to the performance gain elsewhere. Our results suggest that effective test-time scaling should optimize not only how prefixes are scored, but also which prefixes remain available and should be considered for future compute. 9References 
+
+[1] A. Abouelenin, A. Ashfaq, A. Atkinson, H. Awadalla, N. Bach, J. Bao, A. Benhaim, M. Cai, V. Chaudhary, C. Chen, et al. Phi-4-mini technical report: Compact yet powerful multimodal language models via mixture-of-loras. arXiv preprint arXiv:2503.01743 , 2025. [2] E. Beeching, L. Tunstall, and S. Rush. Scaling test-time compute with open models, 2024. Blog post. [3] M. Besta, N. Blach, A. Kubicek, R. Gerstenberger, M. Podstawski, L. Gianinazzi, J. Gajda, T. Lehmann, H. Niewiadomski, P. Nyczyk, et al. Graph of thoughts: Solving elaborate problems with large language models. In Proceedings of the AAAI conference on artificial intelligence ,volume 38, pages 17682–17690, 2024. [4] B. Brown, J. Juravsky, R. Ehrlich, R. Clark, Q. V. Le, C. Ré, and A. Mirhoseini. Large language monkeys: Scaling inference compute with repeated sampling. arXiv preprint arXiv:2407.21787 ,2024. [5] R. S. M. Chan, T. Liu, S. Kiegeland, C. Pasti, J. H. Vigly, T. J. O’Donnell, R. Cotterell, and T. Vieira. Ensembling language models with sequential monte carlo. arXiv preprint arXiv:2603.05432 , 2026. [6] L. Chen, J. Davis, B. Hanin, P. Bailis, I. Stoica, M. Zaharia, and J. Zou. Are more llm calls all you need? towards the scaling properties of compound ai systems. Advances in Neural Information Processing Systems , 37:45767–45790, 2024. [7] M. Chen, J. Tworek, H. Jun, Q. Yuan, H. P. D. O. Pinto, J. Kaplan, H. Edwards, Y. Burda, N. Joseph, G. Brockman, et al. Evaluating large language models trained on code. arXiv preprint arXiv:2107.03374 , 2021. [8] S. Feng, X. Kong, S. Ma, A. Zhang, D. Yin, C. Wang, R. Pang, and Y. Yang. Step-by-step reasoning for math problems via twisted sequential monte carlo. In The Thirteenth International Conference on Learning Representations , 2025. [9] K. Gandhi, D. H. J. Lee, G. Grand, M. Liu, W. Cheng, A. Sharma, and N. Goodman. Stream of search (sos): Learning to search in language. In First Conference on Language Modeling , 2024. [10] G. Giannone, G. Xu, N. S. Nayak, R. M. Awhad, S. Sudalairaj, K. Xu, and A. Srivastava. Mitigating premature exploitation in particle-based monte carlo for inference-time scaling. 
+
+arXiv preprint arXiv:2510.05825 , 2025. [11] G. Grand, J. B. Tenenbaum, V. Mansinghka, A. K. Lew, and J. Andreas. Self-steering language models. In Second Conference on Language Modeling , 2025. [12] D. Guo, D. Yang, H. Zhang, J. Song, P. Wang, Q. Zhu, R. Xu, R. Zhang, S. Ma, X. Bi, et al. Deepseek-r1: Incentivizing reasoning capability in llms via reinforcement learning. arXiv preprint arXiv:2501.12948 , 2025. [13] A. Havrilla, S. C. Raparthy, C. Nalmpantis, J. Dwivedi-Yu, M. Zhuravinskyi, E. Hambro, and R. Raileanu. GLore: When, where, and how to improve LLM reasoning via global and local refinements. In Forty-first International Conference on Machine Learning , 2024. [14] D. Hendrycks, C. Burns, S. Kadavath, A. Arora, S. Basart, E. Tang, D. Song, and J. Steinhardt. Measuring mathematical problem solving with the MATH dataset. In J. Vanschoren and S. Yeung, editors, Proceedings of the Neural Information Processing Systems Track on Datasets and Benchmarks 1, NeurIPS Datasets and Benchmarks 2021, December 2021, virtual , 2021. [15] A. Hosseini, X. Yuan, N. Malkin, A. Courville, A. Sordoni, and R. Agarwal. V-STar: Training verifiers for self-taught reasoners. In First Conference on Language Modeling , 2024. [16] Y. Inoue, K. Misaki, Y. Imajuku, S. Kuroki, T. Nakamura, and T. Akiba. Wider or deeper? scaling LLM inference-time compute with adaptive branching tree search. In The Thirty-ninth Annual Conference on Neural Information Processing Systems , 2026. [17] A. Jaech, A. Kalai, A. Lerer, A. Richardson, A. El-Kishky, A. Low, A. Helyar, A. Madry, A. Beutel, A. Carney, et al. Openai o1 system card. arXiv preprint arXiv:2412.16720 , 2024. 10 [18] M. Karamanis and U. Seljak. Persistent sampling: Enhancing the efficiency of sequential monte carlo. Statistics and computing , 35(5):144, 2025. [19] A. Karan and Y. Du. Reasoning with sampling: Your base model is smarter than you think. In 
+
+The Fourteenth International Conference on Learning Representations , 2026. [20] A. Kumar, V. Zhuang, R. Agarwal, Y. Su, J. D. Co-Reyes, A. Singh, K. Baumli, S. Iqbal, C. Bishop, R. Roelofs, L. M. Zhang, K. McKinney, D. Shrivastava, C. Paduraru, G. Tucker, D. Precup, F. Behbahani, and A. Faust. Training language models to self-correct via rein-forcement learning. In The Thirteenth International Conference on Learning Representations ,2025. [21] A. K. Lew, T. Zhi-Xuan, G. Grand, and V. Mansinghka. Sequential monte carlo steering of large language models using probabilistic programs. In ICML 2023 Workshop: Sampling and Optimization in Discrete Space , 2023. [22] A. Lewkowycz, A. Andreassen, D. Dohan, E. Dyer, H. Michalewski, V. Ramasesh, A. Slone, C. Anil, I. Schlag, T. Gutman-Solo, et al. Solving quantitative reasoning problems with language models. Advances in neural information processing systems , 35:3843–3857, 2022. [23] B. Li, Y. Wang, A. Lochab, A. Grama, and R. Zhang. Cascade reward sampling for efficient decoding-time alignment. In Second Conference on Language Modeling , 2025. [24] H. Lightman, V. Kosaraju, Y. Burda, H. Edwards, B. Baker, T. Lee, J. Leike, J. Schulman, I. Sutskever, and K. Cobbe. Let’s verify step by step. In The Twelfth International Conference on Learning Representations , 2024. [25] B. Lipkin, B. LeBrun, J. H. Vigly, J. Loula, D. R. MacIver, L. Du, J. Eisner, R. Cotterell, V. Mansinghka, T. J. O’Donnell, A. K. Lew, and T. Vieira. Fast controlled generation from language models with adaptive weighted rejection sampling. In Second Conference on Language Modeling , 2025. [26] R. Liu, J. Gao, J. Zhao, K. Zhang, X. Li, B. Qi, W. Ouyang, and B. Zhou. Can 1b LLM surpass 405b LLM? rethinking compute-optimal test-time scaling. In Workshop on Reasoning and Planning for Large Language Models , 2025. [27] J. Loula, B. LeBrun, L. Du, B. Lipkin, C. Pasti, G. Grand, T. Liu, Y. Emara, M. Freedman, J. Eisner, R. Cotterell, V. Mansinghka, A. K. Lew, T. Vieira, and T. J. O’Donnell. Syntactic and semantic control of large language models via sequential monte carlo. In The Thirteenth International Conference on Learning Representations , 2025. [28] L. Luo, Y. Liu, R. Liu, S. Phatale, M. Guo, H. Lara, Y. Li, L. Shu, L. Meng, J. Sun, and A. Rastogi. Improve mathematical reasoning in language models with automated process supervision, 2025. [29] L. Luo, Y. Liu, R. Liu, S. Phatale, M. Guo, H. Lara, Y. Li, L. Shu, Y. Zhu, L. Meng, et al. Improve mathematical reasoning in language models by automated process supervision. arXiv preprint arXiv:2406.06592 , 2024. [30] M. Macfarlane, M. Kim, N. Jojic, W. Xu, L. Caccia, X. Yuan, W. Zhao, Z. Shi, and A. Sordoni. Instilling parallel reasoning into language models. In 2nd AI for Math Workshop@ ICML 2025 ,2025. [31] A. Madaan, N. Tandon, P. Gupta, S. Hallinan, L. Gao, S. Wiegreffe, U. Alon, N. Dziri, S. Prabhumoye, Y. Yang, S. Gupta, B. P. Majumder, K. Hermann, S. Welleck, A. Yazdanbakhsh, and P. Clark. Self-refine: Iterative refinement with self-feedback. In Thirty-seventh Conference on Neural Information Processing Systems , 2023. [32] Mathematical Association of America. American mathematics competitions (amc) 2023. 
+
+https://maa.org , 2023. AMC 8, AMC 10, and AMC 12 competition problems. [33] Mathematical Association of America. Aime 2024 problems, 2024. American Invitational Mathematics Examination. 11 [34] N. Muennighoff, Z. Yang, W. Shi, X. L. Li, L. Fei-Fei, H. Hajishirzi, L. Zettlemoyer, P. Liang, E. J. Candès, and T. Hashimoto. s1: Simple test-time scaling. In C. Christodoulopoulos, T. Chakraborty, C. Rose, and V. Peng, editors, Proceedings of the 2025 Conference on Empirical Methods in Natural Language Processing, EMNLP 2025, Suzhou, China, November 4-9, 2025 ,pages 20275–20321. Association for Computational Linguistics, 2025. [35] A. Nguyen, D. Mekala, C. Dong, and J. Shang. When is the consistent prediction likely to be a correct prediction? arXiv preprint arXiv:2407.05778 , 2024. [36] L. Ouyang, J. Wu, X. Jiang, D. Almeida, C. Wainwright, P. Mishkin, C. Zhang, S. Agarwal, K. Slama, A. Gray, J. Schulman, J. Hilton, F. Kelton, L. Miller, M. Simens, A. Askell, P. Welin-der, P. Christiano, J. Leike, and R. Lowe. Training language models to follow instructions with human feedback. In A. H. Oh, A. Agarwal, D. Belgrave, and K. Cho, editors, Advances in Neural Information Processing Systems , 2022. [37] A. B. Owen. Monte Carlo theory, methods and examples . https://artowen.su.domains/ mc/ , 2013. [38] Y.-J. Park, K. Greenewald, K. Alim, H. Wang, and N. Azizan. Instance-adaptive inference-time scaling with calibrated process reward models. In NeurIPS 2025 Workshop on Efficient Reasoning , 2025. [39] Y.-J. Park, K. Greenewald, K. Alim, H. Wang, and N. Azizan. Know what you don’t know: Uncertainty calibration of process reward models. In The Thirty-ninth Annual Conference on Neural Information Processing Systems , 2026. [40] I. Puri, S. Sudalairaj, G. Xu, A. Bhandwaldar, K. Xu, and A. Srivastava. Rollout roulette: A probabilistic inference approach to inference-time scaling of LLMs using particle-based monte carlo methods. In The Thirty-ninth Annual Conference on Neural Information Processing Systems , 2026. [41] T. Qin, D. Alvarez-Melis, S. Jelassi, and E. Malach. To backtrack or not to backtrack: When sequential search limits model reasoning. In Second Conference on Language Modeling , 2025. [42] Y. Qu, T. Zhang, N. Garg, and A. Kumar. Recursive introspection: Teaching language model agents how to self-improve. Advances in Neural Information Processing Systems , 37:55249– 55285, 2024. [43] D. Rohatgi, A. Shetty, D. Saless, Y. Li, A. Moitra, A. Risteski, and D. J. Foster. Taming imperfect process verifiers: A sampling perspective on backtracking. In The Fourteenth International Conference on Learning Representations , 2026. [44] A. Singh, K. Arora, S. Keh, J. Mercat, T. Hashimoto, C. Finn, and A. Kumar. Improving the efficiency of test-time search in LLMs with backtracking, 2025. [45] C. V. Snell, J. Lee, K. Xu, and A. Kumar. Scaling LLM test-time compute optimally can be more effective than scaling parameters for reasoning. In The Thirteenth International Conference on Learning Representations , 2025. [46] N. Stiennon, L. Ouyang, J. Wu, D. Ziegler, R. Lowe, C. Voss, A. Radford, D. Amodei, and P. F. Christiano. Learning to summarize with human feedback. Advances in neural information processing systems , 33:3008–3021, 2020. [47] E. Veach and L. J. Guibas. Optimally combining sampling techniques for monte carlo rendering. In Proceedings of SIGGRAPH 1995 , pages 419–428. ACM Press, 1995. [48] P. Wang, L. Li, L. Chen, F. Song, B. Lin, Y. Cao, T. Liu, and Z. Sui. Making large language models better reasoners with alignment, 2024. [49] P. Wang, L. Li, Z. Shao, R. Xu, D. Dai, Y. Li, D. Chen, Y. Wu, and Z. Sui. Math-shepherd: Verify and reinforce llms step-by-step without human annotations. In Proceedings of the 62nd Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers) ,pages 9426–9439, 2024. 12 [50] Q. Wang, P. Zhao, S. Huang, F. Yang, L. Wang, F. Wei, Q. Lin, S. Rajmohan, and D. Zhang. Learning to refine: Self-refinement of parallel reasoning in llms. arXiv preprint arXiv:2509.00084 , 2025. [51] X. Wang, J. Wei, D. Schuurmans, Q. V. Le, E. H. Chi, S. Narang, A. Chowdhery, and D. Zhou. Self-consistency improves chain of thought reasoning in language models. In The Eleventh International Conference on Learning Representations , 2023. [52] V. Xefteri, T. Vieira, R. Cotterell, and A. Amini. Syntactic control of language models by posterior inference. In Findings of the Association for Computational Linguistics: ACL 2025 ,pages 25350–25365, 2025. [53] A. Yang, B. Yang, B. Zhang, B. Hui, B. Zheng, B. Yu, C. Li, D. Liu, F. Huang, H. Wei, H. Lin, J. Yang, J. Tu, J. Zhang, J. Yang, J. Yang, J. Zhou, J. Lin, K. Dang, K. Lu, K. Bao, K. Yang, L. Yu, M. Li, M. Xue, P. Zhang, Q. Zhu, R. Men, R. Lin, T. Li, T. Xia, X. Ren, X. Ren, Y. Fan, Y. Su, Y. Zhang, Y. Wan, Y. Liu, Z. Cui, Z. Zhang, and Z. Qiu. Qwen2.5 technical report. arXiv preprint arXiv:2412.15115 , 2024. [54] S. Yao, D. Yu, J. Zhao, I. Shafran, T. Griffiths, Y. Cao, and K. Narasimhan. Tree of thoughts: Deliberate problem solving with large language models. Advances in neural information processing systems , 36:11809–11822, 2023. [55] Y. Yu, Q. Di, Q. Gu, and D. Zhou. On the limits of test-time compute: Sequential reward filtering for better inference. arXiv preprint arXiv:2512.04558 , 2025. [56] L. Yuan, W. Li, H. Chen, G. Cui, N. Ding, K. Zhang, B. Zhou, Z. Liu, and H. Peng. Free process rewards without process labels. In Forty-second International Conference on Machine Learning , 2025. [57] L. Zhang, A. Hosseini, H. Bansal, M. Kazemi, A. Kumar, and R. Agarwal. Generative verifiers: Reward modeling as next-token prediction. In The Thirteenth International Conference on Learning Representations , 2025. [58] Z. Zhang, C. Zheng, Y. Wu, B. Zhang, R. Lin, B. Yu, D. Liu, J. Zhou, and J. Lin. The lessons of developing process reward models in mathematical reasoning. In Findings of the Association for Computational Linguistics: ACL 2025 , pages 10495–10516, 2025. [59] D. Zhao, S. Tu, and L. Xu. Seea*: Efficient exploration-enhanced a* search by selective sampling. In The Thirty-eighth Annual Conference on Neural Information Processing Systems ,2024. [60] S. Zhao, R. Brekelmans, A. Makhzani, and R. B. Grosse. Probabilistic inference in language models via twisted sequential monte carlo. In International Conference on Machine Learning ,pages 60704–60748. PMLR, 2024. [61] C. Zheng, J. Zhu, J. Lin, X. Dai, Y. Yu, W. Zhang, and M. Yang. Cold: Counterfactually-guided length debiasing for process reward models. arXiv preprint arXiv:2507.15698 , 2025. 13 A Algorithms for Persistent-Pool Search 
+
+The main text keeps only the master template; the method-specific pseudocode is collected here. All three algorithms use the notation of Algorithm 1. The child budget is N , the parent budget is M , and each selected parent generates B = N/M children. 
+
+Algorithm 2 Greedy Selection 
+
+Require: prompt x0, child budget N , parent budget M , horizon T , PRM score R. 
+
+> 1:
+
+Initialize P0 with N one-step samples from pLLM (· | x0) and set W0(z) ← rPRM (z) for all 
+
+z ∈ P 0. 
+
+> 2:
+
+for t = 1 , . . . , T do  
+
+> 3:
+
+At ← Top( Pt−1, W t−1, M ). 
+
+> 4:
+
+Generate Bt ← S 
+
+> c∈A t
+
+LLM-E XPAND (c, N/M ) and score each z ∈ B t. 
+
+> 5:
+
+Pt ← P t−1 ⊎ B t. 
+
+> 6:
+
+Set Wt(z) ← rPRM (z) for all z ∈ P t. 
+
+> 7:
+
+end for  
+
+> 8:
+
+return final candidates from Top( PT ; WT ; M ).
+
+Algorithm 3 Subpool Selection 
+
+Require: prompt x0, child budget N , parent budget M , horizon T , PRM score R, subpool ratios 
+
+ρt ∈ (0 , 1] . 
+
+> 1:
+
+Initialize P0 with N one-step samples from pLLM (· | x0) and set W0(z) ← rPRM (z) for all 
+
+z ∈ P 0. 
+
+> 2:
+
+for t = 1 , . . . , T do  
+
+> 3:
+
+Kt ← max {M, ⌊ρt|P t−1|⌋} . 
+
+> 4:
+
+Sample Dt ⊆ P t−1 uniformly without replacement with |D t| = Kt. 
+
+> 5:
+
+At ← Top( Dt, W t−1, M ). 
+
+> 6:
+
+Generate Bt ← S 
+
+> c∈A t
+
+LLM-E XPAND (c, N/M ) and score each z ∈ B t. 
+
+> 7:
+
+Pt ← P t−1 ⊎ B t. 
+
+> 8:
+
+Set Wt(z) ← rPRM (z) for all z ∈ P t. 
+
+> 9:
+
+end for  
+
+> 10:
+
+return final candidates from Top( PT ; WT ; M ).
+
+Algorithm 4 Power Backtrack SMC 
+
+Require: prompt x0, child budget N , horizon T , PRM score R, powers βt, mixture probabilities αt. 
+
+> 1:
+
+Initialize P0 with N one-step samples from pLLM (· | x0) and set W0(z) ← rPRM (z) for all 
+
+z ∈ P 0. 
+
+> 2:
+
+for t = 1 , . . . , T do  
+
+> 3:
+
+Sample At as N parents with replacement from Pt−1 using normalized weights induced by 
+
+Wt−1. 
+
+> 4:
+
+Generate Bt ← S 
+
+> c∈A t
+
+LLM-E XPAND (c, 1) and score each z ∈ B t. 
+
+> 5:
+
+Sample a retained multiset St of size N t with replacement from Pt−1 using normalized weights induced by Wt−1. 
+
+> 6:
+
+Set Pt ← St ⊎ B t. 
+
+> 7:
+
+for each z ∈ P t do  
+
+> 8:
+
+Compute Ft(z) using (5).  
+
+> 9:
+
+if z ∈ B t then  
+
+> 10:
+
+Wt(z) ← αtFt(z). 
+
+> 11:
+
+else  
+
+> 12:
+
+Wt(z) ← (1 − αt) Ft(z)
+
+t . 
+
+> 13:
+
+end if  
+
+> 14:
+
+end for  
+
+> 15:
+
+end for  
+
+> 16:
+
+return final candidates sampled from PT using normalized WT .14 B Mixture-proposal multiple importance sampling and Power Backtrack SMC 
+
+In this part, we will derive the PB-SMC weighting rule and proves proxy-target consistency. All distributions are defined on the fixed state space X≤T +1 := ST +1  
+
+> s=1
+
+Xs. Since PB-SMC initializes 
+
+P0 with one-step prefixes, the round-t target has effective support X≤t+1 through the indicator 
+
+1{len( z) ≤ t + 1 }.
+
+B.1 A mixture-proposal multiple importance sampling identity Lemma 1 (Mixture-proposal multiple importance sampling identity) . Let P be a normalized target distribution on a common measurable state space. Let q1, . . . , q m be normalized proposal distribu-tions, let αi ≥ 0 with Pmi=1 αi = 1 , and define qmix (x) := Pmi=1 αiqi(x). If P ≪ qmix , then for every bounded measurable f ,
+
+EP [f (X)] = 
+
+> m
+
+X
+
+> i=1
+
+Eqi
+
+
+
+f (X) αiP (X)
+
+qmix (X)
+
+
+
+. (6) 
+
+Proof. Define bi(x) := αiqi(x)/q mix (x) whenever qmix (x) > 0. Then P 
+
+> i
+
+bi(x) = 1 , and 
+
+EP [f (X)] = 
+
+Z
+
+f (x)P (x)
+
+> m
+
+X
+
+> i=1
+
+bi(x) d x (7) 
+
+=
+
+> m
+
+X
+
+> i=1
+
+Z
+
+f (x)P (x) αiqi(x)
+
+qmix (x) dx (8) 
+
+=
+
+> m
+
+X
+
+> i=1
+
+Eqi
+
+
+
+f (X) αiP (X)
+
+qmix (X)
+
+
+
+. (9) 
+
+Corollary 1 (Self-normalized unnormalized form) . Suppose P (x) = eP (x)/Z P and qmix (x) = 
+
+eqmix (x)/Z q , where ZP and Zq may be unknown. Then 
+
+EP [f (X)] = 
+
+Pmi=1 Eqi
+
+h
+
+f (X)αi 
+
+> eP(X)
+> eqmix (X)
+
+iPmi=1 Eqi
+
+h
+
+αi 
+
+> eP(X)
+> eqmix (X)
+
+i . (10) 
+
+Proof. Substitute P = eP /Z P and qmix = eqmix /Z q into Lemma 1. Both numerator and denominator contain the same multiplicative factor Zq /Z P , which cancels in the self-normalized ratio. 
+
+B.2 Shared proposal normalizer for PB-SMC 
+
+In this part, we will prove that the generated-child and retained-history proposals have the same normalizer. At round t ≥ 1, the previous powered target is 
+
+eπ(βt−1) 
+
+> t−1
+
+(z) = pLLM (z)rPRM (z)βt−1 1{len( z) ≤ t},
+
+with normalizing constant 
+
+Zt−1 := X 
+
+> z∈X ≤T+1
+
+eπ(βt−1) 
+
+> t−1
+
+(z) = X
+
+> u∈X ≤t
+
+pLLM (u)rPRM (u)βt−1 .
+
+The retained-history proposal redraws a prefix from the previous powered target, so its unnormalized density is 
+
+eqhist  
+
+> t
+
+(z) = pLLM (z)rPRM (z)βt−1 1{len( z) ≤ t}, X
+
+> z
+
+eqhist  
+
+> t
+
+(z) = Zt−1. (11) 15 The one-step prefixes are generated during initialization. Hence, for rounds t ≥ 1, the retained-history prefixes have length of 1, . . . , t , thus the generated-child prefixes have length of 2, . . . , t + 1 . For the generated-child proposal, write z = x1: d with 2 ≤ d ≤ t + 1 and parent u = x1: d−1. Sampling u
+
+from the previous powered target and then sampling xd from the LLM gives 
+
+eqnew  
+
+> t
+
+(x1: d) = pLLM (x1: d−1)rPRM (x1: d−1)βt−1 pLLM (xd | x1: d−1) (12) 
+
+= pLLM (x1: d)rPRM (x1: d−1)βt−1 . (13) Equivalently, with pa( z) denoting the structural parent of z,
+
+eqnew  
+
+> t
+
+(z) = pLLM (z)rPRM (pa( z)) βt−1 1{2 ≤ len( z) ≤ t + 1 }. (14) Because the LLM extension kernel is normalized, 
+
+X 
+
+> z∈X ≤T+1
+
+eqnew  
+
+> t
+
+(z) = 
+
+> t+1
+
+X
+
+> d=2
+
+X
+
+> x1: d−1∈X d−1
+
+pLLM (x1: d−1)rPRM (x1: d−1)βt−1
+
+X
+
+> xd
+
+pLLM (xd | x1: d−1)
+
+(15) 
+
+=
+
+> t+1
+
+X
+
+> d=2
+
+X
+
+> x1: d−1∈X d−1
+
+pLLM (x1: d−1)rPRM (x1: d−1)βt−1 (16) 
+
+= X
+
+> u∈X ≤t
+
+pLLM (u)rPRM (u)βt−1 = Zt−1. (17) Thus eqnew  
+
+> t
+
+and eqhist  
+
+> t
+
+share the same normalizing constant. Consequently, 
+
+eqmix  
+
+> t
+
+(z) = αt eqnew  
+
+> t
+
+(z) + (1 − αt)eqhist  
+
+> t
+
+(z) (18) also has normalizer Zt−1.
+
+B.3 Explicit Power Backtrack SMC weight 
+
+In this part, we will derive the weights for Power Backtrack SMC method. 
+
+Lemma 2 (Explicit PB-SMC correction factor) . Let z = x1: d ∈ X ≤t+1 with d ≥ 1. Let pa( z) = 
+
+x1: d−1 for d ≥ 2, let pa( z) = x0 for d = 1 , and set R(x0) = 1 . Under the mixture proposal in (18) ,
+
+Ft(z) := eπ(βt) 
+
+> t
+
+(z)
+
+eqmix  
+
+> t
+
+(z)
+
+equals 
+
+Ft(z) = 
+
+ rPRM (z)
+
+> rPRM (pa( z))
+
+βt−1
+
+rPRM (z)βt−βt−1
+
+αt1{d ≥ 2} + (1 − αt)
+
+ rPRM (z)
+
+> rPRM (pa( z))
+
+βt−1
+
+1{d ≤ t}
+
+. (19) 
+
+Proof. The target numerator is 
+
+eπ(βt) 
+
+> t
+
+(z) = pLLM (z)rPRM (z)βt 1{d ≤ t + 1 }.
+
+By (14) and (11), 
+
+eqnew  
+
+> t
+
+(z) = pLLM (z)rPRM (pa( z)) βt−1 1{d ≥ 2}, eqhist  
+
+> t
+
+(z) = pLLM (z)rPRM (z)βt−1 1{d ≤ t}.
+
+Therefore 
+
+eqmix  
+
+> t
+
+(z) = pLLM (z)rPRM (pa( z)) βt−1
+
+"
+
+αt1{d ≥ 2} + (1 − αt)
+
+ rPRM (z)
+
+rPRM (pa( z)) 
+
+βt−1
+
+1{d ≤ t}
+
+#
+
+.
+
+(20) Dividing eπβt 
+
+> t
+
+(z) by this expression and using d ≤ t + 1 for the round-t target gives (19) . This is the same expression as (5). 16 Lemma 3 (Fixed-count mixture-proposal estimator) . Let Bt contain N samples from qnew  
+
+> t
+
+and let 
+
+St contain N t samples from qhist  
+
+> t
+
+. The self-normalized mixture-proposal estimator of πβt 
+
+> t
+
+(f ) uses unnormalized weights 
+
+Wt(z) = 
+
+
+
+αtFt(z), z ∈ B t,
+
+(1 − αt) Ft(z)
+
+t , z ∈ St. (21) 
+
+Proof. Corollary 1 gives the numerator 
+
+1
+
+N
+
+X
+
+> z∈B t
+
+f (z)αtFt(z) + 1
+
+N t 
+
+X
+
+> z∈St
+
+f (z)(1 − αt)Ft(z),
+
+with the analogous denominator for f ≡ 1. Multiplying numerator and denominator by N gives (21) . Multiplying all weights by a common positive constant does not change the self-normalized estimator. 
+
+B.4 Adaptive schedules for powers and mixture probabilities 
+
+The power schedule controls how aggressively PB-SMC sharpens the powered PRM target during search. Let Pt = St ⊎ B t be the weighted pool at round t, and let Ct = |P t|; with the default retained-history size Ht = N t , we have Ct = N (t + 1) . We normalize the PRM scores on this multiset as az = rPRM (z)/ P 
+
+> y∈P t
+
+rPRM (y) and define the concentration statistic σt = P 
+
+> z∈P t
+
+a2 
+
+> z
+
+,so that 1/C t ≤ σt ≤ 1. For a power-step hyperparameter γ > 0, we set 
+
+βt+1 = βt + ∆ t, ∆t = γ
+
+
+
+1 −
+
+
+
+σt − 1
+
+Ct
+
+ 
+
+. (22) This gives γ/C t ≤ ∆t ≤ γ, so βt is strictly increasing. When the normalized PRM scores are nearly uniform, σt is close to 1/C t, and the schedule increases βt quickly to move toward stronger exploitation. When the scores are already concentrated on a few particles, σt is close to 1, and the schedule makes a smaller update, slowing further collapse. Thus, γ controls the overall rate at which PB-SMC moves from exploration toward PRM-driven exploitation. In Section D.1.2, we evaluate the sensitivity of PB-SMC to γ on a held-out MATH training validation set and use the selected default 
+
+γ = 9 in all main experiments. The mixture schedule controls the relative contribution of newly generated children and retained historical particles. We parameterize it through the history-to-new ratio 
+
+gt = 1 − αt
+
+αt
+
+, αt = 11 + gt
+
+.
+
+We choose gt by linearly decreasing from gmax to gmin :
+
+gt = gmax − t − 1
+
+T − 1 (gmax − gmin ), αt = 11 + gt
+
+. (23) For T = 1 , we set gt = gmin . In all experiments, we use gmax = 1 , so αt ≥ 1/2 and the mixture weight on newly generated children is never smaller than the mixture weight on retained historical particles. The terminal value gmin determines the late-stage amount of stochastic backtracking: smaller gmin makes αt closer to one and emphasizes newly generated children, making PB-SMC closer to frontier-only SMC; larger gmin allocates more mixture mass to retained historical particles, increasing backtracking but potentially revisiting stale prefixes more often. In Section D.1.2, we evaluate the sensitivity of PB-SMC to gmin on the same held-out MATH training validation set and use the selected default gmin = 0 .4 in all main experiments. 
+
+B.5 Proxy-target consistency 
+
+PB-SMC consistency follows from self-normalized importance sampling (SNIS). We use the standard self-normalized importance sampling consistency theorem: if X1, . . . , X n
+
+> i.i.d.
+
+∼ q, p ≪ q, and f is integrable under p, then Pni=1 f (Xi)p(Xi)/q (Xi)
+
+Pni=1 p(Xi)/q (Xi)
+
+> a.s.
+
+−−−−→
+
+> n→∞
+
+Z
+
+f (x)p(x) d x
+
+[37, Theorem 9.2]. We apply this result on the finite state space X≤T +1 .17 Theorem 2 (PB-SMC proxy-target consistency) . Fix T < ∞ and assume 
+
+|X ≤T +1 | < ∞, 0 < R min ≤ rPRM (z) ≤ Rmax < ∞, 0 < α t < 1,
+
+and P 
+
+> x′
+
+pLLM (x′ | z) = 1 for every prefix z. Let PB-SMC initialize P0 with N one-step samples and weights W0(z) = rPRM (z)β0 . For every fixed t ≤ T and bounded f : X≤T +1 → R,
+
+EbπNt [f (X)] := 
+
+P 
+
+> z∈P t
+
+Wt(z)f (z)
+
+P 
+
+> z∈P t
+
+Wt(z)
+
+> p
+
+−−−−→  
+
+> N→∞
+
+Eπβtt
+
+[f (X)] . (24) 
+
+If βt is computed by (22) , then the same convergence holds with the adaptive powers. Proof. Since X≤T +1 is finite and R is bounded above and below, all weights and normalizing constants are finite and positive. 
+
+Base case. At t = 0 , the proposal is 
+
+q0(z) = pLLM (z)1{len( z) = 1 },
+
+and the target is 
+
+eπ(β0)0 (z) = pLLM (z)rPRM (z)β0 1{len( z) ≤ 1}.
+
+Thus the initial importance ratio is proportional to rPRM (z)β0 on X1. By self-normalized importance sampling consistency [37, Theorem 9.2], 
+
+EbπN 
+
+> 0
+
+[f (X)] p
+
+−−−−→  
+
+> N→∞
+
+Eπ(β0)0
+
+[f (X)] .
+
+Induction step. Assume the conclusion is correct until step t − 1, that means EbπNt−1 [f (X)] →
+
+Eπ(βt−1)
+
+> t−1
+
+[f (X)] in probability for every bounded f . Multinomial sampling from Pt−1 using normal-ized Wt−1 therefore gives empirical samples converging to π(βt−1) 
+
+> t−1
+
+. Applying the normalized LLM kernel gives generated-child samples converging to 
+
+qnew  
+
+> t
+
+(x1: d) = pLLM (x1: d)rPRM (x1: d−1)βt−1 1{2 ≤ d ≤ t + 1 }
+
+Zt−1
+
+,
+
+and redrawing historical prefixes gives samples converging to 
+
+qhist  
+
+> t
+
+(z) = pLLM (z)rPRM (z)βt−1 1{len( z) ≤ t}
+
+Zt−1
+
+.
+
+By Section B.2, both proposals share normalizer Zt−1, and their mixture is 
+
+qmix  
+
+> t
+
+= αtqnew  
+
+> t
+
++ (1 − αt)qhist  
+
+> t
+
+.
+
+The round-t target is 
+
+eπ(βt) 
+
+> t
+
+(z) = pLLM (z)rPRM (z)βt 1{len( z) ≤ t + 1 }.
+
+If eπ(βt) 
+
+> t
+
+(z) > 0, then either len( z) ≤ t and qhist  
+
+> t
+
+(z) > 0, or len( z) = t + 1 and qnew  
+
+> t
+
+(z) > 0
+
+whenever the LLM assigns positive probability to z through its parent. Since 0 < α t < 1 and 
+
+rPRM (z) > 0, πβt 
+
+> t
+
+≪ qmix  
+
+> t
+
+.Lemma 2 gives 
+
+Ft(z) = eπ(βt) 
+
+> t
+
+(z)
+
+eqmix  
+
+> t
+
+(z) .
+
+Lemma 3 shows that (21) is exactly the fixed-count self-normalized mixture-proposal estimator using 
+
+N samples from qnew  
+
+> t
+
+and N t samples from qhist  
+
+> t
+
+. Applying self-normalized importance sampling consistency to the two proposal averages gives 
+
+P 
+
+> z∈P t
+
+Wt(z)f (z)
+
+P 
+
+> z∈P t
+
+Wt(z)
+
+> p
+
+−−−−→  
+
+> N→∞
+
+Eπ(βt)
+
+> t
+
+[f (X)] .
+
+This completes the induction. For adaptive powers, σt = P 
+
+> z∈P t
+
+a2 
+
+> z
+
+is a bounded continuous function of the empirical weighted measure on the finite state space. The continuous mapping theorem gives convergence of σt and therefore of βt+1 = βt + ∆ t. Repeating the induction with the limiting adaptive powers proves the adaptive statement. 18 C Additional Experiments 
+
+C.1 Experimental Setup Benchmark Datasets. We conduct experiments across four mathematical reasoning benchmarks spanning multiple difficulty levels and problem types, enabling comprehensive assessment of our approach across varying reasoning complexity. • MATH500 [ 24 ] comprises 500 competition-level mathematics problems sampled from the MATH dataset [ 14 ], covering topics including algebra, geometry, number theory, and calculus. The problems are stratified across five difficulty levels, making this benchmark well-suited for evaluating general mathematical reasoning. • AMC23 [32 ] consists of 40 problems from the 2023 American Mathematics Competition, featuring intermediate-level competition mathematics that bridges the gap between standard curriculum and advanced problem-solving. These problems require creative application of mathematical concepts rather than routine computation. • AIME24 [ 33 ] contains 30 problems from the 2024 American Invitational Mathematics Examination, representing extremely challenging competition-level mathematics. AIME problems require sophisticated multi-step problem-solving strategies and deep mathematical understanding, making this benchmark discriminative at high performance levels. • Minerva Math [22 ] is a collection of advanced STEM reasoning problems spanning mathematics, physics, chemistry, and biology. Unlike purely math benchmarks, Minerva Math evaluates the model’s ability to apply mathematical reasoning in broader scientific contexts, including problems that require domain knowledge alongside formal derivation. 
+
+Large Language Models. We conduct experiments using three state-of-the-art open-source instruction-tuned language models spanning a range of parameter scales, enabling systematic evalua-tion of our approach across varying computational budgets and model capabilities. • Qwen2.5-7B-Instruct [ 53 ] is a 7-billion-parameter instruction-tuned model from the Qwen2.5 family, which has demonstrated strong performance on mathematical reason-ing benchmarks relative to its size. Its balance of capability and computational cost makes it a representative mid-scale LLM for inference-time scaling experiments. • Qwen2.5-3B-Instruct [53 ] is a 3-billion-parameter variant of the same family, providing a lightweight LLM that allows us to assess whether inference-time scaling methods can compensate for reduced model capacity. Evaluating at this scale is particularly relevant under token-efficiency objectives. • Phi-4-mini-Instruct [1] is a compact yet capable instruction-tuned model from Microsoft’s Phi-4 family, designed to achieve strong reasoning performance at a small parameter foot-print. Its inclusion allows us to evaluate our methods on a model from a distinct training lineage, providing evidence of generalization beyond the Qwen model family. 
+
+Process Reward Model. We use Qwen2.5-Math-PRM-7B [58 ] as the process reward model throughout our experiments. The PRM provides step-level reward signals for evaluating partial reasoning trajectories during inference and is built on Qwen2.5-Math-7B-Instruct with step-level preference training. We choose this PRM due to its widespread adoption and strong empirical performance in mathematical reasoning. 
+
+Baselines. We compare against the following inference-time scaling methods: • Base model: Single greedy pass without test-time scaling—the minimal compute baseline • Self-Consistency [ 51 ]: Samples 32 independent trajectories and selects the final answer via majority voting • Best-of-N (BoN) [ 4]: Generates 32 complete solutions, ranks them by PRM scores of final answers, and selects the highest-scored trajectory • Beam Search [ 45 ]: Maintains beam width 32 with branching factor 4 and top-8 selection per step using cumulative mean PRM scores. 19 • Particle Filtering [ 40 ] : maintaining 32 particles with systematic resampling triggered when effective sample size drops below threshold • MCTS [ 16 ]: Monte Carlo tree search using PRM-guided expansion and UCB selection, with final answer determined by tree statistics aggregation • DVTS [ 2]: Diverse Verified Tree Search—partitions the search budget into M independent subtrees, each explored via beam search with width N/M . We use M = 4 subtrees with beam width 8 per subtree (total budget N = 32 )
+
+PRM scoring and search budgets. For every prefix, we use the PRM score of the last generated reasoning step as the prefix score rPRM (z); final answers are selected by the best PRM score among complete solutions. Unless otherwise stated, all methods use a fixed step horizon T = 30 following the step-level reasoning setup of [8]. 
+
+Implementation Details. We evaluate all baselines with N = 32 candidate expansions per step, while our proposed methods use N = 8 to demonstrate computational efficiency. All sampling-based methods use temperature 0.7. For baseline configurations, we follow their original settings: Beam Search and DVTS employ greedy selection with PRM-based pruning at each decoding step. For our proposed methods, PB-SMC maintains N = 8 particles with step-wise PRM scoring for resampling weights. SPS operates with budget N = 8 , employing adaptive subpool expansion based on mean PRM scores and dynamic pruning strategies. All methods use Qwen2.5-Math-7B-PRM as the default process reward model. All reported results are averaged over 5 random seeds for AMC23 and AIME24, and 3 seeds for Minerva and MATH500, with standard deviations reported where applicable. 
+
+C.2 Extended Main Results 
+
+This section presents the full experimental results (Table 4) across all three LLMs, extending the main-paper analysis (Table 2) with the additional model omitted due to space constraints. Overall, the trends observed in the main paper hold consistently across all settings. Across all three LLMs and four benchmarks, both PB-SMC and SPS consistently outperform strong inference-time search baselines while using substantially fewer tokens. In all cases, our methods achieve competitive or superior accuracy using only N = 8 candidates, compared to N = 32 required by all baselines. When averaged across all model–benchmark pairs, SPS yields a 49.4% reduction in token usage while improving accuracy, and PB-SMC achieves a 36.7% token reduction with improved or comparable accuracy. On Qwen2.5-7B-Instruct, SPS performs best overall, achieving the highest average accuracy while significantly reducing token consumption. This advantage is particularly pronounced on Minerva and AMC23, where SPS attains strong gains despite maintaining a fourfold reduction in candidate count. We attribute this behavior to the use of Qwen2.5-Math-7B-PRM as the preference reward model, which is a natural fit for the base LLM and likely provides more informative guidance. On Phi-4-mini-instruct, PB-SMC emerges as the most reliable method, achieving the highest aggre-gate accuracy across benchmarks. While SPS remains competitive, PB-SMC demonstrates more stable performance across tasks, reflecting its conservative but robust exploration strategy. This robustness is consistently observed across all benchmarks, including more challenging settings such as AIME24. On the third LLM, we observe the same qualitative trends as in the other two settings. Both PB-SMC and SPS outperform all baselines in the accuracy–efficiency trade-off regime, maintaining strong performance at a fraction of the token cost. PB-SMC again exhibits stable scaling behavior across benchmarks, while SPS tends to achieve higher peak accuracy when the PRM is well aligned with the underlying LLM. Taken together, these results demonstrate that the improvements of PB-SMC and SPS are not model-specific but generalize across diverse LLMs. Moreover, they highlight a consistent accuracy– efficiency advantage over existing inference-time search methods, even under severely constrained sampling budgets. 20 Table 4: Comparison of test time scaling methods across benchmarks and models. We report accuracy (Acc, ↑ better) and token usage (#Tokens, ↓ better) across four benchmarks. Results include mean and standard deviation over 5 random seeds for AMC23 vs AIME24 and 3 random seeds for Minerva vs MATH500. Bold indicates best performance; underline indicates runner-up. 
+
+Minerva Math500 AMC23 AIME24 Average Method N Accuracy ↑ #Tokens ↓ Accuracy ↑ #Tokens ↓ Accuracy ↑ #Tokens ↓ Accuracy ↑ #Tokens ↓ Accuracy ↑ #Tokens ↓
+
+Qwen2.5-7B-Instruct 
+
+Base Model 1 34.68 ±1.12 617 76.00 ±0.80 584 54.50 ±2.92 874 11.33 ±1.63 1039 44.13 779 Pass@ k† 32 52.33 ±0.21 19765 93.67 ±0.12 18788 90.50 ±2.45 27979 31.33 ±3.40 33262 66.96 24949 Self-Consistency 32 38.85 ±0.56 19765 83.27 ±0.31 18788 62.00 ±1.87 27979 16.67 ±0.00 33262 50.20 24949 Best-of-N 32 38.48 ±0.42 19765 86.40 ±0.20 18788 65.00 ±1.58 27564 20.67 ±1.33 33344 52.64 24865 Beam Search 32 40.20 ±0.56 23900 86.27 ±0.31 22771 62.00 ±2.92 39195 20.00 ±2.11 55150 52.12 35254 DVTS 32 39.22 ±0.43 23549 86.73 ±0.23 22978 63.00 ±1.00 34670 16.67 ±2.11 46725 51.41 31981 MCTS 32 36.27 ±0.87 25208 78.47 ±0.81 22006 58.00 ±1.00 30328 16.67 ±1.33 35644 47.35 28297 SMC 32 40.32 ±0.94 21642 86.67 ±0.41 23307 62.00 ±3.54 35546 18.65 ±2.66 41031 51.91 30382 
+
+PB-SMC (ours) 8 41.79 ±0.56 13216 87.47 ±0.31 10628 66.50 ±2.85 17637 19.33 ±1.50 27581 53.77 17266 
+
+SPS (ours) 8 43.26 ±0.77 9387 87.87 ±0.70 9076 67.50 ±2.50 22446 20.00 ±2.37 24347 54.66 16314 Qwen2.5-3B-Instruct 
+
+Base Model 1 29.53 ±1.29 617 64.47 ±0.90 607 36.50 ±4.06 839 6.00 ±2.49 1046 34.13 777 Pass@ k† 32 46.20 ±0.21 19765 91.73 ±0.12 19427 87.50 ±2.74 26863 26.67 ±3.65 33477 63.03 24883 Self-Consistency 32 33.21 ±0.21 19765 77.87 ±0.50 19427 54.00 ±3.39 26863 14.67 ±1.63 33477 44.94 24883 Best-of-N 32 33.70 ±0.42 19765 81.20 ±0.40 19427 61.50 ±1.22 26863 16.00 ±1.33 33477 48.10 24883 Beam Search 32 35.78 ±0.57 23131 82.27 ±0.31 25322 60.50 ±1.87 41169 14.00 ±1.33 60382 48.14 37501 DVTS 32 35.05 ±0.21 24971 81.80 ±0.20 26314 65.50 ±2.92 42538 13.33 ±2.11 57349 48.92 37793 MCTS 32 33.58 ±0.35 26121 72.00 ±0.98 22658 56.50 ±1.22 31825 15.33 ±2.13 34589 44.35 28798 SMC 32 36.52 ±0.75 25143 81.33 ±0.41 24362 59.50 ±1.87 43715 14.65 ±2.66 52562 48.00 36446 
+
+PB-SMC (ours) 8 38.23 ±0.64 15450 82.07 ±0.50 11727 62.50 ±2.50 20160 16.67 ±2.11 29108 49.87 19111 
+
+SPS (ours) 8 38.73 ±0.93 10800 83.20 ±0.60 9359 63.00 ±1.87 16644 17.33 ±2.49 25130 50.57 15483 Phi-4-mini-Instruct 
+
+Base Model 1 23.90 ±1.11 535 62.80 ±0.80 525 42.50 ±3.54 781 7.33 ±3.27 948 34.13 697 Pass@ k† 32 54.53 ±0.21 17119 91.07 ±0.12 16774 79.00 ±3.39 25003 28.67 ±5.81 30316 63.32 22303 Self-Consistency 32 33.70 ±0.21 17119 77.00 ±0.40 16774 53.50 ±2.55 25003 13.33 ±0.00 30316 44.38 22303 Best-of-N 32 34.80 ±0.42 17119 80.80 ±0.20 16774 50.50 ±4.30 25003 14.67 ±2.67 30316 45.19 22303 Beam Search 32 33.46 ±0.37 23768 81.20 ±0.20 21397 56.50 ±4.06 37513 16.00 ±3.89 39635 46.79 30578 DVTS 32 33.82 ±0.74 22140 81.53 ±0.12 20956 55.00 ±2.24 36815 16.00 ±3.27 37532 46.59 29361 MCTS 32 32.75 ±2.08 23108 73.20 ±0.56 28036 55.00 ±1.50 33320 14.67 ±1.66 30316 43.91 28695 SMC 32 34.44 ±0.75 24907 81.40 ±0.59 25459 54.50 ±3.32 42574 14.00 ±0.98 45448 46.09 34597 
+
+PB-SMC (ours) 8 37.87 ±0.37 13198 82.07 ±0.50 10422 57.50 ±3.06 15547 17.33 ±3.89 21258 48.69 15106 
+
+SPS (ours) 8 35.42 ±0.56 9832 82.67 ±0.50 7959 57.00 ±2.92 13497 16.00 ±1.33 15056 47.77 11586 
+
+Table 5: vLLM serving configuration for LLMs and reward models. Each model is allocated a dedicated A100 GPU to enable efficient parallel inference. 
+
+Configuration Qwen2.5-7B Instruct Qwen2.5-Math PRM-7B Qwen2.5-3B Instruct Phi-4-mini Instruct 
+
+GPU Allocation A100 A100 A100 A100 Tensor Parallel Size 1 1 1 1Max Model Length 4096 4096 4096 4096 GPU Memory Utilization 0.9 0.9 0.9 0.9 
+
+C.3 Experimental Configuration for Model Serving Hardware and Serving Infrastructure. We deploy the LLM and process reward model on separate NVIDIA A100 GPUs using vLLM framework for efficient batched inference. This configuration enables parallel evaluation of reasoning trajectories and step-level reward computation without memory contention. Table 5 details the serving configuration for each model. 
+
+Frontier vs. Backtracking Test-Time Scaling. Common test-time scaling baselines are frontier 
+
+methods that only expand forward from the current prefix. Best-of-N and Self-Consistency generate multiple complete reasoning trajectories via sampling and then select/aggregate a final answer, without 21 revising earlier prefix decisions. Beam Search and verifier-guided variants such as DVTS similarly maintain a set of partial hypotheses at the decoding frontier and apply step-wise expand-and-prune, advancing the frontier rather than backtracking to earlier steps. In contrast, our method is an backtracking algorithm: it can revert to an earlier step i < t and branch from that prefix to refine the solution. 
+
+C.4 Runtime Comparison 
+
+Figure 3 presents wall-clock runtime measurements for all evaluated methods on the MATH500 bench-mark. Measurements are conducted on the same hardware configuration described in Section C.3, with runtime reported as the average time to solve a single problem across all 500 instances.  
+
+> (a) Runtime vs Tokens (b) Runtime vs Accuracy
+
+Figure 3: Runtime comparison across test-time scaling methods on MATH500. Our proposed methods (PB-SMC and SPS) scale linearly in the number of tokens, and carry only a small runtime overhead of roughly 10% in comparison with the nearest competitive baselines (beam search, DVTS). Taking into account the token count advantage of our methods (3X), this overhead becomes negligible. As shown in Figure 3, methods that generate N = 32 independent samples (Self-Consistency, Best-of-N) exhibit the highest runtime due to sequential generation without pruning. Beam Search and DVTS achieve moderate runtime by leveraging early pruning, though they still maintain large beam widths. Our proposed methods, operating at N = 8 , demonstrate substantial runtime improvements— approximately 2.5× faster than Beam Search—while achieving competitive accuracy as reported in Table 2. Notably, the runtime of PB-SMC and SPS remains comparable despite their different search strategies, as both methods maintain similar numbers of active candidates at each step. The runtime efficiency of our methods stems from two key factors: (1) reduced candidate set size (N = 8 vs N = 32 ), which directly reduces the number of forward passes through the LLM, and (2) efficient resampling and pruning strategies that avoid generating low-quality trajectories. Combined with the memory efficiency discussed in Section C.3, these results demonstrate that our methods achieve a favorable trade-off between computational cost and reasoning performance. 
+
+## D Ablation Study 
+
+We conduct ablations to isolate the effect of historical backtracking and the stochastic mechanisms used to access the persistent pool. Unless otherwise stated, all experiments use Qwen2.5-7B-Instruct as the base generator and Qwen2.5-Math-PRM-7B as the process reward model. We study two questions: (i) whether allowing search to revisit historical prefixes improves over frontier-only selection, and (ii) how robust SPS is to the backtrack ratio. 
+
+D.1 Hyperparameter Sensitivity 
+
+We study the sensitivity of the two proposed backtracking mechanisms to their main search hyper-parameters. For SPS, the default algorithm does not use a fixed backtrack ratio. Instead, it uses the adaptive subpool ratio introduced in Section 4, where the ratio is determined by the average PRM score of the current persistent pool. We therefore treat fixed-ratio SPS as a diagnostic variant: it is used only to understand how SPS behaves as the amount of stochastic backtracking is varied, not to tune the main SPS results. For PB-SMC, we study the two schedule hyperparameters defined in 22 Table 6: Sensitivity to SPS subpool ratio on Math500. We report accuracy (Acc, %, ↑ better) for three base models. Fixed ratios are used only for sensitivity analysis. The default SPS method uses the adaptive ratio ρt = |P t−1|−1 P 
+
+> z∈P t−1
+
+rPRM (z), reported in the “Adaptive” column. The final column reports mean ± standard deviation across fixed ratios only. Bold indicates the best fixed-ratio result for each model.                                                     
+
+> Model 0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8 0.9 Adaptive Mean ±Std
+> Qwen2.5-7B-Instruct 86.0 87.6 88.0 86.4 86.2 87.0 87.2 87.4 87.4 87.8 87 .02 ±0.64
+> Qwen2.5-3B-Instruct 82.4 83.0 82.8 82.8 82.6 82.8 83.2 83.0 82.6 83.2 82 .80 ±0.23
+> Phi-4-mini-instruct 81.6 82.2 82.0 82.6 82.2 82.4 82.0 82.4 82.2 82.6 82 .18 ±0.27
+
+Appendix B.4: the power-step parameter γ in eq. (22), which controls how quickly the powered PRM target sharpens through the adaptive sequence {βt}, and the mixture parameter gmin in Eq. (23) ,which controls the terminal history-to-new ratio gt = (1 − αt)/α t and hence the mixture probability 
+
+αt = 1 /(1 + gt). Smaller gmin places more mass on newly generated children near the end of search and makes PB-SMC closer to frontier-only SMC, while larger gmin retains more mass on historical particles and increases stochastic backtracking. 
+
+D.1.1 Sensitivity to SPS subpool ratio 
+
+The SPS method used in our main experiments employs an adaptive subpool ratio rather than a fixed ratio. To isolate the effect of the subpool ratio, we also evaluate fixed-ratio variants on Math500. In this sweep, the adaptive rule for ρt is disabled and replaced by a constant ratio in {0.1, 0.2, . . . , 0.9}.The fixed-ratio results should therefore be interpreted as a sensitivity analysis, not as the default SPS configuration. The adaptive-ratio result, corresponding to the SPS algorithm used in the main experiments, is reported separately in the “Adaptive” column. Table 6 shows that SPS is not highly sensitive to the fixed subpool ratio. Across fixed ratios, accuracy varies by only 2.0 points for Qwen2.5-7B-Instruct, 0.8 points for Qwen2.5-3B-Instruct, and 1.0 point for Phi-4-mini-instruct. The standard deviations across the fixed-ratio sweep are also small: 0.64 ,
+
+0.23 , and 0.27 , respectively. Thus SPS remains stable across a broad range of stochasticity levels. The adaptive-ratio default is competitive with the best fixed ratios on all three models, achieving 
+
+87 .8% , 83 .2% , and 82 .6% accuracy for Qwen2.5-7B-Instruct, Qwen2.5-3B-Instruct, and Phi-4-mini-instruct, respectively. This supports the use of the adaptive ratio in the main experiments: it avoids introducing an additional fixed-ratio hyperparameter while preserving the benefit of stochastic access to historical prefixes. Intuitively, the fixed-ratio sweep shows that SPS works over a wide range of exploration levels, while the adaptive rule provides a simple automatic mechanism for choosing the exploration level from the current pool quality. 
+
+D.1.2 Sensitivity to PB-SMC power and mixture schedules 
+
+We next study the two main schedule hyperparameters of PB-SMC. The first is the power-step parameter γ in Eq. (22) . This parameter controls the rate at which the powered PRM target sharpens through the adaptive sequence {βt}. Larger values of γ increase the influence of high PRM scores more aggressively and make PB-SMC more exploitative, whereas smaller values keep the sampling distribution more diffuse. The second is gmin in Eq. (23) , the terminal value of the history-to-new ratio gt = (1 − αt)/α t. Since αt = 1 /(1 + gt), smaller gmin makes αt closer to one near the end of search and emphasizes newly generated children. Larger gmin assigns more mixture mass to retained historical particles, increasing the amount of stochastic backtracking. To avoid tuning on the reported test benchmarks, we construct a held-out validation set of 500 
+
+problems sampled from the MATH training split. This validation set is used only to choose global PB-SMC hyperparameters. The selected values are then fixed for all main experiments across datasets and models. We perform a sequential one-dimensional sweep over the schedules in Appendix B.4: we first fix gmin = 0 .5 and vary γ; after selecting γ = 9 , we fix γ = 9 and vary gmin . This validation procedure selects γ = 9 and gmin = 0 .4, which are used as the default PB-SMC hyperparameters in all main experiments. Table 7 shows that PB-SMC is reasonably robust to the power-step parameter γ in Eq. (22) . Across the full sweep γ ∈ { 1, 3, . . . , 21 }, accuracy varies by only 1.8 points. Over the broad middle range 23 Table 7: Sensitivity of PB-SMC hyperparameters on a held-out MATH validation set. We report accuracy (Acc, %, ↑ better) for Qwen2.5-7B-Instruct on 500 validation problems sampled from the MATH training split. For the γ sweep, we fix gmin = 0 .5. For the gmin sweep, we fix γ = 9 . The final column reports mean ± standard deviation across the sweep. Bold indicates best performance.                                                                 
+
+> Power schedule: varying γwith gmin = 0 .5
+> γ1357911 13 15 17 19 21 Mean ±Std Acc 85.6 84.8 85.2 85.6 86.0 85.4 85.2 85.4 85.0 84.6 84.2 85 .18 ±0.49
+> Mixture schedule: varying gmin with γ= 9
+> gmin 0.01 0.05 0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8 0.9 Mean ±Std Acc 83.2 84.6 85.4 85.8 86.2 86.4 86.0 85.6 85.0 84.2 83.4 85 .07 ±1.05
+
+γ ∈ [5 , 15] , accuracy remains between 85 .2% and 86 .0% , a range of only 0.8 points. The best validation accuracy is obtained at γ = 9 . Very small values of γ under-sharpen the powered PRM distribution, making PB-SMC less able to exploit high-quality prefixes. Very large values, such as 
+
+γ = 19 and γ = 21 , slightly degrade performance, consistent with over-sharpening the selection distribution and increasing the risk of premature concentration on a small number of high-scoring prefixes. The mixture parameter gmin in Eq. (23) exhibits a clearer exploration–exploitation trade-off. When 
+
+gmin is very small, such as 0.01 or 0.05 , the terminal mixture probability αt = 1 /(1 + gt) becomes close to one, so PB-SMC places most of its mass on newly generated children near the end of search. In this regime, the method becomes closer to frontier-only SMC and loses part of the benefit of stochastic backtracking. Conversely, when gmin is very large, such as 0.8 or 0.9, PB-SMC retains too much mass on historical particles, which can spend compute revisiting older prefixes rather than extending promising current ones. The best validation accuracy is achieved at gmin = 0 .4, and performance remains stable over the middle range gmin ∈ [0 .2, 0.6] , where accuracy stays within 0.8
+
+points of the best value. Overall, the PB-SMC sensitivity results support the same conclusion as the SPS ratio sweep: stochastic backtracking does not depend on delicate hyperparameter tuning. PB-SMC performs best with a moderate power schedule and a moderate mixture between newly generated children and retained historical prefixes. We therefore use γ = 9 and gmin = 0 .4 as the default PB-SMC hyperparameters in all main experiments. 
+
+## E Broader Impacts 
+
+Our work proposes a test-time search procedure that reallocates inference-time compute more efficiently for LLM reasoning by revisiting historical prefixes, improving the accuracy–token trade-off on public mathematical reasoning benchmarks. A potential positive impact is reduced computational cost (and associated energy use) for achieving a target level of reasoning accuracy, which can make reliable reasoning systems more accessible in resource-constrained settings (e.g., smaller deployments or limited inference budgets). Because the approach is test-time only and does not require additional training, it may lower the barrier to improving the performance of existing models in educational, scientific, and engineering workflows where correctness and efficiency are important. At the same time, improving token-efficiency and reasoning performance can increase the practical capability of LLM-based systems, which may enable misuse in contexts such as accelerating the production of convincing but incorrect outputs when the underlying verifier signals are imperfect. In addition, while our method is designed to be token-efficient, broader deployment could still increase overall usage and total compute, depending on how it is adopted. We also do not introduce or release new datasets or model checkpoints, and evaluate only on publicly available benchmarks. 24 NeurIPS Paper Checklist 
+
+The checklist is designed to encourage best practices for responsible machine learning research, addressing issues of reproducibility, transparency, research ethics, and societal impact. Do not remove the checklist: The papers not including the checklist will be desk rejected. The checklist should follow the references and follow the (optional) supplemental material. The checklist does NOT count towards the page limit. Please read the checklist guidelines carefully for information on how to answer these questions. For each question in the checklist: • You should answer [Yes], [No], or [N/A]. • [N/A] means either that the question is Not Applicable for that particular paper or the relevant information is Not Available. • Please provide a short (1–2 sentence) justification right after your answer (even for [N/A]). 
+
+The checklist answers are an integral part of your paper submission. They are visible to the reviewers, area chairs, senior area chairs, and ethics reviewers. You will also be asked to include it (after eventual revisions) with the final version of your paper, and its final version will be published with the paper. The reviewers of your paper will be asked to use the checklist as one of the factors in their evaluation. While [Yes] is generally preferable to [No], it is perfectly acceptable to answer [No] provided a proper justification is given (e.g., error bars are not reported because it would be too computationally expensive” or “we were unable to find the license for the dataset we used”). In general, answering [No] or [N/A] is not grounds for rejection. While the questions are phrased in a binary way, we acknowledge that the true answer is often more nuanced, so please just use your best judgment and write a justification to elaborate. All supporting evidence can appear either in the main paper or the supplemental material, provided in appendix. If you answer [Yes] to a question, in the justification please point to the section(s) where related material for the question can be found. IMPORTANT, please: • Delete this instruction block, but keep the section heading “NeurIPS Paper Checklist" ,• Keep the checklist subsection headings, questions/answers and guidelines below. 
+
+• Do not modify the questions and only use the provided macros for your answers .1. Claims 
+
+Question: Do the main claims made in the abstract and introduction accurately reflect the paper’s contributions and scope? Answer: [Yes] Justification: The claims made in the abstract and introduction are clearly stated in the Contribution in the Introduction. We present persistent-pool stochastic backtracking, instan-tiated as Subpool Selection and Power Backtrack SMC, to address irreversible frontier-only PRM-guided search. The claimed accuracy–token improvements are supported by the main experimental results across math benchmarks and model scales. Guidelines: • The answer [N/A] means that the abstract and introduction do not include the claims made in the paper. • The abstract and/or introduction should clearly state the claims made, including the contributions made in the paper and important assumptions and limitations. A [No] or [N/A] answer to this question will not be perceived well by the reviewers. • The claims made should match theoretical and experimental results, and reflect how much the results can be expected to generalize to other settings. • It is fine to include aspirational goals as motivation as long as it is clear that these goals are not attained by the paper. 2. Limitations 
+
+Question: Does the paper discuss the limitations of the work performed by the authors? 25 Answer: [Yes] Justification: We discuss about the limitations in the Conclusion section. Guidelines: • The answer [N/A] means that the paper has no limitation while the answer [No] means that the paper has limitations, but those are not discussed in the paper. • The authors are encouraged to create a separate “Limitations” section in their paper. • The paper should point out any strong assumptions and how robust the results are to violations of these assumptions (e.g., independence assumptions, noiseless settings, model well-specification, asymptotic approximations only holding locally). The authors should reflect on how these assumptions might be violated in practice and what the implications would be. • The authors should reflect on the scope of the claims made, e.g., if the approach was only tested on a few datasets or with a few runs. In general, empirical results often depend on implicit assumptions, which should be articulated. • The authors should reflect on the factors that influence the performance of the approach. For example, a facial recognition algorithm may perform poorly when image resolution is low or images are taken in low lighting. Or a speech-to-text system might not be used reliably to provide closed captions for online lectures because it fails to handle technical jargon. • The authors should discuss the computational efficiency of the proposed algorithms and how they scale with dataset size. • If applicable, the authors should discuss possible limitations of their approach to address problems of privacy and fairness. • While the authors might fear that complete honesty about limitations might be used by reviewers as grounds for rejection, a worse outcome might be that reviewers discover limitations that aren’t acknowledged in the paper. The authors should use their best judgment and recognize that individual actions in favor of transparency play an impor-tant role in developing norms that preserve the integrity of the community. Reviewers will be specifically instructed to not penalize honesty concerning limitations. 3. Theory assumptions and proofs 
+
+Question: For each theoretical result, does the paper provide the full set of assumptions and a complete (and correct) proof? Answer: [Yes] Justification: All theoretical results in the paper are stated with their required assumptions and complete/correct proofs (See Sections 3, 4, 5 and Appendices A, B in our manuscript). Guidelines: • The answer [N/A] means that the paper does not include theoretical results. • All the theorems, formulas, and proofs in the paper should be numbered and cross-referenced. • All assumptions should be clearly stated or referenced in the statement of any theorems. • The proofs can either appear in the main paper or the supplemental material, but if they appear in the supplemental material, the authors are encouraged to provide a short proof sketch to provide intuition. • Inversely, any informal proof provided in the core of the paper should be complemented by formal proofs provided in appendix or supplemental material. • Theorems and Lemmas that the proof relies upon should be properly referenced. 4. Experimental result reproducibility 
+
+Question: Does the paper fully disclose all the information needed to reproduce the main ex-perimental results of the paper to the extent that it affects the main claims and/or conclusions of the paper (regardless of whether the code and data are provided or not)? Answer: [Yes] Justification: We provides the information needed to reproduce the main experimental results in Section 6.1 (Experimental Setup), with further details in Appendix C.1, including datasets, models, PRMs, baselines, sampling settings, expansion budgets, and number of seeds. 26 Guidelines: • The answer [N/A] means that the paper does not include experiments. • If the paper includes experiments, a [No] answer to this question will not be perceived well by the reviewers: Making the paper reproducible is important, regardless of whether the code and data are provided or not. • If the contribution is a dataset and/or model, the authors should describe the steps taken to make their results reproducible or verifiable. • Depending on the contribution, reproducibility can be accomplished in various ways. For example, if the contribution is a novel architecture, describing the architecture fully might suffice, or if the contribution is a specific model and empirical evaluation, it may be necessary to either make it possible for others to replicate the model with the same dataset, or provide access to the model. In general. releasing code and data is often one good way to accomplish this, but reproducibility can also be provided via detailed instructions for how to replicate the results, access to a hosted model (e.g., in the case of a large language model), releasing of a model checkpoint, or other means that are appropriate to the research performed. • While NeurIPS does not require releasing code, the conference does require all submis-sions to provide some reasonable avenue for reproducibility, which may depend on the nature of the contribution. For example (a) If the contribution is primarily a new algorithm, the paper should make it clear how to reproduce that algorithm. (b) If the contribution is primarily a new model architecture, the paper should describe the architecture clearly and fully. (c) If the contribution is a new model (e.g., a large language model), then there should either be a way to access this model for reproducing the results or a way to reproduce the model (e.g., with an open-source dataset or instructions for how to construct the dataset). (d) We recognize that reproducibility may be tricky in some cases, in which case authors are welcome to describe the particular way they provide for reproducibility. In the case of closed-source models, it may be that access to the model is limited in some way (e.g., to registered users), but it should be possible for other researchers to have some path to reproducing or verifying the results. 5. Open access to data and code 
+
+Question: Does the paper provide open access to the data and code, with sufficient instruc-tions to faithfully reproduce the main experimental results, as described in supplemental material? Answer: [No] Justification: The datasets used in the paper are publicly available. However, we cannot publicly release the code due to institutional policy; the paper provides experimental and implementation details in Section 6.1 and Appendix C.1 to support reproduction of the main results. Guidelines: • The answer [N/A] means that paper does not include experiments requiring code. • Please see the NeurIPS code and data submission guidelines ( https://neurips.cc/ public/guides/CodeSubmissionPolicy ) for more details. • While we encourage the release of code and data, we understand that this might not be possible, so [No] is an acceptable answer. Papers cannot be rejected simply for not including code, unless this is central to the contribution (e.g., for a new open-source benchmark). • The instructions should contain the exact command and environment needed to run to reproduce the results. See the NeurIPS code and data submission guidelines ( https: //neurips.cc/public/guides/CodeSubmissionPolicy ) for more details. • The authors should provide instructions on data access and preparation, including how to access the raw data, preprocessed data, intermediate data, and generated data, etc. • The authors should provide scripts to reproduce all experimental results for the new proposed method and baselines. If only a subset of experiments are reproducible, they should state which ones are omitted from the script and why. 27 • At submission time, to preserve anonymity, the authors should release anonymized versions (if applicable). • Providing as much information as possible in supplemental material (appended to the paper) is recommended, but including URLs to data and code is permitted. 6. Experimental setting/details 
+
+Question: Does the paper specify all the training and test details (e.g., data splits, hyperpa-rameters, how they were chosen, type of optimizer) necessary to understand the results? Answer: [Yes] Justification: Our methods do not require training data or optimizer settings. The paper specifies the test-time experimental settings and hyperparameters in Appendix C.1, and studies hyperparameter sensitivity in Appendix D. Guidelines: • The answer [N/A] means that the paper does not include experiments. • The experimental setting should be presented in the core of the paper to a level of detail that is necessary to appreciate the results and make sense of them. • The full details can be provided either with the code, in appendix, or as supplemental material. 7. Experiment statistical significance 
+
+Question: Does the paper report error bars suitably and correctly defined or other appropriate information about the statistical significance of the experiments? Answer: [Yes] Justification: The paper reports mean and standard deviation for the main experimental results in Tables 2 and 3, with variability computed over multiple random seeds. The number of seeds is specified in Section 6.1 and the table captions. Guidelines: • The answer [N/A] means that the paper does not include experiments. • The authors should answer [Yes] if the results are accompanied by error bars, confidence intervals, or statistical significance tests, at least for the experiments that support the main claims of the paper. • The factors of variability that the error bars are capturing should be clearly stated (for example, train/test split, initialization, random drawing of some parameter, or overall run with given experimental conditions). • The method for calculating the error bars should be explained (closed form formula, call to a library function, bootstrap, etc.) • The assumptions made should be given (e.g., Normally distributed errors). • It should be clear whether the error bar is the standard deviation or the standard error of the mean. • It is OK to report 1-sigma error bars, but one should state it. The authors should preferably report a 2-sigma error bar than state that they have a 96% CI, if the hypothesis of Normality of errors is not verified. • For asymmetric distributions, the authors should be careful not to show in tables or figures symmetric error bars that would yield results that are out of range (e.g., negative error rates). • If error bars are reported in tables or plots, the authors should explain in the text how they were calculated and reference the corresponding figures or tables in the text. 8. Experiments compute resources 
+
+Question: For each experiment, does the paper provide sufficient information on the com-puter resources (type of compute workers, memory, time of execution) needed to reproduce the experiments? Answer: [Yes] Justification: The compute resources and serving setup are specified in Appendix C.3, including the hardware/serving infrastructure and detailed configurations in Table 5. Runtime is also reported via the accuracy–runtime evaluation in Section 6.3 and Appendix C.4. 28 Guidelines: • The answer [N/A] means that the paper does not include experiments. • The paper should indicate the type of compute workers CPU or GPU, internal cluster, or cloud provider, including relevant memory and storage. • The paper should provide the amount of compute required for each of the individual experimental runs as well as estimate the total compute. • The paper should disclose whether the full research project required more compute than the experiments reported in the paper (e.g., preliminary or failed experiments that didn’t make it into the paper). 9. Code of ethics 
+
+Question: Does the research conducted in the paper conform, in every respect, with the NeurIPS Code of Ethics https://neurips.cc/public/EthicsGuidelines ?Answer: [Yes] Justification: The work uses publicly available benchmark datasets and evaluates existing open models/PRMs for test-time inference, without involving human subjects or collecting personal/sensitive data. Guidelines: • The answer [N/A] means that the authors have not reviewed the NeurIPS Code of Ethics. • If the authors answer [No], they should explain the special circumstances that require a deviation from the Code of Ethics. • The authors should make sure to preserve anonymity (e.g., if there is a special consid-eration due to laws or regulations in their jurisdiction). 10. Broader impacts 
+
+Question: Does the paper discuss both potential positive societal impacts and negative societal impacts of the work performed? Answer: [Yes] Justification: We discuss broader impacts in Appendix E. Guidelines: • The answer [N/A] means that there is no societal impact of the work performed. • If the authors answer [N/A] or [No], they should explain why their work has no societal impact or why the paper does not address societal impact. • Examples of negative societal impacts include potential malicious or unintended uses (e.g., disinformation, generating fake profiles, surveillance), fairness considerations (e.g., deployment of technologies that could make decisions that unfairly impact specific groups), privacy considerations, and security considerations. • The conference expects that many papers will be foundational research and not tied to particular applications, let alone deployments. However, if there is a direct path to any negative applications, the authors should point it out. For example, it is legitimate to point out that an improvement in the quality of generative models could be used to generate Deepfakes for disinformation. On the other hand, it is not needed to point out that a generic algorithm for optimizing neural networks could enable people to train models that generate Deepfakes faster. • The authors should consider possible harms that could arise when the technology is being used as intended and functioning correctly, harms that could arise when the technology is being used as intended but gives incorrect results, and harms following from (intentional or unintentional) misuse of the technology. • If there are negative societal impacts, the authors could also discuss possible mitigation strategies (e.g., gated release of models, providing defenses in addition to attacks, mechanisms for monitoring misuse, mechanisms to monitor how a system learns from feedback over time, improving the efficiency and accessibility of ML). 11. Safeguards 
+
+29 Question: Does the paper describe safeguards that have been put in place for responsible release of data or models that have a high risk for misuse (e.g., pre-trained language models, image generators, or scraped datasets)? Answer: [N/A] Justification: This paper evaluates a test-time decoding/search procedure on public bench-marks and does not release new models or datasets; we therefore do not claim direct societal impacts. Guidelines: • The answer [N/A] means that the paper poses no such risks. • Released models that have a high risk for misuse or dual-use should be released with necessary safeguards to allow for controlled use of the model, for example by requiring that users adhere to usage guidelines or restrictions to access the model or implementing safety filters. • Datasets that have been scraped from the Internet could pose safety risks. The authors should describe how they avoided releasing unsafe images. • We recognize that providing effective safeguards is challenging, and many papers do not require this, but we encourage authors to take this into account and make a best faith effort. 12. Licenses for existing assets 
+
+Question: Are the creators or original owners of assets (e.g., code, data, models), used in the paper, properly credited and are the license and terms of use explicitly mentioned and properly respected? Answer: [Yes] Justification: We properly credit the datasets and models used via citations. Guidelines: • The answer [N/A] means that the paper does not use existing assets. • The authors should cite the original paper that produced the code package or dataset. • The authors should state which version of the asset is used and, if possible, include a URL. • The name of the license (e.g., CC-BY 4.0) should be included for each asset. • For scraped data from a particular source (e.g., website), the copyright and terms of service of that source should be provided. • If assets are released, the license, copyright information, and terms of use in the package should be provided. For popular datasets, paperswithcode.com/datasets 
+
+has curated licenses for some datasets. Their licensing guide can help determine the license of a dataset. • For existing datasets that are re-packaged, both the original license and the license of the derived asset (if it has changed) should be provided. • If this information is not available online, the authors are encouraged to reach out to the asset’s creators. 13. New assets 
+
+Question: Are new assets introduced in the paper well documented and is the documentation provided alongside the assets? Answer: [N/A] Justification: We do not introduce or release new assets (e.g., datasets, model checkpoints). Guidelines: • The answer [N/A] means that the paper does not release new assets. • Researchers should communicate the details of the dataset/code/model as part of their submissions via structured templates. This includes details about training, license, limitations, etc. • The paper should discuss whether and how consent was obtained from people whose asset is used. 30 • At submission time, remember to anonymize your assets (if applicable). You can either create an anonymized URL or include an anonymized zip file. 14. Crowdsourcing and research with human subjects 
+
+Question: For crowdsourcing experiments and research with human subjects, does the paper include the full text of instructions given to participants and screenshots, if applicable, as well as details about compensation (if any)? Answer: [N/A] Justification: Our paper does not involve crowdsourcing nor research with human subjects. Guidelines: • The answer [N/A] means that the paper does not involve crowdsourcing nor research with human subjects. • Including this information in the supplemental material is fine, but if the main contribu-tion of the paper involves human subjects, then as much detail as possible should be included in the main paper. • According to the NeurIPS Code of Ethics, workers involved in data collection, curation, or other labor should be paid at least the minimum wage in the country of the data collector. 15. Institutional review board (IRB) approvals or equivalent for research with human subjects 
+
+Question: Does the paper describe potential risks incurred by study participants, whether such risks were disclosed to the subjects, and whether Institutional Review Board (IRB) approvals (or an equivalent approval/review based on the requirements of your country or institution) were obtained? Answer: [N/A] Justification: Our paper does not involve crowdsourcing nor research with human subjects. Guidelines: • The answer [N/A] means that the paper does not involve crowdsourcing nor research with human subjects. • Depending on the country in which research is conducted, IRB approval (or equivalent) may be required for any human subjects research. If you obtained IRB approval, you should clearly state this in the paper. • We recognize that the procedures for this may vary significantly between institutions and locations, and we expect authors to adhere to the NeurIPS Code of Ethics and the guidelines for their institution. • For initial submissions, do not include any information that would break anonymity (if applicable), such as the institution conducting the review. 16. Declaration of LLM usage 
+
+Question: Does the paper describe the usage of LLMs if it is an important, original, or non-standard component of the core methods in this research? Note that if the LLM is used only for writing, editing, or formatting purposes and does not impact the core methodology, scientific rigor, or originality of the research, declaration is not required. Answer: [N/A] Justification: The core method development in this research does not involve LLMs as any important, original, or non-standard components. Guidelines: • The answer [N/A] means that the core method development in this research does not involve LLMs as any important, original, or non-standard components. • Please refer to our LLM policy in the NeurIPS handbook for what should or should not be described. 31
