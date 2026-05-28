@@ -1,0 +1,1587 @@
+Title: F-GRPO: Factorized Group-Relative Policy Optimization for Unified Candidate Generation and Ranking
+
+URL Source: https://arxiv.org/pdf/2605.12995v1
+
+Published Time: Thu, 14 May 2026 00:38:32 GMT
+
+Number of Pages: 31
+
+Markdown Content:
+Preprint. Under review. 
+
+# F-GRPO: Factorized Group-Relative Policy Optimization for Unified Candidate Generation and Ranking 
+
+Rohan Surana 1, Gagan Mundada 1, Junda Wu 1, Xintong Li 1, Yizhu Jiao 2, Bowen Jin 2,Sizhe Zhou 2, Tong Yu 3, Ritwik Sinha 3, Jiawei Han 2, Jingbo Shang 1, Julian McAuley 11UC San Diego 2University of Illinois at Urbana-Champaign 3Adobe Research 
+
+{rsurana,gmundada,juw069,xil240,jshang,jmcauley }@ucsd.edu 
+
+{yizhu,bowenj4,sizhez,hanj }@illinois.edu {tyu,ritwik }@adobe.com 
+
+## Abstract 
+
+Traditional retrieval pipelines optimize utility through stages of candidate retrieval and reranking, where ranking operates over a predefined candi-date set. Large Language Models (LLMs) broaden this into a generative process: given a candidate pool, an LLM can generate a subset and order it within a single autoregressive pass. However, this flexibility introduces a new optimization challenge: the model must search a combinatorial output space while receiving utility feedback only after the full ranked list is generated. Because this feedback is defined over the completed sequence, it cannot distinguish whether a poor result arises from failing to generate a relevant subset or from failing to rank that subset correctly. This credit assignment gap makes end-to-end optimization both unstable and sample-inefficient. Existing systems often address this challenge by separating candidate generation from ranking. However, such decoupling remains misaligned with downstream utility because the ranking stage is fundamentally limited by the candidate set it receives. To bridge the optimization gap between candidate generation and ranking, we propose a unified framework that performs both within a single autoregressive rollout and optimizes them end-to-end via factorized group-relative policy optimization (F-GRPO). Our framework factorizes the policy into candidate generation and ranking while sharing a single LLM backbone across both stages, and jointly trains them with an order-invariant coverage reward and a position-aware utility reward. To address the resulting phase-specific credit assignment problem, we use separate group-relative advantages for generation and ranking within a two-phase sequence-level objective. Across sequential recommendation and multi-hop question answering benchmarks, F-GRPO improves top-ranked performance over the GRPO and decoupled baselines, outperforms supervised alternatives, and remains competitive with strong zero-shot rerankers, with no architectural changes at inference time. 
+
+## 1 Introduction 
+
+Retrieval and recommendation systems often face a coupled list-to-rank problem, in which the system must identify a slate of relevant candidates and order them so that the best appear first (Robertson & Zaragoza, 2009; Liu, 2009; Ni et al., 2025; Li et al., 2025a; Huang et al., 2025a; Xie et al.; Yan et al.; Wu et al., 2021a). Traditionally, this is handled by multi-stage pipelines that first retrieve candidates and then rerank them (Nogueira et al., 2020; Glass et al., 2022; Yue et al., 2023; Ni et al., 2026; Wu et al., 2025d; Hu et al., 2025b; Xie et al., 2024; Wu et al., 2024a). Large Language Models (LLMs) broaden this design space by serving as stronger rerankers and direct listwise rankers over retrieved candidate sets (Sun et al., 2023; Hou et al., 2024; Surana et al., 2025). However, existing LLM-based approaches handle this coupling imperfectly. Some treat the LLM as a direct reranker over a fixed retrieved candidate pool (Sun et al., 2023; Hou 1
+
+> arXiv:2605.12995v1 [cs.LG] 13 May 2026
+
+Preprint. Under review. et al., 2024; Xia et al., 2025a; Wu et al., 2025a; Xia et al., 2025b), so the model outputs only a final ranking and provides no handle for separating candidate coverage from ordering quality (Figure 1a). Others decompose the problem into separate modules (Yue et al., 2023; Trivedi et al., 2023; Huang et al., 2025b), such as a retriever followed by a reranker. While effective, this separation introduces additional models and optimizes proxy objectives for each stage independently (Gupta et al., 2025; Wu et al., 2022; 2021b), rather than optimizing the coupled list-to-rank decision end-to-end. 
+
+> (a) Black-box LLM with implicit candidate pool.
+> (b) Factorized in-context generation and ranking with phase-specific goals.
+
+Figure 1: (a) Black-box ranking conflates candidate selection and ordering, yielding ambiguous credit assignment. (b) Factor-ized in-context generation and ranking with phase-specific goals within a single autore-gressive rollout. We make the list-to-rank decision explicit within a single LLM rollout through in-context exploration . The model first constructs a can-didate slate and then ranks that slate within the same autoregressive trajectory (Figure 1b). We term this in-context exploration because the slate phase explicitly searches over the can-didate space before committing to a ranking. Keeping both phases in the same context al-lows the ranking phase to condition directly on the generated candidates, enabling end-to-end optimization without the separate mod-ules required by staged pipelines (Yue et al., 2023; Trivedi et al., 2023; Wu et al., 2024b). A central challenge is that a single sequence-level reward conflates slate construction and ranking, so the same feedback simultaneously rewards coverage and ordering (Wu et al., 2025c; Huang et al., 2026b). We therefore pro-pose F-GRPO , which extends GRPO (Shao et al., 2024; Guo et al., 2025; Mundada et al., 2026; Surana et al., 2026) with two-phase sequence-level credit assignment by assigning separate group-relative advantages to slate construction and ranking. We evaluate F-GRPO on sequential recom-mendation (MovieLens (Harper & Konstan, 2015), LastFM (Bertin-Mahieux et al., 2011)) and multi-hop question answering (Hot-potQA (Yang et al., 2018), MuSiQue (Trivedi et al., 2022)) using Qwen3-4B (Team, 2025) and Qwen3.5-2B (Qwen Team, 2026) (§4.2, §4.3). Factorized credit assignment improves over GRPO, with the clearest gains at higher cutoffs and on settings where coverage is limiting. Analysis of training dynamics confirms the expected phase separation: the slate generator matures before the ranker, and error attribution is balanced across both phases, validating that each requires its own learning signal (§5). 
+
+Contributions. Our main contributions are as follows: • We formalize in-context generation and ranking as a factorized policy over a pro-posal slate and a permutation, defining an objective that jointly optimizes coverage and listwise ordering within a single autoregressive rollout (§2). • We propose F-GRPO, a two-phase sequence-level GRPO method with group-relative advantages for each phase, and evaluate it on sequential recommendation and multi-hop question answering using slate and ranking rewards (§3, §4.1). • Extensive empirical evaluations across diverse ranking tasks demonstrate that F-GRPO achieves consistent improvements in Recall@ k and NDCG@ k over zero-shot, supervised, decoupled, and GRPO baselines (§4.2, §4.3). 2Preprint. Under review. 
+
+## 2 Problem Formulation 
+
+We study a coupled list-to-rank decision in which, for each context x ∈ X , a model must first construct a slate of candidates and then order that slate. Let E denote the candidate space. Our goal is to optimize both (i) the coverage and quality of the candidates surfaced by the model, and (ii) the ordering so that higher-utility candidates appear earlier in the list. The context x absorbs all available information so that each task reduces to one coupled slate-construction-and-ranking decision. 
+
+Slate generation and in-context ranking as a factorized policy. Let τ = ( e1, . . . , en)
+
+denote an ordered proposal slate of n candidates with ei ∈ E , and let σ ∈ S n (the set of all permutations of [n] = {1, . . . , n}) be a permutation specifying the final in-context ranked 
+
+ordering of these candidates. We model the joint decision (τ, σ) with a factorized policy: 
+
+πθ (τ, σ | x) = πslate  
+
+> θ
+
+(τ | x) · πrank  
+
+> θ
+
+(σ | x, τ), (1) where πslate  
+
+> θ
+
+is the slate generator and πrank  
+
+> θ
+
+is the ranker conditioned on the generated slate. Both πslate  
+
+> θ
+
+and πrank  
+
+> θ
+
+are realized by a single autoregressive model with shared parameters: the model first generates tokens defining the slate τ, then produces an ordering over those candidates within the same decoding trajectory. 
+
+Feedback signals. Let U : X × E → R≥0 be a task-dependent utility function, and let 
+
+G(x) = {e ∈ E : U(x, e) > 0} denote the set of gold (relevant) items for context x. The 
+
+slate generator receives an order-invariant reward over the relevant proposed items, while the ranker receives a position-aware reward over the reordered list τσ = ( eσ(1), . . . , eσ(n)):
+
+Rslate (x, τ) ≜ ∑e∈uniq (τ) U(x, e), Rrank (x, τ, σ) ≜ Urank (x, τσ). Here, uniq (τ) denotes the set of distinct items in τ. These signals differ structurally: Rslate is order-invariant and depends only on coverage of relevant items, whereas Rrank is position-sensitive and depends on the ordering induced by σ. A single scalar reward applied uniformly across both phases would therefore couple two distinct objectives and obscure which phase caused success or failure. The specific instantiations of U and Urank are given in Section 4.1. 
+
+Learning objective. Let D denote the distribution over contexts. We optimize: max  
+
+> θ
+
+Ex∼D Eτ∼πslate   
+
+> θ(·| x)
+
+Eσ∼πrank  
+
+> θ(·| x,τ)
+
+h
+
+Rslate (x, τ) + λ Rrank (x, τ, σ)
+
+i
+
+, (2) where λ ≥ 0 controls the trade-off between candidate coverage and ranking quality. Sec-tion 3 shows how to optimize this objective using group-relative policy gradients with factorized credit assignment. 
+
+## 3 F-GRPO: Factorized Group-Relative Policy Optimization 
+
+Given the two-phase structure in Section 2, we optimize Eq. (2) with GRPO and then specialize it to factorized credit assignment. 
+
+3.1 Phase-Specific Losses 
+
+For each context x, GRPO samples a group of G rollouts from the current sampling policy 
+
+πθold . We parse each rollout o(i) into two segments: the slate content c(i) 
+
+> τ
+
+and the rank content c(i) 
+
+> σ
+
+, delimited by tag pairs ( <SLATE> . . . </SLATE> and <RANK> . . . </RANK> ). Each raw rollout o(i) is therefore the token-level realization of the decision pair (τ(i), σ(i)), with c(i)
+
+> τ
+
+decoding to τ(i) and c(i) 
+
+> σ
+
+decoding to σ(i). Delimiter tokens are included in the forward pass so that content tokens are conditioned on the correct tagged prefix, but are excluded from the loss via position-based masking (details in Appendix C.2). For readability, the 3Preprint. Under review. conditioning expressions below suppress these fixed delimiter tokens. At the full-sequence level, standard GRPO optimizes the clipped objective (Shao et al., 2024): 
+
+JGRPO (θ) = E
+
+ 1
+
+G
+
+> G
+
+# ∑
+
+> i=1
+
+1
+
+|o(i)| 
+
+> |o(i)|
+
+# ∑
+
+> t=1
+
+min 
+
+
+
+ρ(i) 
+
+> t
+
+ˆA(i), clip  ρ(i) 
+
+> t
+
+, 1 ±ϵclip 
+
+ ˆA(i)
+
+− βKL DKL 
+
+ πθ ∥ πref 
+
+ ,(3) where ρ(i) 
+
+> t
+
+= πθ (o(i) 
+
+> t
+
+| x, o(i)
+
+> <t
+
+)/πθold (o(i) 
+
+> t
+
+| x, o(i)
+
+> <t
+
+) is the per-token importance ratio, ˆA(i) is the rollout-level group-relative advantage, ϵclip is the clipping threshold, βKL is the KL regularization coefficient, and πref is a frozen reference policy. 
+
+3.2 Factorized Credit Assignment 
+
+Each rollout i produces a slate τ(i) and a ranking permutation σ(i), yielding two scalar rewards: R(i) 
+
+> slate
+
+= Rslate (x, τ(i)) and R(i) 
+
+> rank
+
+= Rrank (x, τ(i), σ(i)) as defined in Section 2. Rather than combining these into a single scalar, we compute separate group-relative advantages using the mean-subtracted Dr. GRPO variant: ˆA(i) 
+
+> slate
+
+= R(i) 
+
+> slate
+
+− ¯Rslate , ˆA(i) 
+
+> rank
+
+= R(i) 
+
+> rank
+
+− ¯Rrank , (4) where ¯Rslate = 1 
+
+> G
+
+∑Gj=1 R(j) 
+
+> slate
+
+and ¯Rrank = 1 
+
+> G
+
+∑Gj=1 R(j) 
+
+> rank
+
+are the per-prompt group means over the G rollouts. This phase-specific advantage assignment is the key departure from standard GRPO: standard GRPO applies one rollout-level advantage to all tokens in a completion, whereas F-GRPO applies different rollout-level advantages to the slate and rank token subsequences within the same autoregressive rollout. This decoupling ensures that the slate generator receives gradient signal purely from coverage quality, while the ranker receives signal purely from ordering quality. The complete training procedure is summarized in Algorithm 1. 
+
+Slate loss. The slate loss optimizes the probability of generating slate content conditioned on the prompt x:
+
+Lslate = − 1
+
+G
+
+> G
+
+# ∑
+
+> i=1
+
+1
+
+|c(i) 
+
+> τ
+
+| 
+
+> |c(i)
+> τ|
+
+# ∑
+
+> t=1
+
+min  ρ(i) 
+
+> τ,t
+
+ˆA(i)
+
+> slate
+
+, clip (ρ(i)
+
+> τ,t
+
+, 1 −ϵclip , 1 +ϵclip ) ˆA(i)
+
+> slate
+
+, (5) where ρ(i) 
+
+> τ,t
+
+= πθ (c(i) 
+
+> τ,t
+
+| x, c(i)
+
+> τ,<t
+
+) / πθold (c(i) 
+
+> τ,t
+
+| x, c(i)
+
+> τ,<t
+
+) is the per-token importance ratio and the advantage ˆA(i) 
+
+> slate
+
+is uniform across all slate tokens. 
+
+Rank loss. The rank loss optimizes the probability of generating ranking content condi-tioned on the prompt augmented with the generated slate :
+
+Lrank = − 1
+
+G
+
+> G
+
+# ∑
+
+> i=1
+
+1
+
+|c(i) 
+
+> σ
+
+| 
+
+> |c(i)
+> σ|
+
+# ∑
+
+> t=1
+
+min  ρ(i) 
+
+> σ,t
+
+ˆA(i)
+
+> rank
+
+, clip (ρ(i)
+
+> σ,t
+
+, 1 −ϵclip , 1 +ϵclip ) ˆA(i)
+
+> rank
+
+, (6) where ρ(i) 
+
+> σ,t
+
+is defined analogously with context (x, τ(i)). Conditioning on the slate ensures the ranker learns to order the specific candidates it was given, preserving the autoregressive dependency between phases. 
+
+Combined objective. The total loss combines both phases with optional KL regularization: 
+
+L(θ) = Lslate + λ Lrank + βKL DKL (πθ ∥πref ). (7) As shown in Appendix A, this loss admits a first-order decomposition into slate and rank GRPO-style gradients on shared parameters, implemented with a single backward pass through the combined objective. During training, rollouts that fail to produce the required delimiter tags receive a constant format penalty pfmt < 0 in place of the computed reward; Appendix C.3 specifies how this penalty is applied to the generated tokens in malformed cases. 4Preprint. Under review. 
+
+3.3 Gradient Analysis 
+
+For comparison, consider a GRPO baseline that defines a single combined reward R(i) 
+
+> joint
+
+=
+
+R(i) 
+
+> slate
+
++ λ R(i) 
+
+> rank
+
+and computes a joint group-relative advantage ˆA(i) 
+
+> joint
+
+= R(i) 
+
+> joint
+
+− ¯Rjoint , (8) where ¯Rjoint = 1 
+
+> G
+
+∑Gj=1 R(j) 
+
+> joint
+
+is the corresponding per-prompt group mean. This joint advantage is applied uniformly to all tokens in rollout i. At θ = θold , let T (i) 
+
+> τ
+
+and T (i)
+
+> σ
+
+denote the sets of token positions belonging to the slate content c(i) 
+
+> τ
+
+and rank content c(i) 
+
+> σ
+
+,respectively. The resulting policy gradient is 
+
+∇θ Ljoint = − 1
+
+G
+
+> G
+
+# ∑
+
+> i=1
+
+ˆA(i)
+
+> joint
+
+|o(i)|
+
+
+
+# ∑ 
+
+> t∈T (i)
+> τ
+
+∇θ log πθ (o(i) 
+
+> t
+
+| o(i)
+
+> <t
+
+)
+
+| {z }
+
+> slate tokens
+
++ ∑ 
+
+> t∈T (i)
+> σ
+
+∇θ log πθ (o(i) 
+
+> t
+
+| o(i)
+
+> <t
+
+)
+
+| {z }
+
+> rank tokens
+
+
+
+, (9) where |o(i)| = |T (i) 
+
+> τ
+
+| + |T (i) 
+
+> σ
+
+|. Because a single ˆA(i) 
+
+> joint
+
+multiplies both sums, the gradient direction for slate tokens is influenced by ranking quality and vice versa. This creates a credit-assignment failure: consider a rollout with high ranking quality ( R(i) 
+
+> rank
+
+≫ ¯Rrank )but poor coverage ( R(i) 
+
+> slate
+
+< ¯Rslate ). The combined advantage may be positive, reinforcing the very slate tokens that failed to surface relevant candidates. Conversely, excellent coverage paired with poor ranking yields a negative combined advantage that penalizes good candidate generation. In general, whenever the two reward components are not perfectly correlated across rollouts, the joint advantage introduces cross-phase gradient contamination that conflates what was proposed with how it was ordered. Such discordance is structural, not pathological: coverage is order-invariant and favors broad slates, while ranking quality is position-sensitive and rewards selective concentration. The two objectives inherently pull in different directions. 
+
+Remark 3.1 (Phase-specific gradient weighting) . Although both losses update shared param-eters θ, the advantage weighting ensures that each phase’s gradient is scaled solely by its own reward signal. At θ = θold , the gradient decomposes as ∇θ L = ∇θ Lslate + λ ∇θ Lrank +
+
+βKL ∇θ DKL , where ∇θ Lslate depends only on ˆA(i) 
+
+> slate
+
+and ∇θ Lrank depends only on ˆA(i) 
+
+> rank
+
+(see Appendix A for the full derivation). This first-order separability eliminates the cross-phase gradient contamination identified in Eq. (8). 
+
+## 4 Experiments 
+
+4.1 Experimental Setup Tasks and datasets. Sequential recommendation (MovieLens (Harper & Konstan, 2015), LastFM (Bertin-Mahieux et al., 2011)): select and rank items from a candidate set of 20. 
+
+Multi-hop QA (HotpotQA (Yang et al., 2018), MuSiQue (Trivedi et al., 2022)): select and rank 2–4 gold evidence passages from 20 candidates. Dataset statistics and preprocessing details are in Appendix B. 
+
+Models and training. We experiment with Qwen3-4B-Instruct-2507 (Team, 2025) and 
+
+Qwen3.5-2B (Qwen Team, 2026). We focus on the 2B–4B scale to enable thorough ablation under practical compute constraints. RL training is initialized from an SFT warm-start, ex-cept for Qwen3.5-2B on QA, which starts from the pretrained model. We use Dr. GRPO (Liu et al., 2025b) with G=8 rollouts per prompt and evaluate with greedy decoding ( T=0). Full training and evaluation details, including SFT variants and hyperparameters, are provided in Sections E, F and H. 5Preprint. Under review. LastFM MovieLens Recall@ k NDCG@ k Recall@ k NDCG@ k                                                                                                                                                                                                                                                                                    
+
+> Method @1 @3 @5 @1 @3 @5 @1 @3 @5 @1 @3 @5 Random 5.0 15.0 25.1 5.0 10.6 14.7 4.9 15.3 25.1 4.9 10.8 14.8 Popularity 24.7 45.9 56.6 24.7 36.9 41.3 14.4 36.3 55.1 14.4 26.9 34.6 BM25 6.2 17.8 27.7 6.2 12.8 16.8 8.7 18.4 27.7 8.7 14.1 17.9 GRU4Rec 50.8 69.0 75.5 50.8 61.3 64.0 21.8 46.8 60.2 21.8 36.1 41.6 UniSRec (zero-shot) 11.0 25.4 36.9 11.0 19.2 23.9 6.3 16.5 25.6 6.3 12.0 15.8 UniSRec (fine-tuned) 23.9 42.2 54.7 23.9 34.5 39.6 13.6 29.8 43.5 13.6 22.7 28.4
+> Qwen3-4B
+> Zero-shot (two-step) 18.8 44.7 58.4 18.8 34.0 39.6 12.1 29.0 40.0 12.1 21.6 26.1 Zero-shot (single-step) 20.6 43.8 55.8 20.6 34.3 39.2 11.9 26.7 38.8 11.9 20.3 25.2 SFT 40.1 47.1 53.8 40.1 44.0 46.8 21.5 29.3 36.5 21.5 25.8 28.8 Decoupled SFT (sel. only) 14.1 33.3 46.0 14.1 25.3 30.5 10.1 25.3 36.0 10.1 18.9 23.3 Decoupled SFT (rank. only) 28.8 42.9 51.9 28.8 37.0 40.7 16.5 28.0 37.0 16.5 23.0 26.8 Decoupled SFT (full) 33.4 40.4 46.3 33.4 37.4 39.8 19.7 27.8 35.5 19.7 24.3 27.5 GRPO 44.7 55.1 73.9 44.7 50.8 58.6 23.9 44.4 57.7 23.9 35.8 41.2
+> F-GRPO (ours) 46.8 72.4 81.7 46.8 61.7 65.5 26.9 53.6 66.6 26.9 42.3 47.6 Qwen3.5-2B
+> Zero-shot (two-step) 0.6 1.6 2.3 0.6 1.1 1.5 1.2 1.8 2.2 1.2 1.5 1.7 Zero-shot (single-step) 3.1 6.5 8.1 3.1 5.1 5.7 3.3 4.7 5.5 3.3 4.0 4.4 SFT 37.9 45.4 52.6 37.9 42.1 45.1 27.7 34.7 41.0 27.7 31.6 34.2 Decoupled SFT (sel. only) 0.5 1.3 2.0 0.5 0.9 1.2 0.7 1.8 2.7 0.7 1.3 1.7 Decoupled SFT (rank. only) 23.1 31.6 38.3 23.1 28.0 30.8 12.3 20.7 27.1 12.3 17.1 19.7 Decoupled SFT (full) 32.4 40.1 46.1 32.4 36.9 39.3 23.6 31.6 40.6 23.6 28.2 31.9 GRPO 38.7 60.4 71.3 38.7 51.3 55.8 24.4 50.7 56.4 24.4 39.6 42.1 F-GRPO (ours) 40.0 63.2 74.3 40.0 53.5 58.1 21.5 45.8 61.1 21.5 35.5 41.8
+
+Table 1: Recall@ k and NDCG@ k on LastFM and MovieLens for Qwen3-4B and Qwen3.5-2B. All values are percentages. Bold : best among LLM methods; Underlined: second best. 
+
+Reward instantiation. For both tasks, we instantiate the ranking reward with NDCG@ k:
+
+RNDCG rank (x, τ, σ; k) = DCG@ k(τσ)
+
+IDCG@ k(τ) , DCG@ k(τσ) = 
+
+> min (k,n)
+
+# ∑
+
+> i=1
+
+yσ(i)
+
+log 2(1 + i) , (10) where yi ∈ { 0, 1 } is the binary relevance of item ei and IDCG@ k(τ) is the maximum achievable DCG over all reorderings of τ. The slate reward counts recalled gold items and normalizes the raw count to recall for recommendation and to F1 for QA before advantage computation. We set λ = 1.0 throughout and provide a λ ablation in Section 5. The recommendation reward choice is analyzed in Section 5. 
+
+Baselines. We compare against three paradigms, each isolating a different factor: traditional 
+
+models calibrate against specialized architectures; LLM zero-shot methods establish the pretrained floor; and LLM trained methods ablate the contributions of RL and factorized credit assignment. Decoupled SFT is the closest structural analog, with separately trained selector and ranker modules. GRPO is the direct ablation of factorized credit assignment: it uses the same training setup as F-GRPO, but replaces the phase-specific advantages with a single joint reward Rjoint = Rslate + λRrank applied uniformly to all tokens. Full baseline details are provided in Appendix D; GRPO, zero-shot prompt formats, and SFT variants are detailed in Sections D.3, E.1 and I. 
+
+4.2 Sequential Recommendation 
+
+We report Recall@ k and NDCG@ k for k ∈ { 1, 3, 5 } on LastFM and MovieLens in Table 1 (Precision@ k and Hit@ k are deferred to Appendix F). 
+
+(i) RL fine-tuning yields large gains over supervised methods. F-GRPO improves substantially over SFT on both datasets (e.g., LastFM Recall@3: +53.7% relative; MovieLens Recall@3: 6Preprint. Under review. +82.9% relative), confirming that sequence-level reward optimization provides learning signal that token-level imitation cannot capture. 
+
+(ii) Factorized credit assignment improves over GRPO. F-GRPO improves over GRPO, with the clearest gains at higher k, where the slate’s broader coverage compounds with the ranker’s ordering (e.g., a +10.6% relative gain in LastFM Recall@5 over GRPO). 
+
+(iii) F-GRPO is competitive with specialized sequential models. Traditional baselines (GRU4Rec, UniSRec) score over learned item embeddings in a closed set, whereas our LLM generates item names as free-form text. Despite this harder setting, the Qwen3-4B F-GRPO variant surpasses all traditional methods at every cutoff on MovieLens and at @3 and @5 on LastFM. 
+
+(iv) Decoupled pipelines suffer from distribution mismatch. The full Decoupled SFT variant underperforms single-model SFT across all metrics despite requiring two separately fine-tuned backbone checkpoints, one for selection and one for ranking. This underperformance arises because the ranker is trained on gold slates, creating a distribution shift at inference. F-GRPO avoids this entirely: the ranker conditions on the slate generator’s own rollout output during training, so both phases co-adapt to each other’s evolving behavior. 0.4           
+
+> 0.5
+> 0.6
+> 0.7
+> 0.8
+> LastFM
+> Recall@ k
+> saturates
+> 0.45
+> 0.50
+> 0.55
+> 0.60
+> 0.65
+> 0.70 NDCG@ k
+> saturates
+> 12345
+> k
+> 0.3
+> 0.4
+> 0.5
+> 0.6
+> 0.7
+> MovieLens
+> saturates
+> 12345
+> k
+> 0.25
+> 0.30
+> 0.35
+> 0.40
+> 0.45
+> 0.50
+> saturates
+> F1 reward Recall reward
+
+(a) Slate reward ablation (Qwen3-4B). 0 1000 2000 3000 4000 5000     
+
+> eval step
+> 0.0
+> 0.2
+> 0.4
+> 0.6
+> 0.8
+> 1.0
+> normalized score
+> phase lead = 50
+> 90% of peak:
+> Slate recall: 150
+> Slate F1: 150
+> Ranker NDCG: 200
+> LastFM phase dynamics
+> Slate recall Slate F1 Ranker NDCG Baseline ranker NDCG
+
+(b) Phase separation on LastFM (Qwen3.5-2B). 
+
+Figure 2: Training dynamics on LastFM. (a) Slate reward ablation. (b) The slate generator matures before the ranker. 
+
+4.3 Multi-Hop Question Answering 
+
+We report Recall@ k and NDCG@ k for k ∈ { 1, 3, 5 } on MuSiQue and HotpotQA in Table 2 (Precision@ k and Hit@ k are deferred to Appendix F). 
+
+(i) Factorized credit assignment helps most when coverage is the bottleneck. On MuSiQue, F-GRPO outperforms GRPO at both model scales, with gains concentrated at higher cutoffs (e.g., a +13.2% relative gain in Recall@3 for Qwen3-4B). On HotpotQA, the 4B models are essentially tied, while the 2B model shows a clear gap at @3 and above (a +5.9% relative gain at Recall@3), suggesting phase-specific credit assignment is most beneficial when the backbone makes coverage harder. 
+
+(ii) In-domain RL training competitive with dedicated rerankers. The reranker baselines are trained on MS MARCO and applied zero-shot, whereas GRPO and F-GRPO are trained in-domain. On HotpotQA, the F-GRPO 4B models outperform all dedicated rerankers despite using a general-purpose backbone rather than a reranking-specialized model. On MuSiQue, F-GRPO exceeds MonoT5 at R@1 and @3, while being competitive at @5. 
+
+(iii) Decoupled pipelines remain less reliable than factorized RL. The selector-only and full de-coupled variants are consistently weak, and even the strongest variant (rank only) remains below F-GRPO at the cutoffs where coverage matters most. This mirrors the recommenda-tion setting: training the ranker on gold slates but deploying it on generated slates creates a distribution mismatch that end-to-end factorized RL avoids. Representative HotpotQA outputs are provided in Appendix G. 7Preprint. Under review. MuSiQue HotpotQA Recall@ k NDCG@ k Recall@ k NDCG@ k
+
+Method @1 @3 @5 @1 @3 @5 @1 @3 @5 @1 @3 @5 Random 5.0 15.0 24.7 13.3 14.9 19.6 5.0 15.0 25.1 9.9 13.1 18.1 BM25 22.9 42.9 53.4 57.0 46.7 51.4 41.8 72.2 82.7 83.6 73.2 78.5 RankZephyr 33.5 61.3 71.5 82.3 67.1 71.1 47.4 84.9 90.3 94.8 85.9 88.6 MonoT5 34.9 64.5 74.9 86.1 70.7 74.6 46.3 86.2 92.8 92.5 86.2 89.5 DuoT5 34.3 62.8 73.5 84.8 69.2 73.3 43.2 79.8 86.2 86.4 80.0 83.3 LiT5 33.6 54.7 64.4 82.7 61.9 65.6 46.3 78.4 85.2 92.5 80.3 83.7 
+
+Qwen3-4B 
+
+Zero-shot (two-step) 4.1 8.5 9.0 10.2 9.1 9.2 3.0 5.8 6.1 6.0 5.8 5.9 Zero-shot (single-step) 23.4 48.1 56.3 58.4 51.6 54.7 30.7 61.0 65.4 61.4 60.2 62.4 SFT 27.9 54.4 60.9 69.5 59.5 61.5 38.3 68.7 73.0 76.6 69.6 71.8 Decoupled SFT (sel. only) 8.6 16.3 18.3 21.7 18.0 18.5 9.8 19.1 20.6 19.6 18.9 19.7 Decoupled SFT (rank. only) 32.3 63.0 68.3 79.8 68.6 69.7 43.8 84.3 89.2 87.6 84.0 86.5 Decoupled SFT (full) 24.0 39.0 44.2 60.6 44.9 46.5 32.6 49.0 52.9 65.1 52.0 54.0 GRPO 36.4 63.0 63.0 90.8 71.3 69.2 48.0 93.0 93.1 96.1 93.0 93.1 
+
+F-GRPO (ours) 36.8 71.3 71.8 91.6 78.5 76.5 48.0 92.6 92.6 96.0 93.3 93.3 Qwen3.5-2B 
+
+Zero-shot (two-step) 2.2 4.1 4.8 5.4 4.5 4.7 1.0 1.9 2.1 2.0 1.9 2.0 Zero-shot (single-step) 5.2 10.6 12.4 13.2 11.5 12.1 4.0 7.4 8.4 8.0 7.4 7.9 SFT 13.5 29.2 38.0 34.4 31.2 35.0 5.2 15.1 25.3 10.4 13.2 18.2 Decoupled SFT (sel. only) 0.3 0.6 0.7 0.7 0.6 0.7 0.3 0.6 0.7 0.5 0.5 0.6 Decoupled SFT (rank. only) 17.8 37.4 49.8 43.7 39.0 44.8 21.4 51.7 68.5 42.8 47.7 56.1 Decoupled SFT (full) 5.2 14.8 24.5 13.8 14.7 19.5 6.0 16.6 25.7 11.9 14.8 19.3 GRPO 36.1 63.1 65.2 90.0 71.4 70.6 48.1 86.3 86.5 96.1 88.4 88.5 
+
+F-GRPO (ours) 36.2 72.7 73.2 89.9 79.2 77.2 48.1 91.4 91.4 96.3 92.5 92.5 
+
+Table 2: Recall@ k and NDCG@ k on MuSiQue and HotpotQA for Qwen3-4B and Qwen3.5-2B. All values are percentages. Bold : best among LLM methods; Underlined: second best. 
+
+## 5 Analysis 0 1500 3000 4500           
+
+> eval step
+> 0.06
+> 0.09
+> 0.12
+> 0.15
+> score
+> Δ = +0.069
+> Qwen3-4B — precision
+> 01500 3000 4500
+> eval step
+> 0.45
+> 0.60
+> 0.75
+> 0.90
+> score
+> Δ = -0.104
+> Qwen3-4B — recall
+> 01500 3000 4500
+> eval step
+> 0.09
+> 0.12
+> 0.15
+> score
+> Δ = +0.057
+> Qwen3.5-2B — precision
+> 01500 3000 4500
+> eval step
+> 0.45
+> 0.60
+> 0.75
+> score
+> Δ = -0.126
+> Qwen3.5-2B — recall
+> Slate (constructor) Ranker
+
+Figure 3: Precision–recall redistribution between the slate and ranker on LastFM across two model sizes. The ranker trades recall for precision by filtering the slate. 
+
+Slate reward formulation. Figure 2a compares F1- and recall-based slate rewards. At k=1, the two perform comparably, but the F1 reward saturates by k=3 on LastFM and k=4 on MovieLens, as its precision penalty discourages proposing candidates beyond the gold set. The recall reward improves monotonically, reaching a +48% relative gain in Recall@5 on LastFM and +85% on MovieLens. The main results use the recall-reward variant. 
+
+Phase separation. Figure 2b tracks when each component of the factorized policy matures during training. The slate generator reaches 90% of its peak slate recall by step 150, while the ranker does not reach the same fraction of its peak NDCG until step 200. This ordering is consistent with the conditional structure of the factorized policy (Eq. (1) ): because the ranker conditions on the slate ( πrank 
+
+θ (σ | x, τ)), it cannot rank effectively until the slate generator provides a sufficiently informative candidate set. 8Preprint. Under review. 
+
+Precision–recall redistribution. Figure 3 compares set-level precision and recall of the slate and ranker throughout training on LastFM across two model sizes. The slate generator consistently achieves high recall (0.90 for Qwen3-4B, 0.82 for Qwen3.5-2B) but low precision, reflecting its role as a broad candidate generator. The ranker reverses this balance: at convergence, the ranker achieves precision 0.163 versus the slate’s 0.090 for Qwen3-4B (0.140 vs. 0.082 for Qwen3.5-2B), while recall decreases correspondingly. The pattern holds across both model scales, showing that factorized training consistently produces broad slate coverage followed by sharper top-of-list concentration. Additional analyses of optimization dynamics and phase-specific error attribution are deferred to Appendix F.1 and F.2. 
+
+5.1 Ablation Studies 
+
+We conduct ablation studies on LastFM (Qwen3.5-2B) to isolate the contributions of each design choice. Full results and figures are in Appendix E.3. Sensitivity analysis shows that 
+
+λ=1.0 and slate size n=10 are robust defaults (Figure 4). Underweighting the ranking loss with λ=0.5 consistently degrades top-position quality, while n=5 limits coverage and n=15 dilutes the pool. These trends are stable across Recall@ k and NDCG@ k, supporting λ=1.0 and n=10 as effective defaults. 
+
+## 6 Related Work 
+
+6.1 LLM-based retrieval and ranking. 
+
+LLMs have been applied to retrieval and ranking across several paradigms. Generative retrieval methods emit document identifiers directly (Bevilacqua et al., 2022; Wang et al., 2022; Tang et al., 2024). When a candidate pool is available, LLMs serve as rerankers: pointwise (Nogueira et al., 2020), pairwise (Pradeep et al., 2021), or listwise (Sun et al., 2023; Pradeep et al., 2023; Tamber et al., 2023). More recent work optimizes ranking with RL: Neural PG-RANK (Gao et al., 2024) trains a Plackett-Luce ranking policy with REINFORCE, Rank-R1 (Zhuang et al., 2025) applies GRPO to setwise reranking, Rank-GRPO (Zhu et al., 2026) elevates credit assignment to the rank level, and IRPO (Wu et al., 2025c) and Huang et al. (2026a) extend DPO to listwise preferences. Closest to our work are methods that couple generation and ranking: two-stage counterfactual learning (Gupta et al., 2025), GeMS (Deffayet et al., 2023), and HiGR (Pang et al., 2026). However, these approaches either separate the generator and ranker into distinct models or train both stages under a single shared objective, leaving no mechanism to attribute outcome quality to individual phases. F-GRPO instead generates and ranks within a single autoregressive rollout and applies phase-specific credit assignment, so the slate generator and ranker each receive a gradient signal from their own reward. 
+
+6.2 Reinforcement learning for LLMs. 
+
+PPO (Schulman et al., 2017) was scaled to LLM alignment in RLHF (Ouyang et al., 2022); subsequent work favors critic-free variants. GRPO (Shao et al., 2024) replaces the critic with group-relative normalization and has been widely adopted for large-scale reasoning-oriented RL training. Refinements include Dr. GRPO (Liu et al., 2025b) (unbiased normaliza-tion), DAPO (Yu et al., 2025a) (decoupled clipping and token-level loss), and GVPO (Zhang et al., 2025) (provably optimal group weights). Offline alternatives such as DPO (Rafailov et al., 2023; Wang et al., 2026; Huang et al., 2025d; Li et al., 2025b; Huang et al., 2025c; Kveton et al., 2025) optimize directly from pairwise preferences. These methods target monolithic completions with a single reward; our work extends GRPO to structured rollouts (Yu et al., 2025b; Wu et al.; 2025b; Surana et al., 2026; Wu et al., 2024c) containing two coupled phases, each requiring its own credit assignment. An extended discussion is in Appendix J. 9Preprint. Under review. 
+
+## 7 Conclusion 
+
+We introduced F-GRPO, a factorized policy optimization framework that trains a single LLM to jointly generate and rank candidates by computing separate group-relative advantages for each phase. This eliminates the gradient interference of single-reward GRPO and the distribution mismatch of decoupled pipelines, while our theoretical analysis formalizes the first-order separability of the two credit signals. Experiments across sequential recommen-dation and multi-hop QA show improvements over the GRPO and decoupled baselines, with the strongest gains appearing when proposal coverage is the main bottleneck. 
+
+LLM usage: AI writing tools were used to assist in drafting and verifying the theoretical proofs in this paper. 
+
+## References 
+
+Thierry Bertin-Mahieux, Daniel P.W. Ellis, Brian Whitman, and Paul Lamere. The million song dataset. In Proceedings of the 12th International Conference on Music Information Retrieval (ISMIR 2011) , 2011. Michele Bevilacqua, Giuseppe Ottaviano, Patrick Lewis, Scott Yih, Sebastian Riedel, and Fabio Petroni. Autoregressive search engines: Generating substrings as document identi-fiers. Advances in Neural Information Processing Systems , 35:31668–31683, 2022. Romain Deffayet, Thibaut Thonet, Jean-Michel Renders, and Maarten de Rijke. Generative slate recommendation with reinforcement learning. In Proceedings of the Sixteenth ACM International Conference on Web Search and Data Mining , WSDM ’23, pp. 580–588, New York, NY, USA, 2023. Association for Computing Machinery. ISBN 9781450394079. doi: 10.1145/3539597.3570412. URL https://doi.org/10.1145/3539597.3570412 .Ge Gao, Jonathan D. Chang, Claire Cardie, Kiant ´e Brantley, and Thorsten Joachim. Policy-gradient training of language models for ranking, 2024. URL https://arxiv.org/abs/ 2310.04407 .Michael Glass, Gaetano Rossiello, Md Faisal Mahbub Chowdhury, Ankita Naik, Pengshan Cai, and Alfio Gliozzo. Re2G: Retrieve, rerank, generate. In Marine Carpuat, Marie-Catherine de Marneffe, and Ivan Vladimir Meza Ruiz (eds.), Proceedings of the 2022 Conference of the North American Chapter of the Association for Computational Linguistics: Human Language Technologies , pp. 2701–2715, Seattle, United States, July 2022. Association for Computational Linguistics. doi: 10.18653/v1/2022.naacl-main.194. URL https: //aclanthology.org/2022.naacl-main.194/ .Daya Guo, Dejian Yang, Haowei Zhang, Junxiao Song, Peiyi Wang, Qihao Zhu, Runxin Xu, Ruoyu Zhang, Shirong Ma, Xiao Bi, et al. Deepseek-r1 incentivizes reasoning in llms through reinforcement learning. Nature , 645(8081):633–638, 2025. Shashank Gupta, Yiming Liao, and Maarten de Rijke. Towards two-stage counterfactual learning to rank. In Proceedings of the 2025 International ACM SIGIR Conference on Innovative Concepts and Theories in Information Retrieval (ICTIR) , ICTIR ’25, pp. 177–182, New York, NY, USA, 2025. Association for Computing Machinery. ISBN 9798400718618. doi: 10. 1145/3731120.3744583. URL https://doi.org/10.1145/3731120.3744583 .F. Maxwell Harper and Joseph A. Konstan. The movielens datasets: History and context. 
+
+ACM Trans. Interact. Intell. Syst. , 5(4), December 2015. ISSN 2160-6455. doi: 10.1145/ 2827872. URL https://doi.org/10.1145/2827872 .Bal ´azs Hidasi, Alexandros Karatzoglou, Linas Baltrunas, and Domonkos Tikk. Session-based recommendations with recurrent neural networks, 2016. URL https://arxiv.org/ abs/1511.06939 .Yupeng Hou, Shanlei Mu, Wayne Xin Zhao, Yaliang Li, Bolin Ding, and Ji-Rong Wen. Towards universal sequence representation learning for recommender systems. In Pro-ceedings of the 28th ACM SIGKDD Conference on Knowledge Discovery and Data Mining , KDD 10 Preprint. Under review. ’22, pp. 585–593, New York, NY, USA, 2022. Association for Computing Machinery. ISBN 9781450393850. doi: 10.1145/3534678.3539381. URL https://doi.org/10.1145/3534678. 3539381 .Yupeng Hou, Junjie Zhang, Zihan Lin, Hongyu Lu, Ruobing Xie, Julian McAuley, and Wayne Xin Zhao. Large language models are zero-shot rankers for recommender systems. In Advances in Information Retrieval: 46th European Conference on Information Retrieval, ECIR 2024, Glasgow, UK, March 24–28, 2024, Proceedings, Part II , pp. 364–381, Berlin, Heidelberg, 2024. Springer-Verlag. ISBN 978-3-031-56059-0. doi: 10.1007/978-3-031-56060-6 24. URL 
+
+https://doi.org/10.1007/978-3-031-56060-6 24 .Jingcheng Hu, Yinmin Zhang, Qi Han, Daxin Jiang, Xiangyu Zhang, and Heung-Yeung Shum. Open-reasoner-zero: An open source approach to scaling up reinforcement learn-ing on the base model. In The Thirty-ninth Annual Conference on Neural Information Process-ing Systems , 2025a. URL https://openreview.net/forum?id=NFM8F5cV0V .Songwen Hu, Ryan A Rossi, Tong Yu, Junda Wu, Handong Zhao, Sungchul Kim, and Shuai Li. Interactive visualization recommendation with hier-sucb. In Proceedings of the ACM on Web Conference 2025 , pp. 313–321, 2025b. Chengkai Huang, Hongtao Huang, Tong Yu, Kaige Xie, Junda Wu, Shuai Zhang, Julian Mcauley, Dietmar Jannach, and Lina Yao. A survey of foundation model-powered recommender systems: From feature-based, generative to agentic paradigms. arXiv preprint arXiv:2504.16420 , 2025a. Chengkai Huang, Junda Wu, Yu Xia, Zixu Yu, Ruhan Wang, Tong Yu, Ruiyi Zhang, Ryan A Rossi, Branislav Kveton, Dongruo Zhou, et al. Towards agentic recommender systems in the era of multimodal large language models. arXiv preprint arXiv:2503.16734 , 2025b. Chengkai Huang, Junda Wu, Zhouhang Xie, Yu Xia, Rui Wang, Tong Yu, Subrata Mitra, Julian McAuley, and Lina Yao. Pluralistic off-policy evaluation and alignment. arXiv preprint arXiv:2509.19333 , 2025c. Hongtao Huang, Chengkai Huang, Junda Wu, Tong Yu, Julian McAuley, and Lina Yao. List-wise preference diffusion optimization for user behavior trajectories prediction. Advances in Neural Information Processing Systems , 38:159383–159408, 2026a. Zihan Huang, Junda Wu, Rohan Surana, Tong Yu, David Arbour, Ritwik Sinha, and Ju-lian McAuley. Image difference captioning via adversarial preference optimization. In 
+
+Proceedings of the 2025 Conference on Empirical Methods in Natural Language Processing , pp. 33746–33758, 2025d. Zihan Huang, Rohan Surana, Zhouhang Xie, Junda Wu, Yu Xia, and Julian McAuley. Evaluation on entity matching in recommender systems. arXiv preprint arXiv:2601.17218 ,2026b. Branislav Kveton, Xintong Li, Julian McAuley, Ryan Rossi, Jingbo Shang, Junda Wu, and Tong Yu. Active learning for direct preference optimization. arXiv preprint arXiv:2503.01076 , 2025. Li Li, Peilin Cai, Ryan A Rossi, Franck Dernoncourt, Branislav Kveton, Junda Wu, Tong Yu, Linxin Song, Tiankai Yang, Yuehan Qin, et al. A personalized conversational benchmark: Towards simulating personalized conversations. arXiv preprint arXiv:2505.14106 , 2025a. Xintong Li, Chuhan Wang, Junda Wu, Rohan Surana, Tong Yu, Julian McAuley, and Jingbo Shang. Importance sampling for multi-negative multimodal direct preference optimiza-tion. arXiv preprint arXiv:2509.25717 , 2025b. Haowei Liu, Xuyang Wu, Guohao Sun, Hsin-Tai Wu, Zhiqiang Tao, and Yi Fang. Ract: Ranking-aware chain-of-thought optimization for llms. In Proceedings of the 2025 Annual International ACM SIGIR Conference on Research and Development in Information Retrieval in the Asia Pacific Region , SIGIR-AP 2025, pp. 178–188, New York, NY, USA, 2025a. Association for Computing Machinery. ISBN 9798400722189. doi: 10.1145/3767695.3769487. URL 
+
+https://doi.org/10.1145/3767695.3769487 .11 Preprint. Under review. Tie-Yan Liu. Learning to rank for information retrieval. Foundations and Trends® in Information Retrieval , 3(3):225–331, 2009. Zichen Liu, Changyu Chen, Wenjun Li, Penghui Qi, Tianyu Pang, Chao Du, Wee Sun Lee, and Min Lin. Understanding r1-zero-like training: A critical perspective. In Second Confer-ence on Language Modeling , 2025b. URL https://openreview.net/forum?id=5PAF7PAY2Y .Sichun Luo, Bowei He, Haohan Zhao, Wei Shao, Yanlin Qi, Yinya Huang, Aojun Zhou, Yuxuan Yao, Zongpeng Li, Yuanzhang Xiao, Mingjie Zhan, and Linqi Song. Recranker: Instruction tuning large language model as ranker for top-k recommendation. ACM Trans. Inf. Syst. , 43(5), July 2025. ISSN 1046-8188. doi: 10.1145/3705728. URL https: //doi.org/10.1145/3705728 .MiniMax. Minimax-m1: Scaling test-time compute efficiently with lightning attention, 2025. URL https://arxiv.org/abs/2506.13585 .Gagan Mundada, Zihan Huang, Rohan Surana, Sheldon Yu, Jennifer Yuntong Zhang, Xin-tong Li, Tong Yu, Lina Yao, Jingbo Shang, Julian McAuley, et al. Ws-grpo: Weakly-supervised group-relative policy optimization for rollout-efficient reasoning. arXiv preprint arXiv:2602.17025 , 2026. Bo Ni, Leyao Wang, Yu Wang, Branislav Kveton, Franck Dernoncourt, Yu Xia, Hongjie Chen, Reuben Leura, Samyadeep Basu, Subhojyoti Mukherjee, et al. Large language models for conversational user simulation: A comprehensive survey. 2025. Bo Ni, Yu Wang, Leyao Wang, Branislav Kveton, Franck Dernoncourt, Yu Xia, Hongjie Chen, Reuben Luera, Samyadeep Basu, Subhojyoti Mukherjee, et al. A survey on llm-based conversational user simulation. In Proceedings of the 19th Conference of the European Chapter of the Association for Computational Linguistics (Volume 1: Long Papers) , pp. 4266–4301, 2026. Rodrigo Nogueira, Zhiying Jiang, Ronak Pradeep, and Jimmy Lin. Document ranking with a pretrained sequence-to-sequence model. In Trevor Cohn, Yulan He, and Yang Liu (eds.), Findings of the Association for Computational Linguistics: EMNLP 2020 , pp. 708–718, Online, November 2020. Association for Computational Linguistics. doi: 10.18653/v1/ 2020.findings-emnlp.63. URL https://aclanthology.org/2020.findings-emnlp.63/ .Long Ouyang, Jeffrey Wu, Xu Jiang, Diogo Almeida, Carroll Wainwright, Pamela Mishkin, Chong Zhang, Sandhini Agarwal, Katarina Slama, Alex Ray, et al. Training language models to follow instructions with human feedback. Advances in neural information processing systems , 35:27730–27744, 2022. Yunsheng Pang, Zijian Liu, Yudong Li, Shaojie Zhu, Zijian Luo, Chenyun Yu, Sikai Wu, Shichen Shen, Cong Xu, Bin Wang, Kai Jiang, Hongyong Yu, Chengxiang Zhuo, and Zang Li. Higr: Efficient generative slate recommendation via hierarchical planning and multi-objective preference alignment, 2026. URL https://arxiv.org/abs/2512.24787 .Ronak Pradeep, Rodrigo Nogueira, and Jimmy Lin. The expando-mono-duo design pattern for text ranking with pretrained sequence-to-sequence models, 2021. URL https://arxiv. org/abs/2101.05667 .Ronak Pradeep, Sahel Sharifymoghaddam, and Jimmy Lin. Rankzephyr: Effective and robust zero-shot listwise reranking is a breeze!, 2023. URL https://arxiv.org/abs/2312. 02724 .Qwen Team. Qwen3.5: Towards native multimodal agents, February 2026. URL https: //qwen.ai/blog?id=qwen3.5 .Rafael Rafailov, Archit Sharma, Eric Mitchell, Stefano Ermon, Christopher D. Manning, and Chelsea Finn. Direct preference optimization: your language model is secretly a reward model. In Proceedings of the 37th International Conference on Neural Information Processing Systems , NIPS ’23, Red Hook, NY, USA, 2023. Curran Associates Inc. 12 Preprint. Under review. Stephen Robertson and Hugo Zaragoza. The probabilistic relevance framework: Bm25 and beyond. Found. Trends Inf. Retr. , 3(4):333–389, April 2009. ISSN 1554-0669. doi: 10.1561/1500000019. URL https://doi.org/10.1561/1500000019 .John Schulman, Filip Wolski, Prafulla Dhariwal, Alec Radford, and Oleg Klimov. Proximal policy optimization algorithms, 2017. URL https://arxiv.org/abs/1707.06347 .Zhihong Shao, Peiyi Wang, Qihao Zhu, Runxin Xu, Junxiao Song, Xiao Bi, Haowei Zhang, Mingchuan Zhang, Y. K. Li, Y. Wu, and Daya Guo. Deepseekmath: Pushing the limits of mathematical reasoning in open language models, 2024. URL https://arxiv.org/abs/ 2402.03300 .Sahel Sharifymoghaddam, Ronak Pradeep, Andre Slavescu, Ryan Nguyen, Andrew Xu, Zijian Chen, Yilin Zhang, Yidi Chen, Jasper Xian, and Jimmy Lin. Rankllm: A python package for reranking with llms. In Proceedings of the 48th International ACM SIGIR Conference on Research and Development in Information Retrieval , SIGIR ’25, pp. 3681–3690, New York, NY, USA, 2025. Association for Computing Machinery. ISBN 9798400715921. doi: 10.1145/3726302.3730331. URL https://doi.org/10.1145/3726302.3730331 .Weiwei Sun, Lingyong Yan, Xinyu Ma, Shuaiqiang Wang, Pengjie Ren, Zhumin Chen, Dawei Yin, and Zhaochun Ren. Is ChatGPT good at search? investigating large language models as re-ranking agents. In Houda Bouamor, Juan Pino, and Kalika Bali (eds.), Proceedings of the 2023 Conference on Empirical Methods in Natural Language Processing , pp. 14918–14937, Singapore, December 2023. Association for Computational Linguistics. doi: 10.18653/v1/ 2023.emnlp-main.923. URL https://aclanthology.org/2023.emnlp-main.923/ .Rohan Surana, Junda Wu, Zhouhang Xie, Yu Xia, Harald Steck, Dawen Liang, Nathan Kallus, and Julian McAuley. From reviews to dialogues: Active synthesis for zero-shot llm-based conversational recommender system. arXiv preprint arXiv:2504.15476 , 2025. Rohan Surana, Gagan Mundada, Xunyi Jiang, Chuhan Wang, Zhenwei Tang, Difan Jiao, Zihan Huang, Yuxin Xiong, Junda Wu, Sheldon Yu, Xintong Li, Raghav Jain, Nikki Kuang, Sizhe Zhou, Bowen Jin, Zhendong Chu, Tong Yu, Ryan Rossi, Kuan-Hao Huang, Jingbo Shang, Jiawei Han, and Julian McAuley. Generate, filter, control, replay: A comprehensive survey of rollout strategies for llm reinforcement learning, 2026. URL 
+
+https://arxiv.org/abs/2605.02913 .Fahim Tajwar, Guanning Zeng, Yueer Zhou, Yuda Song, Daman Arora, Yiding Jiang, Jeff Schneider, Ruslan Salakhutdinov, Haiwen Feng, and Andrea Zanette. Maximum likeli-hood reinforcement learning, 2026. URL https://arxiv.org/abs/2602.02710 .Manveer Singh Tamber, Ronak Pradeep, and Jimmy Lin. Scaling down, litting up: Efficient zero-shot listwise reranking with seq2seq encoder-decoder models, 2023. URL https: //arxiv.org/abs/2312.16098 .Yubao Tang, Ruqing Zhang, Jiafeng Guo, Maarten de Rijke, Wei Chen, and Xueqi Cheng. Listwise generative retrieval models via a sequential learning process. ACM Trans. Inf. Syst. , 42(5), April 2024. ISSN 1046-8188. doi: 10.1145/3653712. URL https://doi.org/10. 1145/3653712 .Qwen Team. Qwen3 technical report, 2025. URL https://arxiv.org/abs/2505.09388 .Harsh Trivedi, Niranjan Balasubramanian, Tushar Khot, and Ashish Sabharwal. MuSiQue: Multihop questions via single-hop question composition. Transactions of the Association for Computational Linguistics , 10:539–554, 2022. doi: 10.1162/tacl a 00475. URL https: //aclanthology.org/2022.tacl-1.31/ .Harsh Trivedi, Niranjan Balasubramanian, Tushar Khot, and Ashish Sabharwal. Interleaving retrieval with chain-of-thought reasoning for knowledge-intensive multi-step questions. In Anna Rogers, Jordan Boyd-Graber, and Naoaki Okazaki (eds.), Proceedings of the 61st Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers) , pp. 10014–10037, Toronto, Canada, July 2023. Association for Computational Linguistics. doi: 10.18653/v1/2023.acl-long.557. URL https://aclanthology.org/2023.acl-long.557/ .13 Preprint. Under review. Chuhan Wang, Xintong Li, Jennifer Yuntong Zhang, Junda Wu, Chengkai Huang, Lina Yao, Julian McAuley, and Jingbo Shang. Scenealign: Aligning multimodal reasoning to scene graphs in complex visual scenes. arXiv preprint arXiv:2601.05600 , 2026. Lei Wang and Ee-Peng Lim. Zero-shot next-item recommendation using large pretrained language models, 2023. URL https://arxiv.org/abs/2304.03153 .Yujing Wang, Yingyan Hou, Haonan Wang, Ziming Miao, Shibin Wu, Qi Chen, Yuqing Xia, Chengmin Chi, Guoshuai Zhao, Zheng Liu, et al. A neural corpus indexer for document retrieval. Advances in Neural Information Processing Systems , 35:25600–25614, 2022. Junda Wu, Yuxin Xiong, Xintong Li, Sheldon Yu, Zhengmian Hu, Tong Yu, Rui Wang, Xiang Chen, Jingbo Shang, and Julian McAuley. Ctrls: Chain-of-thought reasoning via latent state-transition. In The 29th International Conference on Artificial Intelligence and Statistics .Junda Wu, Tong Yu, and Shuai Li. Deconfounded and explainable interactive vision-language retrieval of complex scenes. MM ’21, pp. 2103–2111, New York, NY, USA, 2021a. Association for Computing Machinery. ISBN 9781450386517. doi: 10.1145/3474085. 3475366. URL https://doi.org/10.1145/3474085.3475366 .Junda Wu, Canzhe Zhao, Tong Yu, Jingyang Li, and Shuai Li. Clustering of conversational bandits for user preference learning and elicitation. CIKM ’21, pp. 2129–2139, New York, NY, USA, 2021b. Association for Computing Machinery. ISBN 9781450384469. doi: 10.1145/3459637.3482328. URL https://doi.org/10.1145/3459637.3482328 .Junda Wu, Zhihui Xie, Tong Yu, Handong Zhao, Ruiyi Zhang, and Shuai Li. Dynamics-aware adaptation for reinforcement learning based cross-domain interactive recommendation. In Proceedings of the 45th International ACM SIGIR Conference on Research and Development in Information Retrieval , SIGIR ’22, pp. 290–300, New York, NY, USA, 2022. Association for Computing Machinery. ISBN 9781450387323. doi: 10.1145/3477495.3531969. URL 
+
+https://doi.org/10.1145/3477495.3531969 .Junda Wu, Cheng-Chun Chang, Tong Yu, Zhankui He, Jianing Wang, Yupeng Hou, and Julian McAuley. Coral: Collaborative retrieval-augmented large language models improve long-tail recommendation. In Proceedings of the 30th ACM SIGKDD conference on knowledge discovery and data mining , pp. 3391–3401, 2024a. Junda Wu, Hanjia Lyu, Yu Xia, Zhehao Zhang, Joe Barrow, Ishita Kumar, Mehrnoosh Mirta-heri, Hongjie Chen, Ryan A Rossi, Franck Dernoncourt, et al. Personalized multimodal large language models: A survey. arXiv preprint arXiv:2412.02142 , 2024b. Junda Wu, Tong Yu, Xiang Chen, Haoliang Wang, Ryan Rossi, Sungchul Kim, Anup Rao, and Julian McAuley. Decot: Debiasing chain-of-thought for knowledge-intensive tasks in large language models via causal intervention. In Proceedings of the 62nd Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers) , pp. 14073–14087, 2024c. Junda Wu, Warren Li, Zachary Novack, Amit Namburi, Carol Chen, and Julian McAuley. Collap: Contrastive long-form language-audio pretraining with musical temporal struc-ture augmentation. In ICASSP 2025-2025 IEEE International Conference on Acoustics, Speech and Signal Processing (ICASSP) , pp. 1–5. IEEE, 2025a. Junda Wu, Xintong Li, Ruoyu Wang, Yu Xia, Yuxin Xiong, Jianing Wang, Tong Yu, Xiang Chen, Branislav Kveton, Lina Yao, et al. Ocean: Offline chain-of-thought evaluation and alignment in large language models. In International Conference on Learning Representations ,volume 2025, pp. 100570–100589, 2025b. Junda Wu, Rohan Surana, Zhouhang Xie, Yiran Shen, Yu Xia, Tong Yu, Ryan A. Rossi, Prithviraj Ammanabrolu, and Julian McAuley. In-context ranking preference optimization. In Second Conference on Language Modeling , 2025c. URL https://openreview.net/forum? id=L2NPhLAKEd .14 Preprint. Under review. Junda Wu, Yu Xia, Tong Yu, Xiang Chen, Sai Sree Harsha, Akash V Maharaj, Ruiyi Zhang, Victor Bursztyn, Sungchul Kim, Ryan A Rossi, et al. Doc-react: Multi-page heterogeneous document question-answering. In Proceedings of the 63rd Annual Meeting of the Association for Computational Linguistics (Volume 2: Short Papers) , pp. 67–78, 2025d. Yu Xia, Yiran Jenny Shen, Junda Wu, Tong Yu, Sungchul Kim, Ryan A Rossi, Lina Yao, and Julian McAuley. Sand: Boosting llm agents with self-taught action deliberation. In 
+
+Proceedings of the 2025 Conference on Empirical Methods in Natural Language Processing , pp. 3062–3077, 2025a. Yu Xia, Junda Wu, Sungchul Kim, Tong Yu, Ryan A Rossi, Haoliang Wang, and Julian McAuley. Knowledge-aware query expansion with large language models for textual and relational retrieval. In Proceedings of the 2025 Conference of the Nations of the Americas Chapter of the Association for Computational Linguistics: Human Language Technologies (Volume 1: Long Papers) , pp. 4275–4286, 2025b. Zhouhang Xie, Junda Wu, Yiran Shen, Raghav Jain, Yu Xia, Xintong Li, Aaron Chang, Ryan A Rossi, Tong Yu, Sachin Kumar, et al. A survey on personalized and pluralistic preference alignment in large language models. In Second Conference on Language Modeling .Zhouhang Xie, Junda Wu, Hyunsik Jeon, Zhankui He, Harald Steck, Rahul Jha, Dawen Liang, Nathan Kallus, and Julian McAuley. Neighborhood-based collaborative filtering for conversational recommendation. In Proceedings of the 18th ACM Conference on Recommender Systems , pp. 1045–1050, 2024. An Yan, Zhengyuan Yang, Junda Wu, Wanrong Zhu, Jianwei Yang, Linjie Li, Kevin Lin, Jianfeng Wang, Julian McAuley, Jianfeng Gao, et al. List items one by one: A new data source and learning paradigm for multimodal llms. In First Conference on Language Modeling .Zhilin Yang, Peng Qi, Saizheng Zhang, Yoshua Bengio, William Cohen, Ruslan Salakhut-dinov, and Christopher D. Manning. HotpotQA: A dataset for diverse, explainable multi-hop question answering. In Ellen Riloff, David Chiang, Julia Hockenmaier, and Jun’ichi Tsujii (eds.), Proceedings of the 2018 Conference on Empirical Methods in Natural Language Processing , pp. 2369–2380, Brussels, Belgium, October-November 2018. As-sociation for Computational Linguistics. doi: 10.18653/v1/D18-1259. URL https: //aclanthology.org/D18-1259/ .Qiying Yu, Zheng Zhang, Ruofei Zhu, Yufeng Yuan, Xiaochen Zuo, YuYue, Weinan Dai, Tiantian Fan, Gaohong Liu, Juncai Liu, LingJun Liu, Xin Liu, Haibin Lin, Zhiqi Lin, Bole Ma, Guangming Sheng, Yuxuan Tong, Chi Zhang, Mofan Zhang, Ru Zhang, Wang Zhang, Hang Zhu, Jinhua Zhu, Jiaze Chen, Jiangjie Chen, Chengyi Wang, Hongli Yu, Yuxuan Song, Xiangpeng Wei, Hao Zhou, Jingjing Liu, Wei-Ying Ma, Ya-Qin Zhang, Lin Yan, Yonghui Wu, and Mingxuan Wang. DAPO: An open-source LLM reinforcement learning system at scale. In The Thirty-ninth Annual Conference on Neural Information Processing Systems , 2025a. URL https://openreview.net/forum?id=2a36EMSSTp .Sheldon Yu, Yuxin Xiong, Junda Wu, Xintong Li, Tong Yu, Xiang Chen, Ritwik Sinha, Jingbo Shang, and Julian McAuley. Explainable chain-of-thought reasoning: An empirical analysis on state-aware reasoning dynamics. arXiv preprint arXiv:2509.00190 , 2025b. Zhenrui Yue, Sara Rabhi, Gabriel de Souza Pereira Moreira, Dong Wang, and Even Oldridge. Llamarec: Two-stage recommendation using large language models for ranking, 2023. URL https://arxiv.org/abs/2311.02089 .Kaichen Zhang, Yuzhong Hong, Junwei Bao, Hongfei Jiang, Yang Song, Dingqian Hong, and Hui Xiong. Gvpo: Group variance policy optimization for large language model post-training, 2025. URL https://arxiv.org/abs/2504.19599 .Yaochen Zhu, Harald Steck, Dawen Liang, Yinhan He, Vito Ostuni, Jundong Li, and Nathan Kallus. Rank-grpo: Training llm-based conversational recommender systems with rein-forcement learning, 2026. URL https://arxiv.org/abs/2510.20150 .15 Preprint. Under review. Shengyao Zhuang, Xueguang Ma, Bevan Koopman, Jimmy Lin, and Guido Zuccon. Rank-r1: Enhancing reasoning in llm-based document rerankers via reinforcement learning, 2025. URL https://arxiv.org/abs/2503.06034 .
+
+## A Theoretical Analysis 
+
+A.1 Gradient Derivation for Two-Phase Sequence-Level Loss 
+
+We derive the gradient of the two-phase loss (Eq. (7) ) and show that, at the expansion point θ = θold , it decomposes into two GRPO updates, each weighted solely by its own phase-specific reward signal. This formalizes the phase-specific gradient weighting claimed in Remark 3.1. 
+
+Proposition A.1 (Gradient decomposition) . At θ = θold , the gradient of the combined loss decomposes as ∇θ L = ∇θ Lslate + λ ∇θ Lrank + βKL ∇θ DKL , where ∇θ Lslate depends only on the slate advantages ˆA(i) 
+
+> slate
+
+and ∇θ Lrank depends only on the rank advantages ˆA(i)
+
+> rank
+
+. At this expansion point, no cross-phase reward information enters either gradient term. Proof. For each rollout i, recall that c(i) 
+
+> τ
+
+and c(i) 
+
+> σ
+
+denote the slate and rank content tokens, respectively. The two-phase loss from Eq. (7) is: 
+
+L(θ) = Lslate + λ Lrank + βKL DKL (πθ ∥πref ). (11) 
+
+Slate Phase Gradient. The slate loss (Eq. 5) applies the clipped surrogate with per-token ratios ρ(i) 
+
+> τ,t
+
+= πθ (c(i) 
+
+> τ,t
+
+| x, c(i)
+
+> τ,<t
+
+)/πθold (c(i) 
+
+> τ,t
+
+| x, c(i)
+
+> τ,<t
+
+) and a uniform advantage ˆA(i) 
+
+> slate
+
+across all slate tokens: 
+
+Lslate = − 1
+
+G
+
+> G
+
+# ∑
+
+> i=1
+
+1
+
+|c(i) 
+
+> τ
+
+| 
+
+> |c(i)
+> τ|
+
+# ∑
+
+> t=1
+
+min  ρ(i) 
+
+> τ,t
+
+ˆA(i)
+
+> slate
+
+, clip (ρ(i)
+
+> τ,t
+
+, 1 −ϵclip , 1 +ϵclip ) ˆA(i)
+
+> slate
+
+. (12) At θ = θold , all ratios ρ(i) 
+
+> τ,t
+
+= 1, so the clipping is inactive and the gradient simplifies to: 
+
+∇θ Lslate θ=θold = − 1
+
+G
+
+> G
+
+# ∑
+
+> i=1
+
+ˆA(i)
+
+> slate
+
+|c(i) 
+
+> τ
+
+| 
+
+> |c(i)
+> τ|
+
+# ∑
+
+> t=1
+
+∇θ log πθ (c(i) 
+
+> τ,t
+
+| x, c(i)
+
+> τ,<t
+
+). (13) This is the standard REINFORCE gradient with phase-specific group-relative advantages applied uniformly to all tokens in the slate, with per-rollout length normalization. 
+
+Rank Phase Gradient. Analogously, the rank loss (Eq. 6) uses per-token ratios ρ(i) 
+
+> σ,t
+
+condi-tioned on the prompt augmented with the generated slate (x, τ(i)):
+
+∇θ Lrank θ=θold = − 1
+
+G
+
+> G
+
+# ∑
+
+> i=1
+
+ˆA(i)
+
+> rank
+
+|c(i) 
+
+> σ
+
+| 
+
+> |c(i)
+> σ|
+
+# ∑
+
+> t=1
+
+∇θ log πθ (c(i) 
+
+> σ,t
+
+| x, τ(i), c(i)
+
+> σ,<t
+
+). (14) 
+
+Independence of reward signals. The slate gradient is weighted solely by ˆA(i)
+
+> slate
+
+, computed from Rslate (Section 2), and the rank gradient is weighted solely by ˆA(i)
+
+> rank
+
+, computed from 
+
+Rrank (Section 2). Although both gradients update shared parameters θ, the advantage weighting ensures that each phase’s update direction is determined by its own reward alone. The slate is optimized purely for coverage quality and the ranker purely for ordering quality, with no cross-phase interference. This completes the proof. 16 Preprint. Under review. 
+
+Algorithm 1 Factorized List-and-Rank Training with Phase-Specific Group-Relative Advan-tages 
+
+Require: Training dataset Dtrain , group size G, clip ϵclip , KL coef. βKL , trade-off λ, lr α, temperature T, steps M, format penalty pfmt 
+
+1: Initialize policy parameters θ from SFT checkpoint; optionally fix reference πref ← πθ if βKL > 0
+
+2: for step = 1, . . . , M do 
+
+3: Sample minibatch B ⊂ D train 
+
+4: θold ← θ ▷ Snapshot current policy 
+
+5: for all x ∈ B do ▷ Rollout collection 
+
+6: for i = 1 to G do 
+
+7: Sample rollout o(i) ∼ πθold (· | x) with temperature T
+
+8: Parse o(i) into slate content c(i) 
+
+> τ
+
+and rank content c(i) 
+
+> σ
+
+via delimiter tags 
+
+9: if both <SLATE> and <RANK> present then ▷ Case 1 
+
+10: Compute R(i)
+
+> slate
+
+, R(i) 
+
+> rank
+
+from task-specific rewards 
+
+11: else if only <SLATE> present then ▷ Case 2 
+
+12: Compute R(i)
+
+> slate
+
+; set R(i) 
+
+> rank
+
+← pfmt 
+
+13: else ▷ Case 3: malformed 
+
+14: R(i) 
+
+> slate
+
+← pfmt , R(i) 
+
+> rank
+
+← pfmt 
+
+15: end if 
+
+16: end for 
+
+17: Compute group means ¯ Rslate and ¯ Rrank over G rollouts 
+
+18: for i = 1 to G do ▷ Factorized advantage estimation 
+
+19: ˆA(i) 
+
+> slate
+
+← R(i) 
+
+> slate
+
+− ¯Rslate 
+
+20: ˆA(i) 
+
+> rank
+
+← R(i) 
+
+> rank
+
+− ¯Rrank 
+
+21: end for 
+
+22: end for 
+
+23: Phase 1 (Slate): Compute per-token log-probs log πθ (c(i) 
+
+> τ,t
+
+| x, c(i) 
+
+> τ,<t
+
+) for all collected slate segments 
+
+24: Apply delimiter masking: loss on content tokens only (exclude <SLATE> , </SLATE> )
+
+25: Compute Lslate via per-token clipped loss (Eq. (5)) with ˆA(i)
+
+> slate
+
+26: Phase 2 (Rank): Compute per-token log-probs log πθ (c(i) 
+
+> σ,t
+
+| x, τ(i) , c(i) 
+
+> σ,<t
+
+) for Case 1 rank segments and Case 2 post-slate continuations 
+
+27: Apply delimiter masking for Case 1; use the raw continuation without delimiter masking for Case 2 
+
+28: Compute Lrank via per-token clipped loss (Eq. (6)) with ˆA(i)
+
+> rank
+
+29: L(θ) ← L slate + λ Lrank + βKL DKL (πθ ∥πref )
+
+30: θ ← θ − α∇θ L(θ) ▷ Single gradient step per batch 
+
+31: end for 
+
+32: return Trained policy πθ
+
+Relation to standard GRPO. Each phase independently instantiates the GRPO objective from Shao et al. (2024) (Eq. 3). The combined loss L = Lslate + λLrank is therefore equivalent to running two GRPO optimizations on shared model parameters, where λ controls the relative importance of ranking quality. The key difference from standard GRPO is that each optimization operates on a different token subsequence of the same rollout and uses a different reward function , whereas standard GRPO applies a single reward uniformly to all tokens. 
+
+## B Dataset Details 
+
+B.1 Dataset Statistics 
+
+Dataset Train Val Test Gold Count 
+
+Recommendation 
+
+MovieLens 10,000 200 2,000 1 item / 20 candidates LastFM 10,000 200 2,000 1 item / 20 candidates 
+
+Multi-Hop Question Answering 
+
+HotpotQA 10,000 200 2,000 2 passages / 20 candidates MuSiQue 10,000 200 2,000 2–4 passages / 20 candidates Table 3: Dataset statistics. Counts reflect subsampled splits used in experiments. 17 Preprint. Under review. 
+
+B.2 Dataset Formulation 
+
+We describe how each dataset is adapted for factorized list-and-rank training. All datasets follow the same structure: a context x, a candidate pool of 20 items, binary relevance labels, and a task-specific prompt. Candidates are shuffled to prevent positional shortcuts. 
+
+MovieLens. Each sample provides a user history of 10 previously watched movies and a candidate pool of 20 movies (1 true next movie + 19 distractors). Movie titles are normalized to handle year suffixes (e.g., “Toy Story (1995)” → “Toy Story”). 
+
+LastFM. Each sample provides a variable-length user history (18–220 artists, mean ∼125) and 20 candidates (1 gold + 19 distractors). The prompt template is identical to MovieLens, with “items” referring to artist names instead of movie titles. 
+
+HotpotQA. Each sample provides a multi-hop question and 20 candidate passages (exactly 2 gold supporting passages + 18 distractors), constructed from the HotpotQA distractor split (Yang et al., 2018). Passages are identified by abstract IDs (e.g., P5, P15) that serve the same role as item names in recommendation. The task requires selecting and ranking the two bridge passages needed to answer the question. 
+
+MuSiQue. Each sample provides a compositional multi-hop question (Trivedi et al., 2022) and 20 candidate passages (2–4 gold supporting passages + 16–18 distractors). Passages are shuffled and assigned abstract IDs (P1–P20). MuSiQue provides official train (19,938) and validation (2,417) splits but no separate test split. In our experiments, we subsample 10,000 training examples from the train split and construct disjoint validation and test subsets from the original validation split: 200 examples for validation and 2,000 for testing. 
+
+## C Implementation Details 
+
+This section describes the key implementation choices that bridge the formal objective (Section 3) to a working training pipeline. 
+
+C.1 Structured Output Format 
+
+All tasks use the same structured output format with XML-style delimiter tags. The model generates two segments in a single autoregressive pass: 
+
+Recommendation. Items are full names (movie/artist titles); the rank reorders by pre-dicted preference: 
+
+<SLATE>Item A, Item B, Item C, Item D</SLATE> <RANK>Item C, Item A, Item D, Item B</RANK> 
+
+Question answering. Items are passage IDs; the rank reorders by relevance to the query: 
+
+<SLATE>P2, P5, P8</SLATE> <RANK>P5, P2, P8</RANK> 
+
+During parsing, we extract content within tags and apply task-specific normalization for reward computation. 
+
+C.2 Delimiter Masking 
+
+The two-phase loss (Eq. (7) ) requires that delimiter tokens participate in the forward pass (so that content tokens are conditioned on the correct prefix) but are excluded from the loss. We implement this via position-based masking : for each delimiter pair (e.g., <SLATE> , </SLATE> ), we cache the opening token count Nopen and closing token count Nclose at initialization and 18 Preprint. Under review. zero out the loss for the first Nopen and last Nclose positions of each segment. Letting Tseg 
+
+denote the total number of tokens in a segment (including delimiters), the effective segment loss is Lseg = ∑Tseg −Nclose  
+
+> t=Nopen +1
+
+ℓt.
+
+C.3 Malformed Output Handling 
+
+During training, the model may produce outputs missing one or both delimiter tags. We classify each rollout into one of three cases and assign rewards accordingly: 1. Case 1 (both <SLATE> and <RANK> present): Normal two-phase processing with computed rewards for both phases. 2. Case 2 (only <SLATE> present): Slate reward is computed normally; the rank phase re-ceives a format penalty pfmt = −1.0, applied to the raw continuation after </SLATE> 
+
+(or to the full completion if generation stops immediately). 3. Case 3 (<SLATE> missing): Both phases receive pfmt , and the slate loss is applied to the full raw completion without delimiter masking. This classification determines the masking configuration for each rollout. Rollouts within the same case share the same delimiter configuration and are batched together. In practice, after SFT warm-start, nearly all rollouts are Case 1. 
+
+C.4 Rank Subset Validation 
+
+The ranker should reorder items from its own slate; introducing new items would violate the factorized conditioning πrank  
+
+> θ
+
+(σ | x, τ). We enforce this by checking whether every ranked item appears in the unique slate set uniq (τ). If not, the rank reward is replaced with the format penalty pfmt , providing a negative learning signal against out-of-slate hallucination. 
+
+## D Baseline Details 
+
+We provide full descriptions of all baselines to facilitate reproduction. All baselines operate on the same candidate pools, data splits, and evaluation metrics as F-GRPO. 
+
+D.1 Recommendation Baselines 
+
+All recommendation baselines operate on the same 20-candidate ranking task (1 gold + 19 distractors per sample) with identical evaluation (10,000 train / 2,000 test; 200 validation samples held out for model selection). 
+
+Random. Candidates are uniformly permuted and the top-5 returned. We average over 5 seeds for stable estimates. 
+
+Popularity. Item frequencies are counted from training answers with Laplace smoothing: score (i) = ( count (i) + 1)/(total + |V | ), where |V | is the number of unique items in the training set. Candidates are ranked by score. This non-personalized baseline measures signal in item popularity alone. 
+
+BM25 (Robertson & Zaragoza, 2009). The user’s interaction history is concatenated into a query string. Each candidate item name is treated as a document and scored with BM25Okapi. This tests whether surface-level lexical overlap between history and candidate names is informative. 
+
+GRU4Rec (Hidasi et al., 2016). GRU-based sequential model following the official imple-mentation. Architecture: constrained embedding (shared input/output weights), 1-layer GRU (100 hidden). Trained for 100 epochs (Adagrad, lr 0.05, batch 64) with cross-entropy 19 Preprint. Under review. loss and popularity-weighted negative sampling ( α=0.5). Best checkpoint selected by val-idation NDCG@5 every 10 epochs. Adapted from session-parallel batching to standard batching (our samples are independent histories). 
+
+UniSRec (Hou et al., 2022). Uses BERT-base CLS token embeddings (768D) as item rep-resentations, processed through a Mixture-of-Experts adaptor (8 experts, 768 →300) and a 2-layer SASRec-style encoder. Zero-shot : The pretrained checkpoint ( UniSRec-FHCKM-300 ,trained on 5 Amazon domains) is applied directly without fine-tuning. Fine-tuned : The MoE adaptor is updated via inductive fine-tuning on the target domain (encoder frozen), trained for 300 epochs with early stopping (patience 10) on validation NDCG@10. Data is converted to RecBole format for fine-tuning. 
+
+D.2 QA Reranking Baselines 
+
+For the QA tasks (HotpotQA, MuSiQue), we include four reranking-specialized baselines, all applied zero-shot (no task-specific training). These baselines are rerankers only: they reorder all given passages without an explicit selection phase. In contrast, our factorized approach first selects a subset via <SLATE> , then ranks within it via <RANK> . We report only ranker metrics for all rerankers (no slate metrics). All models are accessed via the rank llm 
+
+library (Sharifymoghaddam et al., 2025) (v0.21.0). 
+
+RankZephyr (Pradeep et al., 2023). A 7B model built on Zephyr-7B-β (Mistral-based), fine-tuned for listwise reranking via knowledge distillation from GPT-3.5 and GPT-4 on 100K MS MARCO queries. All candidate passages are formatted into a listwise prompt template, and the model outputs a reordered list of identifiers (e.g., [2] > [5] > [1] > ... ). Since both candidate pools fit within the model’s window size, each query is reranked in a single forward pass. Checkpoint: castorini/rank zephyr 7b v1 full .
+
+MonoT5 (Nogueira et al., 2020). A 3B T5-based model fine-tuned on MS MARCO with a pointwise relevance objective: given a query-passage pair, the model generates “true” or “false,” and the softmax probability of “true” serves as the relevance score. Each candidate is scored independently ( N forward passes per query), then passages are ranked by descending score. Checkpoint: castorini/monot5-3b-msmarco-10k ; context size 512, batch size 32. 
+
+DuoT5 (Pradeep et al., 2021). A 3B T5-based model from the Expando-Mono-Duo frame-work, fine-tuned on MS MARCO with a pairwise relevance objective. For each query, all 
+
+(N 
+
+> 2
+
+) = 190 candidate pairs are compared ( N=20 for both datasets), and the final ranking is by descending total wins. Checkpoint: castorini/duot5-3b-msmarco-10k ; context size 512. 
+
+LiT5 (Tamber et al., 2023). A T5-based model ( ∼3B parameters) that uses Fusion-in-Decoder (FiD) for listwise reranking: all candidates are encoded independently and fused during decoding, enabling joint comparison when producing the output permu-tation. The Distill variant is distilled from GPT-3.5/4 on MS MARCO. Checkpoint: 
+
+castorini/LiT5-Distill-xl ; context size 300, window size 20. 
+
+Summary of reranking paradigms. Table 4 summarizes the key differences among the four rerankers. 
+
+D.3 LLM Baselines Recommendation-side baselines. For recommendation, the compared LLM baselines cor-respond to prior paradigms: Zero-shot (two-step) follows staged prompting that separates candidate generation from ranking (Wang & Lim, 2023); Zero-shot (single-step) treats the model as a direct black-box generator/ranker (Hou et al., 2024); the baseline SFT follows supervised generative recommendation setups (Luo et al., 2025); Decoupled SFT mirrors two-stage pipelines with separately trained selector and ranker modules (Yue et al., 2023); and GRPO uses the Dr. GRPO variant (Liu et al., 2025b). 20 Preprint. Under review.        
+
+> Method Paradigm Size Complexity Training MonoT5 Pointwise 3B O
+
+(N) passes MS MARCO DuoT5 Pairwise 3B O(N2) passes MS MARCO RankZephyr Listwise 7B 1 pass MS MARCO (distilled) LiT5 Listwise (FiD) 3B 1 pass MS MARCO (distilled) GRPO Generative 4B 1 pass In-domain (RL) F-GRPO (ours) Generative (factorized) 4B 1 pass In-domain (RL) 
+
+Table 4: Comparison of QA reranking methods. N is the number of candidate passages. Dedicated rerankers are trained on MS MARCO and applied zero-shot; our methods are trained in-domain with RL. 
+
+GRPO baseline. Identical training setup to F-GRPO (same SFT warm-start, same G=8rollouts, same Dr. GRPO normalization) but uses a single combined reward R(i) 
+
+> joint
+
+= R(i) 
+
+> slate
+
++
+
+λ R(i) 
+
+> rank
+
+applied uniformly to all tokens. This is the direct ablation of factorized credit assignment: everything is the same except the advantage computation collapses both phases into one signal. Zero-shot and SFT baselines are described in Appendix I and E.1, respectively. 
+
+## E Training Details 
+
+E.1 SFT Warm-Start 
+
+All RL methods (GRPO, F-GRPO) are initialized with a supervised fine-tuning (SFT) warm-start. For Qwen3.5-2B on QA tasks, RL training starts from the pretrained model directly. Because our tasks require selecting items from a fixed candidate pool and producing struc-tured <SLATE> /<RANK> output, the pretrained model has a high malformed-output rate without SFT (missing tags, hallucinated item names), leading to sparse rewards that slow RL convergence. Across tasks, supervision is used only to construct SFT targets and compute rewards during training; inference receives only the prompt and candidate pool. 
+
+E.1.1 Factorized SFT (Ours) 
+
+The factorized SFT trains on gold completions with both <SLATE> and <RANK> tags. Given a sample with gold item(s) G and distractor pool N :1. Set slate size n = 10 (fixed, matching the output size cap max slate items ). 2. Construct slate: all gold items G plus min (n − |G| , |N | ) randomly sampled distrac-tors, then shuffle. 3. Construct rank: gold items first (shuffled), then distractors (shuffled), truncated to 
+
+max rank items (default 5). Example Gold Completion (Recommendation — Factorized)  
+
+> <SLATE>Dist. F, Dist. B, Gold , Dist. A, Dist. C, Dist. H, Dist. D, Dist. G, Dist. E, Dist. I</SLATE> <RANK> Gold , Dist. F, Dist. B, Dist. A, Dist. C</RANK>
+
+E.1.2 Baseline SFT 
+
+The baseline SFT trains on gold completions with only the <RANK> tag: 21 Preprint. Under review.               
+
+> Training Setup
+> Learning rate 2×10 −5(3% warmup) Epochs 1Optimizer AdamW Precision BF16 Batch size 2×8 accumulation (16) Max sequence length 2048 Max completion length 256 (Rec/QA) Training samples (Recommendation, MuSiQue) 10k (200 val) Checkpoint selection Best eval loss
+
+Table 5: Shared SFT training hyperparameters for baseline, factorized, and decoupled models. Example Gold Completion (Recommendation — Baseline) 
+
+> <RANK> Gold , Distractor A, Distractor B, Distractor C, Distractor D</RANK>
+
+Gold items are listed first, followed by randomly sampled distractors, truncated to 5 candi-dates. 
+
+E.1.3 Decoupled SFT 
+
+The decoupled SFT baseline trains separate specialist models for selection and ranking, then chains them at inference via two sequential LLM calls. This isolates the benefit of joint train-ing within a shared backbone (as in F-GRPO) versus independently optimized specialists. 
+
+Selector training. The selector is trained on <SLATE> -only gold completions using the Step-1 prompts from the two-step zero-shot baseline (Section I). Gold slates contain all gold items plus randomly sampled distractors (shuffled), matching the factorized SFT slate construction. 
+
+Ranker training. The ranker is trained on <RANK> -only gold completions using Step-2 prompts conditioned on gold slates. Gold ranks list gold items first (shuffled), then distractors (shuffled), truncated to 5 candidates. Critically, the ranker always sees gold slates 
+
+during training. 
+
+Inference. At inference, the selector generates a <SLATE> , which is parsed and fed as context to the ranker’s Step-2 prompt. The ranker then generates a <RANK> .
+
+Three variants. 
+
+• Selector only : Trained selector + base model ranker (zero-shot). • Ranker only : Base model selector (zero-shot) + trained ranker. • Full : Both selector and ranker trained independently. This baseline applies to recommendation and QA tasks. Both selector and ranker use best eval loss checkpoint selection, matching the other SFT baselines. 
+
+E.1.4 SFT Hyperparameters 
+
+All SFT variants share the same training recipe, summarized in Table 5. The SFT prompt templates match the corresponding GRPO prompts exactly (factorized or baseline; see Section H). After SFT, the checkpoint is loaded as the starting policy for GRPO training with learning rate 5 × 10 −6 (2 × 10 −6 for Qwen3.5-2B on QA tasks). 22 Preprint. Under review.   
+
+> Training Setup
+> Learning rate 5
+
+× 10 −6 (3% warmup); 2 × 10 −6 for Qwen3.5-2B QA Batch size 2 × 8 accumulation (16) Epochs 1RL algorithm Dr. GRPO Group size 8 rollouts per prompt Temperature 1.0 Top-p 0.9 Max completion length 256 (Rec/QA) Clipping ϵclip = 0.2 KL weight βKL = 0.0 Ranking trade-off λ = 1.0 Training samples 10k Output size caps rec/QA: max slate items = 10, max rank items = 5 Oversize penalty −0.5 per phase Evaluation Every 50 steps on 200 val prompts; final test on 2000 samples 
+
+Table 6: Shared GRPO hyperparameters for baseline and factorized models. 
+
+E.2 GRPO Hyperparameters 
+
+Table 6 summarizes the GRPO training configuration. Following recent works (Yu et al., 2025a; Liu et al., 2025b; Hu et al., 2025a), we set βKL = 0. Evaluation uses greedy decoding ( T=0, no sampling) with Geval =1 (deterministic single-prediction evaluation) for all tasks. 
+
+E.3 Ablation Results Hyperparameter sensitivity. Figure 4a shows that λ=1.0 yields the best or near-best per-formance across all metrics; underweighting the ranking loss ( λ=0.5) consistently degrades top-position quality, confirming that the ranker needs sufficient gradient signal. Figure 4b varies the maximum slate size n ∈ { 5, 10, 15 }. All metrics peak at n=10: n=5 limits candi-date coverage, while n=15 dilutes the pool with low-relevance items, slightly degrading Precision@1 and NDCG@1. We use λ=1.0 and n=10 as defaults. 
+
+## F Additional Results 
+
+The main text reports Recall@ k and NDCG@ k. For completeness, we include the remaining metrics here. Table 7 reports Precision@ k for recommendation (LastFM and MovieLens). Table 8 reports Precision@ k and Hit@ k for multi-hop QA (MuSiQue and HotpotQA). The trends are consistent with those reported in the main text: F-GRPO achieves the best or second-best performance among LLM-based methods across all cutoffs. 
+
+F.1 Optimization dynamics. 
+
+Figure 5 compares F-GRPO and GRPO evaluation metrics over training on Qwen3-4B. F-GRPO converges to higher values on most metrics on both datasets, with the clearest gains at higher cutoffs. The advantage is most pronounced on Recall@5 and NDCG@5, where the factorized slate’s broader coverage compounds with ranking quality: on MovieLens, F-GRPO reaches Recall@5 ≈0.70 while GRPO plateaus at ≈0.60. F-GRPO also converges faster, achieving strong performance within the first 1,000 steps on LastFM, while GRPO requires ≈2,000 steps to reach comparable Recall@1. This faster convergence is consistent with the credit-assignment analysis in Section 3: by eliminating the cross-phase gradient contamination identified in Equation (8), each phase receives a cleaner learning signal, reducing the number of updates needed to reach high reward. 23 Preprint. Under review. 0.5 1.0 2.0     
+
+> 0.0
+> 0.2
+> 0.4
+> 0.6
+> 0.8
+> Recall
+> 0.5 1.0 2.0
+> 0.0
+> 0.1
+> 0.2
+> 0.3
+> 0.4
+> Precision
+> 0.5 1.0 2.0
+> 0.0
+> 0.1
+> 0.2
+> 0.3
+> 0.4
+> 0.5
+> 0.6
+> NDCG
+> @1
+> @3
+> @5
+
+(a) Effect of λ on LastFM (Qwen3.5-2B). Stars mark the best setting per cutoff. 5 10 15 
+
+Slate Size 
+
+> 0.4
+> 0.5
+> 0.6
+> Score
+
+Recall@ k  
+
+> 510 15
+
+Slate Size 
+
+> 0.20
+> 0.25
+> 0.30
+> 0.35
+> 0.40
+
+Precision@ k  
+
+> 510 15
+
+Slate Size 
+
+> 0.35
+> 0.40
+> 0.45
+> 0.50
+
+NDCG@ k
+
+@1 @2 @3 
+
+(b) Effect of slate size on LastFM (Qwen3.5-2B). 
+
+Figure 4: Hyperparameter sensitivity for F-GRPO. (a) λ=1.0 yields the best or near-best performance across all metrics; underweighting the ranking loss ( λ=0.5) degrades top-position quality. (b) Performance peaks at slate size n=10; smaller slates limit coverage while larger slates dilute the candidate pool. LastFM MovieLens Method @1 @3 @5 @1 @3 @5 Random 5.0 5.0 5.0 4.9 5.1 5.0 Popularity 24.7 15.3 11.3 14.4 12.1 11.0 BM25 6.2 5.9 5.5 8.7 6.1 5.5 GRU4Rec 50.8 23.0 15.1 21.8 15.6 12.0 UniSRec (zero-shot) 11.0 8.5 7.4 6.3 5.5 5.1 UniSRec (fine-tuned) 23.9 14.1 10.9 13.6 9.9 8.7 
+
+Qwen3-4B 
+
+Zero-shot (two-step) 18.8 14.9 11.7 12.1 9.7 8.0 Zero-shot (single-step) 20.6 14.6 11.2 11.9 8.9 7.8 SFT 40.1 15.7 10.8 21.5 9.8 7.3 Decoupled SFT (sel. only) 14.1 11.1 9.2 10.1 8.4 7.2 Decoupled SFT (rank. only) 28.8 14.3 10.4 16.5 9.3 7.4 Decoupled SFT (full) 33.4 13.5 9.2 19.7 9.3 7.1 GRPO 44.7 18.4 14.8 23.9 14.8 11.5 
+
+F-GRPO (ours) 46.8 24.1 16.3 26.9 17.9 13.3 Qwen3.5-2B 
+
+Zero-shot (two-step) 0.6 0.5 0.5 1.2 0.6 0.4 Zero-shot (single-step) 3.1 2.2 1.6 3.3 1.5 1.1 SFT 37.9 15.1 10.5 27.7 11.6 8.2 Decoupled SFT (sel. only) 0.5 0.4 0.4 0.7 0.6 0.5 Decoupled SFT (rank. only) 23.1 10.5 7.7 12.3 6.9 5.4 Decoupled SFT (full) 32.4 13.4 9.2 23.6 10.5 8.1 GRPO 38.7 20.1 14.3 24.4 16.9 11.3 
+
+F-GRPO (ours) 40.0 21.1 14.9 21.5 15.3 12.2 
+
+Table 7: Precision@ k on LastFM and MovieLens for Qwen3-4B and Qwen3.5-2B. All values are percentages. Bold : best among LLM methods; Underlined: second best. 
+
+F.2 Error attribution 
+
+We decompose F-GRPO’s test errors into two failure modes: slate miss (the gold item never appears in the slate) and rank drop (the gold item appears in the slate but the ranker fails to surface it). 24 Preprint. Under review. MuSiQue HotpotQA Precision@ k Hit@ k Precision@ k Hit@ k
+
+Method @1 @3 @5 @1 @3 @5 @1 @3 @5 @1 @3 @5 Random 13.3 13.3 13.2 13.3 36.0 53.8 9.9 10.0 10.0 9.9 28.5 44.7 BM25 57.0 36.5 27.7 57.0 81.5 89.6 83.6 48.1 33.1 83.6 96.6 98.6 RankZephyr 82.3 51.2 36.6 82.3 95.0 97.6 94.8 56.6 36.1 94.8 98.9 99.6 MonoT5 86.1 54.8 38.6 86.1 97.9 99.4 92.5 57.5 37.1 92.5 99.0 99.8 DuoT5 84.8 53.2 37.9 84.8 96.7 99.1 86.4 53.2 34.5 86.4 92.6 94.9 LiT5 82.7 45.8 32.6 82.7 94.3 96.8 92.5 52.2 34.1 92.5 98.3 99.2 
+
+Qwen3-4B 
+
+Zero-shot (two-step) 10.2 7.3 4.6 10.2 11.8 11.9 6.0 3.9 2.4 6.0 6.3 6.4 Zero-shot (single-step) 58.4 41.0 29.2 58.4 70.4 72.6 61.4 40.6 26.1 61.4 68.2 69.6 SFT 69.5 46.3 31.4 69.5 91.3 94.5 76.6 45.8 29.2 76.6 90.1 92.5 Decoupled SFT (sel. only) 21.7 13.9 9.6 21.7 26.1 26.9 19.6 12.8 8.2 19.6 22.0 22.4 Decoupled SFT (rank. only) 79.8 53.6 35.3 79.8 95.1 96.9 87.6 56.2 35.7 87.6 97.6 99.0 Decoupled SFT (full) 60.6 33.5 23.0 60.6 75.4 80.4 65.1 32.6 21.1 65.1 76.4 79.4 GRPO 90.8 54.0 32.4 90.8 96.9 96.9 96.1 62.0 37.2 96.1 99.4 99.5 F-GRPO (ours) 91.6 60.8 36.8 91.6 97.8 97.8 96.0 61.7 37.0 96.0 99.4 99.4 
+
+Qwen3.5-2B 
+
+Zero-shot (two-step) 5.4 3.4 2.4 5.4 7.0 7.5 2.0 1.3 0.8 2.0 2.4 2.5 Zero-shot (single-step) 13.2 9.2 6.5 13.2 17.8 18.9 8.0 5.0 3.4 8.0 9.6 9.9 SFT 34.4 25.1 19.8 34.4 61.8 72.9 10.4 10.0 10.1 10.4 28.6 45.6 Decoupled SFT (sel. only) 0.7 0.4 0.4 0.7 1.0 1.3 0.5 0.4 0.3 0.5 0.9 0.9 Decoupled SFT (rank. only) 43.7 31.4 25.4 43.7 71.5 84.2 42.8 34.5 27.4 42.8 75.4 87.6 Decoupled SFT (full) 13.8 13.1 13.0 13.8 35.5 52.2 11.9 11.1 10.3 11.9 31.3 45.4 GRPO 90.0 53.1 32.9 90.0 97.3 98.3 96.1 57.6 34.6 96.1 99.1 99.2 F-GRPO (ours) 89.9 62.1 37.7 89.9 97.8 97.8 96.3 61.0 36.6 96.3 99.1 99.1 Table 8: Precision@ k and Hit@ k on MuSiQue and HotpotQA for Qwen3-4B and Qwen3.5-2B. All values are percentages. Bold : best among LLM methods; Underlined: second best. 0.34                       
+
+> 0.36
+> 0.38
+> 0.40
+> 0.42
+> 0.44
+> LastFM
+> Recall@ 1
+> 0.5
+> 0.6
+> 0.7
+> 0.8
+> Recall@ 5
+> 0.34
+> 0.36
+> 0.38
+> 0.40
+> 0.42
+> 0.44 NDCG@ 1
+> 0.40
+> 0.45
+> 0.50
+> 0.55
+> 0.60
+> NDCG@ 5
+> 01000 2000 3000 4000 5000
+> Training Step
+> 0.25
+> 0.30
+> 0.35
+> MovieLens
+> 01000 2000 3000 4000 5000
+> Training Step
+> 0.4
+> 0.5
+> 0.6
+> 0.7
+> 01000 2000 3000 4000 5000
+> Training Step
+> 0.25
+> 0.30
+> 0.35
+> 01000 2000 3000 4000 5000
+> Training Step
+> 0.30
+> 0.35
+> 0.40
+> 0.45
+> 0.50
+> F-GRPO (Ours) GRPO
+
+Figure 5: Evaluation metrics during training for F-GRPO and GRPO on Qwen3-4B. F-GRPO converges faster and reaches higher values on most metrics, with the clearest gains at higher cutoffs. Faint lines show raw values, bold lines are smoothed. On both datasets, errors are distributed across both phases rather than dominated by one, validating the factorized design. If errors were concentrated in a single phase, phase-specific advantages would offer little benefit over GRPO. 
+
+## G Representative Examples 
+
+We provide two representative HotpotQA examples from Qwen3-4B. For readability, we show passage titles rather than abstract IDs (P1–P20). 25 Preprint. Under review. 
+
+Dataset Slate miss Rank drop Success LastFM 8.9% 9.4% 81.8% MovieLens 17.9% 15.4% 66.6% 
+
+Table 9: Error attribution for F-GRPO (Qwen3-4B). Errors are distributed across both phases rather than dominated by one, confirming that each requires its own credit signal. HotpotQA Example 1 (Qwen3-4B) 
+
+Question: Shahnoza Nazirova traveled to Icheon and Ansan, South Korea to compete in what sport and event? 
+
+Gold truth: Shahnoza Nazirova; Volleyball at the 2014 Asian Games – Women 
+
+F-GRPO <SLATE> : Shahnoza Nazirova; Volleyball at the 2014 Asian Games -- Women; Icheon 
+
+F-GRPO <RANK> : Shahnoza Nazirova; Volleyball at the 2014 Asian Games -- Women 
+
+Baseline <RANK> : Icheon; Shahnoza Nazirova; Ansan 
+
+HotpotQA Example 2 (Qwen3-4B) 
+
+Question: What Russian city are both Mariinsky Ballet and Arthur Saint-L´ eon located? 
+
+Gold truth: Mariinsky Ballet; Arthur Saint-L´ eon 
+
+F-GRPO <SLATE> : Mariinsky Ballet; Mariinsky Theatre; Arthur Saint-L´ eon 
+
+F-GRPO <RANK> : Mariinsky Ballet; Arthur Saint-L´ eon 
+
+Baseline <RANK> : Mariinsky Ballet; Larissa Lezhnina; Mariinsky Theatre 
+
+## H Prompt Templates 
+
+We reproduce the full prompt templates used for all tasks. The factorized prompt in-structs the model to output both a slate and a ranking in a single pass, wrapped in 
+
+<SLATE>...</SLATE> and <RANK>...</RANK> tags; the baseline prompt uses only <RANK> 
+
+tags. Both include explicit size guidance (“up to 10” for the slate, “top 5” for the rank), matching the output size caps enforced during training (Appendix E.2). 26 Preprint. Under review. 
+
+H.1 Recommendation (MovieLens & LastFM) 
+
+Factorized Mode 
+
+Recommendation Factorized Prompt Template 
+
+System: You are a recommendation system. Given a user’s consumption history, predict which items they are most likely to select next from the provided candidates. 
+
+User: 
+
+User history: 
+
+{history }
+
+Candidate Items: 
+
+{candidates }
+
+Based on the user’s history, predict which items they are likely to select next. You MUST follow this exact format. Output ONLY the tagged blocks. Rules: • SLATE: Select up to {max slate } items the user would most likely choose next. • RANK: Rank your top {max rank } items from SLATE, from most to least likely to be their next choice. • Use ONLY item names from the candidates list (no paraphrases). Output format: 
+
+<SLATE>Item A, Item B, Item C, Item D</SLATE> <RANK>Item B, Item A, Item D, Item C</RANK> 
+
+Baseline Mode 
+
+Recommendation Baseline Prompt Template 
+
+System: You are a recommendation system. Given a user’s consumption history, predict which items they are most likely to select next from the provided candidates. 
+
+User: 
+
+User history: 
+
+{history }
+
+Candidate Items: 
+
+{candidates }
+
+Based on the user’s history, predict which items they are likely to select next. You MUST follow this exact format. Output ONLY the tagged block. Rules: • RANK: Select and rank the top {max rank } items from most to least likely to be their next choice. • Use ONLY item names from the candidates list (no paraphrases). Output format: 
+
+<RANK>Item B, Item A, Item D, Item C</RANK> 
+
+Note. For LastFM, “items” refer to artist names instead of movie titles. The prompt structure remains identical. 27 Preprint. Under review. 
+
+H.2 Question Answering (HotpotQA & MuSiQue) 
+
+Factorized Mode 
+
+QA Factorized Prompt Template 
+
+System: You are an evidence selection system. Given a question and candidate passages (each with an ID and content), identify which passage IDs contain supporting evidence. 
+
+User: 
+
+Query: {question }
+
+Candidate Passages: 
+
+{candidates }
+
+You MUST follow this exact format. Output ONLY the tagged blocks. Rules: • SLATE: Select up to {max slate } passage IDs that contain relevant evidence. • RANK: Rank your top {max rank } passage IDs from SLATE, from most to least relevant. • Use ONLY the passage IDs listed above (do not invent IDs). Output format: 
+
+<SLATE>P1, P2, P3</SLATE> <RANK>P2, P1, P3</RANK> 
+
+Baseline Mode 
+
+QA Baseline Prompt Template 
+
+System: You are an evidence selection system. Given a question and candidate passages (each with an ID and content), identify which passage IDs contain supporting evidence. 
+
+User: 
+
+Query: {question }
+
+Candidate Passages: 
+
+{candidates }
+
+You MUST follow this exact format. Output ONLY the tagged block. Rules: • RANK: Select and rank the top {max rank } passage IDs from most to least relevant. • Use ONLY the passage IDs listed above (do not invent IDs). Output format: 
+
+<RANK>P2, P1, P3</RANK> 
+
+Note. Candidate passages are formatted as **P1** followed by title and text content. For HotpotQA, passage IDs correspond to Wikipedia abstract titles; for MuSiQue, passages are numbered P1–P20. 
+
+## I Two-Step Zero-Shot Prompt Templates 
+
+The two-step zero-shot baseline decomposes the list-to-rank task into two sequential LLM calls without any training: Step 1 generates a <SLATE> (candidate selection), and Step 2 feeds the generated slate back as context to produce a <RANK> (ranking). Both steps use greedy decoding ( T=0) with a single rollout per prompt. System prompts are shared with the factorized templates above; we show only the user messages. 28 Preprint. Under review. 
+
+I.1 Recommendation 
+
+Recommendation — Step 1 (Slate Generation) 
+
+User history: 
+
+{history }
+
+Candidate Items: 
+
+{candidates }
+
+Based on the user’s history, select items they are most likely to choose next. You MUST follow this exact format. Output ONLY the tagged block. Rules: • SLATE: Select up to {max slate } items the user would most likely choose next. • Use ONLY item names from the candidates list (no paraphrases). Output format: 
+
+<SLATE>Item A, Item B, Item C, Item D</SLATE> 
+
+Recommendation — Step 2 (Ranking) 
+
+User history: 
+
+{history }
+
+Candidate Items: 
+
+{candidates }
+
+Based on the user’s history, you previously selected these items as likely next choices: 
+
+{slate items }
+
+You MUST follow this exact format. Output ONLY the tagged block. Rules: • RANK: Rank the top {max rank } items from most to least likely. • Use ONLY item names from your selection (no paraphrases). Output format: 
+
+<RANK>Item B, Item A, Item D, Item C</RANK> 
+
+I.2 Question Answering 
+
+QA — Step 1 (Slate Generation) 
+
+Query: {question }
+
+Candidate Passages: 
+
+{candidates }
+
+You MUST follow this exact format. Output ONLY the tagged block. Rules: • SLATE: Select up to {max slate } passage IDs that contain relevant evidence. • Use ONLY the passage IDs listed above (do not invent IDs). Output format: 
+
+<SLATE>P1, P2, P3</SLATE> 
+
+29 Preprint. Under review. QA — Step 2 (Ranking)    
+
+> Query: {question }
+> Candidate Passages:
+> {candidates }
+> Based on the query, you previously selected these passage IDs as containing relevant evidence:
+> {slate items }
+> You MUST follow this exact format. Output ONLY the tagged block. Rules: • RANK: Rank the top {max rank }passage IDs from most to least relevant. • Use ONLY passage IDs from your selection (do not invent IDs). Output format:
+> <RANK>P2, P1, P3</RANK>
+
+## J Extended Related Work 
+
+This section expands on the discussion in Section 6, providing additional context for each line of work. 
+
+J.1 LLM-based Retrieval and Reranking 
+
+Recent work on LLM-based retrieval broadly splits into generative retrieval and rerank-ing over a fixed candidate pool. In generative retrieval, language models directly emit document identifiers rather than independently scoring a corpus: Autoregressive Search En-gines (Bevilacqua et al., 2022) generates corpus-constrained n-gram substrings as identifiers using an FM-Index, Neural Corpus Indexer (Wang et al., 2022) learns hierarchical semantic document identifiers via clustering, and ListGR (Tang et al., 2024) extends the formulation with sequential, position-aware listwise training so the generation objective better matches ranked evaluation metrics. When a candidate set is already available, LLMs have been applied as increasingly strong rerankers. MonoT5 (Nogueira et al., 2020) and the Expando-Mono-Duo framework (Pradeep et al., 2021) showed that seq2seq models serve as effective pointwise and pairwise rerankers within classical multi-stage pipelines. Subsequent work moved toward listwise formulations. RankGPT (Sun et al., 2023) showed that proprietary LLMs can perform zero-shot listwise reranking competitive with supervised methods, and subsequent open-weight efforts distill this capability into smaller models: RankZephyr (Pradeep et al., 2023) into a 7B model and LiT5 (Tamber et al., 2023) into 220M–3B parameters via a Fusion-in-Decoder architecture. More recent methods optimize ranking objectives directly with RL or preference learning. Neural PG-RANK (Gao et al., 2024) casts retrieval as a Plackett-Luce ranking policy trained with REINFORCE. RaCT (Liu et al., 2025a) combines chain-of-thought supervised fine-tuning with ranking preference optimization. Rank-R1 (Zhuang et al., 2025) applies GRPO to a setwise reranker that selects the single most relevant document per call, eliciting reasoning without explicit supervision. Rank-GRPO (Zhu et al., 2026) adapts GRPO for conversational recommendation by elevating credit assignment from the token level to individual rank positions within a single list. IRPO (Wu et al., 2025c) extends DPO to listwise ranking with a positional preference model inspired by Plackett-Luce. Closest to our setting are methods that treat candidate generation and final ordering as cou-pled decisions rather than isolated stages. Two-stage counterfactual learning to rank (Gupta et al., 2025) jointly optimizes a candidate generator and ranker under logged feedback via alternating updates, while GeMS (Deffayet et al., 2023) and HiGR (Pang et al., 2026) optimize whole recommendation slates rather than independent items, using latent-space RL and hierarchical planning with listwise preference alignment, respectively. Our work follows this direction but differs in realizing both phases within a single autoregressive LLM rollout: 30 Preprint. Under review. the same model first constructs a slate and then ranks it, with separate learning signals for slate quality and within-slate ordering rather than a single shared sequence-level objective. 
+
+J.2 Reinforcement Learning for LLMs 
+
+Reinforcement learning for LLM post-training largely builds on policy-gradient meth-ods. PPO (Schulman et al., 2017), with its clipped surrogate objective, was scaled to LLM alignment in RLHF (Ouyang et al., 2022), where a learned reward model guides policy updates. Recent reasoning-focused work has increasingly favored critic-free variants that avoid learning a separate value model. Shao et al. (2024) introduced GRPO, which replaces the critic with group-relative reward normalization over multiple samples from the same prompt, making large-scale RL more practical for verifiable reasoning tasks; Guo et al. (2025) subsequently scaled this approach to frontier reasoning. Subsequent work mainly refines how credit is assigned within this critic-free framework. Dr. GRPO (Liu et al., 2025b) shows that the standard-deviation normalization in vanilla GRPO introduces response-length and question-difficulty biases, and proposes an unbiased variant that removes the denominator, improving stability and token efficiency. GVPO (Zhang et al., 2025) revisits the weighting rule more fundamentally, deriving group weights from the KL-constrained reward-maximization problem so that the intractable partition function cancels, yielding provably optimal updates. DAPO (Yu et al., 2025a) shows that large-scale reasoning RL is highly sensitive to training recipe choices, improving long-chain-of-thought training with decoupled clipping, dynamic sampling, token-level policy loss, and overlong reward shaping. MiniMax-M1 (MiniMax, 2025) introduces CISPO, which clips importance-sampling weights rather than zeroing out per-token gradient contributions, preserving entropy and stabilizing training for long generations. Alongside these online RL methods, work on offline and alternative objectives has broad-ened the design space. DPO (Rafailov et al., 2023) reparameterizes the reward under a Bradley-Terry preference model so that the partition function cancels, enabling direct optimization from pairwise preferences without an explicit reward model or RL loop. MaxRL (Tajwar et al., 2026) argues that expected-reward RL optimizes only a first-order approximation to the underlying maximum-likelihood objective over correct rollouts, and proposes a compute-indexed family of objectives that interpolate toward exact likelihood as sampling budget grows. Our method is complementary: whereas prior LLM RL methods improve the objective for a single monolithic completion, we study a structured rollout containing two coupled decisions (candidate generation and ranking) and therefore require phase-specific credit assignment rather than one shared sequence-level advantage. 31
