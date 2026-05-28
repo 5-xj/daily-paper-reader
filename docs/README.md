@@ -6,79 +6,78 @@
 </div>
 
 ## 每次日报
-- 最新运行日期：2026-04-29 ~ 2026-05-28
-- 运行时间：2026-05-28 20:36:11 UTC
+- 最新运行日期：2026-05-28
+- 运行时间：2026-05-28 21:42:16 UTC
 - 运行状态：成功
-- 本次总论文数：19
-- 精读区：8
+- 本次总论文数：18
+- 精读区：7
 - 速读区：11
 
 ### 今日简报（AI）
-今日精读两篇满分论文，聚焦重排序与轻量记忆重排序器。  
-最值得关注：UniRank提出的置信度有序去噪列表重排序，以及ConvMemory的负归因结果与研究预览冲突编辑。  
-建议深入列表重排序的去噪策略，同时留意轻量级模型在内存检索中的实际效果。
-- 详情：[/20260429-20260528/README](/20260429-20260528/README)
+今日阅读18篇论文，精读7篇，重点关注科学发现进化与符号回归两大前沿方向。
+
+最值得看的是EvoSci生物启发多智能体框架（9.0分）与潜在迭代精炼符号回归方法（9.0分），前者创新性地模拟群体智能驱动科研发现，后者突破传统回归的可解释性瓶颈。
+
+普通读者可优先关注EvoSci的多智能体协作逻辑，以及符号回归在复杂系统建模中的实用价值。
+- 详情：[/202605/28/README](/202605/28/README)
 
 ### 精读区论文标签
-1. [UniRank: Unified List-wise Reranking via Confidence-Ordered Denoising](/20260429-20260528/2605.10527v1-unirank-unified-list-wise-reranking-via-confidence-ordered-denoising)  
-   标签：评分：10.0/10、query:rerank-train
-   evidence：统一列表式重排序训练方法
-2. [ConvMemory: A Lightweight Learned Memory Reranker, a Negative Attribution Result, and a Research-Preview Conflict Editor](/20260429-20260528/2605.28062v1-convmemory-a-lightweight-learned-memory-reranker-a-negative-attribution-result-and-a-research-preview-conflict-editor)  
-   标签：评分：10.0/10、query:rerank-train
-   evidence：使用交叉编码器教师监督训练重排序器
-3. [Efficient Listwise Reranking with Compressed Document Representations](/20260429-20260528/2604.26483v1-efficient-listwise-reranking-with-compressed-document-representations)  
-   标签：评分：9.0/10、query:rerank-train
-   evidence：基于压缩文档表示的高效列表式重排序器及蒸馏训练
-4. [MemReranker: Reasoning-Aware Reranking for Agent Memory Retrieval](/20260429-20260528/2605.06132v1-memreranker-reasoning-aware-reranking-for-agent-memory-retrieval)  
-   标签：评分：9.0/10、query:rerank-train
-   evidence：面向Agent记忆检索的推理感知重排序器
-5. [Very Efficient Listwise Multimodal Reranking for Long Documents](/20260429-20260528/2605.11864v1-very-efficient-listwise-multimodal-reranking-for-long-documents)  
-   标签：评分：9.0/10、query:rerank-train
-   evidence：列表式重排序训练，两阶段训练策略
-6. [Active Learners as Efficient PRP Rerankers](/20260429-20260528/2605.14236v1-active-learners-as-efficient-prp-rerankers)  
-   标签：评分：9.0/10、query:rerank-train
-   evidence：主动学习将PRP重排序重构为从噪声成对比较中学习
-7. [Stop Overthinking: Unlocking Efficient Listwise Reranking with Minimal Reasoning](/20260429-20260528/2605.14450v1-stop-overthinking-unlocking-efficient-listwise-reranking-with-minimal-reasoning)  
-   标签：评分：9.0/10、query:rerank-train
-   evidence：基于长度正则化自蒸馏和LLM推理的列表式重排序训练
-8. [DeGRe: Dense-supervised Generative Reranking for Recommendation](/20260429-20260528/2605.25749v1-degre-dense-supervised-generative-reranking-for-recommendation)  
-   标签：评分：9.0/10、query:rerank-train
-   evidence：基于密集监督和列表级奖励的生成式重排序训练
+1. [EvoSci: A Bio-Inspired Multi-Agent Framework for the Evolution of Scientific Discovery](/202605/28/2605.24018v1-evosci-a-bio-inspired-multi-agent-framework-for-the-evolution-of-scientific-discovery)  
+   标签：评分：9.0/10、query:ad
+   evidence：使用LLM和演化的生物启发多智能体科学发现框架
+2. [Symbolic Regression via Latent Iterative Refinement](/202605/28/2605.27245v1-symbolic-regression-via-latent-iterative-refinement)  
+   标签：评分：9.0/10、query:ad
+   evidence：符号回归结合潜在空间迭代推理
+3. [MeVer at CheckThat! 2026: Cluster-Aware Hard-Negative Mining for Multilingual Scientific-Source Retrieval](/202605/28/2605.24236v1-mever-at-checkthat-2026-cluster-aware-hard-negative-mining-for-multilingual-scientific-source-retrieval)  
+   标签：评分：8.0/10、query:rerank-train
+   evidence：用于重排序器训练的聚类感知硬负样本挖掘
+4. [TempRet: Temporal Enhancement and Two-Stage Reranking for CVPR 2026 EPIC-KITCHENS-100 Multi-Instance Retrieval Challenge](/202605/28/2605.24470v1-tempret-temporal-enhancement-and-two-stage-reranking-for-cvpr-2026-epic-kitchens-100-multi-instance-retrieval-challenge)  
+   标签：评分：8.0/10、query:rerank-train
+   evidence：视频-文本检索的两阶段重排序方法
+5. [Top-k Approximate Functional Dependency Discovery](/202605/28/2605.24925v1-top-k-approximate-functional-dependency-discovery)  
+   标签：评分：8.0/10、query:ad
+   evidence：数据中top-k近似函数依赖发现
+6. [AIBuildAI-2: A Knowledge-Enhanced Agent for Automatically Building AI Models](/202605/28/2605.27873v1-aibuildai-2-a-knowledge-enhanced-agent-for-automatically-building-ai-models)  
+   标签：评分：8.0/10、query:ad
+   evidence：使用LLM和知识增强自动构建AI模型的智能体，用于科学发现
+7. [Tree of Thoughts as a Classical Heuristic Search Problem: Formal Foundations and Design Patterns](/202605/28/2605.28566v1-tree-of-thoughts-as-a-classical-heuristic-search-problem-formal-foundations-and-design-patterns)  
+   标签：评分：8.0/10、query:ad
+   evidence：将思维树建模为经典启发式搜索，形式化LLM推理
 
 ### 速读区论文标签
-1. [One Pass, Any Order: Position-Invariant Listwise Reranking for LLM-Based Recommendation](/20260429-20260528/2604.27599v1-one-pass-any-order-position-invariant-listwise-reranking-for-llm-based-recommendation)  
+1. [RAG-Match: Retrieval-Augmented Knowledge Injection and Hierarchical Reasoning for Calibrated Semantic Relevance](/202605/28/2605.25486v1-rag-match-retrieval-augmented-knowledge-injection-and-hierarchical-reasoning-for-calibrated-semantic-relevance)  
    标签：评分：8.0/10、query:rerank-train
-   evidence：提出列表式重排序训练方法InvariRank
-2. [MemReranker: Reasoning-Aware Reranking for Agent Memory Retrieval](/20260429-20260528/2605.06132v2-memreranker-reasoning-aware-reranking-for-agent-memory-retrieval)  
+   evidence：面向重新排序训练的检索增强与偏好校准框架
+2. [Credit-assigned Policy Gradient for Early Stage Retrieval in Two-stage Ranking](/202605/28/2605.26385v1-credit-assigned-policy-gradient-for-early-stage-retrieval-in-two-stage-ranking)  
    标签：评分：8.0/10、query:rerank-train
-   evidence：训练面向智能体记忆检索的推理感知重排序器
-3. [F-GRPO: Factorized Group-Relative Policy Optimization for Unified Candidate Generation and Ranking](/20260429-20260528/2605.12995v1-f-grpo-factorized-group-relative-policy-optimization-for-unified-candidate-generation-and-ranking)  
+   evidence：两阶段排序中早期排序器的策略梯度训练方法
+3. [VaxjoOnto: A Vaccine Ontology-driven Framework for Adjuvant Selection](/202605/28/biorxiv-10-1101-2025-11-27-690985-v2-vaxjoonto-a-vaccine-ontology-driven-framework-for-adjuvant-selection)  
    标签：评分：8.0/10、query:rerank-train
-   evidence：使用组相对策略优化训练统一排序模型
-4. [Bridging the Cold-Start Gap: LLM-Powered Synthetic Data Generation for Natural Language Search at Airbnb](/20260429-20260528/2605.21812v1-bridging-the-cold-start-gap-llm-powered-synthetic-data-generation-for-natural-language-search-at-airbnb)  
-   标签：评分：8.0/10、query:rerank-train
-   evidence：利用大模型生成合成数据以训练搜索排名模型
-5. [Caraman at SemEval-2026 Task 8: Three-Stage Multi-Turn Retrieval with Query Rewriting, Hybrid Search, and Cross-Encoder Reranking](/20260429-20260528/2605.12028v1-caraman-at-semeval-2026-task-8-three-stage-multi-turn-retrieval-with-query-rewriting-hybrid-search-and-cross-encoder-reranking)  
+   evidence：使用列表式排序目标训练图神经网络
+4. [Meta-Modal Agent: Sequential Evidence Routing for Missing-Modality Candidate Reranking](/202605/28/2605.25007v1-meta-modal-agent-sequential-evidence-routing-for-missing-modality-candidate-reranking)  
    标签：评分：7.0/10、query:rerank-train
-   evidence：使用BGE-reranker-v2-m3进行交叉编码器重排序
-6. [Layer-wise Token Compression for Efficient Document Reranking](/20260429-20260528/2605.20683v1-layer-wise-token-compression-for-efficient-document-reranking)  
+   evidence：基于大语言模型的候选池重排序器，使用强化学习训练，处理缺失模态
+5. [LRanker: LLM Ranker for Massive Candidates](/202605/28/2605.27810v1-lranker-llm-ranker-for-massive-candidates)  
    标签：评分：7.0/10、query:rerank-train
-   evidence：针对交叉编码器重排序的令牌压缩训练效率方法
-7. [Layer-wise Token Compression for Efficient Document Reranking](/20260429-20260528/2605.20683v2-layer-wise-token-compression-for-efficient-document-reranking)  
+   evidence：基于LLM的大规模候选排序框架
+6. [HELEA: Hard-Negative Benchmark and LLM-based Reranking for Robust Entity Alignment](/202605/28/2605.28308v1-helea-hard-negative-benchmark-and-llm-based-reranking-for-robust-entity-alignment)  
    标签：评分：7.0/10、query:rerank-train
-   evidence：针对交叉编码器重排序的令牌压缩训练效率方法
-8. [MeVer at CheckThat! 2026: Cluster-Aware Hard-Negative Mining for Multilingual Scientific-Source Retrieval](/20260429-20260528/2605.24236v1-mever-at-checkthat-2026-cluster-aware-hard-negative-mining-for-multilingual-scientific-source-retrieval)  
-   标签：评分：7.0/10、query:rerank-train
-   evidence：用于密集检索和重排序的硬负样本挖掘
-9. [RRCM: Ranking-Driven Retrieval over Collaborative and Meta Memories for LLM Recommendation](/20260429-20260528/2605.07129v1-rrcm-ranking-driven-retrieval-over-collaborative-and-meta-memories-for-llm-recommendation)  
-   标签：评分：6.0/10、query:rerank-train
-   evidence：LLM推荐中的排名驱动检索
-10. [HELEA: Hard-Negative Benchmark and LLM-based Reranking for Robust Entity Alignment](/20260429-20260528/2605.28308v1-helea-hard-negative-benchmark-and-llm-based-reranking-for-robust-entity-alignment)  
-   标签：评分：6.0/10、query:rerank-train
-   evidence：基于LLM的实体对齐重排序
-11. [Deterministic retrieval recovers biomedical associations lost by language models](/20260429-20260528/biorxiv-10-64898-2026-04-25-720782-v1-deterministic-retrieval-recovers-biomedical-associations-lost-by-language-models)  
+   evidence：基于LLM的重排序与难负样本训练
+7. [Rewriting protein alphabets with language models](/202605/28/biorxiv-10-1101-2025-11-27-690975-v3-rewriting-protein-alphabets-with-language-models)  
+   标签：评分：7.0/10、query:ad
+   evidence：使用语言模型进行蛋白质同源发现
+8. [Steered Generation via Gradient-Based Optimization on Sparse Query Features](/202605/28/2605.23040v1-steered-generation-via-gradient-based-optimization-on-sparse-query-features)  
    标签：评分：6.0/10、query:ad
-   evidence：基于大模型的确定性生物医学知识发现框架
+   evidence：基于梯度的LLM生成引导，可用于自动发现
+9. [TubiFM: Unified Item, Carousel, and Search Ranking for Streaming Discovery](/202605/28/2605.23702v1-tubifm-unified-item-carousel-and-search-ranking-for-streaming-discovery)  
+   标签：评分：6.0/10、query:rerank-train
+   evidence：统一的项目、轮播和搜索排名模型，使用跨表面用户故事训练排序模型
+10. [RICE-PO: Turning Retrieval Interactions into Credit Signals for Reasoning Agents](/202605/28/2605.26352v1-rice-po-turning-retrieval-interactions-into-credit-signals-for-reasoning-agents)  
+   标签：评分：6.0/10、query:rerank-train
+   evidence：通过检索交互为重排序器提供训练信号
+11. [Checking Fact with Better Retrieval: Dynamic Contrastive Learning for Evidence Retrieval](/202605/28/2605.27449v1-checking-fact-with-better-retrieval-dynamic-contrastive-learning-for-evidence-retrieval)  
+   标签：评分：6.0/10、query:rerank-train
+   evidence：用于证据检索的动态对比学习方法
 
 
 <div class="dpr-home-promo-card">

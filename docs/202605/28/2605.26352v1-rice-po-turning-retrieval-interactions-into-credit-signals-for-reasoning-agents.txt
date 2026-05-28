@@ -1,0 +1,810 @@
+Title: RICE-PO: Turning Retrieval Interactions into Credit Signals for Reasoning Agents
+
+URL Source: https://arxiv.org/pdf/2605.26352v1
+
+Published Time: Wed, 27 May 2026 00:16:59 GMT
+
+Number of Pages: 15
+
+Markdown Content:
+# RICE-PO: Turning Retrieval Interactions into Credit Signals for Reasoning Agents 
+
+Mingchen Li 1∗
+
+, Hansi Zeng 1∗
+
+, Zhuo Qian 2∗
+
+, Jiatan Huang 3, Hamed Zamani 1, Hong Yu 1
+
+> 1
+
+University of Massachusetts, Amherst 2Texas Tech University  
+
+> 3
+
+University of Connecticut 
+
+## Abstract 
+
+Retrieval is increasingly moving from one-shot matching toward interactive rea-soning, where language agents iteratively inspect evidence, reformulate queries, and search again. Training such agents raises a credit-assignment challenge: ex-ecutable actions such as queries or summaries can be directly evaluated by the retriever, while latent reasoning steps are not directly observable and only affect future executable actions. This asymmetry makes outcome-level reward assign-ment unreliable, as the same final reward may credit reasoning steps that did not actually shape retrieval success. We propose RICE-PO, a critic-free policy op-timization framework that converts retrieval interactions into localized learning signals. RICE-PO selects high-uncertainty executable actions as anchors, evaluates local counterfactual branches using retrieval metrics, and propagates credit to latent reasoning steps only when reasoning-to-action influence is strong and future resid-ual effects are stable. On BRIGHT and BEIR, RICE-PO consistently outperforms prompt-based agents and group-based RL baselines under the same retriever setting. These results show that the structure of agent-environment interaction itself can provide useful supervision for training reasoning-based retrieval agents. 
+
+## 1 Introduction 
+
+As the scale and complexity of information needs continue to grow, retrieval is increasingly shifting from a one-shot matching problem toward an interactive reasoning process [ 17 , 10 , 15 ]. Rather than relying on a single query-document comparison, a reasoning agent may need to interact with an external retriever over multiple rounds. At each round, the agent reasons over the retrieved evidence to identify missing constraints, reformulates the query accordingly, and sends the refined query back to the retriever, which executes the search over the document collection. This interaction loop is especially important in reasoning-intensive retrieval, where relevant evidence is often not connected to the original query by surface lexical overlap or shallow semantic similarity. Recent methods have therefore begun to incorporate retrieval interaction into reasoning-intensive retrieval. For example, ThinkQE [ 12 ] and Diver [ 17 ] use prompt-based interaction with retrieval tools to iteratively refine search inputs, but they do not learn from the interaction process itself. Instead, they rely on fixed prompting strategies and tool feedback at inference time. More recently, RL-based methods directly optimize query generation with retrieval feedback [ 13 , 9 ]. While these methods improve retrieval-oriented generation, they still leave a key question unresolved: how should credit be assigned when retrieval trajectories contain actions with different observability and only sparse reward signals? Our key observation is that retrieval interactions contain not only final outcome rewards, but also intermediate signals that can be used for credit assignment. Executable actions, such as generated 
+
+> ∗indicates equal contribution Preprint.
+> arXiv:2605.26352v1 [cs.CL] 25 May 2026
+
+queries or summaries, can be directly submitted to the retriever and evaluated with retrieval metrics. In contrast, latent reasoning actions are not directly executable or measurable; they should receive credit only when alternative reasoning continuations from the same history lead to meaningfully different executable summaries and retrieval rewards. This observation motivates a two-stage process for converting interaction into learning signals. First, the agent should identify which intermediate decisions are worth inspecting, since not every reasoning step substantially changes the following executable summary or its retrieval score. Second, once an executable summary receives retrieval feedback, the agent should decide whether this feedback can be reliably attributed back to the preceding latent reasoning span. Based on this view, we propose a critic-free framework that converts retrieval interactions into action-level learning signals. First , it selects critical decision points using three branch diagnostics: policy uncertainty, which identifies high-entropy executable summaries; reasoning-to-summary influence, which measures whether alternative reasoning continuations lead to different summary rewards; and future residual stability, which checks whether later retrieval rounds preserve rather than overturn the local reward difference. Second , for the selected points, it constructs local counterfactual branches from the same interaction history and evaluates the resulting summaries with retrieval metrics, producing step-specific summary rewards. Third , it propagates these summary rewards to latent reasoning spans only when the future residual effect is stable and the reasoning-to-summary influence is sufficiently strong, preventing local rewards from being copied backward when later interaction steps dominate or overturn the current summary reward. This design preserves the efficiency of group-based policy optimization while introducing fine-grained supervision without learned critics, process reward models, or exhaustive per-step rollouts. Our contributions are summarized as follows: • We introduce an observability-aware credit assignment perspective for reasoning-based retrieval, showing that executable summaries can provide direct retrieval feedback, while latent reasoning spans require selective backward credit propagation. • We propose a critic-free credit assignment framework that exploits the executable-latent action asymmetry of retrieval agents: executable summaries provide step-specific retrieval rewards, while latent reasoning spans receive credit through uncertainty-triggered counterfactual evaluation and residual-stability gating. • We conduct experiments on BRIGHT and BEIR retrieval tasks , demonstrating consistent gains over prompt-based agents and group-based RL baselines, together with analyses of uncertainty selection, local feedback quality, credit propagation reliability, and branching cost. 
+
+## 2 Related Work 
+
+Interactive Retrieval for Reasoning-Intensive Tasks Reasoning-intensive retrieval has long been a central problem in information retrieval (IR) [ 24 ], with broad applications in search, recommendation[ 11 , 4, 29 ], and question answering [ 14 , 5]. Unlike conventional keyword-based retrieval, these tasks often require systems to interpret implicit constraints, infer missing context, and transform complex information needs into effective search queries.To improve interaction with the retriever, supervised methods fine-tune LLMs or sequence-to-sequence models to produce clearer and more specific queries [ 30 , 16 , 19 ]. In parallel, prompt-based methods use LLMs to generate pseudo-documents, reasoning traces, or expanded queries without additional training, including Query2Doc [ 27 ], ThinkQE [ 12 ], Diver [ 17 ], and TongSearch [ 21 ]. Despite their effectiveness, these methods either rely on costly rewrite annotations or depend on fixed prompting strategies, and thus provide limited guidance on how an agent should learn from the retrieval interaction itself. More recently, RL-based methods have been introduced to optimize retrieval-oriented generation using feedback from the retriever, moving beyond fixed prompts and supervised rewrite pairs. 
+
+RL-based Agents for Interactive Retrieval RL-based interactive retrieval is appealing because retrieval metrics can directly serve as rewards for generated queries. In this setting, an LLM acts as a policy that produces expanded queries, and the downstream retriever provides feedback through metrics such as NDCG or recall. Although PPO [ 22 ] is commonly used for RL-based LLM optimization, its learned critic is costly to train. Value-free group-based methods, such as GRPO [23], reduce this cost by estimating advantages from multiple candidate expansions sampled 2for the same query. However, existing RL-based methods mainly optimize the final outcome of the retrieval interaction, with limited study in reasoning-intensive IR. Since such tasks require agents to interact with the retriever over multiple steps to uncover implicit constraints and missing evidence, outcome-level rewards provide little guidance on which internal actions in the interaction are actually useful. 
+
+Reward Shaping and Process Supervision To address reward sparsity, recent studies have pro-posed credit assignment methods for LLM-based RL [ 2 , 3 , 8 ]. For example, GIGPO [ 2] uses anchor states to group trajectories and improve advantage estimation. HGPO [ 3] further estimates step-wise advantages by hierarchically grouping actions that share similar states and historical contexts, and adaptively weighting these groups to reduce variance and bias. Tree-GRPO [ 8] constructs tree-structured agent trajectories to derive step-level supervision from outcome rewards, estimating relative advantages at both intra-tree and inter-tree levels for better credit assignment than chain-based RL. Unlike these methods, our approach treats retrieval as a structured interaction between latent reasoning actions and executable retrieval actions. It remains fully critic-free and does not require auxiliary value models, external judges, or human annotations, while deriving finer-grained credit signals from the retriever feedback available within the interaction itself. 
+
+## 3 Preliminaries 
+
+Problem setup We consider a query-side reasoning setting for reasoning-based retrieval, where an LLM agent interacts with a fixed retriever over multiple retrieval rounds. Given an initial user query q0 and an initial set of retrieved documents D0, the input is denoted as x = ( q0, D 0). At each discrete step t = 1 , 2, . . . , T , the agent observes the original query q0, the latest retrieved documents Dt−1, and the interaction history ht−1. It then generates two textual segments: a reasoning segment zt ∈ V nz and a summary segment st ∈ V ns , where V denotes the token vocabulary. The summary st is used directly as the query for the next retrieval round, and the fixed retriever returns a new document set Dt = R(st). A full episode consists of a trajectory 
+
+τ = {(z1, s 1, D 1), (z2, s 2, D 2), . . . , (zT , s T , D T )}. The agent’s behavior is governed by an LLM policy πθ (zt, s t | q0, D t−1, h t−1), parameterized by θ, which defines a distribution over the generated reasoning and summary segments conditioned on the current retrieval context. After the final round, the environment returns a scalar retrieval reward R(τ ) ∈ R, such as NDCG@10, based on the final retrieved documents or final summary. The summary can receive a direct retrieval reward because it is used as the query for the next retrieval round. In contrast, the reasoning span is internal: it only affects retrieval indirectly through the following summary and later turns. Therefore, directly assigning the summary reward to the reasoning tokens can cause credit misassignment. 
+
+## 4 Method 
+
+4.1 The Issue of Reasoning-Credit Ambiguity 
+
+Group-relative advantage estimation typically compares trajectories sampled from the same query and assigns advantages at the trajectory level. However, a multi-turn retrieval agent produces heterogeneous actions within the interaction. Executable retrieval actions, such as summaries or queries, can be directly submitted to the retriever and evaluated by metrics such as NDCG@10. In contrast, latent reasoning actions are not directly executable; they affect retrieval only by shaping subsequent executable actions and downstream interaction steps. As a result, broadcasting the final trajectory reward to all reasoning tokens can introduce biased credit, because a successful final retrieval outcome may be caused by later recovery rather than by the current reasoning action. Rather than relying on step-level annotations or an external process reward model, we use executable retrieval actions as intermediate credit anchors. Since summaries can be directly evaluated by the retriever, they provide localized retrieval feedback for the surrounding interaction. The remaining question is whether this localized feedback can be reliably attributed to the preceding latent reasoning span. To answer this, we estimate three interaction-derived signals: policy entropy, reasoning-to-summary influence, and residual stability. Policy entropy identifies uncertain decision points worth inspecting; reasoning-to-summary influence measures whether the latent reasoning action actually shapes the neighboring executable summary; and residual stability tests whether the local feedback 3Input                   
+
+> query 𝑞 !
+> initial docs 𝐷 !
+> Round 1
+> <think> <summary>
+> 𝑧 "𝑠 "
+> latent executable retriever/
+> tool response
+> 𝑟 "
+> Round 2
+> <think> <summary>
+> 𝑧 #𝑠 #
+> latent executable retriever/
+> tool response
+> 𝑟 #
+> Round t
+> 𝑧 $𝑠 $𝑟 $
+
+…                   
+
+> Combine advantages
+> 𝐴 !"!#$ =𝑤 !𝐴 %&'
+> Policy update
+> high -entropy anchor
+> A. Uncertainty -Guided Anchor Selection
+> Candidate summaries at step 𝑡
+> from different trajectories
+> trajectory candidate summary 𝒔 𝒊 entropy 𝑯 (𝒔 𝒊 )
+
+𝜏 (")
+
+𝜏 ($)
+
+𝜏 (%)
+
+𝜏 (&)                                     
+
+> “Impact of Xon …”
+> “History of Kyoto …”
+> “Renewable prior…”
+> “Carbon capture tech…”
+> 0.61
+> 0.88
+> 0.36
+> 0.95
+> Top -𝐾
+> uncertain summaries
+> Hs%=average token entropy
+> B. Local Counterfactual Branching
+> Selected anchor history ℎ=(𝑧 &#,𝑠 $,𝐷 #)
+> 𝒉 𝒕
+> original
+> 𝑘 =0
+> alt 1
+> 𝑘 =1
+> alt 2
+> 𝑘 =2
+> alt 𝐾
+> 𝑘 =𝐾
+> NDCG@10
+> 0.74
+> NDCG@10
+> 0.88
+> NDCG@10
+> 0.61
+> NDCG@10
+> 0.36
+
+…                                 
+
+> Influence :ℓ)local sensitivity /
+> variance across branch rewards
+> Residual stability:
+> Variance of future residual effects
+> C. Gated Credit Propagation
+> propagate summary
+> credit to think token only
+> influence is high
+> residual variance is low
+> Gate 𝑤 ℓ
+> =1(open)
+> =0(closed)
+> other tokens
+> summary tokens
+> think tokens
+
+…       
+
+> 𝑤 ℓ∈{0,1)
+> 𝐴 !*#+
+> 𝐴 !*#+ +𝐴 %&'
+> 𝐴 !*#+ +𝑤 ℓ𝐴 %&'
+
+Figure 1: Overview of RICE-PO. The agent generates latent reasoning spans and executable sum-maries across multiple retrieval rounds. RICE-PO selects high-entropy summary anchors, estimates local influence and residual stability through counterfactual branches, and propagates summary-level credit to reasoning tokens only when the signal is reliable. remains reliable after later interaction steps. Motivated by this view, we propose RICE-PO , a 
+
+Retrieval-Interaction Credit Estimation for Policy Optimization framework that refines trajectory-level advantages into localized advantages for both executable retrieval actions and latent reasoning actions. 
+
+4.2 Retrieval-Interaction Credit Estimation for Policy Optimization 
+
+In this subsection, we introduce RICE-PO , as illustrated in Figure 1. Given an input query and initial retrieved documents, we first let the LLM generate N trajectories. Each trajectory is a multi-step reasoning–retrieval interaction, where each step contains a latent reasoning span 
+
+<think>...</think> , an executable summary action <summary>...</summary> , and a retriever observation <tool_response>...</tool_response> . We then identify critical decision points using policy uncertainty. For each selected anchor point, we perform Monte Carlo local sensitivity estimation by constructing local branches from the same interaction history. These branches are used to estimate two interaction-derived signals: the influence of the reasoning action on the follow-ing summary action, and the residual effect of the selected reasoning action on the final retrieval reward. Based on these signals, we apply gated propagation to determine whether localized sum-mary feedback should be assigned to the corresponding reasoning action. This produces step-level advantages for both executable summary actions and latent reasoning actions. Finally, we combine the trajectory-level advantage, summary-level advantage, and gated reasoning-level advantage into a final token-level advantage, which is used for policy optimization. 
+
+4.2.1 Uncertainty-Guided Anchor Selection 
+
+We begin by introducing entropy-based action selection, which organizes local counterfactual estima-tion around uncertain summary actions. The key intuition is that the advantage of a local action should be estimated more carefully when the policy is uncertain about that action. In retrieval agents, such uncertainty is particularly important for summary actions, since summaries are executable queries that directly determine the next retrieved evidence. Specifically, we first pool summary actions from trajectories sampled for the same query, and then select the top-K actions according to their average token entropy. This uncertainty-triggered selection brings two main benefits: (i) it focuses local credit estimation on actions with ambiguous outcomes, and (ii) it reduces the cost of counterfactual branching. 4Formally, let the i-th trajectory be τi = {(z(i)1 , s (i)1 ), (z(i)2 , s (i)2 ), . . . , (z(i) 
+
+> T
+
+, s (i) 
+
+> T
+
+)}. For each summary action s(i) 
+
+> t
+
+, we define its entropy score as 
+
+H(s(i) 
+
+> t
+
+) = 1
+
+|s(i) 
+
+> t
+
+|
+
+X
+
+> u∈s(i)
+> t
+
+H(πθ (· | hu)) , (1) where hu denotes the token-level history before token u. Based on this score, we define the selected action set as 
+
+SK = TopK (i,t ) H(s(i) 
+
+> t
+
+). (2) The resulting set SK contains the high-uncertainty summary actions on which we perform local counterfactual credit estimation. 
+
+4.2.2 Local Counterfactual Branching 
+
+Influence. Given a selected summary action s(i) 
+
+> t
+
+, we estimate whether its immediately preceding reasoning span z(i) 
+
+> t
+
+, generated from history h(i) 
+
+> t
+
+, influences the selected summary. Ideally, we would compute the conditional expectation and variance of the local summary reward under the policy: 
+
+μt = Ezt∼π(·| ht) [r(st(zt))] , σ2 
+
+> t
+
+= Var zt∼π(·| ht) [r(st(zt))] , (3) where st(zt) denotes the summary induced by reasoning action zt and r(st) is the corresponding retrieval reward. Since the exact expectation is intractable, we approximate it with Monte Carlo branch samples. At a selected trigger point t, we fix the interaction history ht before the reasoning action and construct K local branches from the same history. The original branch is denoted as 
+
+k = 0 . For each branch k = 0 , . . . , K , the LLM generates a reasoning span z(k) 
+
+> t
+
+, its neighboring summary s(k) 
+
+> t
+
+, and the corresponding retriever response. The neighboring summary then receives a local retrieval reward r(k) 
+
+> t
+
+= r(s(k) 
+
+> t
+
+) which measures the immediate retrieval quality induced by the reasoning action at step t. In this paper, r(·) is computed by using the generated summary together with the input query to retrieve documents with a fixed retriever, and measuring retrieval quality using NDCG@10. The Monte Carlo estimates are then 
+
+bμt = 1
+
+K + 1 
+
+> K
+
+X
+
+> k=0
+
+r(k) 
+
+> t
+
+, bσ2 
+
+> t
+
+= 1
+
+K + 1 
+
+> K
+
+X
+
+> k=0
+
+
+
+r(k) 
+
+> t
+
+− bμt
+
+2
+
+. (4) Here, bσ2 
+
+> t
+
+serves as a Monte Carlo proxy for local sensitivity: a larger value means that different reasoning choices under the same history induce summaries with substantially different retrieval rewards. 
+
+Residual effect. To check whether the local summary signal is stable against future steps, we continue each branch to the maximum depth and compute the final reward R(k) 
+
+> T
+
+from the last summary. For each branch, we define 
+
+ϵ(k) 
+
+> t
+
+= R(k) 
+
+> T
+
+− r(k) 
+
+> t
+
+, ¯ϵt = 1
+
+K + 1 
+
+> K
+
+X
+
+> k=0
+
+ϵ(k) 
+
+> t
+
+, ResVar t = 1
+
+K + 1 
+
+> K
+
+X
+
+> k=0
+
+
+
+ϵ(k) 
+
+> t
+
+− ¯ϵt
+
+2
+
+. (5) A small ResVar t indicates that subsequent interaction steps have a similar residual effect across local branches. In this case, later retrieval rounds do not substantially reorder or overturn the local reward differences induced by the selected reasoning–summary pair. Thus, the local summary reward provides a more reliable proxy for the contribution of the paired reasoning action, making backward credit propagation less susceptible to later recovery or downstream correction. 
+
+4.2.3 Gated Credit Propagation 
+
+Based on these statistics, we propagate summary credit to the paired reasoning span only when the local reasoning choice is influential and the residual future effect is stable: 
+
+ˆσ2 
+
+> t
+
+≥ τvar and ResVar t ≤ τres . (6) The propagated reasoning credit is then 
+
+∆think  
+
+> t
+
+= ∆ sum  
+
+> t
+
+. (7) Importantly, these Monte Carlo statistics are not used as independent rewards; they only determine how strongly the summary-level credit should be copied back to the paired reasoning span. 5Final token-level advantage and policy optimization. In this section, we incorporate step-level credit signals into the token-level advantages used for policy optimization. We start from the group-normalized trajectory advantage Ai, computed from the final-step retrieval reward, i.e., the NDCG@10 obtained by the last summary in trajectory τi. This trajectory-level advantage is broadcast to all generated tokens in τi. For a selected summary span, we assign the local summary advantage 
+
+Asum  
+
+> t
+
+, computed from the NDCG@10 scores of alternative summaries generated from the same prefix at step t. For tokens in the paired reasoning span, we assign the reasoning-level advantage 
+
+Athink  
+
+> t
+
+, obtained by gated propagation from the corresponding summary advantage. Tokens outside the selected spans retain the original trajectory-level advantage. Formally, for token u in trajectory τi,
+
+Afinal  
+
+> u
+
+=
+
+
+
+Asum  
+
+> t
+
+, u ∈ [l(i,t ) 
+
+> s
+
+, r (i,t ) 
+
+> s
+
+),Athink  
+
+> t
+
+, u ∈ [l(i,t ) 
+
+> z
+
+, r (i,t ) 
+
+> z
+
+),Ai, otherwise .
+
+(8) 
+
+Athink  
+
+> t
+
+=
+
+(Asum  
+
+> t
+
+, ˆσ2 
+
+> t
+
+≥ τvar and ResVar t ≤ τres ,Ai, otherwise . (9) Given Afinal  
+
+> u
+
+, we optimize the policy with a PPO-style clipped objective. Let 
+
+ρu(θ) = πθ (au | hu)
+
+πθold (au | hu) (10) be the token-level importance sampling ratio. The final objective is 
+
+J (θ) = E
+
+"X
+
+> u
+
+min  ρu(θ)Afinal  
+
+> u
+
+, clip ( ρu(θ), 1 − ϵ, 1 + ϵ) Afinal 
+
+> u
+
+#
+
+−βKL DKL (πθ (· | x)∥πref (· | x)) 
+
+(11) , where ϵ is the clipping coefficient and βKL controls the strength of the KL penalty. 
+
+Proposition 1 (Summary-to-Reasoning Credit Approximation) . Let zt be the reasoning action under history ht that induces summary st. Assume R = r(st) + ϵt, where r(st) is the summary retrieval reward and ϵt is the remaining future effect. Then 
+
+Athink  
+
+> t
+
+= Asum  
+
+> t
+
++ ∆ ϵ,
+
+where 
+
+Asum  
+
+> t
+
+= r(st) − Ez′
+
+> t∼π(·| ht)
+
+[r(s′
+
+> t
+
+)] , ∆ϵ = E[ϵt|ht, z t] − Ez′
+
+> t∼π(·| ht)
+
+[ϵ′
+
+> t
+
+|ht, z ′
+
+> t
+
+].
+
+Thus, if |∆ϵ| ≤ δ,
+
+|Athink  
+
+> t
+
+− Asum  
+
+> t
+
+| ≤ δ. 
+
+If additionally |Asum  
+
+> t
+
+| ≥ τ , the summary signal is non-trivial and can be propagated to the reasoning tokens of zt.
+
+## 5 Experiments 
+
+5.1 Experiment Setup Benchmarks We first evaluate our method on the BRIGHT benchmark [ 25 ], which comprises 12 reasoning-intensive retrieval tasks. BRIGHT is designed to evaluate the reasoning ability of retrieval systems, where relevant documents often require in-depth reasoning to identify their connection to complex queries. The benchmark includes queries from diverse sources, such as StackExchange, LeetCode, and TheoremQA, and covers domains including biology, economics, programming, and mathematics. In addition to BRIGHT, we evaluate our method on BEIR [ 26 ], a broader benchmark for general information retrieval across diverse domains and task types. Specifically, we use five BEIR datasets: DBPedia-Entity, FiQA-2018, SciFact, Touché-2020, and TREC-COVID. These datasets cover entity retrieval, finance question answering, scientific fact checking, argument retrieval, and biomedical information retrieval. We use NDCG@10 as the evaluation metric. 6Table 1: Performance on BRIGHT. All RL-based methods use the same fixed retriever, Diver-4B+BM25 [17]. We report NDCG@10 for each task and the macro average across tasks. Method StackExchange Coding Theorem-based Avg. Bio. Earth. Econ. Psy. Rob. Stack. Sus. Leet. Pony AoPS TheoQ. TheoT.                                                                                                                                                                                                                 
+
+> Existing retrieval baselines
+> RaDeR 36.10 42.90 25.20 37.90 16.60 27.40 25.00 34.80 11.90 12.00 37.70 43.40 29.20 DeepRetrieval 22.48 25.60 17.06 21.13 13.46 16.75 16.93 24.99 8.13 3.88 27.90 22.01 18.36 TongSearch-QR 46.20 45.10 31.20 39.60 25.30 28.70 28.40 31.20 16.30 10.80 40.00 39.30 31.90 Diver 60.00 55.90 31.80 47.90 27.10 33.90 31.90 35.10 23.10 16.80 36.90 46.60 37.20
+> DeepSeek-R1-Distill-Qwen-1.5B
+> Prompting agents 20.41 25.14 9.74 13.77 7.99 6.81 8.79 13.08 7.01 3.03 13.48 11.74 11.75 GRPO 34.50 45.61 18.71 31.68 17.86 19.88 22.38 27.98 11.25 5.42 31.08 33.48 24.98 GiGPO 37.00 41.58 23.41 29.10 16.81 22.28 21.41 33.53 11.83 7.96 31.14 34.46 25.88 HGPO 36.36 41.73 20.02 26.94 15.00 23.62 20.46 29.16 11.65 7.81 34.58 38.01 25.45 Tree-GRPO 37.24 44.09 19.42 28.73 18.99 22.99 21.65 29.25 11.73 10.79 30.68 36.49 26.00
+> RICE-PO(ours) 40.17 43.79 18.35 32.13 17.47 22.61 22.54 34.13 10.79 10.77 40.06 37.00 27.49
+> Qwen3-4B-Thinking-2507
+> Prompting agents 54.36 54.89 27.04 40.54 26.12 32.44 29.38 30.80 15.36 12.99 40.38 47.27 34.30 GRPO 58.03 56.82 29.08 42.57 27.97 34.52 27.28 36.61 17.44 12.44 44.92 49.29 36.42 GiGPO 57.82 57.80 27.91 41.32 27.94 32.75 29.35 35.69 17.91 16.15 45.94 45.19 36.31 HGPO 61.77 59.53 27.87 41.93 26.70 33.99 32.72 30.81 19.72 16.07 43.02 45.16 36.61 Tree-GRPO 60.19 56.29 27.91 43.47 27.60 31.09 30.09 35.91 16.92 15.59 43.12 48.47 36.39
+> RICE-PO(ours) 59.32 59.15 28.49 42.00 28.18 35.00 30.73 35.37 17.14 18.97 45.39 49.37 37.76
+
+Baselines For BRIGHT, we compare our approach with two groups of competitive baselines. First, we include existing reasoning-based retrieval, including RaDeR [ 1], DeepRetrieval [ 9], TongSearch-QR [ 21 ], and Diver [ 17 ]. Among them, Diver represents a strong state-of-the-art prompting-based baseline. In the interaction process, Diver uses a hybrid retriever that combines Diver-4B and BM25, and employs DeepSeek-R1-Distill-Qwen-14B to summarize the retrieved information. Second, we compare with recent RL-based credit assignment methods, including GRPO [ 23 ], GiGPO [ 2], HGPO [ 3], and Tree-GRPO [ 7]. Since there is limited prior RL work specifically designed for reasoning-intensive retrieval, we adapt them to our retrieval-agent setting. For fair comparison, we evaluate them with two backbone language models, DeepSeek-R1-Distill-Qwen-1.5B and Qwen3-4B-Thinking-2507. In all prompting-agent settings, the LLM is used as the generator and Diver-4B+BM25 is used as the retriever, matching the retriever used by Diver and our method. For BEIR, following Rank1 [ 28 ], we include several strong reranking baselines: MonoT5-3B [ 20 ], mT5-13B fine-tuned on MMARCO for multilingual retrieval tasks [ 6], and RankLLaMA-7B/13B [ 18 ]. For RL-based baselines, we compare with GRPO [23], GiGPO [2], HGPO [3], and Tree-GRPO [7]. 
+
+5.2 Performance on Bright 
+
+Table 1 reports NDCG@10 on BRIGHT. Existing retrieval baselines are strong; in particular, the state-of-the-art baseline Diver uses a larger 14B model to generate retrieval queries and summarize retrieved documents. Since RL training with a 14B model is computationally expensive, we evaluate our method with more practical 1.5B and 4B backbones. RL training substantially improves smaller models. With a 1.5B backbone, our method outperforms the non-interaction 3B baseline DeepRetrieval; with a 4B backbone, it further surpasses the 7B baseline RaDeR and achieves an average score of 37.76, exceeding the Diver baseline average of 37.20. This suggests that learning from interaction signals can be a competitive alternative to relying solely on larger retrieval-generation pipelines. Under the 1.5B setting, GRPO improves the average score from 11.75 to 24.98 by optimizing the final-step retrieval reward. However, this trajectory-level reward does not distinguish which intermediate reasoning or summary action caused the gain. GiGPO and HGPO introduce step-level or history-aware credit assignment, but their local signals are still mainly redistributed from the final reward. Tree-GRPO uses branching over alternative rollouts, but its credit estimation still depends on full-trajectory outcomes. In contrast, our method exploits the executable nature of summaries: intermediate summaries can be directly evaluated by NDCG@10 and used as local credit anchors. We then propagate this credit to the paired reasoning span only when the influence and residual-effect gates indicate that the signal is reliable. With the 1.5B backbone, this retrieval-specific credit assignment improves the average score to 27.49, outperforming GRPO, GiGPO, HGPO, and Tree-GRPO under the same fixed retriever. The same trend holds for the 4B backbone, where RICE-PO achieves the best average score of 37.76, improving over GRPO, GiGPO, HGPO, and Tree-GRPO by 1.34, 1.45, 1.15, and 1.37 points, respectively. 75.3 Performance on BEIR Table 2: Performance on BEIR datasets: DBPedia-Entity, FiQA-2018, SciFact, Touché-2020, and TREC-COVID. We re-port NDCG@10 for each dataset and the macro average across tasks.                                                                                                                         
+
+> Method DBP FiQA SciFact Touché TREC-COVID Avg.
+> Retrieval baselines
+> BM25S 32.0 25.4 69.1 34.7 68.8 46.00 MonoT5-3B 44.5 46.5 76.1 30.7 79.6 55.48 RankLLaMA-7B 43.7 42.1 71.1 41.4 80.2 55.70 RankLLaMA-13B 44.9 44.1 72.7 39.2 80.8 56.34 Rank1-7B 38.9 39.5 77.2 22.8 81.9 52.06 Rank1-14B 37.4 37.9 77.0 27.1 78.2 51.52 Rank1-32B 40.7 41.8 76.8 19.9 81.9 52.22
+> DeepSeek-R1-Distill-Qwen-1.5B
+> Prompting 59.65 40.94 69.21 38.27 95.01 60.62 GRPO 62.35 43.49 72.41 42.04 97.15 63.49 HGPO 63.15 43.55 73.91 41.21 96.03 63.57 GiGPO 63.30 43.85 75.37 41.47 95.61 63.92 Tree-GRPO 64.81 45.61 74.65 40.18 97.49 64.55
+> RICE-PO(ours) 65.11 46.10 76.90 41.85 98.33 65.66
+> Qwen2.5-3B-Instruct
+> Prompting 61.56 41.34 73.00 38.36 93.87 61.63 GRPO 64.57 45.16 76.06 39.07 98.15 64.60 HGPO 64.23 45.58 76.40 39.90 97.40 64.70 GiGPO 65.69 46.07 75.90 38.32 97.48 64.69 Tree-GRPO 64.71 45.65 76.47 40.65 97.62 65.02
+> RICE-PO(ours) 66.29 45.94 76.96 40.63 98.59 65.68
+
+Table 2 reports results on BEIR, evaluating general retrieval per-formance under a fixed retriever. Compared with strong retriever and reranker baselines (e.g., MonoT5, RankLLaMA, Rank1), query-generation policies consistently achieve higher scores, showing the benefit of optimizing the query itself. Among RL-based methods, our approach achieves the best performance across both backbones. With DeepSeek-R1-Distill-Qwen-1.5B, our method improves the average score to 65.66, outperforming GRPO, GiGPO, HGPO, and Tree-GRPO. Similar gains are observed with Qwen2.5-3B-Instruct, where our method reaches 65.68, again achieving the best average. Compared with BRIGHT, the improvements on BEIR are smaller but consistent. This is expected, as BEIR tasks are less reasoning-intensive and rely more on surface-level matching. Nevertheless, our method still provides gains, suggesting that retrieval-specific credit assignment generalizes beyond multi-step reasoning settings. In particular, using executable summaries as intermediate credit signals remains beneficial even when the interaction depth is limited. 
+
+5.4 Further Analysis StackExchange Coding Theorem Avg. 
+
+> 18
+> 20
+> 22
+> 24
+> 26
+> 28
+> 30
+> 32
+> Score
+> 28.2
+> 22.5
+> 29.3
+> 27.5
+> Comparison Across Task Groups
+> Case 2
+> Case 1
+> Random
+> Ours
+
+Figure 2: Ablation of reasoning credit assignment variants 
+
+Ablation of Credit Propagation Mechanisms We con-duct an ablation study on BRIGHT with DeepSeek-R1-Distill-Qwen-1.5B to analyze different reasoning-credit assignment strategies. For a fair comparison, all vari-ants use the same entropy-triggered anchor points. Case 1 assigns the reasoning advantage from the paired step-level summary advantage. Case 2 assigns it from the final-summary reward, where NDCG@10 is computed from the last summary. Random uniformly selects be-tween these two strategies. Our method instead uses influ-ence and residual-effect estimates to dynamically decide whether summary-level credit should be propagated to the paired reasoning span. As shown in Figure 2, our method achieves the best macro average, improving over Case 2, Case 1, and Random. The gains are particularly evident on coding and theorem-based tasks, where reasoning steps more directly affect the quality of subsequent retrieval summaries. In contrast, the gap is smaller on tasks with weaker reasoning–retrieval coupling, such as economics or Pony. These results indicate that neither always propagating local summary credit nor always relying on final-summary credit is sufficient. Instead, dynamically gating credit propagation based on interaction-derived signals provides a more reliable mechanism for assigning credit to latent reasoning actions. 
+
+Influence vs. Effect A central design choice of our method is whether reasoning credit should be propagated based on local influence, downstream effect, or both. The key difference in Figure 3 lies in how credit propagation is gated. The Influence Only variant considers only the effect of the reasoning action on the induced summary, i.e., whether changing the reasoning step leads to different retrieval summaries. 8Bio.   
+
+> Earth.
+> Econ.
+> Psy.
+> Rob.
+> Stack.
+> Sus.
+> Leet.
+> Pony
+> AoPS
+> TheoQ.
+> TheoT.
+> 0.7
+> 0.8
+> 0.9
+> 1.0
+> Per-Task Performance (Normalized)
+> Effect Only Influence Only Both (Ours)
+
+Figure 3: Model performance with effect-only and influence-only credit propagation However, it ignores whether this change ultimately affects the final retrieval reward. In contrast, the Effect Only variant consid-ers only the impact of the reasoning action on the final reward, without explicitly measuring its influence on the intermediate summary. Figure 3 shows that the two gates are complementary. 
+
+Influence Only is competitive on Economics and Psychology, where changing the intermediate summary is often useful, but it is weaker on Sustainable Living, LeetCode, and TheoremQA-Questions, where local changes may not survive later retrieval rounds. Effect Only performs well on Robotics and Pony, but it can be noisy because final reward changes may come from later steps rather than the selected reasoning action. Our full method combines both signals and achieves stronger performance on most tasks, such as Biology, Earth Science, AoPS, and Theo-remQA, supporting more reliable reasoning-level credit assign-ment. −2 0 2 4 6
+
+> Gain (Ours - Random)
+> 0.0
+> 0.2
+> 0.4
+> 0.6
+> 0.8
+> 1.0
+> Cumulative proportion of tasks  CDF of Task-Level Gain
+> CDF of task gains
+> No gain
+
+Figure 4: CDF of task-level gains from entropy-based triggering over random triggering. 
+
+Entropy-based Triggering Figure 4 shows the cumulative distribution of task-level gains from replacing random trig-gering with entropy-based triggering on BRIGHT. The x-axis reports the per-task gain in NDCG@10, computed as the dif-ference between our method and the random-trigger baseline, while the y-axis shows the cumulative proportion of tasks. The vertical dashed line marks zero gain. The curve shows that most tasks fall on the positive side, with 9 out of 12 tasks benefiting from entropy-based triggering. The median gain is about +1 .28 , indicating that the improvement is not driven only by a single outlier. Several tasks obtain clear gains, such as TheoremQA-Questions (+7 .65) and Psychology (+4 .68) ,while only a few tasks, such as Economics and Pony, show negative gains. This suggests that entropy is an effective signal for selecting informative reasoning steps for local credit estimation, leading to broadly distributed improvements over random triggering. 
+
+## 6 Conclusion 
+
+We study how to better leverage interaction signals in reasoning-based retrieval agents. Existing RL methods mainly rely on trajectory-level rewards, which provide limited supervision for intermediate reasoning steps. We propose RICE-PO, a framework that directly exploits retrieval interaction signals by treating summaries as executable actions and using their retrieval outcomes as intermediate feedback. To ensure reliable learning, we introduce entropy-based triggering to select informative decision points and use influence and residual-effect estimation to determine when these signals should be propagated. Experiments on BRIGHT and BEIR show that our method consistently outperforms prior RL approaches under the same retriever setting, with especially strong improvements for smaller models. These results suggest that effectively utilizing interaction signals, rather than relying solely on final rewards or larger models, is key to improving reasoning-intensive retrieval. More broadly, our work highlights the importance of designing learning algorithms that align with the structure of agent–environment interactions in multi-step language systems. 
+
+## 7 Limitations and Future Directions 
+
+This work studies retrieval-interaction credit assignment with a fixed retriever and a bounded local branching budget. This setting lets us isolate how executable retrieval actions can provide reliable learning signals for latent reasoning steps while keeping training practical. Future work can extend this framework along three directions: combining interaction-derived credit with adaptive retrievers, scaling to larger backbones, and developing more efficient estimators for reasoning-to-summary influence and residual stability. More broadly, we view RICE-PO as an initial step toward training language agents from the structure of their interaction with external tools, beyond retrieval alone. 9References 
+
+[1] Debrup Das, Sam O’Nuallain, and Razieh Rahimi. Rader: Reasoning-aware dense retrieval models. In Proceedings of the 2025 Conference on Empirical Methods in Natural Language Processing , pages 19981–20008, 2025. [2] Lang Feng, Zhenghai Xue, Tingcong Liu, and Bo An. Group-in-group policy optimization for llm agent training. arXiv preprint arXiv:2505.10978 , 2025. [3] Shuo He, Lang Feng, Qi Wei, Xin Cheng, Lei Feng, and Bo An. Hierarchy-of-groups policy optimization for long-horizon agentic tasks. arXiv preprint arXiv:2602.22817 , 2026. [4] Jiatan Huang, Zheyuan Zhang, Tianyi Ma, Mingchen Li, Yaning Zheng, Yanfang Ye, and Chuxu Zhang. Glen-bench: A graph-language based benchmark for nutritional health. arXiv preprint arXiv:2601.18106 , 2026. [5] Jiatan Huang, Zheyuan Zhang, Kaiwen Shi, Yanfang Ye, and Chuxu Zhang. Evolver-outer: Co-evolving routing and prompt for multi-agent question answering. arXiv preprint arXiv:2604.05149 , 2026. [6] Vitor Jeronymo, Roberto Lotufo, and Rodrigo Nogueira. Neuralmind-unicamp at 2022 trec neuclir: Large boring rerankers for cross-lingual retrieval. arXiv preprint arXiv:2303.16145 ,2023. [7] Yuxiang Ji, Ziyu Ma, Yong Wang, Guanhua Chen, Xiangxiang Chu, and Liaoni Wu. Tree search for llm agent reinforcement learning. arXiv preprint arXiv:2509.21240 , 2025. [8] Yuxiang Ji, Ziyu Ma, Yong Wang, Guanhua Chen, Xiangxiang Chu, and Liaoni Wu. Tree search for llm agent reinforcement learning. In International Conference on Learning Representations ,2026. [9] Pengcheng Jiang, Jiacheng Lin, Lang Cao, Runchu Tian, SeongKu Kang, Zifeng Wang, Jimeng Sun, and Jiawei Han. Deepretrieval: Hacking real search engines and retrievers with large language models via reinforcement learning. arXiv preprint arXiv:2503.00223 , 2025. [10] Bowen Jin, Hansi Zeng, Zhenrui Yue, Jinsung Yoon, Sercan Arik, Dong Wang, Hamed Za-mani, and Jiawei Han. Search-r1: Training llms to reason and leverage search engines with reinforcement learning. arXiv preprint arXiv:2503.09516 , 2025. [11] Hyeyoung Ko, Suyeon Lee, Yoonseo Park, and Anna Choi. A survey of recommendation systems: recommendation models, techniques, and application fields. Electronics , 11(1):141, 2022. [12] Yibin Lei, Tao Shen, and Andrew Yates. Thinkqe: Query expansion via an evolving thinking process. arXiv preprint arXiv:2506.09260 , 2025. [13] Ang Li, Yufei Shi, Yuxuan Si, Yiquan Wu, Ming Cai, Xu Tan, Yi Wang, Changlong Sun, Xiaozhong Liu, and Kun Kuang. Think then rewrite: Reasoning enhanced query rewriting for domain specific retrieval. In Proceedings of the AAAI Conference on Artificial Intelligence ,volume 40, pages 15045–15053, 2026. [14] Mingchen Li and Shihao Ji. Semantic structure based query graph prediction for question answering over knowledge graph. In Proceedings of the 29th International Conference on Computational Linguistics , pages 1569–1579, 2022. [15] Xiaoxi Li, Guanting Dong, Jiajie Jin, Yuyao Zhang, Yujia Zhou, Yutao Zhu, Peitian Zhang, and Zhicheng Dou. Search-o1: Agentic search-enhanced large reasoning models. In Proceedings of the 2025 Conference on Empirical Methods in Natural Language Processing , pages 5420–5438, 2025. [16] Hang Liu, Meng Chen, Youzheng Wu, Xiaodong He, and Bowen Zhou. Conversational query rewriting with self-supervised learning. In ICASSP 2021-2021 IEEE International Conference on Acoustics, Speech and Signal Processing (ICASSP) , pages 7628–7632. IEEE, 2021. 10 [17] Meixiu Long, Duolin Sun, Dan Yang, Junjie Wang, Yue Shen, Jian Wang, Peng Wei, Jinjie Gu, and Jiahai Wang. Diver: A multi-stage approach for reasoning-intensive information retrieval. 
+
+arXiv preprint arXiv:2508.07995 , 2025. [18] Xueguang Ma, Liang Wang, Nan Yang, Furu Wei, and Jimmy Lin. Fine-tuning llama for multi-stage text retrieval. In Proceedings of the 47th International ACM SIGIR Conference on Research and Development in Information Retrieval , pages 2421–2425, 2024. [19] Fengran Mo, Kelong Mao, Yutao Zhu, Yihong Wu, Kaiyu Huang, and Jian-Yun Nie. Convgqr: Generative query reformulation for conversational search. arXiv preprint arXiv:2305.15645 ,2023. [20] Rodrigo Nogueira, Wei Yang, Jimmy Lin, and Kyunghyun Cho. Document expansion by query prediction. arXiv preprint arXiv:1904.08375 , 2019. [21] Xubo Qin, Jun Bai, Jiaqi Li, Zixia Jia, and Zilong Zheng. Tongsearch-qr: Reinforced query reasoning for retrieval. arXiv preprint arXiv:2506.11603 , 2025. [22] John Schulman, Filip Wolski, Prafulla Dhariwal, Alec Radford, and Oleg Klimov. Proximal policy optimization algorithms. arXiv preprint arXiv:1707.06347 , 2017. [23] Zhihong Shao, Peiyi Wang, Qihao Zhu, Runxin Xu, Junxiao Song, Xiao Bi, Haowei Zhang, Mingchuan Zhang, YK Li, Yang Wu, et al. Deepseekmath: Pushing the limits of mathematical reasoning in open language models. arXiv preprint arXiv:2402.03300 , 2024. [24] Amit Singhal et al. Modern information retrieval: A brief overview. IEEE Data Eng. Bull. ,24(4):35–43, 2001. [25] Hongjin Su, Howard Yen, Mengzhou Xia, Weijia Shi, Niklas Muennighoff, Han-yu Wang, Haisu Liu, Quan Shi, Zachary S Siegel, Michael Tang, et al. Bright: A realistic and challenging benchmark for reasoning-intensive retrieval. arXiv preprint arXiv:2407.12883 , 2024. [26] Nandan Thakur, Nils Reimers, Andreas Rücklé, Abhishek Srivastava, and Iryna Gurevych. Beir: A heterogenous benchmark for zero-shot evaluation of information retrieval models. arXiv preprint arXiv:2104.08663 , 2021. [27] Liang Wang, Nan Yang, and Furu Wei. Query2doc: Query expansion with large language models. arXiv preprint arXiv:2303.07678 , 2023. [28] Orion Weller, Kathryn Ricci, Eugene Yang, Andrew Yates, Dawn Lawrie, and Benjamin Van Durme. Rank1: Test-time compute for reranking in information retrieval. arXiv preprint arXiv:2502.18418 , 2025. [29] Tongyu Wen, Guanting Dong, and Zhicheng Dou. Smartsearch: Process reward-guided query refinement for search agents. arXiv preprint arXiv:2601.04888 , 2026. [30] Zeqiu Wu, Yi Luan, Hannah Rashkin, David Reitter, Hannaneh Hajishirzi, Mari Ostendorf, and Gaurav Singh Tomar. Conqrr: Conversational query rewriting for retrieval with reinforcement learning. arXiv preprint arXiv:2112.08558 , 2021. 
+
+## A Technical appendices and supplementary material 
+
+A.1 Implementation 
+
+Since BRIGHT and BEIR are primarily designed for evaluation, we construct BRIGHT-style training data based on the dataset released by ReasonIR. ReasonIR builds query-document pairs for reasoning-intensive information retrieval using prompt engineering and human annotation, covering multiple domains aligned with BRIGHT. We sample 4,011 examples for training and 1,384 examples for testing. For the BEIR datasets, we construct the training and validation splits from the available training data of DBPedia-Entity, FiQA-2018, and SciFact. Specifically, we sample 4,008 examples for training and 1,447 examples for testing. Detailed task-level statistics for both BRIGHT and BEIR 11 Table 3: Statistics of the BRIGHT benchmark splits used in our experiments. 
+
+Category Train Test Total Bio 414 103 517 Earth 404 116 520 Econ 412 103 515 Psy 424 101 525 Rob 275 101 376 Stack 418 117 535 Sus 426 108 534 Leet 420 142 562 Pony 94 112 206 AoPS 384 111 495 TheoQ 0 194 194 TheoT 340 76 416 Total 4011 1384 5395 
+
+Table 4: Statistics of the BEIR splits used in our experiments. 
+
+Dataset Train Test Total DBPedia-Entity 23 400 423 FiQA-2018 3183 648 3831 SciFact 802 300 1102 TREC-COVID 0 50 50 Touché-2020 0 49 49 Total 4008 1447 5455 
+
+are provided in Appendix 3 and Appendix 4. We use DeepSeek-R1-Distill-Qwen-1.5B 2, Qwen3-4B-Thinking-2507 3, and Qwen2.5-3B-Instruct 4 as our base models. For policy optimization, we set the actor KL coefficient to 0.001 . For our credit-estimation module, we select the top K = 4 summary actions according to entropy and sample 5 Monte Carlo branches for each selected anchor to estimate reasoning-to-summary influence and residual effects. The influence threshold and residual-effect threshold are set to 0.05 and 0.03 , respectively. We train with a batch size of 128 , an actor learning rate of 1 × 10 −6, and a maximum rollout depth of 5 retrieval steps. Following Diver, we use Diver-4B with BM25 as the retriever for all RL-based methods in this paper. 
+
+A.2 Prompt Template for Multi-step Retrieval Agent 
+
+Figure 5 shows the prompt template for the multi-step retrieval agent. 
+
+A.3 Proof of Proposition 1 
+
+Proof. Let ht be the history before step t, and let zt be the reasoning action that induces summary st.Define the reasoning-level advantage as 
+
+Athink  
+
+> t
+
+= E[R | ht, z t] − Ez′
+
+> t∼π(·| ht)
+
+[R | ht, z ′
+
+> t
+
+].
+
+Assume that the final reward can be decomposed as 
+
+R = r(st) + ϵt,
+
+where r(st) is the immediate retrieval reward of the induced summary and ϵt denotes the remaining future effect. Define the summary-level advantage as 
+
+Asum  
+
+> t
+
+= r(st) − Ez′
+
+> t∼π(·| ht)
+
+[r(s′
+
+> t
+
+)] .
+
+Then, 
+
+Athink  
+
+> t
+
+= Asum  
+
+> t
+
++ ∆ ϵ,
+
+where 
+
+∆ϵ = E[ϵt | ht, z t] − Ez′
+
+> t∼π(·| ht)
+
+[ϵ′ 
+
+> t
+
+| ht, z ′
+
+> t
+
+].
+
+> 2https://huggingface.co/deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B
+> 3https://huggingface.co/Qwen/Qwen3-4B-Thinking-2507
+> 4https://huggingface.co/Qwen/Qwen2.5-3B-Instruct
+
+12 Prompt Template for Multi-step Retrieval Agent 
+
+You are a professional multi-step retrieval agent. Your role is to iteratively refine a query through thinking and summarization, and use an external retriever (not shown to you) to gather increasingly relevant documents. You will be given: a user query wrapped in <query> ... </query> , and an initial set of retrieved documents wrapped in <information> ... </information> .At each step, produce a refined summary to request another retrieval round. 
+
+IMPORTANT: The <summary> you produce will be used directly as the query for the next re-trieval round. It guides the system to fetch a new set of documents in <tool_response> ... </tool_response> . Although your summaries help obtain better evidence, they do NOT replace or modify the original user query. 
+
+DIVERSITY CONSTRAINTS (CRITICAL): For each round, choose ONE primary retrieval angle and center the summary on it. Candidate angles include: definition, mechanism, evidence, counterexample, boundary condition, implementation detail, evaluation metric, temporal context, and domain-specific terminology. Do not reuse the same opening sentence pattern across rounds. Avoid generic filler. Prefer concrete entities, key terms, constraints, and disambiguation cues. Keep lexical overlap with previous summary low; rewrite with different wording when possible. If multiple hypotheses exist, prioritize one and add 1–2 alternatives as optional hooks. 
+
+STRICT OUTPUT FORMAT. At every step, your output MUST be in the following format: 
+
+<think> ... </think> and <summary> ... </summary> .After you output <summary> , the system will automatically retrieve new documents and provide them to you in the next turn. Do NOT generate any placeholder or tag after </summary> .
+
+DETAILS & REQUIREMENTS. 
+
+<think> ... </think> Evaluate whether the current documents address the original user query. Describe what parts of the documents satisfy the query and what is still missing. MAXIMUM 200 words. 
+
+<summary> ... </summary> Produce a retrieval-oriented summary query. 0–500 words. Arefined, retrieval-friendly description of missing information. This summary will become the query for the next retrieval round. Combine the original query with only the latest round context. Include 4–8 concrete keywords or entities that increase retrieval specificity. Include at least one exclusion or disambiguation phrase, for example: not X, focus on Y. 
+
+Figure 5: Prompt template for the multi-step retrieval agent. Therefore, if the residual future effect is bounded, 
+
+|∆ϵ| ≤ δ, 
+
+then the summary-level advantage approximates the reasoning-level advantage with error at most δ:
+
+Athink  
+
+> t
+
+− Asum  
+
+> t
+
+≤ δ. 
+
+Moreover, if the induced summary has a non-trivial advantage, 
+
+|Asum  
+
+> t
+
+| ≥ τ, 
+
+then the summary signal is strong enough to provide meaningful credit to the reasoning action. Thus, when both conditions hold, Asum  
+
+> t
+
+can be used as a reliable proxy for assigning credit to the reasoning tokens that produced st.
+
+A.4 Performance on BRIGHT under different case-selection strategies. 
+
+Table 5 reports the ablation results on BRIGHT. Compared with the three credit-assignment variants, our full method achieves the best average performance, improving the average score from 25 .82 
+
+for the strongest variant to 27 .49 . This suggests that simply propagating credit from either the current-step or final-step summary is not sufficient for reliable reasoning credit assignment. By jointly considering uncertainty, reasoning-to-summary influence, and residual effect, our method assigns credit more selectively and achieves more stable gains across reasoning-intensive retrieval tasks. 
+
+A.5 Ablation on Triggers (Random Trigger vs. Ours Entropy). 
+
+Table 6 compares random trigger selection with our entropy-based trigger selection on BRIGHT. Al-though both methods use the same credit-propagation framework, our method selects high-uncertainty 13 Table 5: Ablation results on BRIGHT for different step-advantage selection strategies. Method Bio. Earth. Econ. Psy. Rob. Stack. Sus. Leet. Pony AoPS TheoQ. TheoT. Avg. Case 2 35.59 45.03 20.24 25.10 15.23 24.98 18.07 30.28 11.54 9.66 34.88 36.01 25.55 Case 1 36.16 43.06 20.29 30.60 15.70 22.10 20.70 29.35 9.44 9.35 35.00 37.10 25.74 Random 39.75 41.95 20.87 27.45 16.74 23.32 19.10 30.60 12.51 8.53 32.41 36.55 25.82 Ours 40.17 43.79 18.35 32.13 17.47 22.61 22.54 34.13 10.79 10.77 40.06 37.00 27.49 Table 6: Random Trigger vs. Ours entropy.                                        
+
+> Method Bio. Earth. Econ. Psy. Rob. Stack. Sus. Leet. Pony AoPS TheoQ. TheoT. Avg. Random Trigger 39.75 41.95 20.87 27.45 16.74 23.32 19.10 30.60 12.51 8.53 32.41 36.55 25.82 Ours 40.17 43.79 18.35 32.13 17.47 22.61 22.54 34.13 10.79 10.77 40.06 37.00 27.49
+
+summary actions as anchors for local credit estimation, while Random Trigger selects anchors ran-domly. The results show that our method improves the average score from 25 .82 to 27 .49 , with clear gains on Biology, Earth Science, Psychology, Sustainable Living, LeetCode, AoPS, TheoremQA-Questions, and TheoremQA-Theorems. This suggests that uncertainty-guided anchor selection is more effective than random selection for identifying reasoning steps where local counterfactual credit estimation is useful. 
+
+A.6 Training Reward 
+
+Figure 6 shows the reward dynamics on BRIGHT and BEIR. All methods in this comparison are trained with the same base model, DeepSeek-R1-Distill-Qwen-1.5B, and use the same Diver-4B+BM25 retrieval backend. Compared with GRPO, GiGPO, HGPO, and Tree-GRPO, our method achieves a higher reward curve on both benchmarks, indicating more effective policy optimization under the same model and retriever setting. The improvement is especially clear on BRIGHT, where reasoning-intensive retrieval requires more careful credit assignment across multi-turn interactions. 14 Table 7: Ablation of influence and residual-effect gates on BRIGHT. 
+
+Method Bio. Earth. Econ. Psy. Rob. Stack. Sus. Leet. Pony AoPS TheoQ. TheoT. Avg. Effect Only 35.64 41.23 20.08 28.07 20.80 21.30 20.64 30.37 13.03 10.56 34.00 35.01 25.89 Influence Only 40.15 41.74 20.92 32.11 17.81 22.83 20.54 29.76 11.50 10.11 34.24 37.07 26.56 Both (Ours) 40.17 43.79 18.35 32.13 17.47 22.61 22.54 34.13 10.79 10.77 40.06 37.00 27.49 0 20 40 60 80 100 
+
+> Step
+> 0.3
+> 0.4
+> 0.5
+> 0.6
+> 0.7
+> Reward Mean
+
+critic/rewards/mean 
+
+> GiGRPO
+> GRPO
+> HGPO
+> TreeRPO
+> Ours
+
+(a) BRIGHT 0 20 40 60 80 100 120 140  
+
+> Step
+> 0.2
+> 0.3
+> 0.4
+> 0.5
+> 0.6
+> 0.7
+> Reward Mean
+> critic/rewards/mean
+> GiGRPO
+> GRPO
+> HGPO
+> TreeRPO
+> Ours
+
+(b) BEIR 
+
+Figure 6: Reward dynamics comparison on BRIGHT and BEIR. 15
