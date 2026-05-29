@@ -6,78 +6,41 @@
 </div>
 
 ## 每次日报
-- 最新运行日期：2026-05-28
-- 运行时间：2026-05-28 21:42:16 UTC
+- 最新运行日期：2026-05-29
+- 运行时间：2026-05-29 21:31:02 UTC
 - 运行状态：成功
-- 本次总论文数：18
-- 精读区：7
-- 速读区：11
+- 本次总论文数：6
+- 精读区：6
+- 速读区：0
 
 ### 今日简报（AI）
-今日阅读18篇论文，精读7篇，重点关注科学发现进化与符号回归两大前沿方向。
-
-最值得看的是EvoSci生物启发多智能体框架（9.0分）与潜在迭代精炼符号回归方法（9.0分），前者创新性地模拟群体智能驱动科研发现，后者突破传统回归的可解释性瓶颈。
-
-普通读者可优先关注EvoSci的多智能体协作逻辑，以及符号回归在复杂系统建模中的实用价值。
-- 详情：[/202605/28/README](/202605/28/README)
+今日精选6篇论文，精读两篇均获9.0高分，聚焦缺失模态重排序与进化搜索计算分配。  
+值得关注：Meta-Modal Agent通过序列证据路由解决缺失模态候选重排序；进化搜索中计算分配从深度广度转向多臂赌博机策略。  
+建议优先阅读这两篇高分论文，前者对多模态AI实际部署极具参考价值，后者为优化算法提供新思路。
+- 详情：[/202605/29/README](/202605/29/README)
 
 ### 精读区论文标签
-1. [EvoSci: A Bio-Inspired Multi-Agent Framework for the Evolution of Scientific Discovery](/202605/28/2605.24018v1-evosci-a-bio-inspired-multi-agent-framework-for-the-evolution-of-scientific-discovery)  
+1. [Meta-Modal Agent: Sequential Evidence Routing for Missing-Modality Candidate Reranking](/202605/29/2605.25007v1-meta-modal-agent-sequential-evidence-routing-for-missing-modality-candidate-reranking)  
+   标签：评分：9.0/10、query:rerank-train
+   evidence：基于大语言模型的重排序器，使用强化学习训练处理缺失模态
+2. [Compute Allocation in Evolutionary Search: From Depth-Breadth to Multi-Armed Bandits](/202605/29/2605.29268v1-compute-allocation-in-evolutionary-search-from-depth-breadth-to-multi-armed-bandits)  
    标签：评分：9.0/10、query:ad
-   evidence：使用LLM和演化的生物启发多智能体科学发现框架
-2. [Symbolic Regression via Latent Iterative Refinement](/202605/28/2605.27245v1-symbolic-regression-via-latent-iterative-refinement)  
-   标签：评分：9.0/10、query:ad
-   evidence：符号回归结合潜在空间迭代推理
-3. [MeVer at CheckThat! 2026: Cluster-Aware Hard-Negative Mining for Multilingual Scientific-Source Retrieval](/202605/28/2605.24236v1-mever-at-checkthat-2026-cluster-aware-hard-negative-mining-for-multilingual-scientific-source-retrieval)  
+   evidence：大模型引导的进化搜索用于数学任务自动发现
+3. [Joint Optimization of Relevance and Engagement in Multi-Task Ranking for E-Commerce with Efficient LLM Supervision](/202605/29/2605.27704v1-joint-optimization-of-relevance-and-engagement-in-multi-task-ranking-for-e-commerce-with-efficient-llm-supervision)  
    标签：评分：8.0/10、query:rerank-train
-   evidence：用于重排序器训练的聚类感知硬负样本挖掘
-4. [TempRet: Temporal Enhancement and Two-Stage Reranking for CVPR 2026 EPIC-KITCHENS-100 Multi-Instance Retrieval Challenge](/202605/28/2605.24470v1-tempret-temporal-enhancement-and-two-stage-reranking-for-cvpr-2026-epic-kitchens-100-multi-instance-retrieval-challenge)  
+   evidence：利用LLM监督的多任务排序系统用于电商搜索
+4. [LRanker: LLM Ranker for Massive Candidates](/202605/29/2605.27810v1-lranker-llm-ranker-for-massive-candidates)  
    标签：评分：8.0/10、query:rerank-train
-   evidence：视频-文本检索的两阶段重排序方法
-5. [Top-k Approximate Functional Dependency Discovery](/202605/28/2605.24925v1-top-k-approximate-functional-dependency-discovery)  
+   evidence：基于大语言模型的大规模候选排序重排序器，使用聚合编码器
+5. [GRASP: Plan-Guided Graph Retrieval with Adaptive Fusion and Reranking on Semi-Structured Knowledge Bases](/202605/29/2605.30237v1-grasp-plan-guided-graph-retrieval-with-adaptive-fusion-and-reranking-on-semi-structured-knowledge-bases)  
+   标签：评分：8.0/10、query:rerank-train
+   evidence：针对半结构化知识库的微调重排器
+6. [ProjectionBench: Evaluating Scientific Hypothesis Generation in LLMs Under Progressive Information Disclosure](/202605/29/2605.30284v1-projectionbench-evaluating-scientific-hypothesis-generation-in-llms-under-progressive-information-disclosure)  
    标签：评分：8.0/10、query:ad
-   evidence：数据中top-k近似函数依赖发现
-6. [AIBuildAI-2: A Knowledge-Enhanced Agent for Automatically Building AI Models](/202605/28/2605.27873v1-aibuildai-2-a-knowledge-enhanced-agent-for-automatically-building-ai-models)  
-   标签：评分：8.0/10、query:ad
-   evidence：使用LLM和知识增强自动构建AI模型的智能体，用于科学发现
-7. [Tree of Thoughts as a Classical Heuristic Search Problem: Formal Foundations and Design Patterns](/202605/28/2605.28566v1-tree-of-thoughts-as-a-classical-heuristic-search-problem-formal-foundations-and-design-patterns)  
-   标签：评分：8.0/10、query:ad
-   evidence：将思维树建模为经典启发式搜索，形式化LLM推理
+   evidence：评估大语言模型在科学假设生成方面的能力，直接涉及利用大语言模型进行发现任务
 
 ### 速读区论文标签
-1. [RAG-Match: Retrieval-Augmented Knowledge Injection and Hierarchical Reasoning for Calibrated Semantic Relevance](/202605/28/2605.25486v1-rag-match-retrieval-augmented-knowledge-injection-and-hierarchical-reasoning-for-calibrated-semantic-relevance)  
-   标签：评分：8.0/10、query:rerank-train
-   evidence：面向重新排序训练的检索增强与偏好校准框架
-2. [Credit-assigned Policy Gradient for Early Stage Retrieval in Two-stage Ranking](/202605/28/2605.26385v1-credit-assigned-policy-gradient-for-early-stage-retrieval-in-two-stage-ranking)  
-   标签：评分：8.0/10、query:rerank-train
-   evidence：两阶段排序中早期排序器的策略梯度训练方法
-3. [VaxjoOnto: A Vaccine Ontology-driven Framework for Adjuvant Selection](/202605/28/biorxiv-10-1101-2025-11-27-690985-v2-vaxjoonto-a-vaccine-ontology-driven-framework-for-adjuvant-selection)  
-   标签：评分：8.0/10、query:rerank-train
-   evidence：使用列表式排序目标训练图神经网络
-4. [Meta-Modal Agent: Sequential Evidence Routing for Missing-Modality Candidate Reranking](/202605/28/2605.25007v1-meta-modal-agent-sequential-evidence-routing-for-missing-modality-candidate-reranking)  
-   标签：评分：7.0/10、query:rerank-train
-   evidence：基于大语言模型的候选池重排序器，使用强化学习训练，处理缺失模态
-5. [LRanker: LLM Ranker for Massive Candidates](/202605/28/2605.27810v1-lranker-llm-ranker-for-massive-candidates)  
-   标签：评分：7.0/10、query:rerank-train
-   evidence：基于LLM的大规模候选排序框架
-6. [HELEA: Hard-Negative Benchmark and LLM-based Reranking for Robust Entity Alignment](/202605/28/2605.28308v1-helea-hard-negative-benchmark-and-llm-based-reranking-for-robust-entity-alignment)  
-   标签：评分：7.0/10、query:rerank-train
-   evidence：基于LLM的重排序与难负样本训练
-7. [Rewriting protein alphabets with language models](/202605/28/biorxiv-10-1101-2025-11-27-690975-v3-rewriting-protein-alphabets-with-language-models)  
-   标签：评分：7.0/10、query:ad
-   evidence：使用语言模型进行蛋白质同源发现
-8. [Steered Generation via Gradient-Based Optimization on Sparse Query Features](/202605/28/2605.23040v1-steered-generation-via-gradient-based-optimization-on-sparse-query-features)  
-   标签：评分：6.0/10、query:ad
-   evidence：基于梯度的LLM生成引导，可用于自动发现
-9. [TubiFM: Unified Item, Carousel, and Search Ranking for Streaming Discovery](/202605/28/2605.23702v1-tubifm-unified-item-carousel-and-search-ranking-for-streaming-discovery)  
-   标签：评分：6.0/10、query:rerank-train
-   evidence：统一的项目、轮播和搜索排名模型，使用跨表面用户故事训练排序模型
-10. [RICE-PO: Turning Retrieval Interactions into Credit Signals for Reasoning Agents](/202605/28/2605.26352v1-rice-po-turning-retrieval-interactions-into-credit-signals-for-reasoning-agents)  
-   标签：评分：6.0/10、query:rerank-train
-   evidence：通过检索交互为重排序器提供训练信号
-11. [Checking Fact with Better Retrieval: Dynamic Contrastive Learning for Evidence Retrieval](/202605/28/2605.27449v1-checking-fact-with-better-retrieval-dynamic-contrastive-learning-for-evidence-retrieval)  
-   标签：评分：6.0/10、query:rerank-train
-   evidence：用于证据检索的动态对比学习方法
+- 本次无速读推荐。
 
 
 <div class="dpr-home-promo-card">
