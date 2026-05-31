@@ -38,13 +38,20 @@ RANGE_DATE_RE = re.compile(r"^(\d{8})-(\d{8})$")
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY") or os.getenv("SUMMARY_API_KEY")
 DEEPSEEK_BASE_URL = os.getenv("DEEPSEEK_BASE_URL") or os.getenv("SUMMARY_BASE_URL") or "https://api.deepseek.com"
 DEEPSEEK_MODEL = os.getenv("SUMMARY_MODEL") or os.getenv("DEEPSEEK_MODEL") or "deepseek-v4-flash"
-LLM_CLIENT = None
-if DEEPSEEK_API_KEY:
-    LLM_CLIENT = DeepSeekClient(
+STEP6_STRUCTURED_MAX_TOKENS = 16 * 1024
+
+
+def create_llm_client() -> DeepSeekClient | None:
+    if not DEEPSEEK_API_KEY:
+        return None
+    return DeepSeekClient(
         api_key=DEEPSEEK_API_KEY,
         model=DEEPSEEK_MODEL,
         base_url=DEEPSEEK_BASE_URL,
     )
+
+
+LLM_CLIENT = create_llm_client()
 
 DEFAULT_DOCS_CONCURRENCY = 4
 
@@ -282,8 +289,13 @@ def fetch_arxiv_paper_meta(arxiv_id: str) -> Dict[str, Any]:
     return parse_arxiv_xml_feed(resp.text)
 
 
-def translate_title_and_abstract_to_zh(title: str, abstract: str) -> Tuple[str, str]:
-    if LLM_CLIENT is None:
+def translate_title_and_abstract_to_zh(
+    title: str,
+    abstract: str,
+    client: DeepSeekClient | None = None,
+) -> Tuple[str, str]:
+    active_client = client or LLM_CLIENT
+    if active_client is None:
         return "", ""
     title = title.strip() if title else ""
     abstract = abstract.strip() if abstract else ""
@@ -319,12 +331,12 @@ def translate_title_and_abstract_to_zh(title: str, abstract: str) -> Tuple[str, 
             "additionalProperties": False,
         }
         parsed = call_llm_structured_json(
-            LLM_CLIENT,
+            active_client,
             messages,
             schema_name="translate_zh",
             schema=schema,
             temperature=0.2,
-            max_tokens=4000,
+            max_tokens=STEP6_STRUCTURED_MAX_TOKENS,
         )
     except Exception:
         return "", ""
@@ -521,8 +533,14 @@ def upsert_glance_block_in_text(md_text: str, glance: str) -> str:
     return (txt.rstrip() + f"\n\n## 速览\n{glance}\n").rstrip() + "\n"
 
 
-def generate_deep_summary(md_file_path: str, txt_file_path: str, max_retries: int = 3) -> str | None:
-    if LLM_CLIENT is None:
+def generate_deep_summary(
+    md_file_path: str,
+    txt_file_path: str,
+    max_retries: int = 3,
+    client: DeepSeekClient | None = None,
+) -> str | None:
+    active_client = client or LLM_CLIENT
+    if active_client is None:
         log("[WARN] 未配置 DEEPSEEK_API_KEY 或 SUMMARY_API_KEY，跳过精读总结。")
         return None
     if not os.path.exists(md_file_path):
@@ -563,7 +581,7 @@ def generate_deep_summary(md_file_path: str, txt_file_path: str, max_retries: in
     last = ""
     for attempt in range(1, max_retries + 1):
         try:
-            summary = call_llm_text(LLM_CLIENT, messages, temperature=0.3, max_tokens=4096)
+            summary = call_llm_text(active_client, messages, temperature=0.3, max_tokens=4096)
             summary = (summary or "").strip()
             if not summary:
                 continue
@@ -578,7 +596,7 @@ def generate_deep_summary(md_file_path: str, txt_file_path: str, max_retries: in
                 {"role": "user", "content": "你上一次的总结可能被截断了，请从中断处继续补全，不要重复已输出内容。"},
                 {"role": "user", "content": f"上一次输出如下：\n\n{summary}\n\n请继续补全，最后以一行“（完）”结束。"},
             ]
-            cont = call_llm_text(LLM_CLIENT, cont_messages, temperature=0.3, max_tokens=2048)
+            cont = call_llm_text(active_client, cont_messages, temperature=0.3, max_tokens=2048)
             cont = (cont or "").strip()
             merged = f"{summary}\n\n{cont}".strip()
             if os.getenv("DPR_DEBUG_STEP6") == "1":
@@ -591,12 +609,18 @@ def generate_deep_summary(md_file_path: str, txt_file_path: str, max_retries: in
     return last or None
 
 
-def generate_glance_overview(title: str, abstract: str, max_retries: int = 3) -> str | None:
+def generate_glance_overview(
+    title: str,
+    abstract: str,
+    max_retries: int = 3,
+    client: DeepSeekClient | None = None,
+) -> str | None:
     """
     生成论文速览（包含 TLDR、Motivation、Method、Result、Conclusion）。
     使用 JSON 结构化输出，确保返回完整的五个字段。
     """
-    if LLM_CLIENT is None:
+    active_client = client or LLM_CLIENT
+    if active_client is None:
         log("[WARN] 未配置 LLM_CLIENT，跳过速览生成。")
         return None
 
@@ -635,12 +659,12 @@ def generate_glance_overview(title: str, abstract: str, max_retries: int = 3) ->
     for attempt in range(1, max_retries + 1):
         try:
             parsed = call_llm_structured_json(
-                LLM_CLIENT,
+                active_client,
                 messages,
                 schema_name="glance_overview",
                 schema=schema,
                 temperature=0.2,
-                max_tokens=2048,
+                max_tokens=STEP6_STRUCTURED_MAX_TOKENS,
             )
             if not isinstance(parsed, dict):
                 continue
@@ -1427,6 +1451,7 @@ def process_paper(
     md_path, txt_path, paper_id = prepare_paper_paths(docs_dir, date_str, title, arxiv_id)
     abstract_en = (paper.get("abstract") or "").strip()
     pdf_url = str(paper.get("link") or paper.get("pdf_url") or "").strip()
+    paper_llm_client = create_llm_client()
 
     glance = ""
 
@@ -1501,7 +1526,7 @@ def process_paper(
 
                 if need_zh:
                     zh_title, zh_abstract = translate_title_and_abstract_to_zh(
-                        title, abstract_en
+                        title, abstract_en, client=paper_llm_client
                     )
                     updated = existing
 
@@ -1544,7 +1569,7 @@ def process_paper(
         # 已存在速览则默认不重复生成（避免重复 LLM 调用），除非 force_glance=true
         has_glance = "## 速览" in existing
         if force_glance or not has_glance:
-            glance = generate_glance_overview(title, abstract_en) or build_glance_fallback(paper)
+            glance = generate_glance_overview(title, abstract_en, client=paper_llm_client) or build_glance_fallback(paper)
             if glance:
                 paper["_glance_overview"] = glance
 
@@ -1603,7 +1628,7 @@ def process_paper(
             # 生成详细总结
             pdf_url = str(paper.get("link") or paper.get("pdf_url") or "").strip()
             ensure_text_content(pdf_url, txt_path)
-            summary = generate_deep_summary(md_path, txt_path)
+            summary = generate_deep_summary(md_path, txt_path, client=paper_llm_client)
             if summary:
                 upsert_auto_block(md_path, "论文详细总结（自动生成）", summary)
             return paper_id, title
@@ -1629,7 +1654,7 @@ def process_paper(
             paper["_figure_assets"] = figures
         if tables:
             paper["_table_assets"] = tables
-        glance = generate_glance_overview(title, abstract_en) or build_glance_fallback(paper)
+        glance = generate_glance_overview(title, abstract_en, client=paper_llm_client) or build_glance_fallback(paper)
         if glance:
             paper["_glance_overview"] = glance
         tags_list = build_tags_list(section, paper.get("llm_tags") or [])
@@ -1653,9 +1678,9 @@ def process_paper(
     if tables:
         paper["_table_assets"] = tables
 
-    zh_title, zh_abstract = translate_title_and_abstract_to_zh(title, abstract_en)
+    zh_title, zh_abstract = translate_title_and_abstract_to_zh(title, abstract_en, client=paper_llm_client)
     tags_list = build_tags_list(section, paper.get("llm_tags") or [])
-    glance = generate_glance_overview(title, abstract_en) or build_glance_fallback(paper)
+    glance = generate_glance_overview(title, abstract_en, client=paper_llm_client) or build_glance_fallback(paper)
     if glance:
         paper["_glance_overview"] = glance
     content = build_markdown_content(paper, section, zh_title, zh_abstract, tags_list)
@@ -1666,7 +1691,7 @@ def process_paper(
 
     # 精读区：生成详细总结
     if section == "deep":
-        summary = generate_deep_summary(md_path, txt_path)
+        summary = generate_deep_summary(md_path, txt_path, client=paper_llm_client)
         if summary:
             upsert_auto_block(md_path, "论文详细总结（自动生成）", summary)
     # 速读区：不生成额外的总结，只保留速览和摘要

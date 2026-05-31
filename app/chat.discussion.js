@@ -11,6 +11,16 @@ window.PrivateDiscussionChat = (function () {
   const MAX_RECENT_QUESTIONS = 10; // 展示与保存都只保留最近 10 个（用户诉求）
   const MAX_PINNED_QUESTIONS = 50; // 防止无限增长
 
+  const resizeChatInput = (input) => {
+    if (!input) return;
+    const style = window.getComputedStyle ? window.getComputedStyle(input) : null;
+    const maxHeight = style ? parseFloat(style.maxHeight || '0') || 160 : 160;
+    input.style.height = 'auto';
+    const nextHeight = Math.min(input.scrollHeight, maxHeight);
+    input.style.height = `${nextHeight}px`;
+    input.style.overflowY = input.scrollHeight > maxHeight ? 'auto' : 'hidden';
+  };
+
   // 读取用户偏好的 Chat 模型名称（跨页面生效）
   const loadPreferredModelName = () => {
     try {
@@ -215,8 +225,10 @@ window.PrivateDiscussionChat = (function () {
         </div>
         <div class="input-area">
           <textarea id="user-input" rows="3" placeholder="针对这篇论文提问，仅自己可见..."></textarea>
-          <button id="chat-questions-toggle-btn" class="chat-questions-toggle-btn" type="button" title="最近提问">🕘</button>
-          <button id="send-btn">发送</button>
+          <div class="chat-input-actions">
+            <button id="chat-questions-toggle-btn" class="chat-questions-toggle-btn" type="button" title="最近提问">🕘</button>
+            <button id="send-btn">发送</button>
+          </div>
         </div>
         <div id="chat-questions-panel" class="chat-questions-panel" style="display:none"></div>
         <div class="chat-footer">
@@ -613,6 +625,7 @@ window.PrivateDiscussionChat = (function () {
           const input = root.querySelector('#user-input');
           if (input && q) {
             input.value = q;
+            resizeChatInput(input);
             input.focus();
           }
           // 选择某一项后自动关闭面板
@@ -1382,6 +1395,7 @@ window.PrivateDiscussionChat = (function () {
       }
 
       input.value = '';
+      resizeChatInput(input);
     } catch (e) {
       console.error(e);
       const isTimeout =
@@ -1587,6 +1601,10 @@ window.PrivateDiscussionChat = (function () {
         input._boundKey = true;
         input.disabled = false;
         input.placeholder = '针对这篇论文提问，仅自己可见...';
+        resizeChatInput(input);
+        input.addEventListener('input', () => {
+          resizeChatInput(input);
+        });
         input.addEventListener('keydown', (e) => {
           if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
             e.preventDefault();
