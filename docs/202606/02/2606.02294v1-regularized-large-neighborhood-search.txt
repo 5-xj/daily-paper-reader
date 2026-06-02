@@ -1,0 +1,3598 @@
+Title: Regularized Large Neighborhood Search
+
+URL Source: https://arxiv.org/pdf/2606.02294v1
+
+Published Time: Tue, 02 Jun 2026 02:50:35 GMT
+
+Number of Pages: 39
+
+Markdown Content:
+# Regularized Large Neighborhood Search 
+
+Germain Vivier-Ardisson 
+
+Google DeepMind & CERMICS Paris, France 
+
+gvivier@google.com 
+
+Laurent Demonet 
+
+Google Research Paris, France 
+
+demonet@google.com 
+
+Axel Parmentier 
+
+CERMICS, ENPC, CNRS, IPP Marne-la-Vallée, France 
+
+axel.parmentier@enpc.fr 
+
+Mathieu Blondel 
+
+Google DeepMind Paris, France 
+
+mblondel@google.com 
+
+## Abstract 
+
+Operations research practitioners typically tackle NP-hard combinatorial problems using large neighborhood search (LNS), a scalable heuristic that iteratively refines a current solution by locally re-optimizing subsets of its variables. In contrast, most existing approaches for integrating combinatorial optimization layers into neural networks still assume access to an exact global solution, which is computationally intractable. We bridge this gap by introducing regularized LNS (RLNS). By regularizing or perturbing local subproblems, we turn the LNS heuristic into an efficient MCMC sampler over the combinatorial set of feasible solutions, with associated Fenchel-Young losses. Under entropic regularization, we prove that RLNS performs exact block Gibbs sampling. Furthermore, adjusting the number of RLNS iterations allows us to interpolate between pseudolikelihood and exact maximum likelihood estimation, for end-to-end learning without global solvers. We demonstrate our approach on k-subset selection, generalized assignment, and stochastic vehicle scheduling problems. 
+
+## 1 Introduction 
+
+Integrating combinatorial optimization solvers into neural networks has emerged as a powerful paradigm for structured prediction (Dalle et al., 2022; Mandi et al., 2024; Sadana et al., 2024; Schiffer et al., 2026). Such architectures enable machine learning models to output discrete decisions that satisfy complex constraints, via layers of the form 
+
+θ 7 −→ ˆy(θ) ≜ arg max 
+
+> y∈Y
+
+⟨θ, y⟩, (1) where Y is a finite, but combinatorially large, set of feasible outputs. The fundamental challenge in this setting is differentiability. Because the arg max operator provides zero gradients almost everywhere, standard approaches typically rely on introducing a regularization term to yield a continuous, differentiable relaxation (Niculae et al., 2018; Mandi & Guns, 2020; Berthet et al., 2020). As summarized in Table 1, various methods have been proposed to solve the resulting problem, depending on the type of regularization used and available oracle. However, most of the existing literature fundamentally assumes access to a global exact solver (a global MAP oracle) or marginal oracle (Lafferty et al., 2001; Wainwright & Jordan, 2008), which computes the expectation of the Gibbs distribution p(y) ∝ exp( ⟨θ, y⟩). For NP-hard optimization problems encountered in operations research, calling a global oracle at every training step can be computationally intractable. Instead, practitioners rely on highly scalable heuristics, particularly large neighborhood search (LNS). LNS iteratively improves a feasible solution by freezing a subset of its variables and exactly re-
+
+> Preprint.
+> arXiv:2606.02294v1 [cs.LG] 1 Jun 2026
+
+Table 1: The new connection we establish between LNS and Gibbs sampling enables us to leverage local oracles and effectively regularize the problem when usual global oracles are not available.                                
+
+> Regularization Oracle Approach
+> Differentiable DP (2018) Entropic Global marginal DP SparseMAP (2018) Quadratic Global MAP Frank-Wolfe Barrier FW (2015) TRW Entropy Global MAP Frank-Wolfe IntOpt (2020) Logarithmic barrier Interior point solver Primal-dual Perturbed optimizers (2020) Implicit via noise Global MAP Monte-Carlo DYS-net (2024) Quadratic Projection oracles Davis-Yin splitting Blackbox solvers (2020) None Global MAP Interpolation Local search MCMC (2025) Entropic Local search Metropolis-Hastings RLNS (proposed) Entropic / Implicit via noise Local marginal / MAP Gibbs sampling
+
+optimizing the remaining free variables (Pisinger & Ropke, 2018). The lack of a principled framework for using LNS as combinatorial layer in a neural network remains a critical bottleneck. In contrast to recent work that connected local search heuristics with Metropolis-Hastings (Vivier-Ardisson et al., 2025), our work bridges LNS with block Gibbs sampling and does not require any sample rejection mechanism. We make the following contributions. • In Section 3.1 we introduce RLNS, a stochastic version of LNS based on smoothed maximum operators, integrating local regularization into the LNS subproblems. • In Section 3.2 we prove that under entropic regularization, RLNS exactly implements a block Gibbs sampler whose stationary distribution matches a globally regularized Gibbs distribution. • In section Section 3.3, we show that RLNS supports perturbation-based regularization (Berthet et al., 2020), leading to tractable updates using the standard local MAP oracles of LNS heuristics. • In Section 4, we demonstrate that the number of RLNS iterations allows us to interpolate between pseudolikelihood (Besag, 1974) and exact maximum likelihood estimation. • In Section 5, we evaluate RLNS on a controlled estimation task on κ-hot vectors, a generalized assignment problem learning task, and a stochastic vehicle scheduling problem. A summary of notations is available at the beginning of the appendix. 
+
+## 2 Background and related work 
+
+Large neighborhood search. LNS is a powerful meta-heuristic used to approximately solve Problem 1 when it is intractable (e.g., when it is NP-hard), by using a local solver ( local MAP oracle) 
+
+θ 7 → arg max 
+
+> y′∈Y
+
+⟨θ, y′⟩ s.t. y′ 
+
+> [S]
+
+= y[S]. (2) These oracles exactly solve sub-problems of Problem 1 by fixing a subset S ⊆ [d] of variables to the previous solution y ∈ Y . LNS iteratively refines a solution by freezing different variables at each step and exactly re-optimizing the rest (Archetti & Speranza, 2014; Pisinger & Ropke, 2018). The pseudo-code is given in Algorithm 1. 
+
+Algorithm 1 Large neighborhood search (LNS) 
+
+Require: Logits θ ∈ Rd, feasible set Y ⊂ Rd, initial solution y(0) ∈ Y , number of iterations K ∈ N. 
+
+> 1:
+
+for k = 0 to K − 1 do  
+
+> 2:
+
+Choose a subset of frozen coordinates S(k) ⊂ [d]. 
+
+> 3:
+
+Define the local neighborhood: Y(k) ≜
+
+n
+
+y ∈ Y | y[S(k)] = y(k)[S(k)]
+
+o 
+
+> 4:
+
+Set y(k+1) ← arg max y∈Y (k) ⟨θ, y⟩ {Solve the local optimization subproblem.}  
+
+> 5:
+
+end for  
+
+> 6:
+
+Return y(K)
+
+2Smoothed maximum operators. Let Ω : △D → R be a lower semicontinuous (l.s.c.) strictly convex regularization function. The smoothed maximum operator fΩ : RD → R (Mensch & Blondel, 2018) and the smoothed maximizer pΩ : RD → ∆D are defined as 
+
+fΩ(s) ≜ max 
+
+> q∈△ D
+
+⟨s, q⟩ − Ω( q), and pΩ(s) ≜ arg max 
+
+> q∈△ D
+
+⟨s, q⟩ − Ω( q).
+
+The strict convexity of Ω guarantees that pΩ(s) is single-valued. Danskin’s theorem (Danskin, 1966) gives pΩ = ∇fΩ, and we have fΩ = Ω ∗, where ·∗ denotes the Fenchel conjugate. Typical choices for 
+
+Ω include Shannon’s negative entropy, which yields the log-sum-exp operator for fΩ and the softmax 
+
+for pΩ, or Ω = 12 ∥ · ∥ 22, which gives the sparsemax operator (Martins & Astudillo, 2016) for pΩ.
+
+Distribution-space Fenchel-Young losses. Following Blondel et al. (2020), we define the score vector sθ ≜ (⟨θ, y⟩)y∈Y ∈ R|Y| , and cast Problem 1 as an optimization problem on △Y , the set of distributions over feasible solutions, yielding max y∈Y ⟨θ, y⟩ = max q∈△ Y ⟨sθ , q⟩. This point of view allows us to introduce distribution-space regularization into the problem. 
+
+Definition 1 (Distribution-space Fenchel-Young loss) . Let Ω : △Y → R be a l.s.c. strictly convex regularization function. The distribution-space Fenchel-Young loss LΩ : Rd ×△ Y → R+
+
+generated by Ω is defined by: 
+
+LΩ(θ ; p) ≜ Ω∗(sθ ) + Ω( p) − ⟨ sθ , p⟩ = fΩ(sθ ) + Ω( p) − ⟨ θ, Ep[Y ]⟩.
+
+This loss is non-negative, and such that LΩ(θ ; p) = 0 ⇐⇒ pΩ(sθ ) = p. It is continuously differentiable and convex in θ, with ∇θ LΩ(θ ; p) = EpΩ(sθ )[Y ] − Ep[Y ]. If Ω is strongly convex, then θ 7 → ∇ θ LΩ(θ ; p) is Lipschitz-continuous. 
+
+Differentiating through combinatorial optimization. Most approaches to differentiate Problem 1 with respect to θ are based on introducing regularization, based on the type of oracle available. If the original problem admits a dynamic programming solution, one can solve an entropy-regularized version by algorithmic smoothing (Li & Eisner, 2009; Mensch & Blondel, 2018). For linear programs, one can use an interior-point solver to to compute a log-barrier-regularized solution (Mandi & Guns, 2020), or leverage projection oracles to handle quadratic regularization (McKenzie et al., 2024). Global MAP oracles can also be used to solve the regularized problem, either via a Frank-Wolfe-like routine (Niculae et al., 2018; Krishnan et al., 2015) or via Monte-Carlo estimation by adding stochastic perturbations to the solver’s input (Berthet et al., 2020; Dalle et al., 2022). Regarding differentiation, several strategies are possible. When the approach only needs to differenti-ate through a regularized max , as is the case of Fenchel-Young losses (Blondel et al., 2020), we can use Danskin’s theorem (Danskin, 1966). When it requires differentiating a regularized arg max , one can use autodiff on the unrolled solver iterations, or implicit differentiation of the KKT conditions (Amos & Kolter, 2021; Ferber et al., 2019; Blondel et al., 2022; Agrawal et al., 2019). Differently, Vlastelica et al. (2020) compute surrogate gradients via continuous interpolation of the solver. 
+
+Local oracles in structured prediction. Exact MAP inference in graphical models is inherently a combinatorial optimization problem. In both domains, the intractability of global inference motivates the use of local oracles. For example, the seminal iterated conditional modes algorithm (Besag, 1986) deterministically maximizes local conditional probabilities, while randomized variants yield provable global approximation guarantees (Jung et al., 2009); together, they act as the graphical models analogue to (unregularized) LNS. During learning, intractable global marginal inference is typically bypassed using local oracles: pseudolikelihood (or composite likelihood) methods (Besag, 1974; Lindsay, 1988; Varin et al., 2011) optimize local conditionals of observed data, while local perturb-and-MAP (Bertasius et al., 2016) forms their noise-regularized counterpart. Approaches based on the local polytope (Niculae et al., 2018) relax constraints, while our approach keeps the same constraints but optimizes over a subset of the variables at each iteration. While Berthet et al. (2020) successfully used global perturb-and-MAP (Papandreou & Yuille, 2011) for combinatorial layers, using local oracles as a layer remains a critical gap in the field which our work aims to bridge. Contrastive divergences (Hinton, 2000) interpolate between pseudolikelihood (CD-1) to maximum likelihood estimation (CD-∞) (Hyvärinen, 2006; Asuncion et al., 2010). We will establish a similar result for the loss function associated with RLNS iterations. 33 Regularized LNS 
+
+3.1 Proposed framework 
+
+We now introduce our main contribution: using smoothed maximum operators, we define a stochastic, regularized version of LNS (RLNS), whose iterates follow a Markov chain with state space Y. To do so, we first define a family of local regularization functions from a global one, via inclusion maps. 
+
+Definition 2 (Local regularizers) . For any subset of solutions Z ⊆ Y , we define the inclusion map ιZ : △Z ,→ △ Y from local distributions on Z to global distributions on Y via padding: 
+
+ιZ (q) ≜
+
+ qy if y ∈ Z 
+
+0 else 
+
+
+
+> y∈Y
+
+.
+
+Then, for any lower semicontinuous, strictly convex global regularizer Ω : △Y → R, we define its local counterpart ΩZ : △Z → R by composing it with ιZ , as ΩZ ≜ Ω ◦ ιZ .
+
+While standard approaches given in Table 1 aim to solve a regularized version of the global optimiza-tion problem (1) , we propose to regularize the LNS subproblems from Algorithm 1 using the local regularizer ΩY(k)
+
+, to define local distributions pΩY(k) (( sθ )[Y(k)]) ∈ △ Y(k)
+
+. RLNS is then obtained by iteratively sampling from these locally regularized distributions, as shown in Algorithm 2. 
+
+Algorithm 2 Regularized LNS with K iterations (RLNS-K)
+
+Require: Logits θ, feasible set Y, initial solution y(0) , number of iterations K, regularization Ω. 
+
+> 1:
+
+for k = 0 to K − 1 do  
+
+> 2:
+
+Choose a subset of frozen coordinates S(k) ⊂ [d]. 
+
+> 3:
+
+Define the local neighborhood: Y(k) ≜
+
+n
+
+y ∈ Y | y[S(k)] = y(k)[S(k)]
+
+o 
+
+> 4:
+
+Sample y(k+1) ∼ pΩY(k)
+
+ (sθ )[Y(k)]
+
+ {Sample from the local regularized distribution.}  
+
+> 5:
+
+end for  
+
+> 6:
+
+Return 1
+
+> K
+
+PKk=1 y(k)
+
+Ergodicity. To guarantee that the distribution of the iterates y(k) of Algorithm 2 asymptotically converges to a unique stationary distribution independent of the initialization y(0) (i.e., that the Markov chain is ergodic ), the two following properties are sufficient: 1. The algorithm employs an irreducible variable selection scheme , i.e., the distribution over frozen variables S(k) induces a connected transition graph over the feasible set Y.2. The local update distributions are dense , i.e., pΩY(k) (( sθ )[Y(k)])( y) > 0 ∀y ∈ Y (k).The first condition ensures that LNS can reach any feasible solution from any other one. This requirement is not very stringent in practice, and is typically met by practical implementations which either consider reduced scope or exploit decomposition into subproblems with specific structure (Archetti & Speranza, 2014). The second condition ensures that any path in the transition graph has a strictly positive transition probability, thereby establishing the irreducibility of the chain. Because the current state is always in its own neighborhood ( y(k) ∈ Y (k)), dense local updates guarantee positive self-loop probabilities at every state, which in turn ensures aperiodicity. 
+
+Definition 3 (Stationary distribution of RLNS) . When the Markov chain (y(k))k∈N defined by Algorithm 2 is ergodic, we denote by πLNS  
+
+> θ,Ω
+
+∈ △ Y its unique stationary distribution. 
+
+Rejection-free sampling. In contrast to the approach of Vivier-Ardisson et al. (2025), which defines a Metropolis-Hastings-based sampler using local search heuristics, Algorithm 2 does not involve any sample rejection mechanism. As we empirically show in Fig. 1, this enables updating more variables at a time without stagnating, especially in low-temperature regimes. 43.2 Entropic LNS and Gibbs sampling 
+
+We now focus on the case where Ω is Shannon’s negative entropy scaled by γ > 0,
+
+Ω( q) ≜ −γH s(q) = γ X
+
+> y∈Y
+
+q(y) log q(y).
+
+This choice yields the Gibbs distribution pΩ(s)( y) ∝ exp( sy /γ ). Computing its expectation (i.e., performing global marginal inference) is only tractable in certain settings, e.g., if the global problem admits an exact dynamic programming solution (Mensch & Blondel, 2018). The local RLNS update distribution pΩY(k) (s[Y(k)]), however, is a local Gibbs distribution on Y(k), and can be sampled from by regularized dynamic programming if the local problem can be solved by dynamic programming. This is the case, e.g., of our applications in Sections 5.1 and 5.2. 
+
+Proposition 1 (Entropic LNS as a block Gibbs sampler) . Assume Ω = −γH s with γ > 0. For any current solution y(k) ∈ Y and frozen subset S(k) ⊆ [d], the locally regularized distribution matches the global regularized distribution conditioned on the fixed variables: 
+
+pΩY(k)
+
+ (sθ )[Y(k)]
+
+ (y) = pΩ(sθ )
+
+
+
+y | y(k)[S(k)]
+
+
+
+∀y ∈ Y (k).
+
+Consequently, Algorithm 2 implements an exact block Gibbs sampler with pΩ(sθ ) as a target distribution, and if the variable selection scheme is irreducible, we have: 
+
+πLNS  
+
+> θ,Ω
+
+(y) = pΩ(sθ )( y) ∝ exp ( ⟨θ, y⟩/γ ) ∀y ∈ Y .
+
+The proof is given in Section B.1. Thus, in the Shannon-regularized case, the stationary distribution of the locally-regularized iterates of Algorithm 2 matches the globally-regularized distribution. The next proposition shows that Ω = −γH s is in fact the only separable regularizer with this property. The proof, given in Section B.2, relies on a functional equation-based characterization of Shannon’s entropy from information theory (Horibe, 1988; Gselmann, 2011; Mensch & Blondel, 2018). 
+
+Proposition 2 (Characterization of stationary exactness) . Let Ω : △Y → R be a l.s.c. separable strictly convex regularization function, normalized such that Ω( δY 
+
+> y
+
+) = 0 for any y ∈ Y . The RLNS stationary distribution matches the global target for all finite feasible sets Y ⊂ Rd, all maximization directions θ ∈ Rd, and all irreducible variable selection schemes, meaning 
+
+πLNS  
+
+> θ,Ω
+
+= pΩ(sθ ), if and only if ∃γ > 0 : Ω = −γH s.
+
+Rao-Blackwellization. When using regularized dynamic programming to sample the next RLNS iterate y(k+1) from the local Gibbs distribution pΩY(k) (( sθ )[Y(k)]), computing its expectation 
+
+E[y(k+1) |y(k), S (k)] is tractable with the same complexity. Thus, we can perform Rao-Blackwellized MCMC (McKeague & Wefelmeyer, 2000) by simply averaging local expectations instead of simple samples along the Markov chain in order to reduce variance. 
+
+3.3 Perturbed LNS and tractable updates 
+
+In some applications, a solver for the unregularized local problem in Eq. (2) (local MAP oracle) is available but a solver for the Shannon-regularized local problem (local marginal oracle) is not. To support this setting, we now consider the case of perturbation-based regularizers (Berthet et al., 2020), which allow us to make RLNS tractable whenever standard, unregularized LNS is. 
+
+Definition 4 (Perturbation-based regularization) . Let ε > 0 be a temperature parameter, and D
+
+be a distribution on Rd admitting a positive density. Following Bouvier et al. (2025), we define the (global) distribution-space perturbation-based regularization function Ωε : △Y → R as: 
+
+Ωε(q) ≜ sup 
+
+> s∈R|Y|
+
+
+
+⟨s, q⟩ − EZ∼D 
+
+
+
+max  
+
+> y∈Y
+
+{sy + ε⟨Z, y⟩} 
+
+ 
+
+.
+
+5In Section B.3, we show that Ωε is strictly convex on △Y . The corresponding global regular-ized distribution is the global perturb-and-MAP distribution (Papandreou & Yuille, 2011) given by pΩε (sθ )( y) = PZ∼D 
+
+ arg max y′∈Y ⟨θ + εZ, y′⟩ = y, and its expectation is the expected per-turbed maximizer EpΩε (sθ )[Y ] = EZ∼D 
+
+arg max y∈Y ⟨θ + εZ, y⟩. We now show that the local 
+
+regularized distributions correspond to local perturb-and-MAP. 
+
+Proposition 3 (Tractability of perturbed LNS) . Let Ωε be a perturbation-based regularizer, as defined in (4) . Exact sampling from the locally regularized distribution on Y(k) with local scores (sθ )[Y(k)] ∈ R|Y (k)| is tractable via perturbed local maximization: 
+
+Z ∼ D =⇒ y(k+1) ≜ arg max 
+
+> y∈Y (k)
+
+⟨θ + εZ, y⟩ ∼ pΩY(k)
+
+> ε
+
+ (sθ )[Y(k)]
+
+ .
+
+Proposition 3, proved in Section B.4, highlights the computational advantage of perturbation-based regularization: samples from the local regularized distribution can be obtained simply by performing local maximization with perturbed costs, leveraging the standard LNS oracles used in Algorithm 1. We summarize this in Algorithm 3, whose iterates match those of Algorithm 2 for Ω = Ω ε.
+
+Algorithm 3 Perturbed LNS 
+
+Require: Logits θ ∈ Rd, finite feasible set Y ⊂ Rd, noise distribution D, temperature parameter 
+
+ε > 0, initial solution y(0) ∈ Y , number of iterations K ∈ N. 
+
+> 1:
+
+for k = 0 to K − 1 do  
+
+> 2:
+
+Choose a subset of coordinates S(k) ⊂ [d]. 
+
+> 3:
+
+Define the local neighborhood: Y(k) ≜
+
+n
+
+y ∈ Y | y[S(k)] = y(k)[S(k)]
+
+o 
+
+> 4:
+
+Sample Z(k) ∼ D  
+
+> 5:
+
+Set y(k+1) ← arg max y∈Y (k) ⟨θ + εZ (k), y⟩ 
+
+> 6:
+
+end for  
+
+> 7:
+
+Return 1
+
+> K
+
+PKk=1 y(k)
+
+## 4 Learning with RLNS 
+
+In this section, we show how RLNS can be integrated as a combinatorial layer in a neural network. 
+
+4.1 RLNS-∞ and global Fenchel-Young loss 
+
+In this section, we consider the asymptotic regime where the number of RLNS iterations grows large (K → ∞ ). Let Ω : △Y → R be a valid distribution-space regularizer, and LΩ : Rd × △ Y → R+ be the corresponding global Fenchel-Young loss, as defined in Definition 1. For any target distribution 
+
+p ∈ △ Y , the gradient of this loss is given by ∇θ LΩ(θ ; p) = EpΩ(sθ )[Y ] − Ep[Y ].Because the expectation of the global regularized distribution pΩ(sθ ) is intractable, we can use the RLNS iterates (y(k))k∈N of Algorithm 2 to construct an MCMC estimator of this gradient: 
+
+∇θ LΩ(θ ; p) ≈ 1
+
+K
+
+> K
+
+X
+
+> k=1
+
+y(k) − Ep[Y ].
+
+The behavior and bias of this stochastic gradient estimator depend heavily on the chosen regularization and the number of iterations K.
+
+Shannon-regularized case. When Ω = −γH s, Proposition 1 guarantees that the stationary distribution of the RLNS Markov chain exactly matches the target distribution, i.e., πLNS  
+
+> θ,Ω
+
+= pΩ(sθ ).In this setting, the only source of bias in the gradient estimator stems from the finite mixing time of the Markov chain. While biased for any fixed K, the estimator is consistent in the K → ∞ limit. 6General case. For general regularizers Ω, the estimator accumulates two distinct sources of bias: the finite mixing time of the chain, and the intrinsic distance between the RLNS stationary distribution 
+
+πLNS  
+
+> θ,Ω
+
+and the true global target pΩ(sθ ). In Section A, we derive theoretical bounds on this gap in the general setting (Propositions 8 and 9), as well as specific bounds tailored to the perturbation-based setting of Section 3.3 based on the constraint graph (Propositions 10 and 12). These bounds show that the approximation error scales with the number of shared constraints between frozen and free variables, providing a theoretical justification for variable selection schemes that minimize such cross-dependencies. We empirically validate them in Section A.4 and Fig. 3. 
+
+The practical choice of K. In practice, treating K as a hyperparameter allows us to interpolate between two learning paradigms. Setting K = 1 minimizes computational overhead and provides unbiased gradients for a local Fenchel-Young loss (Section 4.2), yielding a principled Fenchel-Young counterpart to pseudolikelihood. Conversely, larger values of K better approximate the global Fenchel-Young loss gradients but incur higher computational costs. 
+
+4.2 RLNS-1 and local Fenchel-Young loss 
+
+We study study the special case of K = 1 RLNS iteration. For any target feasible solution y ∈ Y 
+
+and subset of fixed coordinates S ⊆ [d], we denote the corresponding local neighborhood by 
+
+YS ≜ {y′ ∈ Y | y′ 
+
+> [S]
+
+= y[S]}. Let ν ∈ ∆2[d]
+
+denote a distribution on coordinate subsets. 
+
+Definition 5 (Local Fenchel-Young loss) . Define the expected smoothed local maximum value function Fy : R|Y| → R ∪ { +∞} 
+
+Fy (s) ≜ ES∼ν
+
+fΩYS
+
+ s[YS ]
+
+ .
+
+Letting its convex conjugate be Ωy ≜ (Fy )∗, the corresponding target-dependent, local Fenchel-Young loss LΩy : Rd × dom(Ω y ) → R+ is given by: 
+
+LΩy (θ ; p) ≜ Fy (sθ ) + Ω y (p) − ⟨ θ, Ep[Y ]⟩.
+
+The following proposition, which we prove in Section B.7, shows we can obtain unbiased stochastic gradients for this loss directly from a single step of RLNS. 
+
+Proposition 4 (Unbiased gradients via RLNS-1). For any y ∈ Y , we have δY 
+
+> y
+
+∈ dom(Ω y ).Moreover, the gradient of the local Fenchel-Young with target y is given by: 
+
+∇θ LΩy (θ ; δY 
+
+> y
+
+) = ES∼ν
+
+
+
+EpΩYS  
+
+> 
+> (sθ)[YS]
+> 
+
+[Y ]
+
+
+
+− y.
+
+Consequently, executing Algorithm 2 with ground-truth initialization y(0) = y and a single iteration K = 1 yields an unbiased estimator of ∇θ LΩy (θ ; δY 
+
+> y
+
+).
+
+Connection with pseudolikelihood. In the Shannon-regularized setting Ω = −γH s, this local Fenchel-Young loss recovers the pseudolikelihood (a.k.a. composite likelihood) objective (Besag, 1974), which maximizes the likelihood of subsets of observed variables conditioned on the rest. 
+
+Proposition 5 (Equivalence to pseudolikelihood) . When Ω = −γH s, the local Fenchel-Young loss with target y equals the expected negative log-likelihood of y conditioned on y[S]:
+
+LΩy (θ ; δY 
+
+> y
+
+) = −γ · ES∼ν
+
+log  pΩ(sθ )( y | y[S]) .
+
+The derivation is given in Section B.8. Thus, since the global Fenchel-Young loss is given by 
+
+LΩ(θ, δ Y 
+
+> y
+
+) = −γ log pΩ(sθ )( y) in this setting, the number of entropic RLNS iterations enables interpolating between pseudolikelihood and exact maximum likelihood estimation. 710 0 10 1 10 2 10 3 10 4 10 5   
+
+> Samples / Markov Iterations
+> 10 3
+> 10 2
+> 10 1
+> MAE to  pΩ(sθ)[Y]
+
+Perturbation (Ω = Ω ε)     
+
+> Monte-Carlo
+> RLNS
+> (Free Variables)
+> 1%
+> 10%
+> 30%
+> 50%
+> 90%
+> 10 010 110 210 310 410 5
+> Samples / Markov Iterations
+
+Shannon (Ω = −γH s)     
+
+> LS-MCMC
+> RLNS
+> RB-RLNS
+> Monte-Carlo 1% 10% 30% 50% 90%
+> Free Variables
+> 0.1
+> 0.5
+> 1
+> 5
+> 10
+> Reg. Strength  γ
+> 0%
+> 20%
+> 40%
+> 60%
+> 80%
+> 100%
+> Acceptance Rate
+> LS-MCMC
+> RLNS
+
+Figure 1: Estimation on κ-hot vectors. Left: convergence of RLNS with varying proportion of free variables compared to i.i.d. Monte-Carlo estimation. Center: convergence with 30% of free variables, against Local Search MCMC and i.i.d. Monte-Carlo estimation (RB- denotes Rao-Blackwellization). 
+
+Right: acceptance rate with varying proportion of free variables and regularization strength γ.
+
+## 5 Experiments 
+
+5.1 Estimation on κ-hot vectors 
+
+To validate our proposed estimators in a controlled setting, we consider the set of κ-hot vectors, 
+
+Y ≜ {y ∈ { 0, 1}d | Pdi=1 yi = κ}. In this context, the expectation of the global regularized distribution EpΩ(sθ )[Y ] can be exactly computed via regularized dynamic programming for entropic regularization (Vivier-Ardisson et al., 2026), or accurately estimated via exact i.i.d. Monte-Carlo sampling for perturbation-based regularization. This provides a reliable ground truth against which we can evaluate our approach. Full experimental details are provided in Section C. 
+
+Baselines. We compare RLNS against exact, i.i.d. Monte-Carlo estimation (directly sampling from the global perturb-and-MAP (Papandreou & Yuille, 2011; Berthet et al., 2020) or Gibbs distribution) and Local Search MCMC (Vivier-Ardisson et al., 2025) using the same neighborhood system. 
+
+Results. We track the mean absolute error (MAE) to EpΩ(sθ )[Y ] over iterations. Allowing more variables to remain free at each iteration accelerates convergence, though it increases subproblem size (Fig. 1, left). RLNS converges faster than Local Search MCMC (Fig. 1, center), as its acceptance rate of 100% does not suffer from updating more variables or using a low regularization strength (Fig. 1, right). Rao-Blackwellization slightly improves convergence, especially at the start of the MCMC. 
+
+5.2 Generalized assignment problem 
+
+We now evaluate RLNS as a combinatorial layer on the generalized assignment problem (GAP) (Martello & Toth, 1992). In the GAP, we are given n items and m bins with capacity Cj ∈ N. Each item-bin assignment has value θij ∈ R and a weight wij ∈ N. The combinatorial problem writes: 
+
+max 
+
+> y∈{ 0,1}n×m
+> n
+
+X
+
+> i=1
+> m
+
+X
+
+> j=1
+
+θij yij s.t. 
+
+> m
+
+X
+
+> j=1
+
+yij ≤ 1 ∀i ∈ [n], and 
+
+> n
+
+X
+
+> i=1
+
+wij yij ≤ Cj ∀j ∈ [m].
+
+The first constraint ensures each item is assigned to at most one bin, while the second one ensures that the capacity of each bin is not exceeded. Given a dataset of (x, y) pairs where x ∈ Rn×m×p
+
+contains relational features for each item-bin pair, the goal is to learn a neural network fW : Rp → R
+
+that predicts assignment scores θij = fW (xij ), such that ˆy(θ) ≈ y.
+
+Local oracles. We choose to freeze the assignments to all bins except a randomly selected one at each RLNS iteration. The LNS subproblem is then a 0/1 1D Knapsack problem, which admits an exact dynamic programming solution (Kellerer et al., 2004), and we can sample from the local regularized distributions via perturbed or regularized dynamic programming (Vivier-Ardisson et al., 2026). Detailed explanations and full experimental details are given in Section D. 82000 4000 6000 8000 10000      
+
+> Gradient Steps
+> 10 1
+> 4 × 10 2
+> 6 × 10 2
+> 2 × 10 1
+> Test MAE
+> PFY RLNS Iterations
+> 1
+> 10
+> 100
+> 1000
+
+(a) Average test set MAE between predicted and ground-truth solutions of RLNS and PFY on the GAP. K = 1 K = 10 K = 100       
+
+> 10 1
+> 10 0
+> Grad. Variance
+> RLNS
+> RB-RLNS n= 100 n= 200 n= 400
+> 10 −1
+> 10 2
+> 10 4
+> Time (ms)
+> Local (DP)
+> Global (MILP)
+
+(b) Variance of RLNS gradients and oracle wall-clock time on the GAP. 2000 4000 6000 8000 10000 
+
+> Gradient Steps
+> 0
+> 10
+> 20
+> 30
+> Test Relative Delay Cost (%)
+> RLNS-1
+> PFY
+> BCE
+> DBB
+> Greedy
+> RLNS-1
+> PFY
+> BCE
+> DBB
+> Greedy
+
+(c) Delay cost relative to the expert policy on stochastic vehicle schedul-ing test set instances. 
+
+Results. Higher numbers of RLNS iterations K better approximate global perturbed Fenchel-Young (PFY, Berthet et al. (2020)) learning (Fig. 2a). Augmenting K also reduces gradient variance, which is further reduced by Rao-Blackwellization (Fig. 2b, top). Local MAP oracles are orders or magnitude faster than global ones, especially when increasing scale (Fig. 2b, bottom) (we set m = n/ 10 ). 
+
+5.3 Stochastic vehicle scheduling 
+
+We now evaluate RLNS as a combinatorial layer on a stochastic vehicle scheduling benchmark (Parmentier, 2022; Dalle et al., 2022; Hoppe et al., 2025). The objective is to route a fleet of vehicles in order to serve a set of spatio-temporal tasks, minimizing the sum of the deterministic vehicle cost and the expected delay cost across a set of stochastic scenarios. The problem is framed as finding paths on a directed acyclic graph G = ( V, E), where a feasible routing y ∈ { 0, 1}|E| satisfies flow conservation and unit demand constraints. To imitate the ground-truth expert (the optimal solution of a two-stage stochastic MILP with full scenario knowledge), a feed-forward neural network predicts edge costs θe from edge-level features, and the predicted routing is obtained via a flow LP. Complete experimental details are provided in Section E. 
+
+Approach and baselines. We use RLNS-1 with perturbation-based regularization. At each step, we freeze the edges corresponding to 66% of randomly selected vehicle routes, and exactly re-optimize the remaining free variables using a significantly smaller flow LP. We compare RLNS against global perturbed Fenchel-Young learning (PFY, Berthet et al. (2020)), blackbox differentiation (DBB, Vlastelica et al. (2020)), an unstructured binary cross-entropy loss (BCE, see, e.g., Joshi et al. (2019)), and a non-learned greedy policy that minimizes only the deterministic vehicle cost. 
+
+Results. All learned methods quickly reach the optimal vehicle cost by using the same number of vehicles as the expert. However, as shown in Fig. 2c, in terms of delay cost, RLNS-1 outperforms DBB and BCE baselines and nearly matches the global PFY loss while only requiring the solver to process a subproblem of approximately one-third the original size. 
+
+## Conclusion 
+
+Bridging communities and future work. While we exhibit links between LNS and Gibbs sampling and prior work bridged local search with Metropolis-Hastings (Vivier-Ardisson et al., 2025), we believe more combinatorial optimization metaheuristics can be revisited from a sampling perspective. For instance, LNS can actually use local search heuristics as approximate sub-problem solvers in practice (Pisinger & Ropke, 2018): one could therefore combine both perspectives and bridge such "local search within LNS" metaheuristics with "Metropolis-within-Gibbs" MCMC samplers (Roberts & Rosenthal, 1997; Ascolani et al., 2026). 
+
+Limitations. While Shannon regularization theoretically guarantees exact block Gibbs sampling, efficient local marginal oracles can remain intractable even within restricted neighborhoods for many combinatorial problems. Our perturbation-based formulation circumvents this by relying solely on standard local MAP oracles, ensuring RLNS remains tractable whenever standard LNS is. However, this scalability comes at the cost of introducing a structural bias into the stationary distribution. 9References 
+
+Agrawal, A., Amos, B., Barratt, S., Boyd, S., Diamond, S., and Kolter, Z. Differentiable Convex Opti-mization Layers, October 2019. URL http://arxiv.org/abs/1910.12430 . arXiv:1910.12430 [cs]. Amos, B. and Kolter, J. Z. OptNet: Differentiable Optimization as a Layer in Neural Networks, December 2021. URL http://arxiv.org/abs/1703.00443 . arXiv:1703.00443 [cs, math, stat]. Archetti, C. and Speranza, M. G. A survey on matheuristics for routing problems. EURO Journal on Computational Optimization , 2(4):223–246, 2014. Ascolani, F., Roberts, G. O., and Zanella, G. Scalability of Metropolis-within-Gibbs schemes for high-dimensional Bayesian models, January 2026. URL http://arxiv.org/abs/2403.09416 .arXiv:2403.09416 [stat]. Asuncion, A., Liu, Q., Ihler, A., and Smyth, P. Learning with Blocks: Composite Likelihood and Contrastive Divergence. In Proceedings of the Thirteenth International Conference on Artificial Intelligence and Statistics , pp. 33–40. JMLR Workshop and Conference Proceedings, March 2010. URL https://proceedings.mlr.press/v9/asuncion10a.html .Bertasius, G., Liu, Q., Torresani, L., and Shi, J. Local Perturb-and-MAP for Structured Prediction, October 2016. URL http://arxiv.org/abs/1605.07686 . arXiv:1605.07686 [cs]. Berthet, Q., Blondel, M., Teboul, O., Cuturi, M., Vert, J.-P., and Bach, F. Learning with Dif-ferentiable Perturbed Optimizers, June 2020. URL http://arxiv.org/abs/2002.08676 .arXiv:2002.08676 [cs, math, stat]. Besag, J. Spatial Interaction and the Statistical Analysis of Lattice Systems. Journal of the Royal Statistical Society. Series B (Methodological) , 36(2):192–236, 1974. ISSN 0035-9246. URL 
+
+https://www.jstor.org/stable/2984812 .Besag, J. On the Statistical Analysis of Dirty Pictures. Journal of the Royal Statistical Society. Series B (Methodological) , 48(3):259–302, 1986. ISSN 0035-9246. URL https://www.jstor.org/ stable/2345426 .Blondel, M. and Roulet, V. The Elements of Differentiable Programming, June 2025. URL http: //arxiv.org/abs/2403.14606 . arXiv:2403.14606 [cs]. Blondel, M., Martins, A. F. T., and Niculae, V. Learning with Fenchel-Young Losses, March 2020. URL http://arxiv.org/abs/1901.02324 . arXiv:1901.02324 [cs, stat]. Blondel, M., Berthet, Q., Cuturi, M., Frostig, R., Hoyer, S., Llinares-López, F., Pedregosa, F., and Vert, J.-P. Efficient and Modular Implicit Differentiation, October 2022. URL http://arxiv. org/abs/2105.15183 . arXiv:2105.15183 [cs]. Bouvier, L., Prunet, T., Leclère, V., and Parmentier, A. Primal-dual algorithm for contextual stochastic combinatorial optimization, May 2025. URL http://arxiv.org/abs/2505.04757 .arXiv:2505.04757 [cs]. Dalle, G., Baty, L., Bouvier, L., and Parmentier, A. Learning with Combinatorial Optimization Layers: a Probabilistic Approach, December 2022. URL http://arxiv.org/abs/2207.13513 .arXiv:2207.13513 [cs, math, stat]. Danskin, J. M. The Theory of Max-Min, with Applications. SIAM Journal on Applied Mathematics ,14(4):641–664, July 1966. ISSN 0036-1399. doi: 10.1137/0114053. URL https://epubs.siam. org/doi/abs/10.1137/0114053 .Ferber, A., Wilder, B., Dilkina, B., and Tambe, M. MIPaaL: Mixed Integer Program as a Layer, July 2019. URL http://arxiv.org/abs/1907.05912 . arXiv:1907.05912 [cs]. Gselmann, E. Entropy functions and functional equations. Mathematical Communications , 16(2): 347–357, 2011. 10 Hinton, r. E. Training Products of Experts by Minimizing Con-trastive Divergence. 2000. URL https://www.semanticscholar. org/paper/Training-Products-of-Experts-by-Minimizing-Hinton/ 9360e5ce9c98166bb179ad479a9d2919ff13d022 .Hoppe, H., Baty, L., Bouvier, L., Parmentier, A., and Schiffer, M. Structured Reinforcement Learning for Combinatorial Decision-Making, May 2025. URL http://arxiv.org/abs/2505.19053 .arXiv:2505.19053 [cs]. Horibe, Y. Entropy of terminal distributions and the fibonacci trees. The Fibonacci Quarterly , 26(2): 135–140, 1988. Hyvärinen, A. Consistency of Pseudolikelihood Estimation of Fully Visible Boltzmann Machines. 
+
+Neural Computation , 18(10):2283–2292, October 2006. ISSN 0899-7667. doi: 10.1162/neco. 2006.18.10.2283. URL https://doi.org/10.1162/neco.2006.18.10.2283 .Joshi, C. K., Laurent, T., and Bresson, X. An Efficient Graph Convolutional Network Technique for the Travelling Salesman Problem, October 2019. URL http://arxiv.org/abs/1906.01227 .arXiv:1906.01227 [cs]. Jung, K., Kohli, P., and Shah, D. Local Rules for Global MAP: When Do They Work ? In Advances in Neural Information Processing Systems , volume 22. Curran Associates, Inc., 2009. URL https://proceedings.neurips.cc/paper/2009/hash/ eecca5b6365d9607ee5a9d336962c534-Abstract.html .Kellerer, H., Pferschy, U., and Pisinger, D. Knapsack Problems . Springer, Berlin, Heidelberg, 2004. ISBN 978-3-642-07311-3 978-3-540-24777-7. doi: 10.1007/978-3-540-24777-7. URL 
+
+http://link.springer.com/10.1007/978-3-540-24777-7 .Krishnan, R. G., Lacoste-Julien, S., and Sontag, D. Barrier Frank-Wolfe for Marginal Inference, November 2015. URL http://arxiv.org/abs/1511.02124 . arXiv:1511.02124 [stat]. Lafferty, J., McCallum, A., and Pereira, F. Conditional Random Fields: Probabilistic Models for Segmenting and Labeling Sequence Data. June 2001. URL https://www.semanticscholar.org/paper/ Conditional-Random-Fields%3A-Probabilistic-Models-for-Lafferty-McCallum/ f4ba954b0412773d047dc41231c733de0c1f4926 .Li, Z. and Eisner, J. First- and second-order expectation semirings with applications to minimum-risk training on translation forests. In Proceedings of the 2009 Conference on Empirical Methods in Natural Language Processing: Volume 1 - Volume 1 , EMNLP ’09, pp. 40–51, USA, August 2009. Association for Computational Linguistics. ISBN 978-1-932432-59-6. URL https://dl.acm. org/doi/10.5555/1699510.1699517 .Lindsay, B. G. Composite likelihood methods. In Statistical Inference from Stochastic Processes: Proceedings of the AMS-IMS-SIAM Joint Summer Research Conference Held August 9-15, 1987, with Support from the National Science Foundation and the Army Research Office , volume 80, pp. 221. American Mathematical Soc., 1988. Mandi, J. and Guns, T. Interior Point Solving for LP-based prediction+optimisation, October 2020. URL http://arxiv.org/abs/2010.13943 . arXiv:2010.13943. Mandi, J., Kotary, J., Berden, S., Mulamba, M., Bucarey, V., Guns, T., and Fioretto, F. Decision-Focused Learning: Foundations, State of the Art, Benchmark and Future Opportunities. Journal of Artificial Intelligence Research , 80:1623–1701, August 2024. ISSN 1076-9757. doi: 10.1613/jair. 1.15320. URL http://arxiv.org/abs/2307.13565 . arXiv:2307.13565 [cs, math]. Martello, S. and Toth, P. Generalized assignment problems. In Ibaraki, T., Inagaki, Y., Iwama, K., Nishizeki, T., and Yamashita, M. (eds.), Algorithms and Computation , pp. 351–369, Berlin, Heidelberg, 1992. Springer. ISBN 978-3-540-47501-9. doi: 10.1007/3-540-56279-6_88. Martins, A. F. T. and Astudillo, R. F. From Softmax to Sparsemax: A Sparse Model of Attention and Multi-Label Classification, February 2016. URL http://arxiv.org/abs/1602.02068 .arXiv:1602.02068 [cs]. 11 McKeague, I. W. and Wefelmeyer, W. Markov chain Monte Carlo and Rao–Blackwellization. 
+
+Journal of Statistical Planning and Inference , 85(1):171–182, April 2000. ISSN 0378-3758. doi: 10.1016/S0378-3758(99)00079-8. URL https://www.sciencedirect.com/science/ article/pii/S0378375899000798 .McKenzie, D., Fung, S. W., and Heaton, H. Differentiating Through Integer Linear Programs with Quadratic Regularization and Davis-Yin Splitting, July 2024. URL http://arxiv.org/abs/ 2301.13395 . arXiv:2301.13395 [cs]. Mensch, A. and Blondel, M. Differentiable Dynamic Programming for Structured Prediction and Attention, February 2018. URL http://arxiv.org/abs/1802.03676 . arXiv:1802.03676 [stat]. Mitrophanov, A. Y. Sensitivity and Convergence of Uniformly Ergodic Markov Chains. Journal of Applied Probability , 42(4):1003–1014, 2005. ISSN 0021-9002. URL https://www.jstor. org/stable/30040824 . Publisher: Applied Probability Trust. Niculae, V., Martins, A. F. T., Blondel, M., and Cardie, C. SparseMAP: Differentiable Sparse Struc-tured Inference, June 2018. URL http://arxiv.org/abs/1802.04223 . arXiv:1802.04223 [stat]. Papandreou, G. and Yuille, A. L. Perturb-and-MAP random fields: Using discrete optimization to learn and sample from energy models. In 2011 International Conference on Computer Vision ,pp. 193–200, November 2011. doi: 10.1109/ICCV.2011.6126242. URL https://ieeexplore. ieee.org/document/6126242 . ISSN: 2380-7504. Parmentier, A. Learning to Approximate Industrial Problems by Operations Research Classic Problems. Operations Research , 70(1):606–623, January 2022. ISSN 0030-364X. doi: 10. 1287/opre.2020.2094. URL https://pubsonline.informs.org/doi/10.1287/opre.2020. 2094 .Pisinger, D. and Ropke, S. Large neighborhood search. In Handbook of metaheuristics , pp. 99–127. Springer, 2018. Roberts, G. and Rosenthal, J. Geometric Ergodicity and Hybrid Markov Chains. Elec-tronic Communications in Probability , 2(none):13–25, January 1997. ISSN 1083-589X, 1083-589X. doi: 10.1214/ECP.v2-981. URL https://projecteuclid.org/ journals/electronic-communications-in-probability/volume-2/issue-none/ Geometric-Ergodicity-and-Hybrid-Markov-Chains/10.1214/ECP.v2-981.full .Rockafellar, R. T. Convex Analysis . Princeton University Press, 1970. ISBN 978-0-691-01586-6. URL https://www.jstor.org/stable/j.ctt14bs1ff .Sadana, U., Chenreddy, A., Delage, E., Forel, A., Frejinger, E., and Vidal, T. A Survey of Contextual Optimization Methods for Decision Making under Uncertainty, February 2024. URL http: //arxiv.org/abs/2306.10374 . arXiv:2306.10374 [cs, math]. Schiffer, M., Hoppe, H., Su, Y., Bouvier, L., and Parmentier, A. Combinatorial Optimization Augmented Machine Learning, January 2026. URL http://arxiv.org/abs/2601.10583 .arXiv:2601.10583 [cs]. Varin, C., Reid, N., and Firth, D. An Overview of Composite Likelihood Methods. Statistica Sinica ,21(1):5–42, 2011. ISSN 1017-0405. URL https://www.jstor.org/stable/24309261 .Vivier-Ardisson, G., Blondel, M., and Parmentier, A. Learning with Local Search MCMC Layers, May 2025. URL http://arxiv.org/abs/2505.14240 . arXiv:2505.14240 [cs]. Vivier-Ardisson, G., Sander, M. E., Parmentier, A., and Blondel, M. Differentiable Knapsack and Top-k Operators via Dynamic Programming, January 2026. URL http://arxiv.org/abs/ 2601.21775 . arXiv:2601.21775 [cs]. Vlastelica, M., Paulus, A., Musil, V., Martius, G., and Rolínek, M. Differentiation of Black-box Combinatorial Solvers, February 2020. URL http://arxiv.org/abs/1912.02175 .arXiv:1912.02175. 12 Wainwright, M. J. and Jordan, M. I. Graphical Models, Exponential Families, and Variational Inference. Foundations and Trends® in Machine Learning , 1(1–2):1–305, November 2008. ISSN 1935-8237, 1935-8245. doi: 10.1561/2200000001. URL https://www.nowpublishers.com/ article/Details/MAL-001 .
+
+## Notation 
+
+• For any vector x ∈ RD and subset of coordinates I ⊆ [D], we denote by x[I] the vector 
+
+(xi)i∈I ∈ R|I|.• For any finite set Y, we denote by △Y ≜ {p ∈ R|Y| ≥0 | P 
+
+> y∈Y
+
+py = 1 } the set of categorical distributions on Y.• For any p ∈ △ Y and y ∈ Y , we equivalently use functional notation p(y) or vector notation 
+
+py for the corresponding probability. • For any subset of coordinates I ⊆ [d], any solution y′ ∈ Y and y ∈ Y such that y[I] = y′ 
+
+> [I]
+
+,we denote by: 
+
+p(y | y′
+
+> [I]
+
+) ≜ p(y)
+
+P y′′ ∈Y  
+
+> s.t. y′′
+> [I]=y′
+> [I]
+
+p(y′′ )
+
+the corresponding conditional probability (we always use the functional notation for condi-tional probabilities). • For any finite set Y and any element y ∈ Y , we denote by δY 
+
+> y
+
+∈ △ Y the corresponding Dirac distribution. • For any two distributions p, q ∈ △ Y , we denote their total variation (TV) distance by: 
+
+dTV (p, q) ≜ 12
+
+X
+
+> y∈Y
+
+|py − qy |.
+
+• We denote the complement of any event E by E.• For any function f : RD → R∪{ +∞} , we denote by dom( f ) ≜ {x ∈ RD | f (x) < +∞} 
+
+its domain. • For any function f : RD → R ∪ { +∞} , we denote by 
+
+f ∗(y) ≜ sup  
+
+> x∈dom( f)
+
+{⟨ x, y⟩ − f (x)}
+
+its convex conjugate. • We denote the convex hull of any set Y ⊆ RD by conv( Y).13 A Geometrical insights and approximation bounds for general regularizers 
+
+When Ω̸ = −γH s, the locally regularized distributions used by RLNS may differ from the conditional distributions of the global smoothed maximizer pΩ(sθ ), thereby precluding the block Gibbs sampling perspective established in Proposition 1. In this section, we give geometrical insights into this more general case, and establish bounds on the distance between the algorithm’s stationary distribution 
+
+πLNS  
+
+> θ,Ω
+
+and the target pΩ(sθ ).
+
+A.1 Geometrical insights 
+
+We first show that the update distributions of RLNS and the ideal, exact Gibbs sampler with pΩ(sθ ) ∈△Y as target are in fact two different projections of the latter onto the local simplex △Y(k)
+
+.
+
+Proposition 6 (RLNS and Gibbs updates as Bregman projections) . Let Y(k) ⊆ Y be the neighborhood used by Algorithm 2 at step k, and BΩ : △Y × △ Y → R denote the Bregman divergence generated by Ω. The local RLNS update distribution corresponds to the projection of the global smoothed maximizer pΩ(sθ ) onto the local simplex △Y(k)
+
+with respect to BΩ:
+
+pΩY(k)
+
+ (sθ )[Y(k)]
+
+ = arg min 
+
+> q∈△ Y(k)
+
+BΩ
+
+
+
+ι(k)(q)∥pΩ(sθ )
+
+
+
+.
+
+Similarly, the update distribution of the ideal block Gibbs sampler with target pΩ(sθ ) is its projection onto the local simplex with respect to the Kullback-Leibler divergence: 
+
+pΩ(sθ )
+
+
+
+· | y(k)[S(k)]
+
+
+
+= arg min 
+
+> q∈△ Y(k)
+
+DKL 
+
+
+
+ι(k)(q)∥pΩ(sθ )
+
+
+
+.
+
+Proposition 6, proved in Section B.6, shows that RLNS and the ideal Gibbs sampler update distribu-tions both correspond to Bregman projections of the same target distribution pΩ(sθ ) onto the local simplex △Y(k)
+
+, simply with distinct geometries. While RLNS uses the same regularization Ω as the one used by the global target distribution, Gibbs sampling uses Shannon’s negative entropy. This gives a geometrical point of view on the claim of Proposition 1. Indeed, since we have 
+
+DKL = 1 
+
+> γ
+
+B−γH s where B−γH s is the Bregman divergence generated by Shannon’s scaled negative entropy, the corresponding projection problems are equivalent when Ω = −γH s in the first place: the BΩ-projections match DKL -projections, and RLNS matches an exact Gibbs sampler for pΩ(sθ ).We now give a block-coordinate ascent perspective on the expected RLNS updates. 
+
+Proposition 7 (Expected RLNS as block-coordinate ascent) . Assume that Y ⊆ { 0, 1}d, and let M ≜ conv( Y). Let Ω : △Y → R be a strictly convex distribution-space regularizer. Its mean-space counterpart ΩM : M → R, defined as: 
+
+ΩM(μ) ≜ min    
+
+> p∈△ Ys.t. Ep[Y]= μ
+
+Ω( p),
+
+is strictly convex on M. Furthermore, for any current solution y(k) ∈ Y and subset of frozen coordinates S(k) ⊆ [d], the expected RLNS local update matches the exact BCA update of the regularized mean-space objective over the free variables: 
+
+EpΩY(k) 
+
+> 
+> (sθ)[Y(k)]
+> 
+
+[Y ] = arg max   
+
+> μ∈M s.t. μ[S(k)]=y(k)[S(k)]
+
+{⟨ θ, μ⟩ − ΩM(μ)} .
+
+The proof is given in Section B.5. 14 A.2 Local consistency gap 
+
+We first define the local consistency gap , which measures the maximum discrepancy between an LNS update and the ideal Gibbs-like update that would preserve the global regularized distribution. 
+
+Definition 6 (Local consistency gap) . Let y(k) ∈ Y , S(k) ⊆ [d], and let Y(k) denote the corresponding subset of feasible solutions, as defined in Algorithms 1 and 2. We define the local consistency gap δθ,Ω as the maximum TV distance between the global regularized distribution pΩ(sθ ) conditioned on the subset of structures matching y(k) on coordinates S(k) and the local RLNS update distribution (seen as two elements of △Y(k)
+
+): 
+
+δθ,Ω ≜ max 
+
+> y(k),S (k)
+
+dTV 
+
+
+
+pΩ(sθ )( · | y(k)[S(k)]) , pΩY(k) (( sθ )[Y(k)])
+
+
+
+.
+
+As shown in Section 3.2, if Ω = −γH s for some γ > 0, the local updates match the conditionals exactly, implying δθ,Ω = 0 . For general regularizers, δθ,Ω > 0. We now bound the total bias of the algorithm. 
+
+Proposition 8 (Bias of RLNS) . Let P be the transition kernel of the LNS Markov chain defined in Algorithm 2. Let P ∗ be the transition kernel of the ideal Gibbs sampler targeting pΩ(sθ ),i.e., which uses updates of the form: 
+
+yk+1 ∼ pΩ(sθ )
+
+
+
+· | y(k)[S(k)]
+
+
+
+.
+
+Let τm(P ∗) be the Dobrushin contraction coefficient of (P ∗)m, i.e.: 
+
+τm(P ∗) ≜ max  
+
+> y,y′∈Y
+
+dTV (( P ∗)m(y , ·) , (P ∗)m(y′, ·)) .
+
+Let m ≥ 1 such that τm(P ∗) < 1. Then, the distance between the LNS stationary distribution 
+
+πLNS  
+
+> θ,Ω
+
+and the target is bounded by: 
+
+dTV 
+
+ πLNS  
+
+> θ,Ω
+
+, pΩ(sθ ) ≤ m
+
+1 − τm(P ∗) δθ,Ω.
+
+Proposition 8, which is proved in Section B.9, enables us to now focus on bounding the local consistency gap δθ,Ω as it translates to a global bound on the distance between πLNS  
+
+> θ,Ω
+
+and pΩ(sθ ).We first bound the local consistency gap under the assumption that the deviation of the regularization from the scaled Shannon’s negative entropy Ω − (−γH s) has a Lipschitz gradient with respect to the 
+
+ℓ1 norm. 
+
+Proposition 9 (Consistency gap bound via relative smoothness) . Let γ > 0 be a reference temperature, and hγ : △Y → R be the deviation of the regularization Ω from the scaled Shannon’s negative entropy: 
+
+hγ (p) ≜ Ω( p) − (−γH s)( p) = Ω( p) + γ X
+
+> y∈Y
+
+py log py .
+
+If hγ is LΩ,γ -smooth with respect to the ℓ1 norm, we have: 
+
+δθ,Ω ≤ LΩ,γ 
+
+γ .
+
+The proof is given in Section B.10, and leverages the characterization of the RLNS and Gibbs updates as Bregman projections given in Proposition 6. 15 We now bound the consistency gap δθ,Ω in the special case of perturbation-based regularizers. 
+
+Proposition 10 (Consistency gap bound in the perturbation-based setting) . Let Ωε be a perturbation-based regularization function, as defined in Definition 4. Let pΩε (sθ ) denote the corresponding global regularized distribution. The local consistency gap δθ,Ωε is bounded by the maximum probability mass of the global regularized distribution pΩε (sθ ) falling outside a local neighborhood: 
+
+δθ,Ωε ≤ max 
+
+> y(k),S (k)
+
+pΩε (sθ )( Y \ Y (k)),
+
+where the maximum is taken over all feasible solutions y(k) ∈ Y and subsets of coordinates 
+
+S(k) ⊆ [d], which define the neighborhood Y(k).
+
+The proof is given in Section B.11. 
+
+A.3 Constraint graph and cut-bounded bias 
+
+In this section, we analyze the bias of perturbed LNS (i.e., RLNS with perturbation-based regulariza-tion as defined in Section 3.3) through the lens of its variable selection scheme. We begin with an idealized scenario: when the feasible set perfectly factorizes into independent blocks of variables, perturbed LNS achieves zero bias. 
+
+Proposition 11 (Exactness of Perturbed LNS on product spaces) . Let the coordinates [d] be partitioned into M disjoint blocks [d] = FMm=1 Bm, and assume the feasible set factorizes accordingly: Y = QMm=1 Ym, where Ym ⊂ R|Bm|.Assume that the noise distribution D factorizes over this partition, meaning that if Z ∼ D , the block subvectors Z[Bm] are mutually independent. If, at each step k, the frozen subset of coordinates S(k) is a union of blocks (i.e., S(k) =F 
+
+> m∈M (k)
+
+Bm for some index set M(k) ⊂ [M ]), then the local consistency gap is zero ( δθ,Ωε =0), and Algorithm 3 implements a block Gibbs sampler for the global regularized distribution. Consequently, its stationary distribution is exactly: 
+
+πLNS  
+
+> θ,Ωε
+
+= pΩε (sθ ).
+
+While perfect factorization guarantees zero bias, most combinatorial optimization problems feature interacting variables bound by shared constraints. To systematically analyze these interactions, we formalize the problem structure using a constraint graph. Assume the feasible set is defined by a set of linear constraints C ≜ {1, . . . , m } as: 
+
+Y ≜ {y ∈ { 0, 1}d | Ay ≤ b},
+
+where A ∈ Rm×d and b ∈ Rm.
+
+Definition 7 (Constraint hypergraph) . The constraint hypergraph associated with the feasible set Y is a hypergraph HC = ( V, EC ), where the vertices correspond to the decision variables 
+
+V = [ d], and and each hyperedge ec ∈ E C corresponds to a constraint c ∈ C, containing exactly the variables involved in that constraint: 
+
+EC ≜ {ec | c ∈ C} where ec ≜ {i ∈ [d] | Ac,i ̸ = 0 }.
+
+At any iteration k, the choice of frozen variables S(k) ⊆ [d] and free variables F (k) ≜ [d] \ S(k)
+
+essentially partitions the vertices of this constraint hypergraph. This partition naturally divides the constraint indices C (and thus the hyperedges) into three disjoint sets: 16 • CF (S(k)): constraints exclusively involving free variables F (k);• CS (S(k)): constraints exclusively involving frozen variables S(k);• C∂ (S(k)): the cut constraints , which involve at least one variable in F (k) and one in S(k)
+
+(corresponding to the hyperedges in the cut-set of HC ). We can therefore decompose the constraints and write the cut constraints evaluated on a vector 
+
+y ∈ Rd as A[C∂ (S(k)),F (k)]y[F (k)] + A[C∂ (S(k)),S (k)]y[S(k)] ≤ b[C∂ (S(k))] .To isolate the bias introduced specifically by these cut constraints, we define a relaxed space where they are dropped. This effectively forces the subproblem back into the idealized product-space setting described in Proposition 11. 
+
+Definition 8 (Relaxed product space) . For a given partition defined by S(k), we define the 
+
+relaxed feasible set Yrelax (S(k)) ≜ YF (S(k)) × Y S (S(k)), where: 
+
+YF (S(k)) ≜
+
+n
+
+yF ∈ { 0, 1}|F (k)| | A[CF (S(k)),F (k)]yF ≤ b[CF (S(k))] 
+
+o
+
+,
+
+YS (S(k)) ≜
+
+n
+
+yS ∈ { 0, 1}|S(k)| | A[CS (S(k)),S (k)]yS ≤ b[CS (S(k))] 
+
+o
+
+.
+
+Notice that Y ⊆ Y relax (S(k)), and equality holds if and only if C∂ (S(k)) = ∅. Thus, the relaxed space strictly encompasses the true feasible set, allowing us to bound the local consistency gap by measuring how often the unconstrained, relaxed updates violate the dropped cut constraints. 
+
+Proposition 12 (Cut-bounded consistency gap) . For any feasible solution y(k) ∈ Y and subset of frozen coordinates S(k), let Vc(S(k), y(k)) ⊆ Y F (S(k)) denote the set of assignments for the free variables that violate the cut constraint c ∈ C∂ (S(k)) when combined with y(k)[S(k)]:
+
+Vc(S(k), y(k)) ≜
+
+n
+
+yF ∈ Y F (S(k)) | A[{c},F (k)]yF + A[{c},S (k)]y(k)[S(k)] > b c
+
+o
+
+.
+
+Moreover, define the relaxed perturbed maximizer as: 
+
+Y ∗
+
+> relax
+
+(S(k)) ≜ arg max 
+
+> y∈Y relax (S(k))
+
+⟨θ + εZ, y⟩.
+
+The local consistency gap of the perturbed LNS is bounded by: 
+
+δθ,Ωε ≤ 2 max 
+
+> y(k),S (k)
+
+P
+
+(Y ∗
+
+> relax
+
+(S(k))) [F (k)] ∈ [ 
+
+> c∈C∂(S(k))
+
+Vc(S(k), y(k))
+
+ .
+
+Furthermore, applying a union bound and bounding by the worst-case cut constraint yields: 
+
+δθ,Ωε ≤ 2 max 
+
+> y(k),S (k)
+
+|C∂ (S(k))| max  
+
+> c∈C∂(S(k))
+
+P
+
+
+
+(Y ∗
+
+> relax
+
+(S(k))) [F (k)] ∈ Vc(S(k), y(k))
+
+
+
+.
+
+Motivation for min-cut variable selection. Proposition 12, proved in Section B.13, provides a justification for constraint-graph heuristics in LNS. The upper bound on the bias of the local update scales with |C∂ (S(k))|, the number of cut constraints separating the frozen variables S(k) from the free variables F (k). This motivates the design of variable selection schemes that minimize |C∂ (S(k))|
+
+in RLNS. In Section A.4, we empirically validate this theoretical on the maximum weight independent set problem. 
+
+A.4 Min-cut RLNS on the maximum weight independent set 
+
+To empirically validate the cut-size-based bias bound from Section A.3, we evaluate RLNS with pertubation-based regularization on the maximum weight independent set (MWIS) polytope. Given an undirected graph G = ( N , E), the MWIS problem writes: 17 0 2000 4000 6000 8000 10000        
+
+> RLNS Iterations
+> 10 1
+> MAE
+> β
+> -10
+> -1
+> 0
+> 1
+> 10
+> 20
+> 40
+> 60
+> 80
+> 100
+> Cut Size  β
+> -10
+> -1
+> 0
+> 1
+> 10 β = -10
+> Sampled partition Block 1. Cut size: 102 Block 2. Cut size: 94 Block 3. Cut size: 107
+> β = 10
+> Sampled partition Block 1. Cut size: 27 Block 2. Cut size: 19 Block 3. Cut size: 29
+
+Figure 3: Top left. MAE between K-th RLNS estimate and true global expectation, computed as 1 
+
+> |N |
+
+∥ PKk=1 y(k) − EpΩε (sθ )[Y ]∥1. Top right. Average cut size of the selected variables with different values of β. Bottom. Visualization of a sampled partition for β = −10 and β = 10 . Internal edges are represented by black lines, and cut edges are represented by red dashed lines. 
+
+max 
+
+> y∈{ 0,1}|N |
+
+X
+
+> n∈N
+
+θnyn
+
+s.t. yu + yv ≤ 1 ∀(u, v ) ∈ E .
+
+Constraint graph. For the MWIS, the constraint hypergraph HC exactly reduces to the standard problem graph G: since each constraint involves exactly two nodes, every hyperedge has size 2 and corresponds directly to an edge in G. To test the impact of the cut constraint size isolated in our theoretical bound, we design variable selection schemes with varying average cut sizes. We report results averaged across 10 random seeds, where each seed controls the generation of a distinct random graph instance. Specifically, we generate soft random geometric graphs by randomly placing |N | = 100 nodes in a 2D space and assigning edges with a probability that decays exponentially with the Euclidean distance d(u, v ) between nodes. 
+
+Variable selection scheme. For each graph instance, we perform an offline phase where we generate a pool of 100 node partitions, which all divide N into 5 blocks of |N | /5 = 20 nodes each. These partitions are generated via 10 4 steps of Metropolis-Hastings MCMC (where a proposal partition is obtained by exchanging the block labels of two random nodes) to be sampled approximately proportionally to exp( −β · c), where the cut size c is the total number of edges (u, v ) ∈ E such that u and v belong to different blocks in the partition. By adjusting the inverse temperature β, we can smoothly interpolate the variable selection scheme from favoring max-cuts ( β < 0) to min-cuts 18 (β > 0): see Fig. 3 (bottom) for a visualization. During the online RLNS procedure, at each step, we uniformly sample a partition from the offline pool and pick exactly one of its blocks uniformly at random to serve as the free variables, keeping the assignments of all other nodes frozen. 
+
+Results. As illustrated in Fig. 3 (top), the results validate our theoretical insights from Section A.3: variable selection schemes with minimal cut size |C∂ (S(k))| in the constraint graph yield a better convergence to the exact global regularized distribution pΩε (sθ ).
+
+## B Proofs 
+
+B.1 Proof of Proposition 1 (Entropic LNS as a block Gibbs sampler) 
+
+Proof. When Ω = −γH s, we have, for any D ∈ N, x ∈ RD :
+
+pΩ(x) = exp( xi/γ )
+
+PDj=1 exp( xj /γ )
+
+!Di=1 
+
+.
+
+Thus, on the one hand, the local regularized distribution writes, for all y(k) ∈ Y and y ∈ Y (k):
+
+pΩY(k)
+
+ (sθ )[Y(k)]
+
+ (y) = exp ( ⟨θ, y⟩/γ )
+
+P 
+
+> y′∈Y (k)
+
+exp( ⟨θ, y′⟩/γ ) .
+
+On the other hand, the conditional probability of the global regularized distribution is given by: 
+
+pΩ(sθ )
+
+
+
+y | y(k)[S(k)]
+
+
+
+≜ pΩ(sθ )( y)
+
+P y′∈Y 
+
+> s.t. y′
+> [S(k)]=y(k)[S(k)]
+
+pΩ(sθ )( y′)= pΩ(sθ )( y)
+
+P 
+
+> y′∈Y (k)
+
+pΩ(sθ )( y′)= exp( ⟨θ, y⟩/γ )
+
+P 
+
+> y′′ ∈Y
+
+exp( ⟨θ, y′′ ⟩/γ ) ×
+
+ X
+
+> y′∈Y (k)
+
+exp( ⟨θ, y′⟩/γ )
+
+P 
+
+> y′′ ∈Y
+
+exp( ⟨θ, y′′ ⟩/γ )
+
+
+
+> −1
+
+= exp( ⟨θ, y⟩/γ )
+
+P 
+
+> y′′ ∈Y
+
+exp( ⟨θ, y′′ ⟩/γ ) ×
+
+P 
+
+> y′′ ∈Y
+
+exp( ⟨θ, y′′ ⟩/γ )
+
+P 
+
+> y′∈Y (k)
+
+exp( ⟨θ, y′⟩/γ )= exp( ⟨θ, y⟩/γ )
+
+P 
+
+> y′∈Y (k)
+
+exp( ⟨θ, y′⟩/γ ) ,
+
+which therefore gives: 
+
+pΩY(k)
+
+ (sθ )[Y(k)]
+
+ (y) = pΩ(sθ )
+
+
+
+y | y(k)[S(k)]
+
+
+
+.
+
+Thus, Algorithm 2 implements a block Gibbs sampler for the target distribution π ≜ pΩ(sθ ). To check that detailed balance is satisfied, let ν(S(k)) denote the probability of selecting the frozen subset S(k). The transition probability from y(k) to y is: 
+
+P (y(k) → y) = X
+
+> S(k)⊆[d]
+
+ν(S(k))1{y[S(k)]=y(k)[S(k)]}π
+
+
+
+y | y(k)[S(k)]
+
+
+
+.
+
+Multiplying by the stationary distribution candidate π(y(k)), we get: 
+
+π(y(k))P (y(k) → y) = X
+
+> S(k)⊆[d]
+
+ν(S(k))1{y[S(k)]=y(k)[S(k)]}π(y(k)) π(y)
+
+P 
+
+> z∈Y (k)
+
+π(z)= X
+
+> S(k)⊆[d]
+
+ν(S(k))1{y[S(k)]=y(k)[S(k)]}
+
+π(y(k))π(y)
+
+P 
+
+> z:z[S(k)]=y(k)[S(k)]
+
+π(z) .
+
+19 Because the indicator function enforces y[S(k)] = y(k)[S(k)], the denominator is strictly identical whether we condition on y(k)[S(k)] or y[S(k)]. The expression inside the sum is therefore perfectly symmetric with respect to y(k) and y, which immediately yields: 
+
+π(y(k))P (y(k) → y) = π(y)P (y → y(k)),
+
+so that pΩ(sθ ) is a stationary distribution of the Markov chain. Finally, an irreducible variable selection scheme ensures the chain is ergodic (since the strictly positive entropic update distributions guarantee dense transitions and aperiodicity via self-loops). This gives that the stationary distribution is uniquely equal to πLNS  
+
+> θ,Ω
+
+= pΩ(sθ ), and that the chain converges to it. 
+
+B.2 Proof of Proposition 2 (Characterization of stationary exactness) 
+
+Proof. The sense ( ⇐= ) is established by Proposition 1, so we focus on the ( =⇒ ) implication. Assume that Ω : △Y → R is separable, meaning Ω( p) = P 
+
+> y∈Y
+
+ω(py ) for some strictly convex function ω. Since Ω( δY 
+
+> y
+
+) = 0 ∀y ∈ Y , we assume standard simplex normalization ω(0) = ω(1) = 0 
+
+without loss of generality. We assume that πLNS  
+
+> θ,Ω
+
+= pΩ(sθ ) for all score vectors sθ , and we will show this forces Ω = −γH s for some γ > 0.
+
+Problem definition. Consider a state space of dimension d = 3 with feasible set Y = {e1, e2, e3}.Let θ = ( θ1, θ 2, θ 3) ∈ R3 be any maximization direction. Note that in this setting, we have sθ = θ.We instantiate the following specific variable selection strategy for Algorithm 2: at each step k, given a current solution y(k) = ei, the algorithm samples a frozen coordinate subset S(k) ∈ {{ 1}, {3}} 
+
+uniformly at random. We strictly prevent freezing coordinate 2.This choice restricts the possible transitions. For instance, if y(k) = e1 (meaning y(k)1 = 1 ), freezing coordinate 3 (where y(k)3 = 0 ) creates the local neighborhood Y(k) = {e1, e2}. However, it is impossible to transition directly between e1 and e3 in a single step, as that would require freezing coordinate 2, which our algorithm never does. The state transition graph on Y is therefore a simple line graph: e1 ↔ e2 ↔ e3.
+
+Detailed balance. Because the transition graph is a tree (it contains no cycles), any stationary distribution on this graph must satisfy detailed balance. Since we assume the LNS stationary distribution matches the global target ( πLNS  
+
+> θ,Ω
+
+= pΩ(sθ )), the target distribution pΩ(sθ ) itself must satisfy detailed balance along the edges of the tree. Let π ≜ pΩ(sθ ), i.e., πi ≜ pΩ(sθ )( ei). The balance equation between e1 and e2 is: 
+
+π1 · P(e1 → e2) = π2 · P(e2 → e1).
+
+The transition from e1 to e2 (resp. from e2 to e1) occurs by choosing to freeze coordinate 3
+
+(which occurs with probability 1/2) and then sampling e2 (resp. e1) from the local distribution 
+
+q{1,2} ≜ pΩY(k) (( sθ )[Y(k)]) (where Y(k) = {e1, e2}). To simplify notation, let q1 ≜ q{1,2}(e1) and 
+
+q2 ≜ q{1,2}(e2). We have: 
+
+π1 ·
+
+ 12 q2
+
+
+
+= π2 ·
+
+ 12 q1
+
+
+
+.
+
+Since local probabilities sum to 1, substituting q2 = 1 − q1 immediately yields: 
+
+q1 = π1
+
+π1 + π2
+
+and q2 = π2
+
+π1 + π2
+
+. (3) 
+
+Optimality conditions. Because Ω( p) = P3 
+
+> i=1
+
+ω(pi) is strictly convex and differentiable on the interior of the simplex, the global distribution π = pΩ(sθ ) is by definition the unique solution to the following constrained optimization problem: 
+
+min 
+
+> p>03
+
+X
+
+> i=1
+
+ ω(pi) − θipi
+
+
+
+s.t. 
+
+> 3
+
+X
+
+> i=1
+
+pi = 1 .
+
+20 We introduce a Lagrange multiplier ν ∈ R for the simplex equality constraint. The Lagrangian is given by: 
+
+L(p, ν ) = 
+
+> 3
+
+X
+
+> i=1
+
+ ω(pi) − θipi
+
+ − ν
+
+> 3
+
+X
+
+> i=1
+
+pi − 1
+
+!
+
+.
+
+The Karush-Kuhn-Tucker (KKT) stationarity conditions require the partial derivatives of the La-grangian with respect to each pi to be zero at optimality: 
+
+∂L
+
+∂π i
+
+(π, ν ⋆) = ω′(πi) − θi − ν⋆ = 0 = ⇒ ω′(πi) = θi + ν⋆.
+
+By subtracting the optimality condition of i = 2 from i = 1 , the multiplier ν cancels out, yielding: 
+
+ω′(π1) − ω′(π2) = θ1 − θ2. (4) Similarly, the local distribution q{1,2} solves by definition the local constrained problem: 
+
+min 
+
+> q1,q 2>0
+
+ ω(q1) − θ1q1
+
+ +  ω(q2) − θ2q2
+
+
+
+s.t. q1 + q2 = 1 .
+
+Note that the ω(0) term due to padding the local distribution q into a global one (see the definition of the local regularizer in Definition 2) vanishes since we assumed ω(0) = ω(1) = 0 . Introducing a local Lagrange multiplier μ ∈ R, the local Lagrangian is: 
+
+Llocal (q, μ ) =  ω(q1) − θ1q1
+
+ +  ω(q2) − θ2q2
+
+ − μ(q1 + q2 − 1) .
+
+The KKT stationarity conditions for the local problem similarly yield ω′(qi) = θi + μ∗. Subtracting the condition for q2 from q1 gives: 
+
+ω′(q1) − ω′(q2) = θ1 − θ2. (5) Combining Eq. (4) and Eq. (5), we get: 
+
+ω′(π1) − ω′(π2) = ω′(q1) − ω′(q2).
+
+Finally, substituting the expressions of q1 and q2 derived in Eq. (3), we get: 
+
+ω′(π1) − ω′(π2) = ω′
+
+ π1
+
+π1 + π2
+
+
+
+− ω′
+
+ π2
+
+π1 + π2
+
+
+
+. (6) 
+
+Functional equation. Let y ≜ π1 + π2 and x ≜ π1 
+
+> π1+π2
+
+, such that π1 = xy and π2 = (1 − x)y.Since the global scores θ1, θ 2, θ 3 are unconstrained in R and pΩ is surjective onto the relative interior 
+
+ri( △3), we have that π1 and π2 independently span (0 , 1) , so that x and y also independently span 
+
+(0 , 1) .Substituting π1 = xy and π2 = (1 − x)y into Eq. (6) yields: 
+
+ω′(xy ) − ω′((1 − x)y) = ω′(x) − ω′(1 − x).
+
+We integrate this equation with respect to x (holding y constant): 
+
+Z
+
+[ω′(xy ) − ω′((1 − x)y)] dx =
+
+Z
+
+[ω′(x) − ω′(1 − x)] dx 
+
+=⇒ 1
+
+y ω(xy ) + 1
+
+y ω((1 − x)y) = ω(x) + ω(1 − x) + C(y).
+
+Multiplying by y, we get: 
+
+ω(xy ) + ω((1 − x)y) = y(ω(x) + ω(1 − x)) + yC (y). (7) To determine the integration term yC (y), we evaluate the limit as x → 1. Because we normalized 
+
+ω(0) = ω(1) = 0 , taking x → 1 yields: 
+
+ω(y) + ω(0) = y(ω(1) + ω(0)) + yC (y) = ⇒ ω(y) = yC (y).
+
+Substituting yC (y) = ω(y) back into Eq. (7) yields the functional equation: 
+
+ω(xy ) + ω((1 − x)y) − ω(y) = y(ω(x) + ω(1 − x)) ∀ x, y ∈ (0 , 1) .
+
+As first established in Horibe (1988, Theorem 0) and extended in Gselmann (2011), all measurable solutions to this functional equation take the form ω(p) = γp log p + cp for some constants γ, c ∈ R.Since we assumed ω(1) = 0 , we have c = 0 . Moreover, since we assumed ω to be strictly convex, we get γ > 0, which concludes the proof. 21 B.3 Strict convexity of Ωε
+
+In this section, we establish that the perturbation-based regularizer Ωε defined in Definition 4 is strictly convex over the entire closed simplex △Y .
+
+Proposition 13 (Strict convexity of Ωε). Let Ωε : △Y → R be the perturbation-based regu-larization function defined in Definition 4. If the noise distribution D admits a strictly positive density on Rd, then Ωε is strictly convex on the entire closed simplex △Y .
+
+Proof. Let p, q ∈ △ Y be two distinct probability distributions, and let λ ∈ (0 , 1) . We define their convex combination r ≜ λp + (1 − λ)q. The support of r is the union of the supports of p and q,i.e., Z ≜ supp( r) = supp( p) ∪ supp( q) ⊆ Y .Consider the local simplex △Z and the inclusion map ιZ : △Z ,→ △ Y as defined in Definition 2. By construction, p and q belong to the face ιZ (△Z ), and r lies strictly in the relative interior of this face, meaning r ∈ ri( ιZ (△Z )) .To prove strict convexity, we must show that: 
+
+Ωε(r) < λ Ωε(p) + (1 − λ)Ω ε(q).
+
+Assume for contradiction that equality holds. Since Ωε is a supremum of affine functions, it is convex and lower semi-continuous. The equality at an interior point of the segment [p, q] implies that Ωε
+
+must be strictly affine on the entire segment [p, q]. Because r ∈ ri( ιZ (△Z )) , there exists a small line segment centered at r, contained entirely within [p, q], that lies completely within the relative interior ri( ιZ (△Z )) . If Ωε is affine on [p, q], it must be affine on this sub-segment. We now analyze the restriction of Ωε to this face. As shown in Proof of Proposition 3 (Tractability of perturbed LNS), the local regularizer ΩZ 
+
+> ε
+
+≜ Ωε ◦ ιZ is exactly the Fenchel conjugate of the local perturbed maximum function Fε, Z : R|Z| → R:
+
+Fε, Z (u) ≜ EZ∼D 
+
+
+
+max  
+
+> y∈Z
+
+{uy + ε⟨y, Z ⟩} 
+
+
+
+.
+
+By Bouvier et al. (2025, Theorem 4), we have that: 1. The domain of the conjugate of Fε, Z is △Z , i.e., dom(Ω Z 
+
+> ε
+
+) = △Z .2. Fε, Z is l.s.c., proper, convex and differentiable on R|Z| , which makes it essentially smooth. Rockafellar (1970, Theorem 26.3) then gives that its Fenchel conjugate ΩZ 
+
+> ε
+
+is essentially strictly convex. Therefore, it is strictly convex on the relative interior of its domain, ri(dom(Ω Z 
+
+> ε
+
+)) = ri( △Z ).This establishes that Ωε is strictly convex on ri( ιZ (△Z )) . However, we previously deduced that 
+
+Ωε would be affine on a sub-segment passing through r within this relative interior, which is a contradiction. Therefore, the strict inequality must hold, concluding the proof that Ωε is strictly convex on the entire closed simplex △Y .
+
+B.4 Proof of Proposition 3 (Tractability of perturbed LNS) 
+
+Proof. Let Fε, Y(k) denote the following local perturbed maximum function, defined on scores restricted to the neighborhood Y(k):
+
+Fε, Y(k) : R|Y (k)| −→ R
+
+u 7 −→ EZ∼D 
+
+
+
+max 
+
+> y∈Y (k)
+
+{uy + ε⟨y, Z ⟩} 
+
+
+
+.
+
+22 We first establish that the local regularization function ΩY(k) 
+
+> ε
+
+≜ Ωε ◦ ι(k) is the Fenchel conjugate of 
+
+Fε, Y(k) . Starting from the definition of Ωε, we have for any local distribution q ∈ △ Y(k)
+
+:
+
+ΩY(k) 
+
+> ε
+
+(q) = Ω ε(ι(k)(q)) = sup 
+
+> s∈R|Y|
+
+
+
+⟨s, ι (k)(q)⟩ − EZ∼D 
+
+
+
+max  
+
+> y′∈Y
+
+{sy′ + ε⟨y′, Z ⟩} 
+
+ 
+
+= sup 
+
+> s∈R|Y|
+
+ X
+
+> y∈Y (k)
+
+sy qy
+
+ − EZ∼D 
+
+
+
+max  
+
+> y′∈Y
+
+{sy′ + ε⟨y′, Z ⟩} 
+
+ .
+
+We decompose the global score vector s into components inside Y(k) (denoted sin ) and outside Y(k)
+
+(denoted sout ). To maximize the objective inside the supremum, we observe that sout only appears in the negative expectation term. Sending the coordinates of sout to −∞ minimizes the expectation term (by eliminating y′ /∈ Y (k) from the maximum) without affecting the linear term ⟨sin , q⟩.Formally, we have: 
+
+lim  
+
+> sy′→−∞ ∀y′∈Y\Y (k)
+
+EZ∼D 
+
+
+
+max  
+
+> y∈Y
+
+{sy + ε⟨y, Z ⟩} 
+
+
+
+= EZ∼D 
+
+
+
+max 
+
+> y∈Y (k)
+
+{(sin )y + ε⟨y, Z ⟩} 
+
+
+
+≤ EZ∼D 
+
+
+
+max  
+
+> y∈Y
+
+{sy + ε⟨y, Z ⟩} 
+
+
+
+∀s ∈ R|Y| .
+
+Substituting this back into the conjugate expression: 
+
+ΩY(k) 
+
+> ε
+
+(q) = sup 
+
+> sin ∈R|Y (k)|
+
+
+
+⟨sin , q⟩ − EZ∼D 
+
+
+
+max 
+
+> y∈Y (k)
+
+{(sin )y + ε⟨y, Z ⟩} 
+
+ 
+
+= sup 
+
+> u∈R|Y (k)|
+
+⟨u, q⟩ − Fε, Y(k) (u)
+
+= F ∗ 
+
+> ε, Y(k)
+
+(q).
+
+Thus, the local regularizer is exactly the conjugate of the local perturbed maximum function. Finally, we compute the local regularized distribution. By definition: 
+
+pΩY(k)
+
+> ε
+
+ (sθ )[Y(k)]
+
+ ≜ arg max 
+
+> q∈△ Y(k)
+
+n
+
+⟨(sθ )[Y(k)], q⟩ − ΩY(k) 
+
+> ε
+
+(q)
+
+o
+
+= arg max 
+
+> q∈△ Y(k)
+
+n
+
+⟨(sθ )[Y(k)], q⟩ − F ∗ 
+
+> ε, Y(k)
+
+(q)
+
+o
+
+,
+
+so that Danskin’s theorem gives: 
+
+pΩY(k)
+
+> ε
+
+ (sθ )[Y(k)]
+
+ = ∇F ∗∗ 
+
+> ε, Y(k)
+
+ (sθ )[Y(k)]
+
+ .
+
+Since Fε, Y(k) is closed proper convex, it is equal to its biconjugate by the Fenchel-Moreau theorem, and we have in fact: 
+
+pΩY(k)
+
+> ε
+
+ (sθ )[Y(k)]
+
+ = ∇Fε, Y(k)
+
+ (sθ )[Y(k)]
+
+ .
+
+We then invert the differentiation and expectation signs (this application of the path-wise gradient estimator , or the reparameterization trick , is possible since the the expectation is taken with respect to Z which does not depend on sθ (Blondel & Roulet, 2025)), and further apply Danskin’s theorem a second time: 
+
+∇Fε, Y(k)
+
+ (sθ )[Y(k)]
+
+ = ∇(sθ )[Y(k)] EZ∼D 
+
+
+
+max 
+
+> y∈Y (k)
+
+n (sθ )[Y(k)]
+
+ 
+
+> y
+
++ ε⟨y, Z ⟩
+
+o
+
+= EZ∼D 
+
+
+
+∇(sθ )[Y(k)] max 
+
+> y∈Y (k)
+
+(( sθ )[Y(k)])y + ε⟨y, Z ⟩
+
+
+
+= EZ∼D 
+
+
+
+δY(k) 
+
+> arg max y∈Y (k)⟨θ+εZ, y⟩
+
+
+
+.
+
+23 B.5 Proof of Proposition 7 (Expected RLNS as block-coordinate ascent) 
+
+Proof. We first establish the strict convexity of the mean-space regularizer ΩM. Let μ1, μ2 ∈ M 
+
+such that μ1̸ = μ2, and let λ ∈ (0 , 1) . Because the simplex △Y is compact and Ω is strictly convex, the minimum in the definition of ΩM is uniquely attained for any μ ∈ M . Let p1 and p2 be the unique minimizers corresponding to μ1 and μ2, respectively. Since μ1̸ = μ2, we must have p1̸ = p2.Define the convex combinations μλ ≜ λμ1 + (1 − λ)μ2 and pλ ≜ λp1 + (1 − λ)p2. By linearity of expectation, we have Epλ [Y ] = μλ. Since pλ ∈ △ Y , it is a valid candidate distribution for the constrained minimization problem defining ΩM(μλ). Therefore, we have ΩM(μλ) ≤ Ω( pλ).Because Ω is strictly convex and p1̸ = p2, we strictly bound the right-hand side: 
+
+Ω( pλ) < λ Ω( p1) + (1 − λ)Ω( p2).
+
+Substituting the definitions of the marginal minima yields ΩM(μλ) < λ ΩM(μ1) + (1 − λ)Ω M(μ2),which proves that ΩM is strictly convex on M.We now turn to the BCA step. Let M(k) ≜ {μ ∈ M | μ[S(k)] = y(k)[S(k)]} denote the feasible set of the mean-space BCA step. We must show that this slice of the marginal polytope strictly corresponds to the convex hull of the local neighborhood Y(k) ≜ {y ∈ Y | y[S(k)] = y(k)[S(k)]}.Clearly, conv( Y(k)) ⊆ M (k). We must prove M(k) ⊆ conv( Y(k)). Let μ ∈ M (k). Because 
+
+μ ∈ M , there exists a distribution p ∈ △ Y such that μ = P 
+
+> y∈Y
+
+py y. For any coordinate i ∈ S(k),we are given that Y ⊆ { 0, 1}d, so yi ∈ { 0, 1} for all y ∈ Y , and y(k) 
+
+> i
+
+∈ { 0, 1}. Since μ ∈ M (k), we have μi = y(k) 
+
+> i
+
+. We distinguish two cases: • If y(k) 
+
+> i
+
+= 0 , then μi = 0 , giving P 
+
+> y∈Y
+
+py yi = 0 . Since py ≥ 0 and yi ∈ { 0, 1}, all terms in the sum are non-negative. This implies that for any y ∈ Y , py > 0 = ⇒ yi = 0 .• If y(k) 
+
+> i
+
+= 1 , then μi = 1 , giving P 
+
+> y∈Y
+
+py yi = 1 . Since P 
+
+> y∈Y
+
+py = 1 , we can rewrite this as P 
+
+> y∈Y
+
+py (1 − yi) = 0 . Since py ≥ 0 and 1 − yi ≥ 0, we similarly conclude that 
+
+py > 0 = ⇒ yi = 1 .In both cases, any solution y with non-zero probability mass ( py > 0) must strictly match y(k) on all coordinates i ∈ S(k). Thus, supp( p) ⊆ Y (k), which proves that μ ∈ conv( Y(k)), and therefore 
+
+M(k) = conv( Y(k)).Substituting the definition of the mean-space regularizer ΩM into the exact BCA update, the next mean-space iterate μ(k+1) is given by: 
+
+μ(k+1) = arg max 
+
+> μ∈M (k)
+
+
+
+⟨θ, μ⟩ − min    
+
+> p∈△ Ys.t. Ep[Y]= μ
+
+Ω( p)
+
+
+
+.
+
+Distributing the minus sign turns the inner minimum into a maximum: 
+
+μ(k+1) = arg max 
+
+> μ∈M (k)
+
+
+
+max    
+
+> p∈△ Ys.t. Ep[Y]= μ
+
+(⟨θ, μ⟩ − Ω( p)) 
+
+
+
+.
+
+Using the fact that ⟨θ, μ⟩ = ⟨θ, Ep[Y ]⟩ = ⟨sθ , p⟩ via the definition of the score vector sθ ≜
+
+(⟨θ, y⟩)y∈Y , we can absorb the maximization over μ and directly optimize over the distribution p:
+
+μ(k+1) = Ep∗ [Y ], where p∗ = arg max  
+
+> p∈△ Y
+> Ep[Y][S(k)]=y(k)[S(k)]
+
+[⟨sθ , p⟩ − Ω( p)] .
+
+As established earlier, the constraint Ep[Y ][S(k)] = y(k)[S(k)] strictly confines the support of p to Y(k).We can therefore reparameterize p using the local inclusion map ι(k) : △Y(k)
+
+,→ △ Y . Setting 
+
+p = ι(k)(q) for q ∈ △ Y(k)
+
+, the optimization problem restricts to the local simplex: 
+
+q∗ = arg max 
+
+> q∈△ Y(k)
+
+h
+
+⟨sθ , ι (k)(q)⟩ − Ω( ι(k)(q)) 
+
+i
+
+.
+
+24 By the definition of the local regularizer ΩY(k)
+
+≜ Ω ◦ ι(k), and since ⟨sθ , ι (k)(q)⟩ = ⟨(sθ )[Y(k)], q⟩,this simplifies exactly to the definition of the local smoothed maximizer: 
+
+q∗ = arg max 
+
+> q∈△ Y(k)
+
+h
+
+⟨(sθ )[Y(k)], q⟩ − ΩY(k)
+
+(q)
+
+i
+
+= pΩY(k)
+
+ (sθ )[Y(k)]
+
+ .
+
+Since μ(k+1) = Ep∗ [Y ] = Eq∗ [Y ], we conclude that the exact mean-space BCA update yields exactly the expected value of the distribution sampled by the RLNS algorithm. 
+
+B.6 Proof of Proposition 6 (RLNS and Gibbs updates as Bregman projections) 
+
+First, we prove that the local RLNS update distributions match the BΩ-projection of pΩ(sθ ) onto the local simplex △Y(k)
+
+.
+
+Proof. Global optimization problem. By definition, the global smoothed maximizer pΩ(sθ ) is the unique solution to the convex optimization problem: 
+
+pΩ(sθ ) = arg min 
+
+> p∈△ Y
+
+{Ω( p) − ⟨ sθ , p⟩} . (8) We introduce a Lagrange multiplier ν ∈ R for the simplex equality constraint P 
+
+> y∈Y
+
+py = 1 . The Lagrangian is L(p, ν ) = Ω( p) − ⟨ sθ , p⟩ + ν · (⟨p, 1⟩ − 1) . The first-order optimality condition gives: 
+
+∇pL(pΩ(sθ ), ν ⋆) = 0
+
+⇐⇒ ∇ Ω( pΩ(sθ )) = sθ − ν⋆1. (9) 
+
+Local optimization problem. By definition of the local regularized distribution, pΩY(k) (( sθ )[Y(k)])
+
+is the solution to: 
+
+pΩY(k) (( sθ )[Y(k)]) ≜ arg min 
+
+> q∈△ Y(k)
+
+n
+
+ΩY(k)
+
+(q) − ⟨ (sθ )[Y(k)], q⟩
+
+o
+
+= arg min 
+
+> q∈△ Y(k)
+
+n
+
+Ω( ι(k)(q)) − ⟨ sθ , ι (k)(q)⟩
+
+o
+
+.
+
+Equivalence to projection. We now analyze the projection problem. We minimize the Bregman divergence between the global solution pΩ(sθ ) and a distribution q ∈ △ Y(k)
+
+restricted to the local simplex: 
+
+BΩ
+
+
+
+ι(k)(q)∥pΩ(sθ )
+
+
+
+≜ Ω( ι(k)(q)) − Ω( pΩ(sθ )) 
+
+− ⟨∇ Ω( pΩ(sθ )) , ι (k)(q) − pΩ(sθ )⟩.
+
+Substituting the global optimality condition from Eq. (9) into the linear term: 
+
+⟨∇ Ω( pΩ(sθ )) , ι (k)(q)⟩ = ⟨sθ − ν⋆1, ι (k)(q)⟩
+
+= ⟨sθ , ι (k)(q)⟩ − ν⋆ X
+
+> y∈Y (k)
+
+qy
+
+= ⟨sθ , ι (k)(q)⟩ − ν⋆ (since q ∈ △ Y(k)
+
+).
+
+Thus, we have: 
+
+BΩ
+
+
+
+ι(k)(q)∥pΩ(sθ )
+
+
+
+= Ω( ι(k)(q)) − Ω( pΩ(sθ )) 
+
+− ⟨ sθ , ι (k)(q)⟩ + ν⋆
+
++ ⟨∇ Ω( pΩ(sθ )) , pΩ(sθ )⟩.
+
+Removing terms that are constant with respect to q, the projection problem reduces to: 
+
+arg min 
+
+> q∈△ Y(k)
+
+BΩ
+
+
+
+ι(k)(q)∥pΩ(sθ )
+
+
+
+= arg min 
+
+> q∈△ Y(k)
+
+n
+
+Ω( ι(k)(q)) − ⟨ sθ , ι (k)(q)⟩
+
+o
+
+.
+
+This objective is identical to the optimization problem defining pΩY(k) (( sθ )[Y(k)]), proving the result. 25 We now turn to the proof that the Gibbs update distributions match the KL-projection of the target onto the local simplex. 
+
+Proof. Conditional distribution. The conditional distribution is defined by renormalizing the global mass restricted to Y(k):
+
+pΩ(sθ )
+
+
+
+y | y(k)[S(k)]
+
+
+
+= pΩ(sθ )( y)
+
+P 
+
+> y′∈Y (k)
+
+pΩ(sθ )( y′) ∀y ∈ Y (k). (10) 
+
+KL projection. Let q ∈ △ Y(k)
+
+. We have: 
+
+DKL (ι(k)(q)∥π) = X
+
+> y∈Y (k)
+
+qy log 
+
+ qy
+
+πy
+
+
+
+.
+
+We define the Lagrangian with a multiplier λ ∈ R for the constraint P 
+
+> y∈Y (k)
+
+qy = 1 :
+
+L(q, λ ) = X
+
+> y∈Y (k)
+
+qy log( qy ) − X
+
+> y∈Y (k)
+
+qy log( πy ) + λ
+
+ X
+
+> y∈Y (k)
+
+qy − 1
+
+ .
+
+Optimality conditions. The first-order condition with respect to any coordinate qy is: 
+
+∂L
+
+∂q y
+
+(q⋆, λ ⋆) = 1 + log q⋆ 
+
+> y
+
+− log( πy ) + λ⋆ = 0 .
+
+Solving for q⋆ 
+
+> y
+
+:
+
+q⋆ 
+
+> y
+
+= πy exp( −(1 + λ⋆)) .
+
+Summing over y ∈ Y (k) to satisfy the simplex constraint: 
+
+X
+
+> y∈Y (k)
+
+q⋆ 
+
+> y
+
+= exp( −(1 + λ⋆)) X
+
+> y∈Y (k)
+
+πy = 1 .
+
+This determines the Lagrange multiplier term: exp( −(1 + λ⋆)) = ( P 
+
+> y′∈Y (k)
+
+πy′ )−1. Substituting this back into the expression for q⋆ 
+
+> y
+
+, we obtain: 
+
+q⋆ 
+
+> y
+
+= πy
+
+P 
+
+> y′∈Y (k)
+
+πy′
+
+.
+
+This matches the definition of the conditional distribution in Eq. (10) exactly. 
+
+B.7 Proof of Proposition 4 (Unbiased gradients via RLNS-1)
+
+Proof. We first characterize the domain of Ωy . We can write Fy as a convex combination of local maximum functions: Fy (s) = P 
+
+> S∈supp( ν)
+
+ν(S)fS (s), where fS (s) ≜ fΩYS (s[YS ]).To find the domain of the conjugate f ∗ 
+
+> S
+
+, let hS (u) ≜ fΩYS (u) for u ∈ R|Y S |. By definition of the smoothed maximum operator, we have hS = (Ω YS )∗. Since ΩYS is strictly convex, proper, and lower semi-continuous on the compact set △YS , the Fenchel-Moreau theorem yields h∗ 
+
+> S
+
+= (Ω YS )∗∗ = Ω YS .Thus, dom( h∗ 
+
+> S
+
+) = dom(Ω YS ) = △YS .For any global score vector s ∈ R|Y| , we decompose it into components inside the local neighborhood, 
+
+sin ≜ s[YS ], and components outside, sout ≜ s[Y\Y S ]. We can then write fS (s) = hS (sin ). By definition of the Fenchel conjugate: 
+
+f ∗ 
+
+> S
+
+(p) = sup 
+
+> sin ,sout
+
+{⟨ pin , sin ⟩ + ⟨pout , sout ⟩ − hS (sin )}
+
+= sup  
+
+> sin ∈R|Y S|
+
+{⟨ pin , sin ⟩ − hS (sin )} + sup  
+
+> sout ∈R|Y\Y S|
+
+{⟨ pout , sout ⟩} 
+
+= h∗ 
+
+> S
+
+(pin ) + I{0}(pout ).
+
+26 For f ∗ 
+
+> S
+
+(p) to be finite, we require pout = 0 and pin ∈ dom( h∗ 
+
+> S
+
+) = △YS . This means p must be a zero-padded distribution from the local simplex, so dom( f ∗ 
+
+> S
+
+) = ιYS (△YS ).We now determine the domain of Ωy = ( Fy )∗. Recall that Fy is a sum of scaled functions: 
+
+Fy (s) = X
+
+> S∈supp( ν)
+
+ν(S)fS (s).
+
+Let gS (s) ≜ ν(S)fS (s). A known property of the Fenchel conjugate then gives that for any 
+
+ν(S) > 0, we have: 
+
+g∗ 
+
+> S
+
+(p) = ν(S)f ∗
+
+> S
+
+ p
+
+ν(S)
+
+
+
+.
+
+Consequently, the effective domain of the scaled conjugate is scaled by the same factor: 
+
+p ∈ dom( g∗ 
+
+> S
+
+) ⇐⇒ p
+
+ν(S) ∈ dom( f ∗ 
+
+> S
+
+) ⇐⇒ p ∈ ν(S)dom( f ∗ 
+
+> S
+
+).
+
+Thus, dom( g∗ 
+
+> S
+
+) = ν(S)dom( f ∗ 
+
+> S
+
+).The Fenchel conjugate of a sum of functions is the inf-convolution (denoted by □) of their individual conjugates (Rockafellar, 1970): 
+
+Ωy = ( Fy )∗ = □S∈supp( ν)g∗ 
+
+> S
+
+.
+
+Since the effective domain of the inf-convolution is the Minkowski sum of the effective domains, we then have: 
+
+dom(Ω y ) = X
+
+> S∈supp( ν)
+
+dom( g∗ 
+
+> S
+
+)= X
+
+> S∈supp( ν)
+
+ν(S)dom( f ∗ 
+
+> S
+
+)= X
+
+> S∈supp( ν)
+
+ν(S)ιYS (△YS ).
+
+Because y is the reference solution defining the local neighborhoods, it satisfies y ∈ Y S for every subset S. Thus, we have δYS 
+
+> y
+
+∈ △ YS , and by padding, we get δY 
+
+> y
+
+= ιYS (δYS 
+
+> y
+
+) ∈ ιYS (△YS ). Picking this specific point from each set in the Minkowski sum yields: 
+
+X
+
+> S∈supp( ν)
+
+ν(S)δY 
+
+> y
+
+=
+
+ X
+
+> S∈supp( ν)
+
+ν(S)
+
+ · δY 
+
+> y
+
+= δY 
+
+> y
+
+.
+
+This proves that δY 
+
+> y
+
+∈ dom(Ω y ), ensuring the target-dependent Fenchel-Young loss is well-defined and finite at the ground-truth distribution. Now, assuming that ν does not depend on s, we can exchange the expectation and the gradient signs. The gradient of Fy is then given by Danskin’s theorem and the chain rule: 
+
+∇sFy (s) = ES∼ν
+
+ιYS  pΩYS
+
+ s[YS ]
+
+ .
+
+The gradient of the target-dependent loss LΩy with respect to θ at p = δY 
+
+> y
+
+is: 
+
+∇θ LΩy (θ ; δY 
+
+> y
+
+) = ∇θ Fy (sθ ) − y
+
+= ES∼ν
+
+
+
+EY ∼pΩYS  
+
+> 
+> (sθ)[YS]
+> 
+
+[Y ]
+
+
+
+− y.
+
+This exactly matches the expected update of RLNS: 
+
+S ∼ ν and Y | S ∼ pΩYS
+
+ (sθ )[YS ]
+
+ =⇒ ES [E[Y | S]] − y = ∇θ LΩy (θ ; δY 
+
+> y
+
+).
+
+Thus, the sampling procedure initialized at y and run for 1 step produces an unbiased stochastic gradient. 27 B.8 Proof of Proposition 5 (Equivalence to pseudolikelihood) 
+
+Proof. In the Shannon entropy-regularized setting Ω = −γH s, the smoothed local maximum evaluates to the log-sum-exp function: 
+
+fΩYS
+
+ s[YS ]
+
+ = max 
+
+> q∈△ YS
+
+⟨q, s[YS ]⟩ − Ω ◦ ιYS (q)= max 
+
+> q∈△ YS
+
+⟨q, s[YS ]⟩ + γH s 
+
+> YS
+
+(q) where Hs 
+
+> YS
+
+(q) ≜ − X
+
+> y′∈Y S
+
+qy′ log( qy′ )= γ log X
+
+> y′∈Y S
+
+exp ( sy′ /γ ) .
+
+We first determine the value of the additive constant Ωy (δY 
+
+> y
+
+). By definition of the convex conjugate, we have: 
+
+Ωy (δY 
+
+> y
+
+) = sup 
+
+> s∈R|Y|
+
+⟨s, δ Y 
+
+> y
+
+⟩ − Fy (s) = sup 
+
+> s∈R|Y|
+
+sy − ES∼ν
+
+γ log X
+
+> y′∈Y S
+
+exp( sy′ /γ )
+
+ .
+
+Notice that for any subset S, the ground-truth solution y always belongs to its own local neighborhood, meaning y ∈ Y S . Because all terms in the exponential sum are strictly positive, the sum is lower-bounded by the single term corresponding to y:
+
+X
+
+> y′∈Y S
+
+exp( sy′ /γ ) ≥ exp( sy /γ ).
+
+Taking the logarithm and multiplying by γ > 0, we get: 
+
+γ log X
+
+> y′∈Y S
+
+exp( sy′ /γ ) ≥ γ log(exp( sy /γ )) = sy .
+
+Therefore, for any score vector s ∈ R|Y| and any subset S, the difference inside the expectation is non-positive: 
+
+sy − γ log X
+
+> y′∈Y S
+
+exp( sy′ /γ ) ≤ 0.
+
+Taking the expectation over S ∼ ν preserves this inequality, meaning Ωy (δY 
+
+> y
+
+) ≤ 0. To show that the supremum is exactly 0, we can construct a sequence of score vectors that asymptotically achieves it. Let sy = 0 , and for all y′̸ = y, let sy′ → −∞ . Under this limit, for any subset S:
+
+lim   
+
+> sy′̸ =y→−∞
+
+γ log X
+
+> y′∈Y S
+
+exp( sy′ /γ ) = γ log(exp(0) + 0) = 0 .
+
+Consequently, the objective value tends to 0 − 0 = 0 . Since the supremum is bounded above by 0
+
+and can be asymptotically approached, we conclude that Ωy (δY 
+
+> y
+
+) = 0 .Now, substituting sθ = ( ⟨θ, y′⟩)y′∈Y and Ωy (δY 
+
+> y
+
+) = 0 into the loss function: 
+
+LΩy (θ ; δY 
+
+> y
+
+) = Fy (sθ ) + Ω y (δY 
+
+> y
+
+) − ⟨ θ, y⟩
+
+= ES∼ν
+
+fΩYS
+
+ (sθ )[YS ]
+
+ + 0 − ⟨ θ, y⟩
+
+= ES∼ν
+
+γ log X
+
+> y′∈Y S
+
+exp( ⟨θ, y′⟩/γ ) − ⟨ θ, y⟩
+
+ .
+
+28 Moreover, denoting πθ ≜ pΩ(sθ ), we know that πθ (y) ∝ exp( ⟨θ, y⟩/γ ) in this setting. Thus, the conditional probability is: 
+
+πθ (y | y[S]) = πθ (y)
+
+P 
+
+> y′∈Y S
+
+πθ (y′)= exp( ⟨θ, y⟩/γ )
+
+P 
+
+> y′′ ∈Y
+
+exp( ⟨θ, y′′ ⟩/γ ) ·
+
+P 
+
+> y′∈Y S
+
+exp( ⟨θ, y′⟩/γ )
+
+P 
+
+> y′′ ∈Y
+
+exp( ⟨θ, y′′ ⟩/γ )
+
+!−1
+
+= exp( ⟨θ, y⟩/γ )
+
+P 
+
+> y′∈Y S
+
+exp( ⟨θ, y′⟩/γ ) .
+
+Taking the negative logarithm and multiplying by γ:
+
+−γ log πθ (y | y[S]) = γ log X
+
+> y′∈Y S
+
+exp( ⟨θ, y′⟩/γ ) − ⟨ θ, y⟩.
+
+Substituting this back into the loss expression gives the final result: 
+
+LΩy (θ ; δY 
+
+> y
+
+) = ES∼ν
+
+−γ log πθ (y | y[S]) .
+
+B.9 Proof of Proposition 8 (Bias of RLNS) 
+
+Proof. This result follows from the perturbation bounds for uniformly ergodic Markov chains established by Mitrophanov (2005). Specifically, we apply Theorem 3.2 and Corollary 3.2 from that work. Let π∗ be the stationary distribution of P ∗. Mitrophanov (2005) show that if τm(P ∗) < 1, then: 
+
+dTV 
+
+ πLNS  
+
+> θ,Ω
+
+, π ∗ ≤ max y∈Y dTV (P m(y , ·) , (P ∗)m(y , ·)) 1 − τm(P ∗)
+
+(note that the original theorem is stated in terms of operator norms, which corresponds to exactly twice the TV distance for both the numerator and the left-hand side: the factors of 2 cancel out). Furthermore, as shown in the proof of Corollary 3.2 in Mitrophanov (2005), the error over m steps is bounded by m times the single-step error: 
+
+max  
+
+> y∈Y
+
+dTV (P m(y , ·) , (P ∗)m(y , ·)) ≤ m · max  
+
+> y∈Y
+
+dTV (P (y , ·) , P ∗(y , ·)) .
+
+We now bound the distance between the transition kernels. Let μ denote the probability distribution used to select the subset of coordinates S(k) in Step 3 of Algorithm 2 (and identically for the ideal Gibbs sampler). For a fixed current state y(k) ∈ Y , the transition kernel P (y(k), ·) is a mixture of the local update distributions over all possible choices of S(k). Using the inclusion map ιY(k) from Definition 2 to map local distributions to △Y , we denote: 
+
+qLNS (y(k), S (k)) ≜ ιY(k)
+
+ pΩY(k)
+
+ (sθ )[Y(k)]
+
+ ∈ △ Y ,
+
+qGibbs (y(k), S (k)) ≜ ιY(k)
+
+
+
+pΩ (sθ )
+
+
+
+· | y(k)[S(k)]
+
+ 
+
+∈ △ Y .
+
+Then, we have: 
+
+P (y(k), ·) = X
+
+> S(k)⊆[d]
+
+ν(S(k)) qLNS (y(k), S (k)).
+
+Similarly, the ideal Gibbs kernel P ∗(y(k) , ·) uses the conditional distributions: 
+
+P ∗(y(k), ·) = X
+
+> S(k)⊆[d]
+
+ν(S(k)) qGibbs (y(k), S (k)).
+
+29 We compute the total variation distance between these two mixtures. Using on the convexity of the TV distance, we have: 
+
+dTV 
+
+
+
+P (y(k), ·), P ∗(y(k), ·)
+
+
+
+= dTV 
+
+X
+
+> S(k)
+
+ν(S(k))qLNS (y(k), S (k)), X
+
+> S(k)
+
+ν(S(k))qGibbs (y(k), S (k))
+
+!
+
+≤ X
+
+> S(k)⊆[d]
+
+ν(S(k)) dTV 
+
+
+
+qLNS (y(k), S (k)), qGibbs (y(k), S (k))
+
+
+
+.
+
+Since we have dTV (p, p′) = dTV (ι(k)(p), ι (k)(p′)) for any p, p′ ∈ △ Y(k)
+
+, Definition 6 then gives that this local distance is bounded by δθ,Ω for every y(k) and S(k):
+
+dTV 
+
+
+
+qLNS (y(k), S (k)), qGibbs (y(k), S (k))
+
+
+
+≤ max 
+
+> y(k′),S (k′)
+
+dTV 
+
+
+
+qLNS (y(k′), S (k′)), qGibbs (y(k′), S (k′))
+
+
+
+= δθ,Ω.
+
+Substituting this into the sum: 
+
+dTV 
+
+
+
+P (y(k), ·), P ∗(y(k), ·)
+
+
+
+≤ X
+
+> S(k)⊆[d]
+
+ν(S(k)) δθ,Ω
+
+= δθ,Ω.
+
+Taking the maximum over y(k) ∈ Y completes the proof. 
+
+B.10 Proof of Proposition 9 (Consistency gap bound via relative smoothness) 
+
+Proof. Let π ≜ pΩ(sθ ) be the global regularized distribution. Fix a neighborhood Y(k) defined by some y(k) ∈ Y , and S(k) ⊆ [d]. Let ˆq, q∗ ∈ △ Y(k)
+
+denote the RLNS update and the ideal Gibbs update distributions (the projections of π onto △Y(k)
+
+via BΩ and B−γH s , per Proposition 6). 
+
+Optimality conditions of the projection problems. Both ˆq and q∗ satisfy the first-order optimality conditions for their respective projection problems. For any z ∈ △ Y(k)
+
+:
+
+⟨∇ ˆq BΩ
+
+
+
+ι(k)( ˆ q)∥π
+
+
+
+, z − ˆq⟩ ≥ 0,
+
+⟨∇ q∗ B−γH s
+
+
+
+ι(k)(q∗)∥π
+
+
+
+, z − q∗⟩ ≥ 0.
+
+Since for any f we have ∇1Bf (u∥v) = ∇f (u) − ∇ f (v), applying the chain rule gives: 
+
+D
+
+[∇ι(k)( ˆ q)] ⊤ 
+
+∇Ω( ι(k)( ˆ q)) − ∇ Ω( π)
+
+
+
+, z − ˆq
+
+
+
+⟩ ≥ 0,
+
+D
+
+[∇ι(k)(q∗)] ⊤ 
+
+∇(−γH s)( ι(k)(q∗)) − ∇ (−γH s)( π)
+
+
+
+, z − q∗E
+
+≥ 0.
+
+Since ι(k) is a linear map, it is its own Jacobian. Using the identity ⟨A⊤x, y⟩ = ⟨x, Ay ⟩, we get: 
+
+⟨∇ Ω( ι(k)( ˆ q)) − ∇ Ω( π), ι (k)(z − ˆq)⟩ ≥ 0, (11) 
+
+⟨∇ (−γH s)( ι(k)(q∗)) − ∇ (−γH s)( π), ι (k)(z − q∗)⟩ ≥ 0. (12) 
+
+Decomposition. We now decompose the gradient of Ω as ∇Ω = ∇(−γH s) + ∇hγ . Substituting this into Eq. (11) and applying it to z = q∗ ∈ △ Y(k)
+
+, we get: 
+
+⟨∇ (−γH s)( ι(k)( ˆ q)) + ∇hγ (ι(k)( ˆ q)) − ∇ (−γH s)( π) − ∇ hγ (π), ι (k)(q∗ − ˆq)⟩ ≥ 0. (13) Next, we apply Eq. (12) to z = ˆ q ∈ △ Y(k)
+
+:
+
+⟨∇ (−γH s)( ι(k)(q∗)) − ∇ (−γH s)( π), ι (k)( ˆ q − q∗)⟩ ≥ 0. (14) 30 Summing Eqs. (13) and (14) and recognizing that ι(k)(q∗ − ˆq) = −ι(k)( ˆ q − q∗), the ∇(−γH s)( π)
+
+terms cancel out, and we obtain: 
+
+⟨∇ (−γH s)( ι(k)( ˆ q)) − ∇ (−γH s)( ι(k)(q∗)) , ι (k)(q∗ − ˆq)⟩
+
++⟨∇ hγ (ι(k)( ˆ q)) − ∇ hγ (π), ι (k)(q∗ − ˆq)⟩ ≥ 0.
+
+Rearranging the terms and using the linearity of ι(k) yields: 
+
+D
+
+∇hγ (ι(k)( ˆ q)) − ∇ hγ (π), ι (k)(q∗ − ˆq)
+
+E
+
+≥
+
+D
+
+∇(−γH s)( ι(k)( ˆ q)) − ∇ (−γH s)( ι(k)(q∗)) , ι (k)( ˆ q) − ι(k)(q∗)
+
+E
+
+. (15) 
+
+Strong convexity of −γH s. By Pinsker’s inequality, −Hs is 1-strongly convex with respect to the 
+
+ℓ1 norm, which implies that −γH s is γ-strongly convex with respect to the ℓ1 norm. Thus, for any 
+
+u, v ∈ △ Y , we have: 
+
+⟨∇ (−γH s)( u) − ∇ (−γH s)( v) , u − v⟩ ≥ γ∥u − v∥21. (16) The right-hand side of Eq. (15) is now bounded by the strong convexity of −γH s, and Eq. (16) gives: 
+
+⟨∇ (−γH s)( ι(k)( ˆ q)) − ∇ (−γH s)( ι(k)(q∗)) , ι (k)( ˆ q) − ι(k)(q∗)⟩ ≥ γ∥ι(k)( ˆ q) − ι(k)(q∗)∥21
+
+≥ γ∥ ˆq − q∗∥21.
+
+Combining this with Eq. (15), we get: 
+
+γ∥ ˆq − q∗∥21 ≤ ⟨∇ hγ (ι(k)( ˆ q)) − ∇ hγ (π), ι (k)(q∗ − ˆq)⟩. (17) 
+
+Smoothness of hγ . Applying Hölder’s inequality to the right-hand side of Eq. (17): 
+
+γ∥ ˆq − q∗∥21 ≤ ∥∇ hγ (ι(k)( ˆ q)) − ∇ hγ (π)∥∞ · ∥ ι(k)(q∗ − ˆq)∥1
+
+≤ ∥∇ hγ (ι(k)( ˆ q)) − ∇ hγ (π)∥∞ · ∥ ˆq − q∗∥1.
+
+Assuming ˆq̸ = q∗, dividing by ∥ ˆq − q∗∥1, and using the definition dTV (p, q) = 12 ∥p − q∥1 yields: 
+
+dTV ( ˆ q , q∗) ≤ 12γ ∥∇ hγ (ι(k)( ˆ q)) − ∇ hγ (π)∥∞.
+
+Then, from the LΩ,γ -smoothness of hγ for the ℓ1 norm (whose dual is the ℓ∞ norm), we get: 
+
+dTV ( ˆ q , q∗) ≤ LΩ,γ 
+
+2γ ∥ι(k)( ˆ q) − π∥1.
+
+Since π, ι (k)( ˆ q) ∈ △ Y , we conclude by using the fact that the diameter of △Y in ℓ1 norm is 2, , which finally gives: 
+
+dTV ( ˆ q , q∗) ≤ LΩ,γ 
+
+γ .
+
+Since this bound is independent of the chosen y(k) and S(k) (which determine ˆq and q∗ by determin-ing Y(k)), we finally get: 
+
+δθ,Ω ≜ max 
+
+> y(k),S (k)
+
+dTV ( ˆ q, q∗) ≤ LΩ,γ 
+
+γ .
+
+31 B.11 Proof of Proposition 10 (Consistency gap bound in the perturbation-based setting) 
+
+Proof. Consider a fixed current solution y(k) ∈ Y and a subset of coordinates S(k) ⊆ [d], defining the local neighborhood Y(k).Let ˆq ≜ pΩY(k)
+
+> ε
+
+(( sθ )[Y(k)]) denote the local regularized distribution, π∗ ≜ pΩε (sθ ) denote the global regularized distribution, and q∗ ≜ pΩε (sθ )( ·| y(k)[S(k)]) denote the global regularized distribution conditioned on Y(k). We rely on the coupling induced by the shared noise variable Z.Let Z ∼ D be a random noise vector. We define two coupled random variables taking values in Y
+
+and Y(k) respectively: 
+
+Y ∗ ≜ arg max 
+
+> y∈Y
+
+{⟨ θ + εZ, y⟩} ,
+
+ˆY ≜ arg max 
+
+> y∈Y (k)
+
+{⟨ θ + εZ, y⟩} .
+
+By definition of the perturbation-based regularizer Ωε (Definition 4) and Proposition 3, the distribu-tions of these variables correspond exactly to the global and local regularized distributions: 
+
+Y ∗ ∼ π∗ and ˆY ∼ ˆq.
+
+Coupling event. Let E be the event that the global perturbed maximizer falls within the local neighborhood: 
+
+E ≜ {Y ∗ ∈ Y (k)}.
+
+Since Y(k) ⊆ Y , if the maximum over the larger set Y belongs to the subset Y(k), it must strictly coincide with the maximum over the subset Y(k) (assuming unique maximizers almost surely, which holds if D has a density). Therefore: 
+
+∀ω ∈ E, Y ∗(ω) = ˆY (ω). (18) We denote the probability of this event by α ≜ P(E) = π∗(Y(k)).
+
+Decomposition of the local distribution. The ideal conditional distribution q∗ corresponds to the distribution of Y ∗ conditioned on E:
+
+∀y ∈ Y (k), q∗ 
+
+> y
+
+= P(Y ∗ = y | E).
+
+We decompose the probability mass function of ˆY (which is ˆq) by conditioning on E:
+
+ˆqy = P( ˆY = y)= P( ˆY = y | E)P(E) + P( ˆY = y | E)P(E).
+
+Using the coupling implication from Eq. (18), we have ˆY = Y ∗ on E. Thus: 
+
+P( ˆY = y | E) = P(Y ∗ = y | E) = q∗ 
+
+> y
+
+.
+
+Substituting this back, and letting r ∈ △ Y(k)
+
+be defined by ry ≜ P( ˆY = y | E), we obtain the mixture: 
+
+ˆqy = αq ∗ 
+
+> y
+
++ (1 − α)ry .
+
+32 Total variation bound. We now compute the total variation distance between ˆq and q∗:
+
+dTV ( ˆ q, q∗) = 12
+
+X
+
+> y∈Y (k)
+
+|ˆqy − q∗ 
+
+> y
+
+|
+
+= 12
+
+X
+
+> y∈Y (k)
+
+|αq ∗ 
+
+> y
+
++ (1 − α)ry − q∗ 
+
+> y
+
+|
+
+= 12
+
+X
+
+> y∈Y (k)
+
+|(1 − α)( ry − q∗ 
+
+> y
+
+)|
+
+= (1 − α)
+
+ 12
+
+X
+
+> y∈Y (k)
+
+|ry − q∗ 
+
+> y
+
+|
+
+
+
+= (1 − α) · dTV (r, q∗).
+
+Since the total variation distance is bounded by 1, we then have: 
+
+dTV ( ˆ q, q∗) ≤ 1 − α = 1 − π∗(Y(k)).
+
+Conclusion. The local consistency gap δθ,Ω is defined as the maximum of this total variation distance over all choices of y(k) and S(k) (Definition 6). Taking the maximum yields: 
+
+δθ,Ω ≤ 1 − min 
+
+> y(k),S (k)
+
+π∗(Y(k)).
+
+B.12 Proof of Proposition 11 (Exactness of Perturbed LNS on product spaces) 
+
+Proof. Factorization of the global distribution. Recall that the global regularized distribution is defined by the law of the perturbed maximizer Y ∗ ≜ arg max y∈Y ⟨θ + εZ, y⟩ with Z ∼ D . Because the feasible set is a product space Y = QMm=1 Ym, the dot product additively decomposes over the blocks Bm. The global maximization therefore separates into M independent local maximizations: 
+
+Y ∗ =
+
+
+
+arg max 
+
+> ym∈Y m
+
+⟨θ[Bm] + εZ [Bm], ym⟩
+
+Mm=1 
+
+.
+
+Since the noise blocks (Z[Bm])Mm=1 are mutually independent, the components (Y ∗
+
+> [Bm]
+
+)Mm=1 are independent random variables. Thus, the global regularized distribution π∗ ≜ pΩε (sθ ) factorizes over the blocks: 
+
+π∗(y) = 
+
+> M
+
+Y
+
+> m=1
+
+π∗
+
+> m
+
+(y[Bm]), where π∗
+
+> m
+
+(ym) ≜ P arg max 
+
+> y′
+> m∈Y m
+
+⟨θ[Bm] + εZ [Bm], y′
+
+> m
+
+⟩ = ym
+
+!
+
+.
+
+Conditional distribution. Let y(k) ∈ Y be a current solution, and S(k) be a union of blocks defining the frozen variables. Let F (k) ≜ [d] \ S(k) be the complement (the free variables), which is also a union of blocks. Due to the independence of the blocks, conditioning the global distribution π∗ on the frozen variables y(k)[S(k)] simply restricts the product to the free blocks: 
+
+π∗ 
+
+y | y(k)[S(k)]
+
+
+
+= Y 
+
+> Bm⊆F(k)
+
+π∗
+
+> m
+
+(y[Bm]) for any y ∈ Y (k), (19) where Y(k) = {y ∈ Y | y[S(k)] = y(k)[S(k)]}.
+
+Local RLNS update. By Proposition 3, the local perturbed RLNS update samples from 
+
+pΩY(k)
+
+> ε
+
+(( sθ )[Y(k)]) by computing ˆY ≜ arg max y∈Y (k) ⟨θ + εZ, y⟩. Because y[S(k)] is fixed to 
+
+y(k)[S(k)] for all y ∈ Y (k), the maximization over Y(k) reduces to maximizing over the free blocks: 
+
+ˆY[F (k)] = arg max   
+
+> yfree ∈Q
+> Bm ⊆F(k)Ym
+
+X 
+
+> Bm⊆F(k)
+
+⟨θ[Bm] + εZ [Bm], y[Bm]⟩.
+
+33 This subproblem is structurally identical to the one defining the free components of the global maximizer Y ∗. Since Z ∼ D , the distribution of ˆY[F (k)] is exactly Q  
+
+> Bm⊆F(k)
+
+π∗
+
+> m
+
+.Thus, the local regularized distribution exactly matches the conditional global distribution from Eq. (19): 
+
+pΩY(k)
+
+> ε
+
+(( sθ )[Y(k)])( y) = π∗ 
+
+y | y(k)[S(k)]
+
+
+
+.
+
+By Definition 6, this exact match implies that the local consistency gap is δθ,Ωε = 0 . Since the local updates are equivalent to conditional sampling from π∗, Algorithm 3 precisely operates as a block Gibbs sampler targeting π∗, and its stationary distribution is exactly: 
+
+πLNS  
+
+> θ,Ωε
+
+= pΩε (sθ ).
+
+B.13 Proof of Proposition 12 (Cut-bounded consistency gap) 
+
+Proof. Consider a fixed current solution y(k) ∈ Y and a subset of frozen coordinates S(k) ⊆ [d]. Let 
+
+F (k) = [ d] \ S(k) be the free coordinates. Let ˆq ≜ pΩY(k)
+
+> ε
+
+(( sθ )[Y(k)]) denote the local RLNS update distribution, and q∗ ≜ pΩε (sθ )( · | y(k)[S(k)]) denote the ideal global conditional distribution. 
+
+1. Relaxed local update. Define the relaxed local neighborhood Y(k) 
+
+> relax
+
+≜ YF (S(k)) × { y(k)[S(k)]}, as well as the relaxed maximizer over this set: 
+
+ˆYrelax ≜ arg max 
+
+> y∈Y (k)
+> relax
+
+⟨θ + εZ, y⟩.
+
+Since Y(k) 
+
+> relax
+
+places no constraints between the free variables and the frozen variables y(k)[S(k)],the optimization over F (k) is identical to the one defining the free block of the global relaxed maximizer Y ∗
+
+> relax
+
+(S(k)). Therefore, the distribution of ( ˆYrelax )[F (k)] is exactly the distribution of 
+
+(Y ∗
+
+> relax
+
+(S(k))) [F (k)]. Let q∗ 
+
+> relax
+
+denote the law of ˆYrelax . By Proposition 11, q∗ 
+
+> relax
+
+is also exactly the conditional distribution of the relaxed global maximizer: 
+
+q∗
+
+> relax
+
+(·) = P(Y ∗ 
+
+> relax
+
+= · | (Y ∗
+
+> relax
+
+(S(k))) [S(k)] = y(k)[S(k)]).
+
+2. Bounding the distance to the local RLNS update. The true local RLNS update ˆY optimizes over 
+
+Y(k) = {y ∈ Y | y[S(k)] = y(k)[S(k)]}. Notice that Y(k) ⊆ Y (k)
+
+> relax
+
+.Let E∂ be the event that ˆYrelax /∈ Y (k). This event occurs if and only if the relaxed local update violates at least one cut constraint, meaning ( ˆYrelax )[F (k)] ∈ S  
+
+> c∈C∂(S(k))
+
+Vc(S(k), y(k)) for some 
+
+c ∈ C∂ . If the complement event E∂ occurs, then ˆYrelax ∈ Y (k). Because Y(k) ⊆ Y (k) 
+
+> relax
+
+and the maximizer over the larger set belongs to the smaller set, it must be that ˆY = ˆYrelax . By the standard coupling inequality, the total variation distance between their laws is bounded by the probability of them differing: 
+
+dTV ( ˆ q, q∗
+
+> relax
+
+) ≤ P( ˆY̸ = ˆYrelax ) ≤ P(E∂ ). (20) 
+
+3. Bounding the distance to the ideal conditional. Let A be the event that the global relaxed maximizer is globally feasible: A ≜ {Y ∗ 
+
+> relax
+
+∈ Y} . On the event A, we have Y ∗
+
+> relax
+
+(S(k)) = Y ∗, where 
+
+Y ∗ is the true global maximizer drawn from π∗. The ideal conditional q∗ is the law of Y ∗ conditioned on Y ∗ 
+
+> [S(k)]
+
+= y(k)[S(k)]. Using the fact that Y ∗ = Y ∗ 
+
+> relax
+
+on A, we can bound the total variation distance between the conditional distributions q∗ and q∗ 
+
+> relax
+
+by the probability of A conditioned on the frozen variables: 
+
+dTV (q∗, q∗
+
+> relax
+
+) ≤ P(A | (Y ∗
+
+> relax
+
+(S(k))) [S(k)] = y(k)[S(k)]). (21) 34 Because (Y ∗
+
+> relax
+
+(S(k))) [F (k)] and (Y ∗
+
+> relax
+
+(S(k))) [S(k)] are independent, conditioning on the frozen variables simply fixes their value to y(k)[S(k)]. The event A conditioned on this fixed assignment is exactly the event that (Y ∗
+
+> relax
+
+(S(k))) [F (k)] violates at least one cut constraint in C∂ (S(k)). This is identical to the probability of the local boundary event E∂ defined earlier. Thus: 
+
+dTV (q∗, q∗
+
+> relax
+
+) ≤ P(E∂ ).
+
+4. Triangle inequality and union bound. Applying the triangle inequality to the results of Step 2 and Step 3 yields: 
+
+dTV ( ˆ q, q∗) ≤ dTV ( ˆ q, q∗
+
+> relax
+
+) + dTV (q∗
+
+> relax
+
+, q∗)
+
+≤ 2P(E∂ ).
+
+Taking the maximum over all feasible y(k) ∈ Y and subsets S(k) yields the first bound on the local consistency gap δθ,Ωε :
+
+δθ,Ωε ≤ 2 max 
+
+> y(k),S (k)
+
+P
+
+(Y ∗
+
+> relax
+
+(S(k))) [F (k)] ∈ [ 
+
+> c∈C∂(S(k))
+
+Vc(S(k), y(k))
+
+ .
+
+Finally, applying a union bound over the individual cut constraints c ∈ C∂ (S(k)) and extracting the maximum probability gives: 
+
+P(E∂ ) ≤ X 
+
+> c∈C∂(S(k))
+
+P
+
+
+
+( ˆYrelax )[F (k)] ∈ Vc(S(k), y(k))
+
+
+
+≤ | C∂ (S(k))| max  
+
+> c∈C∂(S(k))
+
+P
+
+
+
+( ˆYrelax )[F (k)] ∈ Vc(S(k), y(k))
+
+
+
+,
+
+which completes the proof. 
+
+## C Experimental details for κ-hot vector estimation 
+
+This section details the experimental setup for the numerical results presented in Section 5.1. 
+
+Problem formulation. We consider the set of κ-hot vectors, Y ≜ {y ∈ { 0, 1}d | Pdi=1 yi = κ},with d = 1000 and κ = 500 . The score vectors θ ∈ Rd are sampled from a standard Normal distribution N (0 , I d). We run all algorithms for 10 5 iterations and average the metrics over 128 
+
+random seeds (controlling randomness of the generation of θ as well as in the MCMC and Monte-Carlo processes) for statistical significance. To measure convergence, we compute the following mean absolute error (MAE): MAE (K) = 1
+
+d
+
+> d
+
+X
+
+> i=1
+
+ˆμ(K) 
+
+> i
+
+− μi ,
+
+where ˆμ(K) = 1
+
+> K
+
+PKk=1 y(k) is the K-th RLNS estimate of μ ≜ EpΩ(sθ )[Y ].
+
+Variable selection. For the neighborhood system in RLNS, at each step k, we uniformly sample a random mask to freeze a fixed fraction of the variables (e.g., 70% frozen, 30% free). The local subproblem then amounts to placing exactly κ − l ones among the free variables, where l is the number of ones already assigned in the frozen subset. 
+
+Regularization and Oracles. We evaluate the methods under two regularization regimes: • Shannon Regularization: We set the temperature γ = 1.0. The local Gibbs sampling 
+
+pΩY(k) (( sθ )[Y(k)]) is performed exactly using regularized dynamic programming on the free variables. The global target μ is analytically computed using the global regularized dynamic programming formulation (Vivier-Ardisson et al., 2026). • Perturbation-based Regularization: We use standard Gaussian noise N (0 , I d) with scaling 
+
+ε = 1 .0. Local sampling is performed via perturbed local maximization, which trivially reduces to identifying the top-(κ − l) perturbed scores among the free variables. The global target μ is estimated to high precision via independent Monte-Carlo samples of the global perturbed MAP. 35 Baselines. We compare RLNS against i.i.d. Monte-Carlo sampling, which repeatedly calls the global exact regularized oracles (i.e., global perturb-and-MAP (Papandreou & Yuille, 2011; Berthet et al., 2020) for perturbation-based regularization and sampling from the global Gibbs distribution 
+
+pΩ(sθ )( y) ∝ exp( ⟨θ, y⟩/γ ) for Shannon regularization) and Local Search MCMC (Vivier-Ardisson et al., 2025). For Local Search MCMC, the proposal mechanism uses the same neighborhood system as RLNS, also uniformly sampling a random mask to freeze the same fixed fraction of variables. It then uniformly samples a new valid κ-hot vector (by sampling a (κ − l)-hot vector on the free coordinates), which is then accepted or rejected via the standard Metropolis-Hastings ratio. Every Monte-Carlo and MCMC run is performed on a CPU with 64 GB of RAM and 16 cores. 
+
+## D Experimental details for the generalized assignment problem 
+
+This section presents the experimental details for the numerical results presented in Section 5.2. 
+
+Instance generation. We consider GAP instances with n = 50 items and m = 5 bins. For each instance, item-bin weights wij are sampled uniformly from the discrete set {1, . . . , 10 }. To create tight constraints that force non-trivial combinatorial trade-offs, the capacity Cj for all bins in a given instance is set identically to C = ⌊ 12
+
+Pni=1 
+
+Pmj=1 wij /m 2⌋.
+
+Dataset generation and expert policy. We generate a dataset of 1000 independent GAP instances. For each instance, we generate latent profile vectors to construct relational features: • Item features: vi ∼ N (0 , I 10 ) for i ∈ [n]
+
+• Bin features: uj ∼ N (0 , I 10 ) for j ∈ [m]
+
+The edge-wise feature vector for an item-bin pair is the concatenation of their respective profiles, 
+
+xij = [ vi, uj ] ∈ R20 . To generate the ground-truth assignment labels y ∈ { 0, 1}n×m, a randomly initialized target neural network processes the features to generate true (unseen by the model) under-lying scores θ∗ 
+
+> ij
+
+, and the target assignment y = ˆ y(θ∗) is found using the scipy.optimize.milp 
+
+global solver. A time limit of 60 seconds is enforced per instance during dataset generation. 
+
+Model architecture. We learn a mapping from the relational features xij to the predicted scores 
+
+θij using a shared multi-layer perceptron. The network operates independently on each item-bin pair and shares weights across all edges. The architecture consists of two hidden layers of size 32 with ReLU activations, followed by a linear projection to a scalar cost. 
+
+Local oracles and LNS subproblem. To scale learning, RLNS utilizes a randomized neighborhood system. At each iteration k, the assignment of all bins except one randomly selected free bin jk ∈ [m]
+
+are frozen. The LNS subproblem can be written as the following 0/1 Knapsack problem: 
+
+max   
+
+> y[ : ,j k]∈{ 0,1}n
+> n
+
+X
+
+> i=1
+
+θij k yij k s.t. 
+
+> n
+
+X
+
+> i=1
+
+˜wij k yij k ≤ C, 
+
+where the weight ˜wij k is set to (C + 1) if item i is already assigned to another bin to prevent from assigning it twice, and to wij k else. This subproblem admits an exact dynamic programming solution with O(nC ) complexity (Kellerer et al., 2004). Thus, we can easily sample from pΩY(k)
+
+> ε
+
+(( sθ )[Y(k)]) when using perturbation-based regularization by local perturbed maximization. When using Shannon regularization, one can sample from the local Gibbs distribution pΩY(k) (( sθ )[Y(k)]) via regularized dynamic programming with the same complexity using Vivier-Ardisson et al. (2026, Algorithm 3). 
+
+Training details. For Fig. 2a, all models are trained for 10 , 000 steps using the Adam optimizer with a learning rate of 2 × 10 −3 and a batch size of 32 , on a CPU with 64 GB of RAM and 16 cores. 
+
+Gradient variance analysis. To robustly evaluate the stability of the RLNS stochastic gradients in Fig. 2b (top), we measure the trace of the gradient covariance matrix using repeated sampling. 36 For these experiments, we fix a single GAP instance and sample a batch of 64 logit vectors θ from a standard Normal distribution. For each score vector, we draw 50 independent gradient samples to compute the per-instance covariance trace. The reported variance metrics represent the average across this batch of 64 queried score vectors. All error bars indicate the 95% confidence intervals of this mean across the batch, calculated using the standard normal multiplier ( 1.96 ). Explicit random seeds are used to strictly control the generation of the underlying polytope instance weights, the queried score vectors, and the internal stochasticity of the MCMC and perturbation sampling mechanisms. 
+
+Oracle execution time benchmarking. To ensure statistically significant time comparisons be-tween the local dynamic programming oracle and the global MILP solver in Fig. 2b (bottom), we benchmark execution times across 100 independent trials for each problem scale ( (n, m ) = (100 , 10) ,
+
+(n, m ) = (200 , 20) , and (n, m ) = (400 , 40) ). Within each scale, the underlying item weights and bin capacities are generated using a fixed random seed (following the same generation process as explained above). For each of the 100 trials, we sample a new logit vector θ and, for the local oracle, uniformly sample a new free bin to re-optimize. The reported execution times are the arithmetic means over the 100 trials, with error bars representing the 95% confidence intervals derived from a Student’s t-distribution. 
+
+## E Experimental details for stochastic vehicle scheduling 
+
+This section details the complete experimental setup, dataset generation procedure, model architecture, and hyperparameters for the stochastic vehicle scheduling problem (SVSP) experiments presented in Section 5.3. While the problem formulation and dataset generation process are standard and identical to, e.g., Parmentier (2022); Dalle et al. (2022); Hoppe et al. (2025), we detail them here for completeness. 
+
+Problem formulation The problem is modeled on a directed acyclic graph G = ( V, E) with 
+
+|V| = n + 2 nodes (a source depot, n job nodes, and a sink depot) and |E| edges. An edge (i, j ) ∈ E 
+
+exists from source to every job, from every job to sink, and from job i to job j if the deterministic end time of task i plus travel time allows reaching task j before its start. The number of edges varies across instances, as it depends on the spatial and temporal configuration of the tasks. A feasible routing y ∈ { 0, 1}|E| satisfies flow conservation and unit demand constraints: 
+
+X
+
+> e∈δ−(v)
+
+ye = 1 and X
+
+> e∈δ+(v)
+
+ye = 1 ∀v ∈ V ,
+
+where δ−(v) and δ+(v) denote the sets of incoming and outgoing edges of v. Each vehicle corre-sponds to a path from source to sink, so the number of vehicles is P 
+
+> e∈δ+(0)
+
+ye.Given a routing y and a scenario ω ∈ [S], delays propagate along each vehicle path via the recursion 
+
+R(ω) 
+
+> v
+
+= ε(ω) 
+
+> v
+
++ max( R(ω) 
+
+> u
+
+− σ(ω) 
+
+> uv
+
+, 0) , where ε(ω) 
+
+> v
+
+is the intrinsic delay at node v, σ(ω) 
+
+> uv
+
+is the slack (time margin) on edge (u, v ), and (u, v ) is the predecessor edge of v in the routing. The total cost of routing y is the sum of the vehicle cost and the average total delay cost over the scenarios: 
+
+c(y) = cvehicle · X
+
+> e∈δ+(0)
+
+ye + cdelay · 1
+
+S
+
+> S
+
+X
+
+> ω=1
+> n
+
+X
+
+> v=1
+
+R(ω) 
+
+> v
+
+.
+
+E.1 Dataset generation and expert policy 
+
+We generate a dataset of 1000 independent SVSP instances. For each instance, we sample a random city layout simulating spatial areas and transit delays. • Stochasticity: Task locations, start times, and travel times are sampled randomly. Intrinsic task delays ( ε(ω) 
+
+> v
+
+) and regional inter-area travel delays follow LogNormal distributions, generating the 10 distinct delay scenarios per instance. • Expert policy: The ground-truth solution y for each instance is computed by solving a two-stage stochastic MILP that minimizes the expected total cost c(y) with full knowledge 37 of all S scenarios. To handle the bilinear delay-propagation term yuv R(ω) 
+
+> u
+
+without requiring a big-M parameter, we use exact McCormick envelope linearizations. The MILP is solved using SciPy with a time limit of 120 seconds per instance. • Size: Each instance features n = 50 job tasks and S = 10 stochastic scenarios, which is the largest problem size handled by the expert solver. In terms of industrial applications, this scale corresponds to standard long-haul fleet aircraft routing problems. 
+
+E.2 Features and model architecture 
+
+For each edge e ∈ E in a given graph, we construct a 20 -dimensional feature vector xe ∈ R20 . The features capture the deterministic and stochastic characteristics of the edge: • Feature 1: The deterministic travel time for the edge. • Feature 2: The vehicle cost (equal to cvehicle if the edge originates from the source depot, and 0 otherwise). • Features 3–11: The 9 deciles of the slack (time margin) distribution σ(ω) 
+
+> uv
+
+computed across the S = 10 scenarios. • Features 12–20: The cumulative distribution function (CDF) of the slack distribution evaluated at 9 predefined time thresholds: {− 100 , −50 , −20 , −10 , 0, 10 , 50 , 200 , 500 }.The predictive model uses an standard feed-forward architecture. It applies a shared two-layer perceptron with a hidden dimension of 64 independently to each edge’s feature vector xe to output the predicted scalar cost θe.Given predicted edge costs θ ∈ R|E| , the combinatorial optimization layer is then a flow linear program (LP) ˆy(θ) ≜ arg max y∈Y ⟨θ, y⟩.
+
+E.3 Training details and hyperparameters 
+
+All models are trained for 10 , 000 steps using the Adam optimizer with a learning rate of 10 −4 and a batch size of 32 . The dataset is split into 70% training, 15% validation, and 15% testing. All training configurations are repeated across 10 different random seeds controlling dataset and model initialization randomness for statistical significance. Each training is performed on a CPU with 64 GB of RAM and 16 cores. 
+
+RLNS-specific parameters. Our proposed method is parameterized as follows: • Iterations: We run K = 1 RLNS iteration per training step to compute the gradient estimator. • Regularization: We use perturbation-based regularization with N (0 , I ) standard Gaussian noise and a temperature scaling parameter ε = 1 .0.• Initialization: RLNS is initialized directly at the ground-truth expert solution. • Variable selection scheme: We use a route-based mask generation heuristic. At each step, we identify the distinct vehicle routes present in the current routing assignment. We select 
+
+66% of these routes uniformly at random and freeze all variables corresponding to the tasks visited by those routes. 
+
+Baseline parameters. The baselines share the identical underlying model architecture, optimization hyperparameters, and evaluation metrics: • Global perturbed Fenchel-Young loss (PFY) (Berthet et al., 2020): Uses the same perturbation-based regularization setup (Gaussian noise, ε = 1 .0,) but calls the exact global MAP oracle over the full graph G at every training step. • Blackbox differentiation (DBB) (Vlastelica et al., 2020): Continuous interpolation of the solver. We performed a hyperparameter sweep over the interpolation strength λ ∈{10 −1, 5 × 10 −1, 1, 5, 10 1, 10 2, 5 × 10 2, 10 3, 5 × 10 3, 10 4} and report the best performing configuration, which was λ = 10 2.38 • Binary cross-entropy (BCE): An unstructured binary cross-entropy loss applied directly to the edge-level predictions θ against the expert binary labels y. See, e.g., Joshi et al. (2019) for a similar approach on a routing combinatorial optimization problem. • Greedy policy: A non-learned baseline that solves a standard minimum-cost flow problem on the DAG, placing negative costs on the source edges to minimize the total number of vehicles, entirely ignoring the stochastic delays. 39
