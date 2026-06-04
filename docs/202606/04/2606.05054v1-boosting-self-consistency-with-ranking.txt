@@ -1,0 +1,979 @@
+Title: Boosting Self-Consistency with Ranking
+
+URL Source: https://arxiv.org/pdf/2606.05054v1
+
+Published Time: Thu, 04 Jun 2026 01:21:08 GMT
+
+Number of Pages: 16
+
+Markdown Content:
+## Boosting Self-Consistency with Ranking 
+
+Maria Marina 1,2 , Daniil Moskovskiy 1,2 , Sergey Pletenev 1,2 ,Mikhail Salnikov 1,2 , Alexander Panchenko 2,1 , and Viktor Moskvoretskii 3
+
+> 1
+
+AIRI, 2Skoltech, 3EPFL 
+
+m.marina.scientia@gmail.com 
+
+Abstract 
+
+Self-consistency improves large language mod-els by sampling multiple reasoning paths and selecting the most frequent answer, but major-ity voting often fails to recover correct answers that are already present among the samples. We address this limitation with Ranking-Improved Self-Consistency (RISC), which reformulates answer selection in self-consistency as a rank-ing problem. Instead of relying on a single uncertainty or confidence signal, RISC uses a lightweight LambdaRank model to score can-didate answers with five carefully designed features that capture answer frequency, se-mantic centrality, and reasoning-trace consis-tency. We evaluate RISC on three datasets under a range of test-time budgets. Across datasets, RISC consistently achieves a better accuracy-efficiency trade-off than standard self-consistency and strong baselines, with par-ticularly large gains on question answering benchmarks. Further analysis shows that the proposed features are individually useful and, more importantly, complementary, highlighting the value of learning to combine multiple infor-mative signals for test-time answer selection. 
+
+1 Introduction 
+
+Test-time scaling has recently emerged as a promis-ing direction for improving the performance of large language models (LLMs) (Snell et al., 2024; Muennighoff et al., 2025). Instead of relying solely on larger models or more training data, this paradigm improves performance by allocat-ing additional compute during inference. Prior work has shown that additional computation can substantially improve performance through ap-proaches such as extended reasoning (OpenAI, 2024; Guo et al., 2025), structured search methods like Tree-of-Thoughts (Yao et al., 2023), iterative self-correction (Kamoi et al., 2024; Moskvoretskii et al., 2025), and self-consistency decoding (Wang et al., 2023). 5 10 15 20 25 30 35 40 45 50 55 60 65 70 75 80 85 90 95                    
+
+> # LLM calls
+> 30
+> 32
+> 34
+> 36
+> Accuracy (%)  82% cost reduction
+> Same accuracy, fewer LLM calls
+> Self-consistency
+> RISC
+> 510 15 20 25 30 35 40 45 50 55 60 65 70 75 80 85 90 95
+> # LLM calls
+> 30
+> 32
+> 34
+> 36
+> Accuracy (%)
+> +6.08%
+> +4.28%
+> +5.83% +6.51%
+> Same budget, higher accuracy
+> Self-consistency
+> RISC
+
+Figure 1: Accuracy versus the number of sampled responses on PopQA for self-consistency and RISC. RISC consistently achieves higher accuracy while sub-stantially reducing computational cost: with only 18 samples, it already surpasses the performance of self-consistency with 99 samples. It also delivers system-atic accuracy gains over self-consistency across the full range of LLM-call budgets. 
+
+In this paper, we focus on improving self-consistency, a test-time scaling technique where an LLM samples multiple candidate answers and selects the final prediction by majority vote (Wang et al., 2023). Despite its simplicity, self-consistency has proven highly effective while remaining compu-tationally efficient and easy to apply across models, tasks, and hardware (Amballa et al., 2025; Min et al., 2024). However, despite its strong performance, a large gap still remains between majority voting and an upper bound where an oracle selects the correct answer from the sampled candidates (Zhuang et al., 
+
+> arXiv:2606.05054v1 [cs.CL] 3 Jun 2026
+
+2026; Dang et al., 2025). This gap suggests that the correct answer is often present among the sam-ples, but the model is uncertain and fails to select it reliably. Several prior works have attempted to identify robust signals that help distinguish the cor-rect answer among sampled candidates. Examples include CISC, which relies on verbal uncertainty estimates (Taubenfeld et al., 2025), and methods based on internal geometric structure, such as sta-ble rank (Tang and Yang, 2025). Nevertheless, these approaches rely on design-ing a single robust signal intended to capture the model’s parametric knowledge. While appealing in their simplicity, such hand-crafted, knowledge-driven methods often struggle to scale and gener-alize to new tasks, a pattern long observed in AI research (Sutton, 2019). We therefore introduce Ranking-Improved Self-Consistency (RISC), a lightweight extension of self-consistency. RISC treats answer selection among sampled candidates as a ranking task, where correct answers should appear higher in the output. Under this formulation, RISC builds alightweight ranker that scores candidates using a small set of interpretable features motivated by prior work. This design is aligned with recent QA research showing that lightweight question-level and external-knowledge signals can provide useful reliability information without relying on expensive additional LLM calls (Marina et al., 2025; Pletenev et al., 2025). Our results show that RISC significantly outper-forms previous methods, while remaining gener-alizable and performing strongly on challenging test-time scaling tasks such as question answering. We further analyze its behavior and demonstrate that each feature contributes meaningful improve-ments on its own, while their combination leads to additional performance gains. The contributions of this paper are as follows: 1. We propose RISC, which reformulates answer se-lection in self-consistency as a ranking problem ,and show that RISC consistently outperforms ma-jority voting and strong confidence-based base-lines across three benchmarks. 2. We design five interpretable features captur-ing answer frequency, semantic centrality, and reasoning-trace consistency, and show they are individually useful and mutually complementary. 3. We provide a detailed analysis via feature abla-tions and SHAP, revealing non-additive interac-tions between features that explain why a learned combination outperforms any single handcrafted signal. We make code publicly available. 1
+
+2 Related Work 
+
+Test-Time Compute Scaling. Recent research has shown that allocating additional computation at inference time can significantly improve the perfor-mance of large language models without modifying their parameters (Snell et al., 2024). This family of methods includes parallel strategies that generate multiple candidate outputs and select or combine them. These techniques have been successful on various tasks across mathematical reasoning (Light-man et al., 2024), code generation (Jimenez et al., 2024), and open-ended question answering (Chen et al., 2023). Our work falls within the parallel scaling paradigm: generate N candidate responses and select the best candidate. 
+
+Self-Consistency and Majority Voting. Self-consistency (Wang et al., 2023) is the most widely used parallel selection strategy: it samples multi-ple reasoning paths at different temperatures and selects the most frequent final answer by majority vote. It is a strong baseline because diversity across chains can cancel errors. Several extensions have been proposed, including weighted voting based on verbalized or confidence scores and ranked voting methods that use preferences (Chen et al., 2023; Wang et al., 2025). Yet a persistent gap remains between majority-vote accuracy and oracle selec-tion (Wu et al., 2025), the accuracy achievable if one could always pick the correct candidate when-ever it is present. This suggests that LLMs often generate correct answers that are not the plurality vote, motivating stronger selection criteria. 
+
+Ranking and Learning to Rank. Learning-to-rank methods (Burges et al., 2006; Liu, 2009) have been widely applied in NLP, from passage retrieval to candidate selection in language models. Cobbe et al. (2021) train a verifier to score math solutions, and Lightman et al. (2024) extend this with pro-cess reward models that evaluate reasoning step by step. In best-of-N selection (Snell et al., 2024), a separately trained scorer ranks N candidates and returns the highest-scoring one. Our approach is different: we score candidates 
+
+relative to the full candidate set rather than indepen-                            
+
+> 1https://github.com/s-nlp/RISC 10 20 30 40 50 60 70 80 90
+> # LLM calls
+> 26
+> 28
+> 30
+> 32
+> 34
+> 36
+> Accuracy (%)
+> PopQA
+> 10 20 30 40 50 60 70 80 90
+> # LLM calls
+> 24
+> 26
+> 28
+> 30
+> 32
+> 34
+> 36
+> Accuracy (%)
+> HotpotQA
+> 10 20 30 40 50 60 70 80 90
+> # LLM calls
+> 40
+> 45
+> 50
+> 55
+> 60
+> Accuracy (%)
+> Math500
+> RISC CISC Self-consistency Stable Rank ReASC
+
+Figure 2: Comparison of RISC against Self-Consistency, Stable Rank, ReASC, and CISC on three datasets for Llama-3.1-8B-Instruct model. RISC consistently outperforms the baselines on the QA datasets across all LLM call budgets, while remaining competitive on MATH500. 
+
+dently, capturing inter-candidate agreement struc-ture; and we use a lightweight gradient-boosted ranker over interpretable features rather than a neu-ral reward model, requiring no additional model beyond the base LLM. In this way, we bring the set-relative perspective of LTR directly into the self-consistency framework, showing that a small set of interpretable features suffices to substantially close the gap to oracle selection. 
+
+3 Ranking-Improved Self-Consistency 
+
+In this section, we present Ranking-Improved Self-Consistency (RISC), which casts self-consistency as a ranking problem, and then derive the features that power the ranker. 
+
+3.1 Self-Consistency as a Ranking Problem. Task Definition. Let x ∈ X denote an input prompt and y ∈ Y a candidate output. Given a base generative model pθ(y | x), self-consistency constructs a candidate set by drawing N indepen-dent samples, 
+
+C(x) = {y1, y 2, . . . , y N }, yi ∼ pθ(· | x). (1) The goal is then to select, from C(x), the candidate that is most likely to yield a correct or otherwise desirable final answer. We formalize this as a query-dependent ranking problem , where the prompt x is the query and the sampled candidates in C(x) are the items to be ranked. We seek a scoring function fϕ that assigns each candidate y ∈ C (x) a score based on the prompt x,the candidate itself, and the full candidate set C(x):
+
+fϕ
+
+ x, y | C (x) ∈ R. (2) The final prediction is then given by 
+
+ˆy = arg max  
+
+> y∈C (x)
+
+fϕ
+
+ x, y | C (x). (3) In the simplest self-consistency setting, this score is given by the empirical frequency of an answer under repeated sampling, i.e., majority vot-ing (Wang et al., 2023). More generally, f may be heuristic or learnable, and may depend on the candidate answer itself, its reasoning trace, or its agreement with other samples. 
+
+Learning the Ranker. The above-mentioned set-ting is naturally framed as ranking. Previous stud-ies found that a reward model may be used as a ranker by scoring candidates independently (Cobbe et al., 2021), but this is only a special case. More generally, the objective is to rank candidates within the sampled set C(x) for a fixed prompt x. This dis-tinction matters because multiple candidates may be valid, semantically equivalent, or lead to the same correct final answer. Thus, f (x, y | C (x)) is better understood as a relative selection score. Under this formulation, the scoring function is trained to rank candidates within the sampled set, rather than to estimate an absolute reward. From this perspective, it is often more natural to optimize the ordering of the entire candidate set C(x) using listwise supervision, rather than relying only on pairwise comparisons. Given relevance labels or a partial ordering over sampled outputs, a simple listwise objective is 
+
+Llist = −E(x, C(x)) 
+
+"
+
+log exp( fϕ(x, y +)) 
+
+P 
+
+> y∈C (x)
+
+exp( fϕ(x, y )) 
+
+#
+
+,
+
+(4) where y+ denotes a correct candidate in the sam-pled set. More generally, standard listwise learning-to-rank objectives can be used to optimize the or-dering of the entire candidate pool. Overall, this view treats self-consistency as se-lection from a prompt-specific set of sampled gen-erations. Its effectiveness depends both on the di-versity and quality of the candidate set C(x) and on how well the scoring function ranks candidates within that set. 
+
+3.2 Training Ranker 
+
+In our study, we train a LightGBM (Shi et al., 2026) LambdaRank (Burges et al., 2006) model and use NDCG (Järvelin and Kekäläinen, 2017) to incor-porate list-aware information, placing greater em-phasis on errors that more strongly affect the final ordering of the candidate set. Formally, let si = fϕ(x, y i) denote the score assigned to candidate yi in the sampled set C(x),and let ri be its relevance label. Training is based on pairwise comparisons (yi, y j ) within the same set, but the contribution of each pair is weighted by |∆NDCG ij |, the change in the quality of the overall ranked list that would result from swapping their positions. Training details are described in Appendix A. 
+
+3.3 Feature descriptions 
+
+For each question, all traces (CoTs) are aggregated at the answer level. In other words, we assess an-swer quality either directly from the answer itself or indirectly by measuring how cohesive — or con-versely, how different—the CoTs associated with the same answer are. 
+
+Answer length . Character length of the final answer extracted after CoT. 
+
+Intuition 
+
+This feature captures whether an answer appears in a clean, compact form. Correct answers are often expressed canonically (for example, as a short number or concise entity name), while incorrect answers are more likely to contain extra formatting, explanatory residue, or malformed text. 
+
+Ratio to best 
+
+For question i, let, ni,a be the number of traces producing answer a, and let Ni = P
+
+a′ ni,a ′ be the total number of traces for that question. Define the answer share: ans _share i,a = ni,a 
+
+Ni .
+
+Let the largest answer share for question i be 
+
+top1 _share i = max 
+
+a′ ans _share i,a′
+
+Then, ratio-to-best is 
+
+ratio _to _best i,a = ans _share i,a
+
+top1 _share i
+
+.
+
+Intuition 
+
+This feature measures how competitive an an-swer is relative to the strongest answer for the same question. It helps the ranker understand whether a candidate is nearly tied with the dominant answer or far behind it. 
+
+Distance from answer to answer centroid 
+
+Let Vi,a ∈ Rd denote the embedding of candi-date answer a for question i.We define the count-weighted centroid for ques-tion i as 
+
+Cans 
+
+i =
+
+P
+
+a′ ni,a ′ Vi,a ′
+
+P
+
+a′ ni,a ′
+
+.
+
+The feature is the squared Euclidean distance from the answer embedding to this weighted cen-troid: 
+
+ans _centroid _dist i,a = ∥Vi,a − Cans 
+
+i ∥22 .
+
+Intuition 
+
+This feature measures how far a candidate an-swer lies from the semantic center of all answers proposed for the same question. Weighting the centroid by answer frequency makes it a “center of mass” of the answer distribution rather than an unweighted average over unique strings. Answers that are semantically central to the candidate set may be more plausible, while scattered or atypical answers are often less reliable. 0.0 0.2 0.4 0.6 0.8 1.0 1.2                      
+
+> Squared distance to weighted answer centroid
+> (lower is more central )
+> stephen king 0.310 47
+> dean koontz 0.386 42
+> steven king 0.532 1
+> walter dean myers 0.652 2
+> stephenie meyer 0.674 1
+> the author of t... 0.764 1
+> lois duncan 0.848 1
+> walter mosley 0.914 1
+> sandra brown 0.993 2
+> nora roberts 1.054 1
+> Closest to centroid;
+> frequent but incorrect
+> Correct answer and
+> also near the semantic
+> center
+> Question: Who is the author of Intensity?
+> Lower distance = more semantically central
+> Answer (candidate) Squared distance
+> (lower is better)
+> Count
+> (frequency)
+
+Figure 3: Example visualization of the answer-centroid distance feature. Each point shows the squared dis-tance from a candidate answer embedding to the count-weighted answer centroid; lower values indicate greater semantic centrality. 
+
+Worst-step coherence 
+
+For a trace t, let its step embeddings be 
+
+st, 1, s t, 2, . . . , s t,m t ∈ Rd. Define the within-trace step centroid as ct = 1
+
+mt
+
+Pmt
+
+j=1 st,j .
+
+For each step, compute its cosine similar-ity to the trace centroid: rt,j = cos( st,j , c t).The trace-level worst-step coherence is r⋆t =min 1≤j≤mt rt,j .
+
+For a fixed question i and answer a, let Ti,a be the set of traces producing answer a. The answer-level feature is the mean of the trace-level worst-step coherences: 
+
+worst _step _coherence i,a = 1
+
+|Ti,a |
+
+X
+
+t∈Ti,a 
+
+r⋆t .
+
+Intuition 
+
+This feature captures whether every step in a reasoning trace stays semantically aligned with the overall trajectory. A low value suggests that at least one step is off-direction, which may indicate a derailment even if the final answer looks plausible. 
+
+Question: The football manager who recruited David Beckham managed Manchester United during what timeframe? 
+
+GOOD CHAIN BAD CHAIN                   
+
+> Step 1 Identify Beckham’s recruiter and his tenure. cos = 0.891
+> Step 2 Beckham played for Manchester United. cos = 0.760
+> Step 3 He joined United in 1992 at age 17. cos = 0.741
+> Step 4 Identify the manager who signed him. cos = 0.827
+> Step 5 That manager was Alex Ferguson. cos = 0.870
+> Step 6 Ferguson led United for 26 years. cos = 0.807
+> Step 7 Determine Ferguson’s management period. cos = 0.885
+> Step 8 Ferguson managed United from 1986 to 2013. cos = 0.799
+> Step 9 Conclusion: timeframe = 1986–2013. cos = 0.840
+
+✓ Final answer: 1986–2013           
+
+> correct
+> MIN
+> Step 1 Find when Beckham’s recruiting manager led United. cos = 0.817
+> Step 2 Beckham played for United from 1992 to 2003. cos = 0.822
+> Step 3 Likely the manager is Sir Alex Ferguson. cos = 0.727
+> Step 4 Ferguson managed United during Beckham’s playing spell. cos = 0.928
+> Step 5 He recruited Beckham in 1992. cos = 0.906
+
+× Final answer: Sir Alex Ferguson 
+
+> incorrect
+> MIN
+
+Figure 4: Example visualization of the worst-step co-herence feature. Each row shows a reasoning step with its cosine similarity to the within-chain step centroid; lower values indicate weaker alignment with the chain’s overall reasoning trajectory. The minimum-coherence step is marked with MIN, and final answer boxes show whether the chain produced the correct answer. Step sen-tences are shortened with ellipses for readability. The full example is provided in Appendix F. 
+
+Shared checkpoints count 
+
+For a fixed question i and answer a, consider the set of traces Ti,a . Each trace is converted into a sequence of prefixes. If trace t has steps 
+
+xt, 1, x t, 2, . . . , x t,m t , then its prefixes are 
+
+pt, 1 = xt, 1,pt, 2 = xt, 1 ⊕ xt, 2, · · · 
+
+pt,m t = xt, 1 ⊕ xt, 2 ⊕ · · · ⊕ xt,m t .
+
+Let ei,j be the embedding of prefix pt,j . Let the normalised depth of prefix j in trace t be dt,j = jmt
+
+Two prefixes pt,j and pt′,k between traces are considered to be matched if they share two condi-tions: 1. | dt,j − dt′,k | ≤ τdepth 
+
+2. cos( et,j , e t′,k ) ≥ τsim 
+
+A prefix pt,j is called a shared checkpoint, denoted 
+
+zt,j , if it matches prefixes from at least a fraction q
+
+of the other traces with the same final answer: 
+
+shared _checkpoints i,a = X
+
+t∈Ti,a 
+
+mtX
+
+j=1 
+
+zt,j .
+
+Intuition 
+
+This feature measures how much intermediate reasoning structure is shared among traces with the same answer. It asks not only whether traces reach the same final answer, but also whether they pass through similar semantic states at similar stages. Higher values indicate a more stable and repro-ducible reasoning pattern. 
+
+Factoring x8 + 3 x4 − 4Two different solution traces with matched checkpoints. 
+
+Problem: Factor the polynomial x8 + 3 x4 − 4 completely over the integers. 
+
+Trace A Trace B                                                                
+
+> Step 1: Factor the polynomial and then evaluate ...
+> Step 2: Note x8+3 x4−4 = ( x4)2+3 x4−4.
+> Step 3: Factor the quadratic in x4:
+> (x4+4)( x4−1) .
+> Step 4: Obtain the factorization
+> (x2+x+ 1)( x2−x+ 1) . . .
+> Step 5: Evaluate the factors at x= 1 ,giving 3,1and 5.
+> Step 6: Sum the values to get 9.
+> Step 1: Use a factorization strategy to factor completely ...
+> Step 2: Write x8+3 x4−4 = ( x4+4)( x4−1) .
+> Step 3: Factor x4−1as
+> (x2+1)( x+1)( x−1) .
+> Step 4: Factor x4+4 as
+> (x2−2x+2)( x2+2 x+2) .
+> Step 5: List the irreducible factors:
+> x2−2x+2 , x 2+2 x+2 , x 2+1 ,x+1 , x −1.
+> Step 6: Substitute x= 1 into each factor to obtain 1,5,2,2,and 0.
+> Step 7: Then P5
+> i=1 pi(1) = 10 .
+
+Figure 5: Example visualization of the shared-checkpoints feature. Matching colors indicate semanti-cally shared checkpoints detected at similar reasoning depths across two reasoning traces. Step sentences are shortened with ellipses for readability. Full example is provided in Appendix G. 
+
+We encode answers, chain-of-thoughts, prefixes, and reasoning steps using the MiniLM 2 sentence embedding model (Wang et al., 2021) (just 22.7M parameters), which produces dense sentence-level embeddings via transformer encoding followed by pooling. 
+
+4 Experimental Setup 
+
+4.1 Datasets 
+
+In this work, we utilize a suite of datasets to cover complex tasks: long-tail QA, multi-hop reasoning and math reasoning. PopQA (Mallen et al., 2023) is an open-domain question answering benchmark 
+
+2hf.co/sentence-transformers/all-MiniLM-L6-v2 consisting of entity-centric questions derived from Wikipedia. Each question is associated with a pop-ularity score reflecting the monthly Wikipedia page view count of the corresponding entity. Follow-ing Mallen et al. (2023), we partition the dataset in train and test set. HotpotQA (Yang et al., 2018) requires multi-hop reasoning over multiple sup-porting documents. In our work, we use the closed-book scenario, i.e., without gold or distractor con-texts. MATH500 (Lightman et al., 2024) is a sub-set of 500 competition-level mathematics problems spanning algebra, geometry, number theory, and other domains. 
+
+4.2 Baselines Self-Consistency. Self-Consistency (Wang et al., 2023) samples m reasoning chains and selects the answer by majority vote: 
+
+ˆaSC = arg max 
+
+> am
+
+X
+
+> i=1
+
+1[ai = a]. (5) It requires no additional training or auxiliary mod-els, but achieving reliable performance demands a large number of samples. 
+
+Confidence-Informed Self-Consistency. 
+
+CISC (Taubenfeld et al., 2025) replaces uni-form votes with confidence-weighted aggregation. A per-response confidence score ci is obtained via the P(True ) method (Kadavath et al., 2022) and normalized via temperature-scaled softmax, yielding: 
+
+ˆaCISC = arg max 
+
+> am
+
+X
+
+> i=1
+
+1[ai = a] · ˜ci. (6) CISC reduces the required number of samples by over 40% on average while matching SC accuracy. 
+
+Stable Rank. Tang and Yang (2025) propose us-ing the stable rank of the response hidden-state matrix H ∈ RT ×d as a reference-free quality sig-nal: 
+
+SR( H) = ∥H∥2
+
+> F
+
+∥H∥22
+
+, (7) observing that higher stable rank correlates with response quality in best-of-N selection. 
+
+ReASC. ReASC (Kim et al., 2026) replaces count-based stopping with a reliability-aware evi-dence sufficiency criterion. It first attempts to an-swer from a single sample, accepting the response only if its confidence exceeds a calibrated thresh-old. Otherwise, it continues sampling and updates a Beta posterior with confidence-weighted pseudo-counts, so higher-confidence responses contribute more evidence than lower-confidence ones. Sam-pling stops when the posterior indicates sufficient support for the leading answer. This lets ReASC avoid unnecessary samples and reduce inference cost. 
+
+4.3 Experimental Details Generation Setup. In all our experiments we use Llama 3.1 8B Instruct 3 (Team, 2024). As an additional generalizability check, we evaluate our method on the Olmo-3-7B-Instruct model; the re-sults are reported in Appendix 13 4 (Olmo et al., 2025). This model shows extensive knowledge cov-erage and benefits most from scaling on all datasets. For all datasets, samples were generated with a temperature of t=0.9, top_p=1.0, we generated 99 samples sequentially. The generation for the train and test splits was done at 0-shot with Chain-of-Thought (Wei et al., 2022); prompts are available in Appendix D. 
+
+Evaluation Setup. We evaluate QA performance using Inclusion Accuracy (In-Acc) (Chen et al., 2017) as a relaxed exact match by checking whether any reference answer occurs as an adja-cent token subsequence within the extracted final answer ˆa.
+
+Efficiency and Accuracy Metrics. Following CISC (Taubenfeld et al., 2025), we additionally evaluate response selection methods using two complementary metrics. The cost reduction is de-fined as: Cost Reduction = 100 ×
+
+
+
+1 − bbSC 
+
+
+
+%, (8) where b is a fixed sample budget for a method and bSC is the number of calls that standard self-consistency requires to reach the same accuracy level. The second metric captures the accuracy gain when all methods are given the same number of responses. Given accuracy Acc method and Acc SC 
+
+at equal sample budgets, the accuracy improvement 
+
+is: Acc. Improvement = 100 ×
+
+ Acc method 
+
+Acc SC 
+
+− 1
+
+
+
+%.
+
+(9) 
+
+> 3hf.co/meta-llama/Llama-3.1-8B-Instruct
+> 4hf.co/allenai/Olmo-3-7B-Instruct
+
+Cost Reduction Accuracy Improvement Headroom Over Maximum Dataset @5 @10 @15 @5 @50 @99 @50 @75 @99 
+
+PopQA 61.54 71.43 70.00 6.08 4.75 6.77 4.31 5.34 6.42 HotpotQA 37.50 50.00 64.29 5.95 6.49 8.03 4.79 6.63 7.98 Math500 37.50 28.57 28.57 4.80 5.07 3.61 1.30 0.33 2.93 Average 45.51 50.00 54.29 5.61 5.44 6.14 3.47 4.10 5.78 
+
+Table 1: Performance summary on PopQA, HotpotQA, and Math500 under different LLM-call budgets. Here, @ k
+
+denotes results at a budget of k LLM calls. We report cost reduction, accuracy improvement, and headroom over the maximum, where headroom is defined relative to SC’s maximum achieved accuracy. Ratio to Best   
+
+> Answer Length
+> Answer Centroid Dist
+> Worst Step Coherence
+> Shared Checkpoints
+> Ratio to Best
+> Answer Length
+> Answer Centroid Dist
+> Worst Step Coherence
+> Shared Checkpoints
+> -0.26%
+> 0.355
+> -3.73%
+> 0.343
+> -3.91%
+> 0.342
+> -4.86%
+> 0.339
+> -5.22%
+> 0.338
+> -3.31%
+> 0.344
+> -0.74%
+> 0.353
+> -4.85%
+> 0.339
+> -3.76%
+> 0.343
+> -0.16%
+> 0.356
+> -0.30%
+> 0.355
+> -3.54%
+> 0.344
+> -3.19%
+> 0.345
+> -0.36%
+> 0.355
+> -0.17%
+> 0.356
+> PopQA
+> Ratio to Best
+> Answer Length
+> Answer Centroid Dist
+> Worst Step Coherence
+> Shared Checkpoints
+> Ratio to Best
+> Answer Length
+> Answer Centroid Dist
+> Worst Step Coherence
+> Shared Checkpoints
+> -1.49%
+> 0.334
+> -6.86%
+> 0.315
+> -6.48%
+> 0.317
+> -8.66%
+> 0.309
+> -6.16%
+> 0.318
+> -5.34%
+> 0.321
+> -1.50%
+> 0.334
+> -6.51%
+> 0.317
+> -5.54%
+> 0.320
+> 0.05%
+> 0.339
+> -1.35%
+> 0.334
+> -6.06%
+> 0.318
+> -5.46%
+> 0.320
+> -0.76%
+> 0.336
+> -1.02%
+> 0.335
+> HotpotQA
+> Ratio to Best
+> Answer Length
+> Answer Centroid Dist
+> Worst Step Coherence
+> Shared Checkpoints
+> Ratio to Best
+> Answer Length
+> Answer Centroid Dist
+> Worst Step Coherence
+> Shared Checkpoints
+> -1.49%
+> 0.589
+> -1.70%
+> 0.588
+> -1.99%
+> 0.586
+> -3.50%
+> 0.577
+> -4.22%
+> 0.573
+> -0.90%
+> 0.593
+> -1.65%
+> 0.588
+> -2.23%
+> 0.585
+> -1.05%
+> 0.592
+> -0.47%
+> 0.596
+> -5.73%
+> 0.564
+> -0.69%
+> 0.594
+> -0.42%
+> 0.596
+> -0.02%
+> 0.598
+> 0.10%
+> 0.599
+> Math500
+> Diagonal: |change| > 1% Off-diagonal: interaction excess > 0 Other cells
+
+Figure 6: Feature ablation across three datasets. Heatmaps show the percentage change in mean accuracy, averaged over budgets 1–99 LLM calls, relative to the full ranker. Diagonal cells represent single-feature ablations, and lower-triangular cells represent two-feature ablations. Raw mean accuracies for the ablated models are shown in parentheses. Cells are colored by effect type: diagonal cells with an absolute drop greater than 1% are highlighted, while off-diagonal cells are highlighted when the joint ablation is larger than the sum of individual drops. All other cells are shown in light gray. 
+
+For the QA datasets, we observe that beyond a certain budget RISC attains an accuracy that self-consistency never matches, even at the maximum number of sampled calls. To quantify this gap, we introduce a third metric, the headroom over maximum SC , defined as: 
+
+100 ×
+
+ Acc method (b)max k≤K Acc SC (k) − 1
+
+
+
+%. (10) Together, these metrics allow us to compare methods both in terms of how much computation they save and how much accuracy they add at fixed cost. 
+
+5 Results 
+
+Figure 2 shows a consistent pattern across all three datasets: RISC improves steadily with budget and stays above both CISC and vanilla self-consistency over most of the range, while Stable Rank is clearly weaker and sometimes degrades as more calls are added. On PopQA and HotpotQA, the gap appears early and widens with budget. On MATH500, the gap is smaller, but RISC remains competitive at low budgets and finishes highest at the largest budgets. The advantage is therefore not limited to low bud-gets: across all three datasets, RISC remains strong or continues improving at high budgets, rather than saturating as early as CISC or self-consistency. The quantitative results in Table 1 support this pattern: RISC consistently provides a better effi-ciency–accuracy trade-off than the baselines across all three datasets. Positive cost-reduction values show that it often matches self-consistency with substantially fewer calls, especially on PopQA and HotpotQA. The accuracy-improvement metric is positive in every reported setting, showing that the method is not only cheaper at matched quality but also more accurate at the same budget. Finally, pos-itive headroom-over-maximum values show that in many settings RISC reaches accuracy levels that self-consistency never attains within the sampled range, particularly on the QA datasets. We evaluate out-of-domain generalization by testing how rankers trained on the training split of one dataset perform on the test split of another dataset (Figure 7). Performance remains competi-HotpotQA PopQA MATH500         
+
+> Test dataset
+> HotpotQA
+> PopQA
+> MATH500
+> Train dataset
+> 0.339 0.350 0.499
+> 0.324 0.356 0.524
+> 0.314 0.331 0.598
+> In-domain Within 10% of target >10% below target
+
+Figure 7: Out-of-domain transfer. Mean ranker qual-ity over 1–99 LLM calls for each train–test dataset pair. Diagonal cells show in-domain performance; off-diagonal cells show out-of-domain transfer. Cells are colored by relative transfer quality: green indicates per-formance within 10% of the target dataset’s in-domain score, while red indicates larger degradation. Trans-fer remains competitive on HotpotQA and PopQA, but drops substantially when transferring to MATH500. 
+
+tive on HotpotQA and PopQA, but drops substan-tially when transferred to MATH500. Appendix B provides some intuition for why sev-eral strong baselines perform surprisingly poorly. 
+
+6 Analysis 
+
+6.1 Feature Ablation 
+
+Figure 6 shows the results of single- and two-feature ablations. On the QA datasets, Answer Length and Answer Centroid Dist are the most individually impactful features, with HotpotQA showing sharper drops than PopQA. On MATH500, no single feature matters much in isolation — the model is robust to any individual removal. The more interesting pattern emerges from two-feature ablations, which reveal complementarity: removing two features together causes significantly larger drops than the sum of their individual ef-fects. On HotpotQA and PopQA, Ratio to Best and Answer Centroid Dist are the most complemen-tary pair. MATH500 shows the most striking case: Ratio to Best and Shared Checkpoints are nearly irrelevant individually, yet removing both causes a -5.7% drop — a strong sign that the ranker relies on their combination rather than either signal alone. 
+
+6.2 SHAP feature analysis 
+
+To further analyze feature interactions, Figure 8 shows SHAP dependence plots for the most influ-ential features per dataset. In each plot, the x-axis is the raw feature value, the y-axis is its SHAP con-tribution to the ranker score, and the color encodes a second feature. The key signal is vertical color 0.00 0.25 0.50 0.75 1.00 1.25 1.50 1.75 
+
+> Answer Centroid Dist
+> 2.0
+> 1.5
+> 1.0
+> 0.5
+> 0.0
+> 0.5
+> 1.0
+> 1.5
+> SHAP value for Answer Centroid Dist
+> 0.1
+> 0.2
+> 0.3
+> 0.4
+> 0.5
+> Ratio to Best
+
+(a) PopQA 0 50 100 150 200 
+
+> Shared Checkpoints
+> 0.4
+> 0.2
+> 0.0
+> 0.2
+> 0.4
+> 0.6
+> SHAP value for Shared Checkpoints
+> 0.1
+> 0.2
+> 0.3
+> 0.4
+> 0.5
+> Ratio to Best
+
+(b) HotpotQA 0.00 0.25 0.50 0.75 1.00 1.25 1.50 1.75 
+
+> Answer Centroid Dist
+> 1
+> 0
+> 1
+> 2
+> 3
+> 4
+> 5
+> SHAP value for Answer Centroid Dist
+> 0
+> 20
+> 40
+> 60
+> 80
+> 100
+> Shared Checkpoints
+
+(c) MATH500 
+
+Figure 8: SHAP dependence plots for selected features across PopQA, HotpotQA, and MATH500. The x-axis shows the feature value, the y-axis its contribution to the ranker score, and color encodes a second feature. Vertical color separation at the same x-value reveals that the two features interact — the contribution of one depends on the value of the other. 
+
+separation: if green and blue points sit at different heights for the same x-value, the two features inter-act — the effect of the first depends on the value of the second. The dependence plots reveal that features do not act independently — their contributions are condi-tioned on the values of other features, producing non-additive interactions that vary across datasets. In PopQA, a semantically central answer is re-warded more strongly when it is not the dominant one, while a semantically distant answer is not pe-nalized if it is sufficiently common. In HotpotQA, high Ratio to Best is penalized when reasoning overlap is weak, suggesting it reflects coincidental rather than genuine agreement. In MATH500, se-mantically central answers reached via independent reasoning paths are favored over those produced by correlated chains. 
+
+7 Conclusion 
+
+In this study, we presented a new framing of self-consistency as a ranking problem, considering in-formation from the ranking order. Adopting this view, we construct a lightweight ranker trained to rank candidate answers by their correctness. Fur-ther we test it on three diverse datasets and show that, RISC consistently improves the accuracy-cost trade-off over standard self-consistency and strong baselines. The gains are especially pronounced on the QA datasets, where the ranker frequently matches self-consistency with substantially fewer samples and, at higher budgets, can surpass the best achieved accuracy. To analyze the ranker’s properties, we conduct a feature analysis showing that the ranker benefits from combining complementary signals rather than relying on any single handcrafted criterion. Overall, these results suggest that ranking is a promising and practical direction for improving test-time scaling in LLMs. 
+
+Limitations 
+
+Our study has several limitations. First, although we evaluate the proposed approach using gener-ations from two models, Llama-3.1-8B-Instruct and Olmo-3-7B-Instruct, both are relatively small instruction-tuned models. Therefore, it remains unclear how well the approach generalizes across broader model families and substantially different model scales. Second, the gains on mathematical reasoning benchmarks are more limited than on question an-swering tasks. This suggests that the proposed fea-tures and ranking formulation may be better suited to settings such as QA, where semantic agreement and answer clustering are more informative, than to domains like math reasoning, where correctness can depend on finer-grained intermediate steps. Third, although RISC consistently improves over standard self-consistency, there remains a substan-tial gap to oracle performance. In other words, the correct answer is often present among the sampled candidates, but the ranker still fails to identify it reliably in many cases. This highlights consider-able room for improvement in test-time answer selection. 
+
+Acknowledgements 
+
+The work was supported by the grant for re-search centers in the field of AI provided by the Ministry of Economic Development of the R.F. in accordance with the agreement 000000C313925P4F0002 and the agreement with Skoltech №139-10-2025-033. 
+
+References        
+
+> Avinash Amballa, Aditya Parashar, Aditya Vikram Singh, Jinlin Lai, and Benjamin Rozonoyer. 2025. Quasi-random Multi-Sample Inference for Large Lan-guage Models. In Frontiers in Probabilistic Infer-ence: Learning meets Sampling .Christopher J. C. Burges, Robert Ragno, and Quoc Viet Le. 2006. Learning to Rank with Nonsmooth Cost Functions. In Advances in Neural Information Pro-cessing Systems 19, Proceedings of the Twentieth Annual Conference on Neural Information Process-ing Systems, Vancouver, British Columbia, Canada, December 4-7, 2006 , pages 193–200. MIT Press. Danqi Chen, Adam Fisch, Jason Weston, and Antoine Bordes. 2017. Reading Wikipedia to Answer Open-Domain Questions. In Proceedings of the 55th An-nual Meeting of the Association for Computational Linguistics, ACL 2017, Vancouver, Canada, July 30 -August 4, Volume 1: Long Papers , pages 1870–1879. Association for Computational Linguistics. Xinyun Chen, Renat Aksitov, Uri Alon, Jie Ren, Ke-fan Xiao, Pengcheng Yin, Sushant Prakash, Charles Sutton, Xuezhi Wang, and Denny Zhou. 2023. Uni-versal Self-Consistency for Large Language Model Generation. Preprint , arXiv:2311.17311. Karl Cobbe, Vineet Kosaraju, Mohammad Bavarian, Mark Chen, Heewoo Jun, Lukasz Kaiser, Matthias Plappert, Jerry Tworek, Jacob Hilton, Reiichiro Nakano, Christopher Hesse, and John Schulman. 2021. Training Verifiers to Solve Math Word Prob-lems. CoRR , abs/2110.14168. Xingyu Dang, Christina Baek, Kaiyue Wen, Zico Kolter, and Aditi Raghunathan. 2025. Weight Ensembling Improves Reasoning in Language Models. CoRR ,abs/2504.10478.
+
+Daya Guo, Dejian Yang, Haowei Zhang, Junxiao Song, Peiyi Wang, Qihao Zhu, Runxin Xu, Ruoyu Zhang, Shirong Ma, Xiao Bi, Xiaokang Zhang, Xingkai Yu, Yu Wu, Z. F. Wu, Zhibin Gou, Zhihong Shao, Zhuoshu Li, Ziyi Gao, Aixin Liu, and 175 oth-ers. 2025. DeepSeek-R1 incentivizes reasoning in LLMs through reinforcement learning. Nat. ,645(8081):633–638. Kalervo Järvelin and Jaana Kekäläinen. 2017. IR eval-uation methods for retrieving highly relevant docu-ments. SIGIR Forum , 51(2):243–250. Carlos E. Jimenez, John Yang, Alexander Wettig, Shunyu Yao, Kexin Pei, Ofir Press, and Karthik R. Narasimhan. 2024. SWE-bench: Can Language Models Resolve Real-world Github Issues? In The Twelfth International Conference on Learning Rep-resentations, ICLR 2024, Vienna, Austria, May 7-11, 2024 . OpenReview.net. Saurav Kadavath, Tom Conerly, Amanda Askell, Tom Henighan, Dawn Drain, Ethan Perez, Nicholas Schiefer, Zac Hatfield-Dodds, Nova DasSarma, Eli Tran-Johnson, Scott Johnston, Sheer El-Showk, Andy Jones, Nelson Elhage, Tristan Hume, Anna Chen, Yuntao Bai, Sam Bowman, Stanislav Fort, and 17 others. 2022. Language Models (Mostly) Know What They Know. CoRR , abs/2207.05221. Ryo Kamoi, Yusen Zhang, Nan Zhang, Jiawei Han, and Rui Zhang. 2024. When Can LLMs Actually 
+
+Correct Their Own Mistakes? A Critical Survey of Self-Correction of LLMs. Trans. Assoc. Comput. Linguistics , 12:1417–1440. Junseok Kim, Nakyeong Yang, Kyungmin Min, and Ky-omin Jung. 2026. Reliability-Aware Adaptive Self-Consistency for Efficient Sampling in LLM Reason-ing. CoRR , abs/2601.02970. Hunter Lightman, Vineet Kosaraju, Yuri Burda, Harri-son Edwards, Bowen Baker, Teddy Lee, Jan Leike, John Schulman, Ilya Sutskever, and Karl Cobbe. 2024. Let’s Verify Step by Step. In The Twelfth International Conference on Learning Representa-tions, ICLR 2024, Vienna, Austria, May 7-11, 2024 .OpenReview.net. Tie-Yan Liu. 2009. Learning to Rank for Information Retrieval. Found. Trends Inf. Retr. , 3(3):225–331. Alex Mallen, Akari Asai, Victor Zhong, Rajarshi Das, Daniel Khashabi, and Hannaneh Hajishirzi. 2023. When Not to Trust Language Models: Investigat-ing Effectiveness of Parametric and Non-Parametric Memories. In Proceedings of the 61st Annual Meet-ing of the Association for Computational Linguis-tics (Volume 1: Long Papers), ACL 2023, Toronto, Canada, July 9-14, 2023 , pages 9802–9822. Associa-tion for Computational Linguistics. Maria Marina, Nikolay Ivanov, Sergey Pletenev, Mikhail Salnikov, Daria Galimzianova, Nikita Krayko, Vasily Konovalov, Alexander Panchenko, and Viktor Moskvoretskii. 2025. Llm-independent adaptive RAG: let the question speak for itself. In 
+
+Proceedings of the 2025 Conference on Empirical Methods in Natural Language Processing, EMNLP 2025, Suzhou, China, November 4-9, 2025 , pages 8697–8709. Association for Computational Linguis-tics. Marcus J. Min, Yangruibo Ding, Luca Buratti, Saurabh Pujar, Gail E. Kaiser, Suman Jana, and Baishakhi Ray. 2024. Beyond Accuracy: Evaluating Self-Consistency of Code Large Language Models with IdentityChain. In The Twelfth International Con-ference on Learning Representations, ICLR 2024, Vienna, Austria, May 7-11, 2024 . OpenReview.net. Viktor Moskvoretskii, Chris Biemann, and Irina Nik-ishina. 2025. Self-Taught Self-Correction for Small Language Models. CoRR , abs/2503.08681. Niklas Muennighoff, Zitong Yang, Weijia Shi, Xi-ang Lisa Li, Li Fei-Fei, Hannaneh Hajishirzi, Luke Zettlemoyer, Percy Liang, Emmanuel J. Candès, and Tatsunori Hashimoto. 2025. s1: Simple test-time scaling. In Proceedings of the 2025 Conference on Empirical Methods in Natural Language Processing, EMNLP 2025, Suzhou, China, November 4-9, 2025 ,pages 20275–20321. Association for Computational Linguistics. Team Olmo, Allyson Ettinger, Amanda Bertsch, Bailey Kuehl, David Graham, David Heineman, Dirk Groen-eveld, Faeze Brahman, Finbarr Timbers, Hamish Ivison, Jacob Morrison, Jake Poznanski, Kyle Lo, Luca Soldaini, Matt Jordan, Mayee Chen, Michael Noukhovitch, Nathan Lambert, Pete Walsh, and 49 others. 2025. Olmo 3. Preprint , arXiv:2512.13961. OpenAI. 2024. OpenAI o1 System Card. CoRR ,abs/2412.16720. Sergey Pletenev, Maria Marina, Nikolay Ivanov, Daria Galimzianova, Nikita Krayko, Mikhail Salnikov, Vasily Konovalov, Alexander Panchenko, and Vik-tor Moskvoretskii. 2025. Will it still be true tomor-row? multilingual evergreen question classification to improve trustworthy QA. In Proceedings of the 2025 Conference on Empirical Methods in Natural Language Processing, EMNLP 2025, Suzhou, China, November 4-9, 2025 , pages 8603–8620. Association for Computational Linguistics. Yu Shi, Guolin Ke, Damien Soukhavong, James Lamb, Qi Meng, Thomas Finley, Taifeng Wang, Wei Chen, Weidong Ma, Qiwei Ye, Tie-Yan Liu, Nikita Titov, and David Cortes. 2026. lightgbm: Light Gradient Boosting Machine . R package version 4.6.0.99. Charlie Snell, Jaehoon Lee, Kelvin Xu, and Aviral Ku-mar. 2024. Scaling LLM Test-Time Compute Op-timally can be More Effective than Scaling Model Parameters. CoRR , abs/2408.03314. Richard S. Sutton. 2019. The Bitter Lesson. 
+
+http://www.incompleteideas.net/IncIdeas/ BitterLesson.html . Accessed: 2026-03-15. Yixuan Tang and Yi Yang. 2025. SR-GRPO: Sta-ble Rank as an Intrinsic Geometric Reward for Large Language Model Alignment. Preprint ,arXiv:2512.02807. Amir Taubenfeld, Tom Sheffer, Eran Ofek, Amir Feder, Ariel Goldstein, Zorik Gekhman, and Gal Yona. 2025. Confidence Improves Self-Consistency in LLMs. In 
+
+Findings of the Association for Computational Lin-guistics, ACL 2025, Vienna, Austria, July 27 - August 1, 2025 , volume ACL 2025 of Findings of ACL , pages 20090–20111. Association for Computational Lin-guistics. Llama Team. 2024. The Llama 3 Herd of Models. 
+
+CoRR , abs/2407.21783. Weiqin Wang, Yile Wang, and Hui Huang. 2025. Ranked Voting based Self-Consistency of Large Lan-guage Models. Preprint , arXiv:2505.10772. Wenhui Wang, Hangbo Bao, Shaohan Huang, Li Dong, and Furu Wei. 2021. MiniLMv2: Multi-Head Self-Attention Relation Distillation for Compressing Pre-trained Transformers. In Findings of the Associa-tion for Computational Linguistics: ACL/IJCNLP 2021, Online Event, August 1-6, 2021 , volume ACL-IJCNLP 2021 of Findings of ACL , pages 2140–2151. Association for Computational Linguistics. Xuezhi Wang, Jason Wei, Dale Schuurmans, Quoc V. Le, Ed H. Chi, Sharan Narang, Aakanksha Chowd-hery, and Denny Zhou. 2023. Self-Consistency Im-proves Chain of Thought Reasoning in Language Models. In The Eleventh International Conference on Learning Representations, ICLR 2023, Kigali, Rwanda, May 1-5, 2023 . OpenReview.net. Jason Wei, Xuezhi Wang, Dale Schuurmans, Maarten Bosma, Brian Ichter, Fei Xia, Ed H. Chi, Quoc V. Le, and Denny Zhou. 2022. Chain-of-Thought Prompt-ing Elicits Reasoning in Large Language Models. In 
+
+Advances in Neural Information Processing Systems 35: Annual Conference on Neural Information Pro-cessing Systems 2022, NeurIPS 2022, New Orleans, LA, USA, November 28 - December 9, 2022 .Yangzhen Wu, Zhiqing Sun, Shanda Li, Sean Welleck, and Yiming Yang. 2025. Inference Scaling Laws: An Empirical Analysis of Compute-Optimal Inference for LLM Problem-Solving. In The Thirteenth Inter-national Conference on Learning Representations, ICLR 2025, Singapore, April 24-28, 2025 . OpenRe-view.net. Zhilin Yang, Peng Qi, Saizheng Zhang, Yoshua Ben-gio, William W. Cohen, Ruslan Salakhutdinov, and Christopher D. Manning. 2018. HotpotQA: A Dataset for Diverse, Explainable Multi-hop Question Answering. In Proceedings of the 2018 Conference on Empirical Methods in Natural Language Process-ing, Brussels, Belgium, October 31 - November 4, 2018 , pages 2369–2380. Association for Computa-tional Linguistics. Shunyu Yao, Dian Yu, Jeffrey Zhao, Izhak Shafran, Tom Griffiths, Yuan Cao, and Karthik Narasimhan. 2023. Tree of Thoughts: Deliberate Problem Solv-ing with Large Language Models. In Advances in Neural Information Processing Systems 36: Annual Conference on Neural Information Processing Sys-tems 2023, NeurIPS 2023, New Orleans, LA, USA, December 10 - 16, 2023 .Zhan Zhuang, Xiequn Wang, Zebin Chen, Feiyang Ye, Ying Wei, Kede Ma, and Yu Zhang. 2026. One-Token Verification for Reasoning Correctness Estimation. 
+
+CoRR , abs/2603.01025. 
+
+A Training Details 
+
+To improve generalization across inference budgets, we replicate each question across multiple budget settings by retaining only the first n sampled an-swers and treating each budget-specific subset as a separate ranking instance, where n corresponds to the number of available LLM calls. We exclude training questions that do not induce a meaningful ranking signal, where all candidate answers are either incorrect or correct. The data is then split into 80% training and 20% validation at the original question level, ensuring that budget-specific variants of the same question do not appear in both splits. After hyperparameter selection on the validation set, we retrain the ranker on the full training data. Default hyperparameters 
+
+DEFAULT_LGB_PARAMS = dict( objective="lambdarank", metric="ndcg", n_estimators=600, learning_rate=0.005, max_depth=5, num_leaves=20, subsample=0.9, colsample_bytree=1.0, min_data_in_leaf=20, feature_fraction_bynode=0.8, reg_lambda=1.0, reg_alpha=1e-3, random_state=42, )
+
+Hyperparameter grid 
+
+PARAM_GRID = { "n_estimators": [500, 600, 700], "learning_rate": [0.005, 0.01], "num_leaves": [24, 31], "max_depth": [5, 6], "min_data_in_leaf": [20, 40], "reg_lambda": [0.3, 1.0], "feature_fraction_bynode": [0.8, 1.0], }
+
+B Baselines vs SC performance 
+
+Stable Rank vs. Majority Vote. Here we pro-vide an additional analysis of why SR preformed poorly. Stable rank captures the geometric spread of a response’s hidden-state representation, but this property is only weakly associated with correctness. Wrong (but elaborate) responses can exhibit high representational diversity, while correct (but con-cise) answers may concentrate on few dimensions. More fundamentally, stable rank operates as a per-response quality signal and cannot exploit the error-cancellation mechanism that gives majority voting its strength. Correct answers cluster while errors disperse, so as sample size grows, majority voting benefits from stronger consensus. However, SR-based selection becomes increasingly suscep-tible to outlier responses with anomalously high geometric spread. This explains the observed per-formance degradation at larger N, and this is why CISC works better. The confidence signal in CISC works because it is fed back into a weighted ma-jority vote, rather than using it for single-response selection. 
+
+C SHAP analysis 2 1 0 1 2
+
+> SHAP value (impact on model output)
+> Worst Step Coherence
+> Shared Checkpoints
+> Ratio to Best
+> Answer Centroid Dist
+> Answer Length
+> Low
+> High
+
+(a) PopQA 3 2 1 0 1
+
+> SHAP value (impact on model output)
+> Worst Step Coherence
+> Shared Checkpoints
+> Ratio to Best
+> Answer Length
+> Answer Centroid Dist
+> Low
+> High
+
+(b) HotpotQA 4 2 0 2 4
+
+> SHAP value (impact on model output)
+> Worst Step Coherence
+> Ratio to Best
+> Answer Centroid Dist
+> Answer Length
+> Shared Checkpoints
+> Low
+> High
+
+(c) MATH500 
+
+Figure 9: SHAP feature importance plots for three datasets, illustrating the average impact of selected fea-tures on the model output across the evaluated samples. D Prompts 
+
+Self-Consistency Prompt Template (PopQA) 
+
+[System] 
+
+You are a helpful reasoning assistant for question an-swering. Answer the user’s question directly based on your knowledge. 
+
+[User] 
+
+Reason step by step very concisely before giving a final answer. Strictly follow the format: 
+
+Step-by-step reasoning: [your reasoning] Final Answer: [your answer] 
+
+Question: {question} 
+
+Figure 10: Prompt template used for self-consistency chain-of-thought sampling. The model is queried N
+
+times with temperature T > 0; the final answer is then selected by majority vote over extracted answers. 
+
+MATH500 Prompt Template 
+
+[System] 
+
+You are a helpful and expert mathematical assistant. Solve the given math problem step-by-step. 
+
+[User] 
+
+Reason step-by-step to solve the math problem. At the end of your solution, strictly follow this format to present your final answer: 
+
+Final Answer: \boxed{answer} 
+
+Ensure the answer within \boxed{} is concise and contains only the final value or expression. Problem: {problem} 
+
+Figure 11: Prompt template used for the MATH500 dataset. The system prompt establishes the role of a mathematical assistant, while the user instructions enforce a chain-of-thought structure with a specific 
+
+\boxed{} format for the final answer extraction. 
+
+E ReASC algorithm 
+
+Given an input x, ReASC (Kim et al., 2026) sam-ples responses yi ∼ pθ(· | x) with extracted answers ai = Ans( yi) and confidence scores 
+
+si = S(yi). If the first sampled response satisfies 
+
+s1 ≥ τgate , the algorithm returns a1. Otherwise, it accumulates weighted evidence 
+
+v(a) = X 
+
+> i:ai=a
+
+max 
+
+
+
+1, exp 
+
+
+
+λ si − μσ
+
+ 
+
+,
+
+Self-Consistency Prompt Template (HotpotQA) 
+
+[System] 
+
+You are a helpful assistant that answers questions by reasoning step by step. 
+
+[User] 
+
+Think through the question carefully, then provide your final answer as a short phrase on the last line in the format: 
+
+Final Answer: [your answer] 
+
+Question: {question} 
+
+Figure 12: Prompt template used for self-consistency chain-of-thought sampling. The model is queried N
+
+times with temperature T > 0; the final answer is then selected by majority vote over extracted answers. 
+
+where (μ, σ ) are calibration statistics and λ con-trols sensitivity to confidence. After each sample, letting a(1) and a(2) denote the answers with the largest and second-largest evidence, ReASC de-fines 
+
+α = v(a(1) ) + 1 , β = v(a(2) ) + 1 ,
+
+and stops when 
+
+1 − I1/2(α, β ) ≥ Cthresh .
+
+The final prediction is ˆa = arg max a v(a).F Example of Worst-Step Coherence feature 
+
+Here, we present a comparison between two traces for the same question–answer pair. However, in the actual calculations, these computations are performed over all traces for each question–answer pair, rather than just the two traces shown here. 
+
+Question: The football manager who recruited David Beckham managed Manchester United during what timeframe? 
+
+Good Chain 
+
+> 0.890848
+
+To answer this question, I need to identify the football manager who recruited David Beckham and then determine during which timeframe he managed Manchester United. 
+
+> 0.760034
+
+First, I know that David Beckham is a retired English football player who played for several clubs, including Manchester United.  
+
+> 0.740996 lowest
+
+He was recruited to Manchester United in 1992, when he was just 17 years old. 
+
+> 0.826989
+
+Next, I need to identify the manager who signed David Beckham to Manchester United. 
+
+> 0.869573
+
+After some research, I found that the manager who recruited David Beckham was Alex Ferguson. 
+
+> 0.807464
+
+Alex Ferguson is a well-known former manager of Manchester United, and he played a significant role in shaping the club’s history during his 26-year tenure. 
+
+> 0.885220
+
+Finally, to determine the timeframe during which Alex Ferguson managed Manchester United, I need to consider that David Beckham arrived at the club in 1992. 
+
+> 0.798782
+
+Alex Ferguson’s tenure as manager of Manchester United began in 1986, and he remained in the position until his retirement in 2013. 
+
+> 0.839749
+
+Therefore, considering all the information, I can conclude that Alex Ferguson managed Manchester United during the timeframe from 1986 to 2013. The answer is: from 1986 to 2013. 
+
+Bad Chain 
+
+> 0.816500
+
+To determine the timeframe during which the football manager who recruited David Beckham managed Manchester United, let’s consider the key information. 
+
+> 0.821974
+
+David Beckham played for Manchester United from 1992 to 2003.  
+
+> 0.727240 lowest
+
+Given this, it is likely that the manager we are looking for is Sir Alex Ferguson. 
+
+> 0.927873
+
+Sir Alex Ferguson was the manager at Manchester United during the entire period in which David Beckham played for the team. 
+
+> 0.905895
+
+Sir Alex Ferguson is widely known to have recruited David Beckham during his tenure, when Beckham moved from Manchester United’s youth team to the first team in 1992. The answer is: Sir Alex Ferguson. 
+
+G Example of Shared Checkpoints feature 
+
+Here, we present a comparison between two traces for the same question–answer pair. However, in the actual calculations, these computations are performed over all traces for each question–answer pair, rather than just the two traces shown here. Trace A vs Trace B for the math problem: color-coded shared checkpoints 
+
+Problem. Let 
+
+x8 + 3 x4 − 4 = p1(x)p2(x) · · · pk(x),
+
+where each non-constant polynomial pi(x) is monic with integer coefficients and cannot be factored further over the integers. Compute 
+
+p1(1) + p2(1) + · · · + pk(1) .
+
+Trace A 
+
+Step 1: The problem requires us to factor the given polynomial $x^8 + 3x^4 - 4$ into irreducible polynomials and then find the sum of the values obtained by evaluating each of these polynomials at $x = 1$. 4
+
+Step 2: To start, we can try to factor the given polynomial using the sum of squares identity, $a^2 -b^2 = (a - b)(a + b)$. We notice that $x^8 + 3x^4 - 4$ can be expressed as $(x^4)^2 + 2x^4 + 1 -2x^4 - 4$, which simplifies to $(x^4 + 1)^2 - (x^2)^2$. Applying the sum of squares identity, we get $(x^4 + 1 - x^2)(x^4 + 1 + x^2)$. Step 3: Further simplifying, we employ the difference of squares again: $x^4 + 1 - x^2 = (x^2 - x + 1)(x^2 + x + 1)$, and $x^4 + 1 + x^2 = (x^2 + x + 1)(x^2 - x + 1)$. Step 4: We see that the factor $(x^2 + x + 1)$ appears in both factors. Factoring this out first allows us to obtain the factorization: $(x^4 + 3x^2 - 4) = (x^2 + x + 1)(x^2 - x + 1)(x^2 + 4)$. 1
+
+Step 5: Now, we need to evaluate each of these factors at $x = 1$. When we substitute $x = 1$ into each factor, we get $1 + 1 + 1 = 3$ from the first polynomial, $1 - 1 + 1 = 1$ from the second polynomial, and $1 + 4 = 5$ from the last polynomial. 2
+
+Step 6: The sum of these values is $3 + 1 + 5 = \{}boxed{9}$. 3
+
+Trace B 
+
+## Step 1: The given expression is $x^8 + 3x^4 - 4$. To factorize this expression into the product of non-constant polynomials $p_i(x)$, we can use the difference of squares factorization. ## 4 Step 2: We can rewrite $x^8 + 3x^4 - 4$ as a difference of squares: $(x^4 + 4)(x^4 - 1)$, where the latter expression can be further factorized as a difference of squares. ## Step 3: Now, we apply the difference of squares identity, which gives us: $(x^4 - 1) = (x^2 + 1)(x + 1)(x - 1)$. ## Step 4: Combining the initial factorization with the further factorization, we get the complete factorization of $x^8 + 3x^4 - 4 = (x^4 + 4)(x^2 + 1)(x + 1)(x - 1)$. ## Step 5: Finally, since $x^4 + 4$ cannot be factored further over the integers, we have $k = 4$, and the polynomials are $p_1(x) = x^4 + 4$, $p_2(x) = x^2 + 1$, $p_3(x) = x + 1$, and $p_4(x) = x - 1$. ## 1 Step 6: We can now evaluate each $p_i(1)$ by substituting $x = 1$ into each of the polynomials. This gives us $p_1(1) = (1)^4 + 4 = 5$, $p_2(1) = (1)^2 + 1 = 2$, $p_3(1) = 1 + 1 = 2$, and $p_4(1) = 1 - 1 = 0$. ## 2 Step 7: Therefore, we find that $p_1(1) + p_2(1) + p_3(1) + p_4(1) = 5 + 2 + 2 + 0 = 9$. 3Pair Color Similarity Checkpoint in Trace A Checkpoint in Trace B 
+
+1 0.823 Step 4: We see that the factor $(x^2 + x + 1)$ appears in both factors. Factoring this out first allows us to obtain the factorization: $(x^4 + 3x^2 - 4) = (x^2 + x + 1)(x^2 - x + 1)(x^2 + 4)$. Step 5: Finally, since $x^4 + 4$ cannot be factored further over the integers, we have $k = 4$, and the polynomials are $p_1(x) = x^4 + 4$, $p_2(x) = x^2 + 1$, $p_3(x) = x + 1$, and $p_4(x) = x - 1$. ## 2 0.823 Step 5: Now, we need to evaluate each of these factors at $x = 1$. When we substitute $x = 1$ into each factor, we get $1 + 1 + 1 = 3$ from the first polynomial, $1 - 1 + 1 = 1$ from the second polynomial, and $1 + 4 = 5$ from the last polynomial. Step 6: We can now evaluate each $p_i(1)$ by substituting $x = 1$ into each of the polynomials. This gives us $p_1(1) = (1)^4 + 4 = 5$, $p_2(1) = (1)^2 + 1 = 2$, $p_3(1) = 1 + 1 = 2$, and $p_4(1) = 1 - 1 = 0$. ## 3 0.823 Step 6: The sum of these values is $3 + 1 + 5 = \{}boxed{9}$. Step 7: Therefore, we find that $p_1(1) + p_2(1) + p_3(1) + p_4(1) = 5 + 2 + 2 + 0 = 9$. 4 0.800 Step 1: The problem requires us to factor the given polynomial $x^8 + 3x^4 - 4$ into irreducible polynomials and then find the sum of the values obtained by evaluating each of these polynomials at $x = 1$. Step 1: The given expression is $x^8 + 3x^4 - 4$. To factorize this expression into the product of non-constant polynomials $p_i(x)$, we can use the difference of squares factorization. ## 
+
+H Inference on the Olmo-3-7B-Instruct model 10 20 30 40 50 60 70 80 90                   
+
+> # LLM calls
+> 15.5
+> 16.0
+> 16.5
+> 17.0
+> 17.5
+> 18.0
+> 18.5
+> Accuracy (%)
+> PopQA
+> 10 20 30 40 50 60 70 80 90
+> # LLM calls
+> 20.5
+> 21.0
+> 21.5
+> 22.0
+> 22.5
+> 23.0
+> 23.5
+> 24.0
+> Accuracy (%)
+> HotpotQA
+> 10 20 30 40 50 60 70 80 90
+> # LLM calls
+> 80
+> 82
+> 84
+> 86
+> 88
+> 90
+> Accuracy (%)
+> Math500
+> RISC CISC Self-consistency
+
+Figure 13: Comparison of RISC against Self-Consistency, Stable Rank, ReASC, and CISC on three datasets for Olmo-3-7B-Instruct model. RISC consistently outperforms the baselines on the HotpotQA and MATH500 datasets. 
+
+Compared to the results obtained with Llama-3.1-8B-Instruct, we observe a performance drop on PopQA, which is likely due to the disproportionately small number of high-quality training examples, i.e., questions for which both correct and incorrect candidate answers are available. For HotpotQA, we observe a similar trend. In contrast, on MATH500, the method shows a substantial performance improvement compared to Llama-3.1-8B-Instruct. The majority answer is often already correct, as reflected by the top-1 accuracy. However, among the remaining cases, errors frequently occur when the majority answer is wrong because generations stop at an intermediate reasoning step without producing the final answer. Since p-true-based CISC may still assign high confidence to such incomplete reasoning traces, RISC handles these cases more effectively. Since such cases are the main source of top-1 errors when the majority choice is wrong, correcting them yields a large apparent performance gain.
