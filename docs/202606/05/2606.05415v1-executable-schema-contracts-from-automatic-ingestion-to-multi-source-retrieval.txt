@@ -1,0 +1,1606 @@
+Title: Executable Schema Contracts: From Automatic Ingestion to Multi-Source Retrieval
+
+URL Source: https://arxiv.org/pdf/2606.05415v1
+
+Published Time: Fri, 05 Jun 2026 00:21:55 GMT
+
+Number of Pages: 28
+
+Markdown Content:
+# Executable Schema Contracts: From Automatic Ingestion to Multi-Source Retrieval 
+
+Padmaja Jonnalagedda Yuguang Yao Xiang Gao Hilaf Hasson * Kamalika Das 
+
+Intuit AI Research 
+
+saisri_jonnalagedda@intuit.com 
+
+Abstract 
+
+Real-world data spans tables, documents, and semi-structured files with implicit semantics. Querying this data requires integrating evi-dence across inconsistent schemas and formats, yet existing approaches either demand costly manual engineering or bypass structure entirely. We present a system that automatically dis-covers an executable schema from raw multi-source data and uses it as a shared contract for knowledge graph construction and query-time retrieval. A closed-world field catalog constrains LLM-based schema discovery to at-tested fields; deterministic structural analysis infers identity keys, foreign keys, and source hi-erarchy; and the resulting schema drives extrac-tion, deduplication, and cross-source linking into a provenance-aware knowledge graph. At query time the schema – optionally extended via a monotonic protocol – conditions a multi-tool agent routing retrieval across structured lookup, graph traversal, and vector search, re-turning grounded answers with traceable ci-tations. In controlled zero-shot comparisons using the same LLM, data, and evaluation har-ness, the system improves over retrieval-only and decomposition-based baselines across four QA benchmarks, with ablations showing that schema-conditioned routing, structural intelli-gence, and schema-guided construction each contribute to the gains. 
+
+1 Introduction 
+
+Most practical knowledge rarely lives in a sin-gle database: it spans PDFs, transactional tables, semi-structured JSON logs, internal wikis, and ad-hoc spreadsheets with inconsistent identifiers and implicit semantics (Chen et al., 2020). Orga-nizations increasingly rely on Question Answer-ing (QA) systems to extract value from this mix (e.g., “Which products launched after Company X’s 2018 acquisitions, and what were their profits 
+
+> *Work done while at Intuit AI Research. Now at Cohesity.
+
+that year?”). While Retrieval-Augmented Gener-ation (RAG) works for single-document lookup, it often fails on cross-source joins , multi-hop re-trieval , and workflows requiring auditable prove-nance (Barnett et al., 2024; Liu et al., 2025; Phanse et al., 2025). In practice, the hardest failures arise not from language modeling but from missing struc-ture: systems cannot reliably align entities, traverse relationships, or justify answers across sources. 
+
+The data-to-answer automation problem. We study self-configuring, self-extending QA over heterogeneous, multi-source data without manual schema design or ingestion . This setting is non-stationary: sources change, identifiers drift, and new entity types emerge, yet QA must remain low-latency, controllable, and auditable. Four bottle-necks recur: (1) domain experts must predefine entity types, relationships, and extraction rules per dataset, repeating this as sources evolve; (2) static schemas become outdated while fully open-ended approaches sacrifice correctness or latency; (3) an-swers must be traceable to source records, requir-ing lineage throughout extraction, linking, and re-trieval; (4) multi-source questions require choosing retrieval strategies and bridging sources via join-able identifiers – without explicit structure, routing is brittle. Schema-light systems (“LLM + vector retrieval”) reduce upfront effort but fail on cross-source joins and provenance-backed multi-hop QA. Manually engineered KGs are precise but do not scale under schema changes (Edge et al., 2024). Moreover, ex-traction, linking, and retrieval are often optimized in isolation, leaving end-to-end correctness under schema evolution unresolved. 
+
+Our approach. We automatically discover a unified schema from heterogeneous sources and treat it as an executable contract shared by offline ingestion and online QA – so the system can decide where to look, how to connect evidence, and when not to answer, extending the schema at query time 1
+
+> arXiv:2606.05415v1 [cs.CL] 3 Jun 2026
+
+when needed. 
+
+1.1 Contributions 
+
+Our overarching contribution is an end-to-end for-mulation of heterogeneous QA around a shared ex-ecutable schema contract : a single induced schema grounds LLM-discovered structure in observed fields, specifies how data are extracted and linked, and exposes the same typed vocabulary and link paths to the retrieval agent. We evaluate this formu-lation through three questions: 
+
+RQ1: Executable schema discovery. Can LLM-discovered schemas be made executable over raw heterogeneous sources? A closed-world field cata-log requires LLM-proposed attributes, extraction paths, and relationship link fields to reference at-tested field identifiers; invalid references are re-jected or repaired before execution, turning schema discovery into a validated artifact that drives down-stream extraction (Section 3.2). 
+
+RQ2: Schema-guided construction. Does ex-ecuting the induced schema during ingestion improve downstream QA? The schema specifies extraction paths, identity keys, foreign-key links, and provenance hooks. Removing structural intelligence degrades EM by 2.1–6.8 and F1 by up to 10.0, even when the same LLM and tools are available (Section 4.3). 
+
+RQ3: Schema-guided retrieval. Does exposing the induced schema to the QA agent improve re-trieval over generic tool use? Generic agents (Re-Act, PlanAct) barely improve over RAG (+1.0–1.3 EM on BlendQA); the schema-guided agent im-proves by +10.2 EM. The full system achieves the best EM/F1 among controlled methods on all four benchmarks (Section 4.3). We also study monotonic query-time schema ex-tension as an optional mechanism for evolving schemas, and perform a cross-model evaluation on BlendQA with GPT-4.1, Claude Haiku, and Llama 3.3 70B, finding consistent gains across all three model families (Section 4.4). 
+
+2 Related Work 
+
+We study universal data-to-answer automation :given heterogeneous sources, infer a schema, in-gest data with lineage, and answer queries using the schema to decide where to look and how to connect evidence . This spans threads that typically address one pipeline layer or assume a fixed schema. 
+
+(a) Schema discovery, KG construction, and en-tity resolution. Schema induction from text – con-cept taxonomies (Wu et al., 2012), lifelong extrac-tion (Mitchell et al., 2018) – demonstrates the value of induced structure but remains text-centric. Re-cent work applies LLMs to entity matching and alignment across heterogeneous KGs (Wang et al., 2025). Our structural analysis connects to classic data profiling and schema matching; unlike these systems, we use the induced structure as a run-time control plane for LLM-based ingestion and retrieval routing, targeting schema discovery and cross-source linking from raw data with link paths as routing primitives for multi-hop QA. 
+
+(b) Natural language interfaces to structured and semi-structured data. Text-to-SQL (Yu et al., 2018; Li et al., 2024), compositional table pars-ing (Pasupat and Liang, 2015), HybridQA (Chen et al., 2020), and the emerging Text-to-Cypher line (Ozsoy et al., 2025; Cazzaro et al., 2025) all as-sume a known, stable schema and focus on query generation given an existing substrate. Our focus is complementary: automating schema discovery, linking, and maintenance as sources evolve. 
+
+(c) Retrieval-augmented generation and graph-based retrieval. RAG (Lewis et al., 2020; Gao et al., 2023), dense retrieval (Karpukhin et al., 2020), hybrid retrieval (Chen et al., 2024), structured KG retrieval (Sun et al., 2024), and GraphRAG (Edge et al., 2024) all assume an exist-ing index or engineered substrate. We instead dis-cover retrieval structure from raw heterogeneous data via schema induction, enabling downstream RAG and graph retrieval without repeated manual configuration. 
+
+(d) Tool-use and agentic QA systems. Tool-using LLMs (Schick et al., 2023; Qin et al., 2024) and prompting paradigms like ReAct (Yao et al., 2022) and chain-of-thought (Wei et al., 2022) enable multi-step reasoning but leave tool and source se-lection to the model. We use the discovered schema as an agent contract guiding routing among struc-tured lookup, vector retrieval, and graph traversal. 
+
+Closest comparisons. AtomR (Xin et al., 2025) decomposes reasoning into atomic operators over heterogeneous evidence but assumes the substrate and schema are given; we discover and execute the schema automatically. HippoRAG 2 (Gutiérrez et al., 2025) achieves strong retrieval via a memory-inspired graph but does not perform automatic schema induction or query-time schema extension across heterogeneous sources. GraphRAG (Edge 2Figure 1: End-to-end pipeline. Raw heterogeneous sources (tables, JSON, text) are profiled and fed to an automatic schema generator producing a closed-world field catalog and unified executable schema Σ. Σ drives (i) schema-guided KG ingestion – extraction, deduplication, cross-source linking, provenance tracking – into a typed Neo4j graph, and (ii) a schema-guided QA agent routing queries across structured lookup, graph traversal, and vector retrieval, returning grounded answers with source citations. Dashed paths indicate optional query-time extension. 
+
+et al., 2024) builds community-summarized graphs for retrieval over indexed text; we induce a typed, cross-source schema from raw heterogeneous data with provenance and foreign-key structure. 
+
+3 Technical Approach 
+
+The individual components we employ – schema profiling, LLM-based extraction, KG construction, vector retrieval – are established techniques. Our key contribution is their coupling : a single in-duced schema simultaneously constrains what is extracted (closed-world catalog), how entities are linked (structural intelligence), and where the agent retrieves (schema-conditioned routing). We show empirically that the full coupled system outper-forms variants that remove schema guidance, KG construction, structural intelligence, or query-time extension (Section 4.3). 
+
+3.1 Schema Contract Definition 
+
+Let S = {S1, . . . , S m} be heterogeneous data sources (tables, JSON files, text corpora) with un-known and potentially overlapping schemas. Given a natural-language query Q, the goal is to return a grounded answer ˆy with optional provenance traces to originating records. We decompose this into three sub-problems: 1. Schema Induction. Discover a unified schema Σ = (F, T , R, I) where F is a closed-world field catalog, T a set of entity types with attribute mappings A : t 7 → 2F
+
+for each t ∈ T , R relationship types, and I
+
+structural intelligence (identity keys, foreign keys, source hierarchy, extraction paths). 2. Schema-Guided Construction. Using Σ as a control plane, build a provenance-aware knowledge graph G = ( V, E, π ) where V
+
+contains typed entities, E typed relationships, and π : V ∪ E → 2S maps each element to its source records. 3. Schema-Guided QA. Given Q, optionally ex-tend Σ → Σ′, then select and compose re-trieval tools {SCHEMA LOOKUP , G RAPH TRA -
+
+> VERSE
+
+, V ECTOR RAG } using Σ′ to produce 
+
+ˆy with citations π(ˆ y) ⊆ S .Figure 1 shows the pipeline. The key insight is that a single executable schema Σ serves as a shared contract across all three stages: it constrains what the LLM can reference (closed-world catalog), determines how entities are extracted and linked (control plane), and guides where the agent looks at query time (routing). 
+
+Core artifacts. (i) Schema Σ (YAML). A ver-sioned artifact containing the field catalog F with per-field statistics, entity/relationship definitions grounded in F, structural intelligence I, and cross-source link specifications. (ii) KG + evidence store 
+
+G. A Neo4j property graph with typed domain en-tities and SourceRecord nodes; all elements con-nect to source records via DERIVED_FROM edges ( π). Unstructured evidence is chunked and indexed for dense retrieval. 
+
+3.2 Inducing the Contract from Raw Sources 
+
+Given heterogeneous sources S, schema induc-tion must discover entity types, attribute mappings, and cross-source relationships without manual an-notation. Two challenges motivate our design: 3Figure 2: Automatic schema generation: closed-world field catalog → two-pass semantic discovery →
+
+> structural/cross-source intelligence.
+
+(1) LLM-based discovery hallucinates fields absent from the data, producing non-executable schemas; (2) structural patterns – foreign keys, cardinality, identity keys – are unreliable when inferred seman-tically. We address both via closed-world ground-ing , restricting all LLM outputs to attested data fields, and statistical-before-semantic ordering, del-egating structural inference to deterministic meth-ods and reserving LLM calls for semantic discovery only. This pipeline is shown in Figure 2. Pseu-docode and details are provided in Appendix A. 
+
+(i) Closed-world constrained discovery. We pro-file each source and construct a field catalog FS
+
+enumerating every observable field with a stable hash-based identifier, data type, null rate, and exam-ple values. The LLM may reference only identifiers in FS ; every output is validated via: 
+
+FieldValidity = |{ ref. IDs } ∩ F S | / |{ ref. IDs }| 
+
+(1) Schemas with FieldValidity < 1.0 are flagged for repair. This prevents hallucinated field references 
+
+but does not preclude incorrect entity types or spu-rious relationships among valid fields. Semantic discovery proceeds in two LLM calls per source (cross-source link detection may add further calls; see Appendix A.8), balancing quality against cost. Call 1 (deep discovery) analyzes a representative sample r⋆, selected for field com-pleteness, together with FS to extract entity types, attributes mapped to field IDs, and relationships. 
+
+Call 2 (validation) reviews diverse samples D
+
+drawn from different source positions to surface entities or relationships absent from r⋆. Outputs are merged and linted against FS ; this two-pass strategy recovers 10–15% more entity types than single-pass extraction, particularly rare types in non-representative regions. 
+
+(ii) Statistical structural intelligence. LLMs rea-son poorly about cardinality, uniqueness, and value distributions – properties straightforward to com-pute from data. We therefore infer structural pat-terns without LLM involvement: • Identity keys. Fields qualified by uniqueness ra-tio and naming patterns (Appendix, Eq. 4) serve as deterministic deduplication keys during inges-tion, resolving the vast majority of duplicates via 
+
+O(n) hashing when keys exist. • Foreign keys. For each source pair, we compute field-level value overlap (Appendix, Eq. 6) and emit column pairs with non-zero overlap as candidate join keys, assign-ing confidence min  0.95 , 0.5 + 0 .3·overlap +0.15 ·⊮[exact name ]. Low-overlap candidates receive proportionally low confidence, and down-stream FK resolution uses hash-index joining on declared keys. Cardinality is inferred from value-distribution asymmetry and row-count ratios. • Source hierarchy. Parent–child relationships combine foreign-key cardinality with row-count ratios: a source with k× fewer records linked via a 1:N key is classified as the parent. These patterns are encoded in I and consumed downstream for deduplication, cross-source link-ing, and extraction-path selection. 
+
+(iii) Cross-source link discovery and unification. 
+
+Naive parallel indexing – comparing the i-th record from source A with the i-th from B – fails for 1:N and N:M relationships. We instead apply matched sampling : candidate link keys (fields with high value overlap) are identified; for each shared key value, all matching records from both sources are loaded and analyzed as a group. This handles arbi-trary cardinalities. Per-source schemas are unified into a global Σ with provenance hooks tracking 4each entity’s source origin. An optional exclusion manifest prevents ground-truth leakage in evaluation and redacts sensitive fields in production (Appendix A). 
+
+3.3 Executing the Contract: KG Construction 
+
+Given Σ, we construct a typed, provenance-aware Neo4j knowledge graph. The key property is that 
+
+Σ alone determines what is extracted, how dupli-cates are resolved, and where cross-source links are created – changing the schema changes the KG without code changes (Figure 4, Appendix B). 
+
+Schema-driven extraction. Σ’s attribute map-pings A(t) select the extraction strategy per source: deterministic extractors handle schema-mapped fields; LLM extraction fires only when Σ marks a source as hybrid. Extracted entities are validated against Σ’s type constraints. 
+
+Schema-driven deduplication. Σ’s identity keys (I) determine dedup strategy: types with declared keys use exact key grouping ( O(n)); types with-out keys fall back to embedding-based clustering (τ =0 .85 ). 
+
+Schema-driven linking. Cross-source edges are created where Σ specifies foreign keys: hash indexes over FK columns materialize edges for matching values, enabling multi-hop queries spanning sources. Within-source relationships use schema-specified link fields and record co-occurrence. 
+
+Provenance. Every raw record is materialized as a SourceRecord node with DERIVED_FROM edges, ensuring traceability for the agent’s citation mecha-nism (Section 3.5). 
+
+3.4 Extending the Contract at Query Time 
+
+A static Σ cannot anticipate every query-time need. We formalize conditional schema augmentation :given a trigger T (query or new document), deter-mine whether Σ suffices; if not, produce Σ′ ⊇ Σ
+
+under a monotonicity invariant (T ′ ⊇ T , R′ ⊇ R ,
+
+A′(t) ⊇ A (t)), so prior queries remain answerable. 
+
+Sufficiency gating. A lightweight check extracts entity types from T and verifies resolution against 
+
+Σ’s vocabulary; extension fires only on unresolved types (Algorithm 6). On stable-schema datasets (BlendQA, ComplexTR) the gate suppresses ex-tension entirely; on per-query KBs (HybridQA) it triggers 85.3% of the time with 98.4% utilization (Section 4.5). 
+
+Diff-based merge. When triggered, the system profiles the new context, extracts candidate schema elements, and computes a schema diff. Only addi-tions with confidence > τ =0 .7 are merged; exist-ing definitions are never altered. 
+
+Two modes. Persistent extension handles corpus growth via the full two-pass pipeline (Section 3.2), writing Σ′ to disk. Query-scoped extension handles concept gaps via a single LLM call producing an in-memory Σ′ that is discarded after the current query. Details in Appendix C. 
+
+3.5 Executing the Contract: Query Routing 
+
+Given query Q, schema Σ′ (possibly extended), and heterogeneous retrieval backends – structured stores and a dense text index – the agent must select and compose retrieval tools to produce a grounded answer ˆy. Standard tool-use agents (e.g., ReAct (Yao et al., 2022)) rely on LLM reason-ing to select tools at each step; this is expen-sive, non-deterministic, and blind to corpus struc-ture. We contribute schema-conditioned rout-ing – tool selection and query planning derived from the schema – together with two-stage relia-bility gating for principled abstention (Figure 3; Appendix D). 
+
+(i) Schema-conditioned routing. At initialization the agent introspects Σ′ to build a runtime routing context : (i) a field-type partition (typed columns with discrete values vs. free text), (ii) entity and relationship vocabulary, and (iii) known-value dic-tionaries from field-level statistics in Σ′. At query time it parses Q against this context to identify tar-get entity types, attribute constraints, and expected answer type – all anchored in Σ′’s vocabulary (Ap-pendix D.2). Routing follows a preference order: SCHEMA LOOKUP for typed discrete-valued con-straints, V ECTOR RAG for unstructured evidence, EXTERNAL SEARCH for OOD queries. Each tool’s behavior is parameterized by Σ′ – source selection, constraint fields, and filter construction are derived from the schema, not hard-coded (Appendix D.1). 
+
+(ii) Two-stage reliability gating. Rather than an-swering every query indiscriminately, the agent performs two reliability checks. Pre-retrieval 
+
+(Stage 1): a schema-coverage gate verifies that Q’s entity mentions and temporal references fall within 
+
+Σ′’s known value sets and temporal range; queries that fail are flagged OOD and routed to absten-tion (Appendix D.3). Post-retrieval (Stage 2): a grounding filter checks whether candidate answers are supported by retrieved evidence. Composite confidence c = clink · cnode · cground aggregates path confidence, constraint-match quality, and evidence-5Figure 3: Schema-guided QA agent. Given Q and Σ′, the agent parses entity types and constraints, routes via Σ′’s preference order, applies pre-/post-retrieval reliability gating ( c = clink · cnode · cground ), and synthesizes the grounded answer. 
+
+grounding strength. If no grounded answer is found, a structured failure summary triggers retry (Appendix D.5). 
+
+(iii) Synthesis and fallback. Evidence from all tools is aggregated into a unified context for LLM-based answer synthesis. When the LLM is unavail-able, the agent returns schema-lookup candidates directly ( c=1 .0 if grounded). Two-stage gating with retry provides principled abstention on OOD queries while maximizing recall on in-distribution ones (Appendix D.6). 
+
+4 Experiments and Results 
+
+We evaluate end-to-end QA accuracy across four benchmarks (Table 1), intrinsic schema/KG quality, and online serving efficiency. All methods operate over identical dataset-provided sources; gold and answer fields are excluded from schema discovery and ingestion to prevent leakage. 
+
+4.1 Experimental Setup 4.1.1 Benchmarks. 
+
+Existing QA benchmarks (Rajpurkar et al., 2016; Yang et al., 2018; Ho et al., 2020; Wu et al., 2024; Yang et al., 2024) assume pre-curated corpora, an existing KB, or focus on online retrieval. For our setting we select four benchmarks (Table 1) cover-ing complementary dimensions: BLEND QA (Xin et al., 2025) stresses cross-source discovery and routing under heterogeneity (text + structured facts, multi-hop comparisons). HYBRID QA (Chen et al., 2020) requires bridging table rows and linked pas-sages; each query has its own KB, requiring per-query extension. TAT-QA (Zhu et al., 2021) cov-ers financial QA over tables and passages with nu-meric reasoning; it occasionally requires extension. 
+
+Table 1: Dataset characteristics. ✓/×/∼ denote presence/absence/sometimes. “MS" = Multi-source, “MH"=Multi-hop, “Temp" = Temporal, “Ext.” = needs query-time schema extension.                               
+
+> Dataset #Q Source types MS MH Temp. Ext.
+> BLEND QA 445 Wikidata, passages, facts ✓✓××
+> HYBRID QA 3,466 Tables + Wikipedia passages ✓✓×✓
+> TAT-QA 1,668 Financial tables + text ✓××∼
+> COMPLEX TR 1,000 Temporal relation triples ×✓✓×
+
+COMPLEX TR (Tan et al., 2023) tests temporal multi-hop reasoning over structured records with time-scoped relations. All datasets are publicly available for research use. 
+
+4.1.2 Baselines. 
+
+We compare against: (i) RAG , a retrieve-then-generate baseline using top-k passages; (ii) Prob-Tree (Cao et al., 2023), organizing multi-hop re-trieval as probabilistic tree search over evidence chains; (iii) CoK (Li et al., 2023), iteratively gath-ering and verifying facts via chain-of-knowledge decomposition; and (iv) AtomR (Xin et al., 2025), decomposing reasoning into atomic operator calls over structured and unstructured evidence. For context, we also report a published reference 
+
+per benchmark: the strongest zero-shot / no-finetuning result we could identify – AtomR (Xin et al., 2025) (BlendQA), Odyssey (Agarwal et al., 2025) (HybridQA), GPT-4 zero-shot reported by Zhu et al. (Zhu et al., 2024) (TAT-QA), Hip-poRAG 2 (Gutiérrez et al., 2025) (ComplexTR). These methods use dataset-specific prompting or retrieval pipelines; their numbers are not controlled for model, setup, or evaluation harness and are provided for context only (see Table 2 caption). 
+
+Models and configuration. All experiments are 
+
+zero-shot with GPT-4.1 (temperature = 0 ); all con-6Table 2: End-to-end QA performance. Controlled re-runs are our implementations using GPT-4.1 backbone, dataset-provided sources, ground-truth exclusion manifest, evaluation harness, and zero-shot setting as our method. 
+
+Published reference reports the strongest comparable no-finetuning result we could identify for context; these numbers are not controlled for model, prompting, retrieval substrate, or implementation details and are not the basis of our main claims. Ablations modify the specified component while keeping the remaining infrastructure fixed.                                                                                                                                                                                                    
+
+> Method BLEND QA HYBRID QA TAT-QA COMPLEX TR EM F1 BLEU LJ EM F1 BLEU LJ EM F1 BLEU LJ EM F1 BLEU LJ
+> Controlled re-runs (same GPT-4.1 backbone, sources, exclusions, and harness)
+> RAG 19.1 33.6 26.1 52.3 7.0 13.8 14.2 15.0 18.5 33.9 24.9 39.0 25.5 53.3 44.6 69.0 ProbTree 20.1 33.9 36.6 56.7 55.5 65.9 66.4 76.5 33.2 48.0 48.4 66.3 70.0 80.5 79.7 77.0 CoK 20.4 38.6 40.5 61.1 37.5 45.9 45.8 52.5 26.6 33.0 33.9 45.7 28.0 40.0 38.6 44.5 AtomR 26.7 43.3 49.2 68.5 38.5 50.4 49.1 61.5 68.6 74.9 62.1 86.3 64.0 75.7 74.7 74.5
+> Published reference (not controlled; for context only) ‡
+> Best published –43.3 ––51.5 66.0 ––71.9 ––––78.2 72.7 81.5
+> Ours
+> Schema-Guided 29.3 48.9 54.1 72.3 58.3 68.9 69.0 78.9 74.3 82.6 68.6 93.2 74.5 82.2 82.0 79.5
+> Ablations (each removes one component, all else fixed)
+> w/o schema guidance 20.0 32.3 39.3 53.3 55.6 68.0 66.9 78.3 72.2 77.9 66.2 90.0 67.2 77.0 76.8 74.4 w/o KG ingestion 21.3 36.5 43.1 58.2 57.8 68.4 68.4 78.3 71.7 77.3 66.8 91.7 68.8 77.1 76.8 74.5 single-pass 25.4 41.8 47.9 67.9 57.8 67.7 67.9 77.8 71.1 76.2 65.3 87.7 65.0 76.3 75.7 74.4 w/o schema exten. N/A N/A N/A N/A 55.5 66.0 66.2 76.5 72.8 78.6 67.0 91.7 N/A N/A N/A N/A w/o struc. intel. 26.3 38.9 44.8 56.0 55.0 68.1 67.2 76.9 72.2 76.9 66.7 90.6 67.7 78.6 77.9 77.2
+> ‡Best published zero-shot / no-finetuning references: BlendQA (Xin et al., 2025), HybridQA (Agarwal et al., 2025), TAT-QA GPT-4 zero-shot from Zhu et al. (Zhu et al., 2024), ComplexTR (Gutiérrez et al., 2025).
+
+trolled baselines use the same backbone. The QA agent uses E5 bi-encoder embeddings with FAISS and optional cross-encoder reranking. Only dataset-provided sources are used; E XTERNAL SEARCH 
+
+was available but was not invoked by the OOD gate in benchmark runs, so all reported results use only dataset-provided sources. Implementation details, pseudocode, and prompts are in the Appendix. 
+
+4.1.3 Evaluation metrics. 
+
+We report exact match ( EM ), token-level F1 ,
+
+BLEU , and an LLM-as-judge score ( LLM-J ). LLM-J uses GPT-4.1 as judge at temperature = 0 :given predicted and gold answers, it returns a bi-nary correctness score (1 if semantically equivalent, 0 otherwise); we report the percentage of correct judgments. EM and F1 are the primary metrics; LLM-J captures semantic equivalence beyond ex-act string overlap. Official evaluation protocols are used when available (such as for TAT-QA). 
+
+Evaluation hygiene. For all datasets, annotation fields and files are removed before schema induc-tion, KG construction, vector indexing, and query-time extension (Table 5). In TAT-QA, this removes the entire questions subtree; the system indexes only the table and paragraph evidence available to all methods. Appendix A.10.3 provides a stage-by-stage audit. 
+
+4.2 Results 
+
+Table 2 summarizes performance. Our main claims rest on the controlled re-runs (top block), which share the same GPT-4.1 backbone, sources, exclu-sion manifest, and evaluation harness. The Schema-Guided Agent achieves the high-est EM and F1 among controlled methods on ev-ery dataset, outperforming AtomR by +2.6 EM on BlendQA, +19.8 on HybridQA, +5.7 on TAT-QA, and +10.5 on ComplexTR. Gains are largest where structured evidence must be aligned with textual evidence: TAT-QA (+55.8 EM over RAG) and HYBRID QA (+51.3 EM). On ComplexTR LLM-J, HippoRAG 2 scores 81.5 vs. our 79.5 ( −2.0), while we lead on F1 (82.2 vs. 78.2, +4.0) and BLEU (82.0 vs. 72.7, +9.3). Error analysis sug-gests that rare and temporally reified types are harder to realize during KG construction, reducing retrieval coverage for some time-scoped queries (Appendix B.7.2). 
+
+4.3 Ablation Studies Component ablations (Table 2, bottom). Each ablation removes one component while holding all others fixed. In “w/o schema guidance,” schema-conditioned routing is disabled; on B LEND QA this scores 20.0 EM – nearly identical to ReAct (20.4 EM, Table 3), confirming that without schema con-ditioning the additional infrastructure provides no 7Table 3: Agent architecture comparison on BlendQA (445 multi-source questions). Retrieval baselines, generic agentic approaches (ReAct, PlanAct), and our schema-guided agent.                               
+
+> Agent EM F1 BLEU LJ Latency
+> RAG (E5) 19.1 33.6 26.1 52.3 0.3s RAG (E5+rerank) 20.2 34.8 32.4 60.5 0.4s ReActAgent 20.4 41.8 42.6 65.4 1.5s PlanActAgent 20.1 40.2 39.8 64.8 1.7s SchemaAgent (ours) 29.3 48.9 54.1 72.3 3.2s
+
+routing advantage ( −9.3 EM on B LEND QA, −2.1 to −7.3 on other datasets). KG ingestion con-tributes most on multi-hop tasks ( −8.0 EM on BLEND QA, −5.7 on C OMPLEX TR). Structural intelligence : removing it drops EM by 2.1–6.8 across datasets. Schema extension : removing it drops EM by 2.8 on H YBRID QA and 1.5 on TAT-QA. Importantly, gains do not rely on query-time extension: removing extension preserves most of the improvement (55.5 vs. 58.3 EM on HybridQA; 72.8 vs. 74.3 on TAT-QA). Component importance varies by dataset: schema-conditioned routing is most visible on B LEND QA and C OMPLEX TR, while H YBRID QA and TAT-QA benefit substan-tially from schema-compatible structured evidence access even when routing guidance is ablated. 
+
+Agent architecture comparison (Table 3). 
+
+Generic tool-use agents (ReAct, PlanAct) barely improve over RAG ( +1.0–1.3 EM) despite 5–6 ×
+
+latency. The Schema-Guided Agent achieves +10.2 EM and +15.3 F1 over RAG, confirming gains stem from schema-conditioned routing rather than agen-tic iteration alone. 
+
+4.4 Cross-Model Evaluation 
+
+To test model dependence, we evaluate on BlendQA with three backbone families (Table 4). Schema guidance improves over RAG and Re-Act in all three: +8.0 EM (Claude Haiku 4.5), +10.1 EM (Llama 3.3 70B), +10.2 EM (GPT-4.1). The consistent pattern across proprietary and open-weight models suggests gains are not specific to GPT-4.1. 
+
+4.5 Schema/KG Quality and Online Serving 
+
+Intrinsic schema/KG quality is evaluated via eight metrics (Appendix B.7.2). Link validity and prove-nance completeness are 100% on all datasets; type utilization ranges from 50% to 89%. The main remaining bottleneck is schema realization: some valid schema-defined types, especially rare or tem-
+
+Table 4: Cross-model evaluation on BlendQA. Schema guidance consistently improves over RAG and generic agents across three LLM families.                                             
+
+> Base Model Method EM F1 BLEU LJ
+> Claude Haiku 4.5 RAG 20.1 33.4 27.2 50.9 ReAct 24.7 45.0 43.2 63.2
+> Ours 28.1 46.1 45.7 67.8
+> Llama 3.3 70B RAG 13.9 23.0 21.9 33.5 ReAct 17.7 28.0 36.3 43.0
+> Ours 24.0 36.7 44.5 67.2
+> GPT 4.1 RAG 19.1 33.6 26.1 52.3 ReAct 20.4 41.8 42.6 65.4
+> Ours 29.3 48.9 54.1 72.3
+
+porally reified ones, are not reliably populated dur-ing KG construction. This measures graph real-ization coverage rather than overall answerabil-ity, since the agent can also answer through struc-tured lookup and vector evidence. Schema gener-ation completes in 0.5–2.4 min; ingestion in 0.33– 3.3 sec/doc. On online serving (Appendix, Table 8), KG traversal (4.6 ms) and schema lookup (0.9 ms) are negligible; dominant costs are vector retrieval (584 ms) and LLM synthesis (707 ms). Extension triggers on 85.3% of HybridQA queries, adding 
+
+∼3.4 s with 98.4% utilization. 
+
+5 Conclusion 
+
+We presented a system that treats an automatically induced schema as a shared executable contract for both KG ingestion and query-time retrieval. In controlled comparisons across four benchmarks, ablations confirm that schema guidance, structural intelligence, and schema-guided construction each contribute independently to end-to-end QA accu-racy. Cross-model evaluation on BlendQA shows consistent gains across three LLM families. Our results suggest three principles for het-erogeneous QA: (1) closed-world schema induc-tion makes LLM-discovered structure executable; (2) statistical structural analysis should precede se-mantic extraction; and (3) retrieval agents benefit when the schema used for construction also con-ditions routing – on BlendQA, this substantially outperforms generic ReAct/PlanAct-style tool use, and the full system leads controlled baselines on all four benchmarks. 
+
+Limitations 
+
+Scope of cross-model evaluation. We evaluate across three LLM families on BlendQA and find 8consistent gains (Section 4.4). Extending this to all four datasets and to smaller open-weight models would further strengthen generalizability claims. 
+
+Schema realization vs. coverage. The closed-world field catalog prevents hallucinated field ref-erences but does not prevent spurious relationships among valid fields. Schema type utilization ranges from 50% to 89% across datasets. Not all schema-defined types are reliably populated during KG con-struction, particularly rare or domain-specific ones; however, the agent mitigates this through fallback to structured lookup and vector retrieval, so unre-alized types reduce graph-based coverage without eliminating answerability (Appendix B.7.2). 
+
+Extension latency. Query-time schema extension adds ∼3.4 s when triggered (98.4% utilization rate), which may be prohibitive for real-time applications with strict latency requirements. 
+
+Evaluation scope. We evaluate on four publicly available benchmarks with diverse characteristics (Table 1). Generalization to production enterprise data with noisier sources, larger scale, and stricter governance requirements has not been validated. 
+
+References 
+
+Ankush Agarwal, Chaitanya Devaguptapu, and 1 oth-ers. 2025. Hybrid graphs for table-and-text based question answering using llms. arXiv preprint arXiv:2501.17767 .Scott Barnett, Stefanus Kurniawan, Srikanth Thudumu, Zach Brannelly, and Mohamed Abdelrazek. 2024. Seven failure points when engineering a retrieval augmented generation system. In Proceedings of the IEEE/ACM 3rd International Conference on AI Engineering-Software Engineering for AI , pages 194– 199. Rui Cao, Zhiyuan Liu, and Maosong Sun. 2023. Proba-bilistic tree-of-thought reasoning for multi-hop ques-tion answering. arXiv preprint . ArXiv:2311.13982. Francesco Cazzaro, Justin Kleindienst, Sofia Márquez Gomez, and Ariadna Quattoni. 2025. SPOT: Zero-shot semantic parsing over prop-erty graphs. In Findings of the Association for Computational Linguistics: ACL 2025 , pages 10057–10073. Jianlv Chen, Shitao Xiao, Peitian Zhang, Kun Luo, Defu Lian, and Zheng Liu. 2024. Bge m3-embedding: Multi-lingual, multi-functionality, multi-granularity text embeddings through self-knowledge distillation. 
+
+arXiv preprint arXiv:2402.03216 .Wenhu Chen, Hanwen Zha, Zhiyu Chen, Wenhan Xiong, Hong Wang, and William Yang Wang. 2020. Hy-bridqa: A dataset of multi-hop question answering over tabular and textual data. In Findings of EMNLP (ACL Workshop/Findings) , pages 1026–1036. Darren Edge, Ha Trinh, Newman Cheng, Joshua Bradley, Alex Chao, Apurva Mody, Steven Truitt, Dasha Metropolitansky, Robert Osazuwa Ness, and Jonathan Larson. 2024. From local to global: A graph rag approach to query-focused summarization. 
+
+arXiv preprint arXiv:2404.16130 .Yunfan Gao, Yun Xiong, Xinyu Gao, Kangxiang Jia, Jinliu Pan, Yuxi Bi, Yi Dai, Jiawei Sun, Meng Wang, and Haofen Wang. 2023. Retrieval-augmented gen-eration for large language models: A survey. arXiv preprint arXiv:2312.10997 .Bernal Jiménez Gutiérrez, Yiheng Shu, Weijian Qi, Sizhe Zhou, and Yu Su. 2025. From rag to memory: Non-parametric continual learning for large language models. arXiv preprint arXiv:2502.14802 .Xanh Ho, Anh-Khoa Duong Nguyen, Saku Sugawara, and Akiko Aizawa. 2020. Constructing a multi-hop QA dataset for comprehensive evaluation of reason-ing steps. In Proceedings of the 28th International Conference on Computational Linguistics (COLING) ,pages 6609–6625. Vladimir Karpukhin, Barlas Oguz, Sewon Min, Patrick Lewis, Ledell Wu, Sergey Edunov, Danqi Chen, and Wen-tau Yih. 2020. Dense passage retrieval for open-domain question answering. In Advances in Neural Information Processing Systems (NeurIPS) .ArXiv:2004.04906. Patrick Lewis, Ethan Perez, Aleksandra Piktus, Fabio Petroni, Vladimir Karpukhin, Naman Goyal, Hein-rich Küttler, Mike Lewis, Wen-tau Yih, Tim Rock-täschel, Sebastian Riedel, and Douwe Kiela. 2020. Retrieval-augmented generation for knowledge-intensive nlp tasks. In Advances in Neural Infor-mation Processing Systems (NeurIPS) .Boyan Li, Yuyu Luo, Chengliang Chai, Guoliang Li, and Nan Tang. 2024. The dawn of natural lan-guage to sql: Are we fully ready? arXiv preprint arXiv:2406.01265 .Zifan Li, Tao Yu, and Rui Zhang. 2023. Chain-of-knowledge: Grounded reasoning over heterogeneous sources. arXiv preprint . ArXiv:2305.13269. Hao Liu, Zhengren Wang, Xi Chen, Zhiyu Li, Feiyu Xiong, Qinhan Yu, and Wentao Zhang. 2025. Hoprag: Multi-hop reasoning for logic-aware retrieval-augmented generation. arXiv preprint arXiv:2502.12442 .Tom Mitchell, William W. Cohen, Estevam Hruschka, Partha Talukdar, Justin Betteridge, Andrew Carlson, Bhavana Dalvi, Matt Gardner, Bryan Kisiel, Jayant Krishnamurthy, Nicholas Lao, and 1 others. 2018. Never-ending learning. Communications of the ACM ,61(5):103–115. 
+
+9Makbule Gulcin Ozsoy, Leila Messallem, Jon Besga, and Gianandrea Minneci. 2025. Text2cypher: Bridg-ing natural language and graph databases. In Pro-ceedings of the Generative AI and Knowledge Graph Workshop (GenAIK) , pages 100–108. Panupong Pasupat and Percy Liang. 2015. Composi-tional semantic parsing on semi-structured tables. In 
+
+Proceedings of the 53rd Annual Meeting of the Asso-ciation for Computational Linguistics (ACL) , pages 1470–1480. Rohan Phanse, Yijie Zhou, Kejian Shi, Wencai Zhang, Yixin Liu, Yilun Zhao, and Arman Cohan. 2025. Msrs: Evaluating multi-source retrieval-augmented generation. arXiv preprint arXiv:2508.20867 .Yujia Qin, Shihao Liang, Yining Ye, Kunlun Zhu, Lan Yan, Yaxi Lu, Yankai Lin, Xin Cong, Xiangru Tang, Bill Qian, Sihan Zhao, Lauren Hong, Runchu Tian, Ruobing Xie, Jie Zhou, Mark Gerstein, Dahai Li, Zhiyuan Liu, and Maosong Sun. 2024. Toolllm: Fa-cilitating large language models to master 16000+ real-world apis. In International Conference on Learning Representations (ICLR) .Pranav Rajpurkar, Jian Zhang, Konstantin Lopyrev, and Percy Liang. 2016. Squad: 100,000+ questions for machine comprehension of text. Proceedings of EMNLP .Timo Schick, Jane Dwivedi-Yu, Roberto Dessì, Roberta Raileanu, Maria Lomeli, Eric Hambro, Naman Goyal, Luke Zettlemoyer, and Thomas Scialom. 2023. Tool-former: Language models can teach themselves to use tools. Advances in Neural Information Process-ing Systems (NeurIPS) . ArXiv:2302.04761. Jiashuo Sun, Chengjin Xu, Lumingyuan Tang, Saizhuo Wang, Chen Lin, Yeyun Gong, Lionel M. Ni, Heung-Yeung Shum, and Jian Guo. 2024. Think-on-graph: Deep and responsible reasoning of large language model on knowledge graph. In International Confer-ence on Learning Representations (ICLR) .Qingyu Tan, Hwee Tou Ng, and Lidong Bing. 2023. Towards robust temporal reasoning of large lan-guage models via a multi-hop qa dataset and pseudo-instruction tuning. arXiv preprint arXiv:2311.09821 .Tianshu Wang, Xiaoyang Chen, Hongyu Lin, Xuanang Chen, Xianpei Han, Hao Wang, Zhenyu Zeng, and Le Sun. 2025. Match, compare, or select? an investi-gation of large language models for entity matching. In Proceedings of the 31st International Conference on Computational Linguistics (COLING) , pages 96– 109. Jason Wei, Xuezhi Wang, Dale Schuurmans, Maarten Bosma, Ed Chi, Quoc Le, and Denny Zhou. 2022. Chain-of-thought prompting elicits reasoning in large language models. Advances in Neural Information Processing Systems (NeurIPS) , 35. Shirley Wu, Shiyu Zhao, Michihiro Yasunaga, Kexin Huang, Kaidi Cao, Qian Huang, Vassilis N. Ioanni-dis, Karthik Subbian, James Zou, and Jure Leskovec. 2024. Stark: Benchmarking llm retrieval on tex-tual and relational knowledge bases. NeurIPS 2024 Datasets and Benchmarks Track (dataset repo / preprint) .Wentao Wu, Hongsong Li, Haixun Wang, and Kenny Q. Zhu. 2012. Probase: A probabilistic taxonomy for text understanding. In Proceedings of the 2012 ACM SIGMOD International Conference on Management of Data , pages 481–492. Amy Xin, Jinxin Liu, Zijun Yao, Zhicheng Lee, Shulin Cao, Lei Hou, and Juanzi Li. 2025. Atomr: Atomic operator-empowered large language models for het-erogeneous knowledge reasoning. In Proceedings of the 31st ACM SIGKDD Conference on Knowledge Discovery and Data Mining V. 2 , pages 3344–3355. Xiao Yang, Kai Sun, Hao Xin, Yushi Sun, Nikita Bhalla, Xiangsen Chen, Sajal Choudhary, Rongze Daniel Gui, Ziran Will Jiang, Ziyu Jiang, and 1 others. 2024. Crag – comprehensive rag benchmark. arXiv preprint arXiv:2406.04744 . (Comprehensive benchmark for retrieval-augmented generation). Zhilin Yang, Peng Qi, Saizheng Zhang, Yoshua Ben-gio, William W. Cohen, Ruslan Salakhutdinov, and Christopher D. Manning. 2018. Hotpotqa: A dataset for diverse, explainable multi-hop question answer-ing. Proceedings of EMNLP .Shunyu Yao, Jeffrey Zhao, Dian Yu, Nan Du, Izhak Shafran, Karthik Yang, and 1 others. 2022. React: Synergizing reasoning and acting in language models. 
+
+arXiv preprint . ArXiv:2210.03629. Tao Yu, Rui Zhang, Kai Yang, Michihiro Yasunaga, Dongxu Wang, Zifan Li, James Ma, Irene Li, and 1 others. 2018. Spider: A large-scale human-labeled dataset for complex and cross-domain semantic pars-ing and text-to-sql task. In Proceedings of EMNLP .Fengbin Zhu, Wenqiang Lei, Youcheng Huang, Chao Wang, Shuo Zhang, Jiancheng Lv, Fuli Feng, and Tat-Seng Chua. 2021. Tat-qa: A question answering benchmark on a hybrid of tabular and textual content in finance. In Proceedings of the 59th Annual Meet-ing of the Association for Computational Linguistics (ACL) , pages 3277–3287. Fengbin Zhu, Ziyang Liu, Fuli Feng, Chao Wang, Moxin Li, and Tat Seng Chua. 2024. Tat-llm: A specialized language model for discrete reasoning over financial tabular and textual data. In Proceed-ings of the 5th ACM International Conference on AI in Finance , pages 310–318. 
+
+10 A Schema Generation Pipeline: Technical Details 
+
+This appendix provides implementation details and pseudocode for the schema generation pipeline described in Section 3.2. Given a collection of sources S = {S1, . . . , S m}, the system induces per-source schemas {ΣSi } and unifies them into a global schema Σ.
+
+A.1 Notation and Definitions 
+
+We adopt the following notation throughout this appendix: • For a structured source S, let {r1, . . . , r n}
+
+denote sampled records (or files, for corpus sources). • Let FS be the closed-world field catalog : the set of all observable fields in S (columns for tabular sources; JSON paths for semi-structured sources). • Let r⋆ denote the representative sample se-lected for deep discovery. • Let D = {d1, . . . , d k} denote the diverse sam-ples used for validation. • For a field f , let Vf denote the multiset of observed values across sampled records. 
+
+A.2 Pipeline Overview 
+
+The schema generation pipeline processes each source S ∈ S through seven stages: 1. Source discovery: Scan the input directory, detect file formats, and group files into logical sources. 2. Profiling: For each source, enumerate observ-able fields and compute statistics (types, null rates, cardinalities). 3. Field catalog construction: Build the closed-world catalog FS with stable field identifiers. 4. Sampling: Select representative sample r⋆
+
+and diverse set D.5. Two-pass LLM discovery: Extract entities and relationships via two targeted LLM calls. 6. Structural inference: Detect identity keys, foreign keys, and hierarchy using statistical methods (no LLM). 
+
+Algorithm 1 Source Discovery  
+
+> 1:
+
+procedure DISCOVER SOURCES (root ) 
+
+> 2:
+
+S ← ∅  
+
+> 3:
+
+for each path p in R ECURSIVE LIST (root )
+
+do  
+
+> 4:
+
+if ISDIRECTORY (p) and COUNT -FILES (p) ≥ 50 and STRUCT SIM (p) ≥ 0.8
+
+then  
+
+> 5:
+
+S ← S ∪ { CORPUS SOURCE (p)} 
+
+> 6:
+
+else if ISSUPPORTED FILE (p) then  
+
+> 7:
+
+S ← S ∪ { FILE SOURCE (p)} 
+
+> 8:
+
+end if  
+
+> 9:
+
+end for  
+
+> 10:
+
+return GROUP COMPATIBLE SOURCES (S) 
+
+> 11:
+
+end procedure 
+
+7. Cross-source linking and unification: Dis-cover inter-source relationships and merge per-source schemas into Σ.The remainder of this section details each stage. 
+
+A.3 Source Discovery and Corpus Detection 
+
+The pipeline begins by scanning the input directory to identify data sources. We support JSON, JSONL, CSV, and Excel files. A key challenge is handling 
+
+corpus sources – directories containing thousands of individual text files with homogeneous structure. 
+
+Corpus detection heuristic. A directory contain-ing at least 50 files is flagged as a corpus candi-date. We then sample k=5 files and compute pair-wise structural similarity (JSON key sets, column names); if average similarity exceeds 0.8, the direc-tory is classified as a corpus source. Rather than treating each file as a separate source (which would be computationally prohibitive), we treat the entire directory as a single logical source with file-level sampling. This design reflects our observation that corpus directories typically contain homogeneous documents sharing a common schema. 
+
+Pseudocode. Algorithm 1 outlines the source dis-covery procedure. 
+
+A.4 Profiling and Sampling 
+
+After discovering sources, we profile each source to extract field metadata and select samples for LLM analysis. The goal is to minimize LLM cost while maximizing schema coverage. 
+
+A.4.1 Field Profiling 
+
+For each source S, profiling extracts: 11 • Field paths: All observable JSON paths or column names. • Data types: Inferred from value patterns (string, number, boolean, array, object). • Null rates: Fraction of records where each field is absent or null. • Example values: A small sample of non-null values for each field. • Cardinality: Number of unique values ob-served. These statistics inform both the sampling strat-egy and subsequent structural analysis. 
+
+A.4.2 Representative Sample Selection 
+
+We select a single representative sample r⋆ for deep LLM analysis. Each candidate is scored by three heuristics: 
+
+score (r) = 10 · |{ f : r[f ]̸ = null }| 
+
+| {z }
+
+> field completeness
+
++ brich (r)
+
+| {z } 
+
+> content richness
+
++ bpos (r)
+
+| {z } 
+
+> positional bonus
+
+(2) where brich = +50 for text content >1 K chars, 
+
+−30 for <100 chars, and bpos = +10 when the record lies in the middle 60% of the file. The can-didate with the highest score is selected as r⋆.
+
+A.4.3 Diverse Sample Selection 
+
+We select diverse samples via positional sam-pling (beginning, middle, end) and quality-aware coverage-adaptive selection. Samples are packed into the remaining LLM token budget ( ∼8K to-kens) after accounting for the field catalog and prompt instructions, so the effective count adapts to record size. 
+
+A.5 Closed-World Field Catalog 
+
+A critical component of our approach is the closed-world field catalog FS . Before invoking the LLM, we enumerate all observable fields and assign each a stable identifier. The LLM is then constrained to reference only fields from this catalog, preventing hallucinated structure. 
+
+A.5.1 Catalog Structure and Validation 
+
+Each entry in FS stores: a stable hash-based ID, the source name, the field path (or column name), the inferred data type, null rate, example values, and optional semantic tags. The LLM is constrained to reference only catalog field IDs; we validate all references: 
+
+FieldValidity = |{ referenced IDs } ∩ F S ||{ referenced IDs }| (3) Schemas with FieldValidity < 1.0 are flagged for review. The closed-world constraint eliminates nearly all hallucinated field references. 
+
+A.6 Two-Pass LLM Discovery 
+
+We extract entities and relationships using exactly two LLM calls per source. This design balances extraction quality against cost: a single call often misses edge cases, while many calls become pro-hibitively expensive. 
+
+Call 1 (Deep Discovery). Analyzes a token-budget–packed set of representative samples to-gether with the full field catalog. The LLM ex-tracts entity types, attributes (mapped to catalog field IDs), and relationships. 
+
+Call 2 (Validation). Reviews diverse samples D
+
+(selected by positional sampling) to identify entity types or relationships not visible in the first call. Outputs from both calls are merged (Sec-tion A.6.1), yielding broader coverage than a single-pass call – particularly for rare entity types that appear only in a minority of records. 
+
+A.6.1 Output Merging and Linting 
+
+New entities from Call 2 are appended, new at-tributes extend existing entity definitions, and rela-tionships are deduplicated by (source, target, type) tuple. A schema linter then validates: • All field references exist in FS .• All relationship endpoints reference defined entity types. • Entity and relationship names follow nam-ing conventions (PascalCase for entities, UP-PER_SNAKE for relationships). 
+
+A.7 Structural Intelligence 
+
+Beyond LLM-discovered semantics, we infer struc-tural patterns using statistical analysis of sampled values. This non-LLM analysis detects identity 12 keys, foreign keys, and source hierarchy – patterns that are difficult for LLMs to detect reliably but straightforward to compute from data statistics. 
+
+A.7.1 Identity Key Detection 
+
+Identity keys are fields (or field combinations) that uniquely identify entity instances, enabling deter-ministic deduplication during ingestion. A field f is accepted as an identity key if it passes a two-stage gate. First, a qualifying check: 
+
+qualify (f ) = uniq (f ) ≥ 0.95 
+
+∨ uniq (f ) ≥ 0.80 ∧ isIdLike (f )
+
+(4) where uniq (f ) = |V unique  
+
+> f
+
+|/|Vf | and isIdLike 
+
+matches patterns such as id , key , uuid , ticker ,and code . Fields with fewer than 5 non-null values, average length >500 characters, or cardinality ≤ 2
+
+are excluded. For qualifying fields, a confidence score is assigned: 
+
+conf (f ) = min  0.95 , 0.7 + 0 .3 · uniq (f ) (5) The pipeline also detects composite keys (pairs of fields whose combined uniqueness ≥ 0.95 ), com-mon in datasets keyed by ( ticker , quarter ). 
+
+A.7.2 Foreign Key Detection 
+
+Foreign keys connect entities across sources. For each pair of sources (SA, S B ), candidate columns are identified by exact or semantic name matching (e.g., ticker ↔ symbol ). For matched columns we compute value overlap: 
+
+overlap (fA, f B ) = |VfA ∩ VfB |
+
+max( |VfA |, |VfB |) (6) Column pairs with non-zero overlap (or key-like names even without sampled overlap) are emitted as candidate foreign keys, with confi-dence min  0.95 , 0.5 + 0 .3 · overlap + 0 .15 ·
+
+⊮[exact name ]. Cardinality is inferred per shared key value: if the average record count per key in a source ≤ 1.2 (and max ≤ 2), that side is classified as “one”; otherwise “many”. This yields cardinali-ties 1:1, 1:N, N:1, or N:M. 
+
+A.7.3 JSON Path Detection 
+
+For semi-structured sources, we detect nested ar-rays and objects that require special extraction han-dling. We recursively traverse sample structures and emit JSON path specifications: 
+
+Algorithm 2 Matched Sampling for Cross-Source Links  
+
+> 1:
+
+procedure MATCHED SAM -
+
+> PLING
+
+(SA, S B , f link ) 
+
+> 2:
+
+GA ← GROUP BY(samples A, f link ) 
+
+> 3:
+
+GB ← GROUP BY(samples B , f link ) 
+
+> 4:
+
+Kcommon ← KEYS (GA) ∩ KEYS (GB ) 
+
+> 5:
+
+matched ← ∅  
+
+> 6:
+
+for k ∈ SAMPLE (Kcommon , 5) do  
+
+> 7:
+
+matched ← matched ∪{(GA[k], G B [k], k )} 
+
+> 8:
+
+end for  
+
+> 9:
+
+return matched  
+
+> 10:
+
+end procedure 
+
+• Array at path p: emit p[*] 
+
+• Nested object with common array key: emit 
+
+p.items[*] 
+
+These paths are included in the schema to guide the ingestion pipeline’s extraction logic. 
+
+A.8 Cross-Source Link Detection 
+
+For multi-source datasets, we detect relationships between entities in different sources. A key insight is that naive parallel indexing (comparing the i-th record from source A with the i-th record from source B) fails for 1:N and N:M relationships. In-stead, we use matched sampling .
+
+A.8.1 Matched Sampling Algorithm 
+
+The matched sampling procedure works as follows: 1. Discover link keys: Identify candidate fields that connect sources (using the foreign key detection from Section A.7). 2. Group by key value: For each source, group sampled records by their link key value. 3. Find common values: Identify key values that appear in both sources. 4. Load matched sets: For each common value, retrieve all records from both sources sharing that value. 5. Analyze matched pairs: The LLM analyzes matched record sets to discover semantic rela-tionships. Algorithm 2 provides pseudocode for this proce-dure. 13 This approach correctly handles all cardinalities: for a given key value, we retrieve all matching records from both sources, revealing the true rela-tionship structure. 
+
+A.8.2 Companion Source Detection 
+
+As a preprocessing step, we detect companion sources – sources with related filenames (e.g., 
+
+queries.jsonl and queries_metadata.jsonl ). These are linked via their implicit shared identifier before general cross-source detection. 
+
+A.9 Schema Unification 
+
+After processing all sources, we unify per-source schemas into a global schema Σ. Unification pro-ceeds in three phases: 
+
+Entity merging. Entities appearing in multiple sources are matched by normalized name (case-insensitive). When two per-source schemas declare the same entity type (e.g., WikidataEntity in two files), they are merged: the first-encountered name becomes canonical, and attributes are unioned across sources. Aliases (original, source-specific names) are retained for provenance. 
+
+Relationship deduplication. Relationships are deduplicated by (source_entity, target_entity, type) tuple. When duplicates exist, we retain the instance with higher confidence. 
+
+Provenance layer. We add a SourceRecord en-tity type to track provenance. Each ingested entity receives a DERIVED_FROM relationship to its origi-nating SourceRecord , enabling lineage queries. 
+
+A.10 Ground-Truth Exclusion and Leakage Control 
+
+For evaluation datasets, we must prevent ground-truth leakage: the schema should not expose an-swer fields that would trivialize the QA task. The pipeline accepts an exclusion configuration (a lightweight YAML manifest) specifying files and fields to hide. 
+
+A.10.1 Exclusion Processing 
+
+The GTFilter component applies exclusions at multiple stages: 1. Source discovery: Excluded files are re-moved from the source list. 2. Sampling: Excluded fields are stripped from all samples before LLM analysis.                             
+
+> Table 5: Leakage control: excluded fields and files per dataset
+> Dataset Type Excluded Fields/Files
+> BLEND QA hybrid_qa_kb question ,sub_q1 ,sub_q2 ,
+> long_answer ,short_-answer ,answers .HYBRID QA qa_evaluation question ,question_-id ,question_postag ,
+> answer-text ,answer-node .TAT-QA hybrid_qa_kb questions (entire ar-ray, containing answer ,
+> derivation ,scale ,
+> answer_type ,answer_-from ,rel_paragraphs ). Files: *_test*.json ,*_-dev.json .COMPLEX TR qa_evaluation question ,answers ,text_-answers ,fact_context .
+
+3. Schema finalization: Entities and attributes referencing excluded fields are removed. Re-lationships with orphaned endpoints (referenc-ing removed entities) are also removed. 
+
+A.10.2 Per-Dataset Leakage Control 
+
+Table 5 details the fields and files excluded for each evaluation dataset to prevent ground-truth leakage. This design allows raw benchmark files to be processed without modifying the underlying data, while using a lightweight exclusion manifest to hide annotation fields from schema induction and ingestion. 
+
+A.10.3 Leakage Audit: What Each Pipeline Stage Sees 
+
+We provide a stage-by-stage audit of what informa-tion each component accesses, confirming that no ground-truth answers, derivation programs, scale annotations, or evaluation labels enter the schema, KG, or agent prompts. 
+
+Schema generation. The field catalog and LLM discovery calls see only KB fields. For TAT-QA, ingestion uses JSONPath selectors ( $.table ,
+
+$.paragraphs[*] ) that are structurally disjoint from $.questions[*] – the GT array cannot be accessed through these paths regardless of field-name filtering. For HybridQA and ComplexTR, QA files are excluded at the file level before source discovery; only KB files (Wikipedia tables, corpus passages) enter the pipeline. 
+
+KG construction. Extraction, deduplication, and linking operate on schema-specified fields only. 14 The schema may include field-level statistics and examples from the allowed evidence corpus, but it does not include gold answer fields, derivations, scale labels, answer types, answer provenance la-bels, or per-question supervision. KG nodes and vector chunks may contain values from allowed tables and paragraphs – because those are the ev-idence sources all systems are expected to use – but they do not contain gold answer annotations or per-question answer labels from the excluded ground-truth subtree (e.g., questions[*] in TAT-QA). 
+
+Query-time extension. Extension operates via two paths, neither of which accesses GT: • Query-scoped extension receives only the query string and the existing schema vocabu-lary. An LLM proposes candidate entity type definitions (e.g., “add type Number ”) with con-fidence scores; it never sees raw data records, answer fields, or evaluation labels. • Document-based extension receives KB con-tent (tables, paragraphs) after GT filtering via the centralized GTFilter module, which strips excluded fields before any LLM call. Extension proposes schema elements (entity types, relationship types, attributes), not an-swer candidates. In both modes, extension can only add schema def-initions (type names, relationship types, attribute lists); it cannot add KG nodes, entity values, or answer candidates. The output is a set of typed placeholders that guide downstream extraction, not retrieved evidence itself. 
+
+Extension utility metrics. We define three met-rics for query-time extension (Table 8): ETR (Ex-tension Trigger Rate) is the fraction of queries where the sufficiency gate (Algorithm 6) detects un-resolved entity types and triggers extension. EUR 
+
+(Extension Utilization Rate) is the fraction of trig-gered extensions for which at least one newly added schema type or relationship is used by a down-stream retrieval step (measuring retrieval utiliza-tion, not answer-causal contribution). EWR (Ex-tension Waste Rate) = 1 − EUR : the fraction of triggered extensions that added types unused by retrieval. 
+
+A.11 Complexity Analysis 
+
+Table 6 summarizes the computational complexity of each pipeline stage.                                
+
+> Table 6: Complexity of schema generation stages
+> Stage Complexity Notes
+> Source discovery O(F)F= total files Profiling O(n·k)n= samples, k= fields Sampling O(nlog n)Sorting for median LLM discovery O(m)m= sources; 2 calls each Structural analysis O(m2·k)FK detection is pairwise Cross-source links O(m2·n)Matched sampling Unification O(E)E= total entities (name-based)
+
+In practice, LLM calls dominate wall-clock time. With 2 calls per source and typical response times of 5–15 seconds, schema generation for a 10-source dataset completes in 2–5 minutes. 
+
+A.11.1 Reproducibility Checklist 
+
+To reproduce schema generation: 1. Configuration: Specify ground-truth exclu-sions for the target dataset via a YAML mani-fest. 2. Pipeline stages: The schema generation script invokes the following modules in se-quence: • Multi-source orchestrator (coordinates per-source analysis) • LLM-based dataset analyzer (two-pass entity/relationship discovery) • Structural analyzer (identity keys, for-eign keys, JSON paths) • Semantic type enricher (canonical type mapping) • Ground-truth filter (exclusion enforce-ment) 3. Output: Executable schema in YAML for-mat. 4. Key parameters: Sample size per source (default: 50), LLM model (GPT-4.1), field catalog enumeration (automatic), corpus file threshold (50), structural similarity threshold (0.8) 
+
+B KG Ingestion Pipeline: Technical Details 
+
+This appendix provides implementation details for the schema-guided KG ingestion pipeline described in Section 3.3. Given a schema Σ and data sources 
+
+S, the pipeline produces a Neo4j knowledge graph 15 Figure 4: Schema-guided ingestion: extraction, deduplication, within/cross-source linking, and provenance edges. 
+
+with full provenance tracking. Illustrative exam-ples throughout this section use B LEND QA (three heterogeneous sources sharing cross-source identi-fiers); the mechanisms generalize to all evaluation datasets. 
+
+B.1 Pipeline Overview 
+
+Ingestion proceeds in five phases: 1. Source ordering: Determine processing or-der from schema hierarchy (parents before children). 2. Entity extraction: Apply multi-strategy ex-traction per source. 3. Deduplication: Merge duplicate entities via identity keys and clustering. 4. Relationship extraction: Build edges using three parallel strategies plus cross-source FK resolution. 5. Neo4j ingestion: Write nodes and edges with provenance tracking. 
+
+B.2 Source Ordering 
+
+When the schema defines hierarchical relationships between sources (e.g., parent entities referenced by child passages), we process parent sources first to ensure foreign key targets exist before children reference them. Source hierarchy is inferred during schema generation (Section A.7): a source with fewer records linked via a 1:N key is classified as the parent. For coordinated subsetting (e.g., during development), limits are propagated across sources sharing foreign key values to preserve referential integrity. 
+
+B.3 Multi-Strategy Entity Extraction 
+
+Entity extraction uses a conditional decision tree rather than a fixed priority cascade. The key insight is that structured extraction is fast and free, while LLM extraction is slow and costly – so we invoke LLM only when necessary. 
+
+B.3.1 Decision Logic 
+
+Algorithm 3 formalizes the extraction decision. 
+
+B.3.2 Structured Extraction Methods 
+
+Structured extraction supports three methods, auto-matically inferred if not specified: 
+
+Field mapping. Direct column-to-attribute map-ping for structured fields. Example from BLEND QA: 
+
+> WikidataEntity: extraction: method: field source_field: entity_id # Wikidata QID (e.g., Q142) attributes: [entity_id, entity, concepts]
+
+Nested field (JSONPath). Extraction from nested JSON structures. The extractor iterates over JSONPath results and creates one entity per match-ing item: 
+
+> WikidataTriple: extraction: method: nested_field json_path: "sub_source1[*]" attributes: [subject, predicate, object]
+
+Row as entity. For sources where each row rep-resents a complete entity (common after JSONPath expansion): 
+
+> extraction: method: row_as_entity attributes: [subject, predicate, object, source_qid]
+
+16 Algorithm 3 Entity Extraction Decision  
+
+> 1:
+
+procedure EXTRACT ENTITIES (source , Σ) 
+
+> 2:
+
+Estruct ←
+
+EXTRACT STRUCTURED (source , Σ)  
+
+> 3:
+
+llm _types ←
+
+Σ.GET LLME XTRACTABLE ENTITIES (source ) 
+
+> 4: 5:
+
+// Determine if LLM extraction needed  
+
+> 6:
+
+if Σ.ISHYBRID (source ) then  
+
+> 7:
+
+run _llm ← true ▷ Schema marks as hybrid  
+
+> 8:
+
+else if |Estruct | = 0 and |llm _types | > 0
+
+then  
+
+> 9:
+
+run _llm ← true ▷ Fallback: no structured results  
+
+> 10:
+
+else  
+
+> 11:
+
+run _llm ← false  
+
+> 12:
+
+end if  
+
+> 13: 14:
+
+if run _llm then  
+
+> 15:
+
+Ellm ←
+
+EXTRACT WITH LLM (source , Σ, llm _types ) 
+
+> 16:
+
+else  
+
+> 17:
+
+Ellm ← ∅  
+
+> 18:
+
+end if  
+
+> 19:
+
+return Estruct ∪ Ellm  
+
+> 20:
+
+end procedure B.3.3 LLM Extraction with Batching and Chunking 
+
+When LLM extraction is required, we optimize for throughput and cost: 
+
+Batching. Records are grouped into batches (de-fault: 100 records) and processed in parallel across 8 workers, amortizing LLM call overhead while staying within API rate limits. 
+
+Semantic chunking. Long documents ( >10K characters) are split into chunks of at most 8,000 characters with 500-character overlap. The chunker prefers discourse-level boundaries in the following priority order: 1. Section headers (HTML markers such as 
+
+<h1> /<h2> , or markdown headings) 2. Discourse boundaries (speaker turns, para-graph breaks) 3. Sliding window (fallback) 
+
+Algorithm 4 Identity Key Deduplication  
+
+> 1:
+
+procedure DEDUPLICATE -BYKEY (E, key _field ) 
+
+> 2:
+
+G ← GROUP BY(E, λe :
+
+e. attributes [key _field ])  
+
+> 3:
+
+E′ ← ∅  
+
+> 4:
+
+for (key , group ) ∈ G do  
+
+> 5:
+
+if |group | > 1 then  
+
+> 6:
+
+emerged ←
+
+MERGE ENTITIES (group ) 
+
+> 7:
+
+else  
+
+> 8:
+
+emerged ← group [0]  
+
+> 9:
+
+end if  
+
+> 10:
+
+E′ ← E′ ∪ { emerged } 
+
+> 11:
+
+end for  
+
+> 12:
+
+return E′ 
+
+> 13:
+
+end procedure Co-extraction. During LLM entity extraction, we simultaneously extract relationships between co-occurring entities in each chunk. This reduces total LLM calls by avoiding a separate relationship extraction pass. 
+
+B.4 Two-Stage Deduplication 
+
+Deduplication merges duplicate entities while pre-serving provenance. We use a two-stage approach: deterministic identity key matching (fast, exact) followed by embedding-based clustering (slower, fuzzy). 
+
+B.4.1 Stage 1: Identity Key Matching 
+
+For entity types with identity keys in Σ, we group entities by key value and merge each group: Identity key matching groups entities by key value and merges each group in O(n) time. When identity keys exist, this stage handles >99% of duplicates. 
+
+B.4.2 Stage 2: Embedding-Based Clustering 
+
+For entities without identity keys (or where key matching fails), we apply fuzzy matching: 1. Embed: Convert each entity to text and com-pute sentence embeddings ( all-MiniLM-L6-v2 , 384-d). 2. Cluster: Apply agglomerative clustering with distance threshold 0.15 (i.e., similarity ≥
+
+0.85 ). 17 3. Merge: For each cluster with >1 entity, merge into a canonical form preserving all source references. 
+
+B.4.3 ID Mapping 
+
+Deduplication produces a mapping from temporary IDs to canonical IDs: 
+
+id _map : temp _id → canonical _id 
+
+This mapping is applied to all relationship end-points before Neo4j ingestion, and duplicate rela-tionships are removed. 
+
+B.5 Three-Strategy Relationship Extraction 
+
+Relationships are extracted using three parallel strategies whose results are merged. 
+
+B.5.1 Strategy 1: Schema-Guided (Link Fields) 
+
+When Σ specifies link_fields for a relationship type, we match entities deterministically: 
+
+> # Example: link entities to their semantic types relationships: - type: HAS_TYPE source_entity: WikidataEntity target_entity: SemanticType link_fields: - source_attr: concepts target_attr: type_name
+
+For each source entity, the extractor finds target entities whose attribute value matches the specified source attribute, and creates typed edges. These deterministic matches are assigned confidence 1.0. 
+
+B.5.2 Strategy 2: Type-Based Patterns 
+
+Structural relationships are inferred from entity type co-occurrence within the same source record. When two entities of types for which Σ defines a valid relationship are extracted from the same record, an edge is created. For example, in BLEND QA:           
+
+> Source Type Target Type Relationship
+> WikidataEntity WikidataTriple HAS_TRIPLE
+> WikidataTriple WikidataEntity OBJECT_OF
+> WebPassage WikidataEntity MENTIONS
+> ∗SourceRecord DERIVED_FROM
+
+These edges are assigned confidence 0.9–1.0, de-pending on the specificity of the type match. 
+
+B.5.3 Strategy 3: LLM Extraction 
+
+For relationships requiring semantic understanding, we invoke targeted LLM extraction using the origi-nal text context. To control cost, LLM relationship extraction is capped at 50 calls per source, applied only to records containing 2+ co-occurring entities. 
+
+Algorithm 5 Foreign Key Resolution  
+
+> 1:
+
+procedure RESOLVE FOR -
+
+> EIGN
+
+KEYS (EA, E B , fk ) 
+
+> 2:
+
+IA ← INDEX BY(EA, fk .source _col ) 
+
+> 3:
+
+IB ← INDEX BY(EB , fk .target _col ) 
+
+> 4:
+
+R ← ∅  
+
+> 5:
+
+for v ∈ KEYS (IA) ∩ KEYS (IB ) do  
+
+> 6:
+
+for eA ∈ IA[v] do  
+
+> 7:
+
+for eB ∈ IB [v] do  
+
+> 8:
+
+R ← R ∪{(eA, fk .rel _type , e B , fk .conf )} 
+
+> 9:
+
+end for  
+
+> 10:
+
+end for  
+
+> 11:
+
+end for  
+
+> 12:
+
+return R 
+
+> 13:
+
+end procedure 
+
+> # Example: extract semantic relations from text relationships: - type: DESCRIBED_IN source_entity: WikidataEntity target_entity: WebPassage extraction_method: llm
+
+The LLM receives the source text, candidate entity mentions extracted from that text, and returns typed relationship instances with confidence scores. 
+
+B.5.4 Cross-Source Foreign Key Resolution 
+
+When sources share identifier columns (detected during schema generation, Eq. 6), we resolve for-eign keys by hash-based index joining: Cross-source foreign keys enable multi-hop queries spanning sources by linking entities via shared identifier values. The FK resolver builds hash indexes over declared FK columns and mate-rializes edges for matching values, with confidence inherited from the schema-discovery step. 
+
+B.6 Provenance and SourceRecord Nodes 
+
+Every raw record is materialized as a SourceRe-cord node with full lineage tracking. Extracted entities receive DERIVED_FROM edges to their origi-nating records, enabling citation and grounding. 
+
+B.6.1 Provenance Metrics and Methodology 
+
+We measure provenance completeness as the frac-tion of extracted entities with valid DERIVED_FROM 
+
+edges. For grounding validation, we verify that: 1. All entities have at least one DERIVED_FROM 
+
+edge to a SourceRecord .18 2. SourceRecord nodes preserve original field values for traceability (e.g., entity_id ,
+
+record_id ). 3. Answer citations can be traced back to specific source records via graph traversal. The provenance layer enables answer grounding: when the QA agent returns an answer, it can cite the specific source records that supplied the supporting evidence via the DERIVED_FROM relationship chain. 
+
+B.7 Quality Validation and Dataset Preparation B.7.1 Quality Metrics 
+
+Before serving, we compute lightweight quality metrics: 
+
+IsolatedRatio = |{ e ∈ E : deg( e) = 0 }| |E| (7) 
+
+AvgDegree = 2|R||E| (8) A graph is marked QA-ready if IsolatedRatio <
+
+0.3 and AvgDegree ≥ 2.0.
+
+B.7.2 Schema and KG Evaluation Metrics 
+
+We define eight evaluation metrics organized in five blocks (Table 7). 
+
+Block A: Schema planning quality. Cross-SourceUtil (XSrcUtil ) measures the fraction of source pairs (Si, S j ) connected by at least one cross-source relationship in Σ. High values in-dicate the schema provides join paths for multi-source queries. 
+
+Block B: Schema execution fidelity. SchemaU-tility (SchUtil ) is the fraction of entity types in Σ
+
+instantiated as at least one KG node. Relation-shipUsage (RelUse ) is the analogous fraction for relationship types. Together they quantify schema 
+
+realization : whether planned types were populated. 
+
+Block C: KG structural integrity. LinkValid-ity (LinkVal ) is the fraction of edges whose source and target both exist – necessary for traversability. 
+
+ProvenanceCompleteness (ProvCom ) is the frac-tion of domain entities connected via at least one 
+
+DERIVED_FROM edge to a source record, ensuring traceability. 
+
+Block D: End-to-end semantic support. SchemaTypeAccuracy (SchTypeAcc ) is the fraction of entity types in evaluation queries that are semantically covered by the schema vocab-ulary. KGTypeAccuracy (KGTypeAcc ) is the fraction of query-referenced types semantically covered by entity types present in the KG. We use a two-step protocol: (1) an LLM extracts the abstract entity types needed to answer each query 
+
+without access to the schema ; (2) an independent LLM judge evaluates whether each extracted type is semantically covered by any schema/KG type. This avoids both information leaking (extraction is schema-blind) and vocabulary-gap artifacts (the judge reasons about semantic equivalence, e.g., query-derived “Revenue” is covered by schema-derived “FinancialMetric”). 
+
+Block E: Automation efficiency. SchTime is wall-clock time for schema induction (field cat-alog, two-pass discovery, structural intelligence). 
+
+IngestTime is per-document time from raw data to queryable Neo4j graph. Both measured on 500-sample subsets; all Block E times are one-time offline and amortized across queries. 
+
+B.7.3 Detailed Failure Analysis 
+
+Three failure modes emerge from the schema and KG evaluation metrics, each suggesting directions for improvement. 
+
+Relationship vocabulary redundancy. RelUse ranges from 42% (TAT-QA) to 69% (B LEND QA). Unused types fall into: (i) semantic alternatives 
+
+canonicalized into a dominant pattern (e.g., AT_-COMPANY subsumed by MEMBERSHIP_OR_EMPLOY-MENT_AT_ORGANIZATION ), and (ii) cross-source structural types requiring FK signals absent in the data. A pruning pass could yield RelUse closer to 100%, but we retain unused types for extension and future ingestion. 
+
+Schema over-specification. Up to half of schema-defined entity types go uninstantiated (TAT-QA SchUtil = 50%): the two-pass LLM dis-covery proposes all plausible types, but extraction only populates those with clear structural signals or sufficient frequency. Domain-specific types in spe-cialized corpora (e.g., ActuarialAssumption in TAT-QA) appear too rarely for reliable extraction, leaving valid definitions unpopulated. 
+
+Entity resolution and type loss. When identity keys cannot be discovered, deduplication falls back 19 Table 7: Unified schema+KG evaluation (5 blocks). “N/A” denotes not applicable. †Uses schema extension; Block E times are one-time offline, amortized across all queries. IngestTime normalized per document; measured on 500-sample subsets.                                                  
+
+> Dataset Block A Block B Block C Block D Block E XSrcUtil ↑SchUtil ↑RelUse ↑LinkVal ↑ProvCom ↑SchTypeAcc ↑KGTypeAcc ↑SchTime IngestTime
+> BLEND QA 58% 89% 69% 100% 100% 60% 58% 1.0 min 3.3 sec/doc HYBRID QA †41% 85% 48% 100% 100% 54% 49% 1.4 min 0.37 sec/doc TAT-QA †60% 50% 42% 100% 100% 62% 42% 2.4 min 0.33 sec/doc COMPLEX TR N/A 75% 43% 100% 100% 60% 44% 0.5 min 0.43 sec/doc
+
+Table 8: Query latency on HybridQA (n=1000). ETR: Extension Trigger Rate, EUR: Utilization Rate, EWR: Waste Rate.                           
+
+> Component Avg (ms) p50 (ms) p90 (ms)
+> KG Traversal 4.6 4.2 6.3 Schema Lookup 0.9 0.8 1.5 RAG/Vector 584.1 550.7 1022.4 LLM Synthesis 706.6 673.2 923.8
+> Total (base query) 1845.5 1810.0 2418.3
+> Extension latency 3365 3270 4836
+> ETR EUR EWR
+> Extension utility 85.3% 98.4% 1.6%
+
+to embedding-based clustering ( τ =0 .85 ). KGTy-peAcc falls below SchTypeAcc on every dataset, indicating schema-defined types lost during extrac-tion and deduplication. The gap is largest on C OM -
+
+> PLEX
+
+TR (44% vs. 60%) and TAT-QA (42% vs. 62%), where fuzzy matching discards borderline entities, and smallest on B LEND QA (58% vs. 60%), where heterogeneous sources provide richer extrac-tion context. 
+
+B.7.4 Dataset Preparation Methodology Table formatting. Structured tables (CSV, Ex-cel) are processed row-by-row. Nested JSON ar-rays within table cells are expanded using JSON-Path specifications from the schema (e.g., partic-ipants[*].name ). 
+
+Text chunking. Long documents are split into semantic chunks with the following parameters: • Chunking threshold: 10,000 characters (shorter documents are processed as-is). • Max chunk size: 8,000 characters (fits within LLM context windows while preserving se-mantic coherence). • Overlap: 500 characters to preserve context across chunk boundaries. • Field truncation: 12,000 characters per field (prevents extremely long values from over-whelming LLM prompts). • Chunking strategy: Section headers → dis-course boundaries (speaker turns, paragraphs) 
+
+→ sliding window (fallback). The 10K threshold avoids unnecessary chunking for short documents while keeping longer inputs within LLM context limits. The 8K chunk size ensures chunks fit within typical context windows (16K–32K tokens) with room for prompts and sys-tem messages. 
+
+Ingestion thresholds. Key thresholds governing extraction, deduplication, and linking: • Entity clustering: Embedding similarity ≥
+
+0.85 (distance ≤ 0.15 ) for fuzzy dedupli-cation. Balances precision (avoiding false merges) against recall (catching surface-form variants). • Link field matching: Deterministic, confi-dence 1.0, when the schema specifies explicit link fields. • Foreign key overlap: Column pairs with overlap > 0 (Eq. 6) are emitted as candidate FKs during schema generation; confidence is 
+
+0.5 + 0 .3 · overlap + 0 .15 · ⊮[exact name ]. At ingestion time, declared FKs are resolved via hash-index joining. • LLM relationship cap: Maximum 50 LLM calls per source for semantic relationship ex-traction, preventing excessive cost on sources with many entity co-occurrences. 
+
+Validation example (B LEND QA). With 28 en-tity types and ∼5.2K nodes across three sources, the graph achieves high connectivity via shared identifier values (connectivity >99%, average con-fidence 0.98; see Table 9 for per-dataset statistics). 20 Table 9: KG ingestion metrics across evaluation datasets. DetRatio: fraction of relationships extracted via deter-ministic (non-LLM) methods. ConfAvg: mean relation-ship confidence. DomRatio: fraction of nodes that are domain entities (excluding SourceRecord nodes).             
+
+> Dataset DetRatio ConfAvg DomRatio
+> BLEND QA 79% 0.98 83% TAT-QA 75% 0.97 61% COMPLEX TR 51% 0.95 58%
+
+B.8 Neo4j Ingestion 
+
+Entities and relationships are written to Neo4j using batched operations. 
+
+B.8.1 Index Creation 
+
+For each entity type in Σ, we create Neo4j indexes on the node label and its identity key (if declared) plus any frequently queried attributes: 
+
+> CREATE INDEX IF NOT EXISTS FOR ( n:<EntityType>) ON ( n.id) CREATE INDEX IF NOT EXISTS FOR ( n:<EntityType>) ON ( n.<identity_key>)
+
+B.8.2 Batched MERGE 
+
+Entities are upserted via MERGE to ensure idempo-tency:     
+
+> MERGE ( n:<EntityType> {id: $id}) ON CREATE SET n= $properties ON MATCH SET n+= $properties
+
+We process entities in batches of 1,000 to balance throughput against memory. Relationships are writ-ten similarly, with deduplication-mapped endpoint IDs. 
+
+B.9 Performance Characteristics 
+
+Table 9 summarizes ingestion metrics for datasets where global KG ingestion statistics are collected. 
+
+B.9.1 Reproducibility Checklist 
+
+To reproduce KG ingestion: 1. Prerequisites: Generated executable schema (from Section A). 2. Pipeline stages: The ingestion driver invokes the following modules: • Pipeline orchestrator (batching, paral-lelism, progress tracking) • Multi-strategy entity extractor (struc-tured + conditional LLM extraction) • Two-stage entity deduplicator (identity-key + embedding-based) • Three-strategy relationship extractor (FK links, type patterns, LLM) • Cross-source FK resolver • Neo4j graph writer 3. Configuration: Neo4j connection via envi-ronment variables or a local settings file. 4. Key parameters: Batch size (default: 100), max workers (default: 8), chunk size (8,000 chars), overlap (500 chars), similarity thresh-old (0.85), embedding model ( all-MiniLM-L6-v2 ). 5. Output: Neo4j graph with provenance edges (DERIVED_FROM ). 
+
+C Schema Extension: Technical Details 
+
+This appendix provides implementation details for the schema extension system described in Sec-tion 3.4. 
+
+C.1 Architecture Overview 
+
+The extension system comprises two complemen-tary components with different analysis depths: 1. SchemaExtender (persistent): Permanently extends the schema when new documents ar-rive. Runs the full analysis pipeline – two-pass LLM discovery, structural analysis (iden-tity keys, foreign keys, JSON paths), and semantic type enrichment – identical to ini-tial schema generation (Section A), ensuring methodological consistency and quality par-ity. 2. QueryDrivenSchemaExtender (query-scoped): Extends the schema in-memory for a specific query with automatic revert. Uses a single LLM call to analyze query requirements and propose candidate entity types with confidence scores, trading analysis depth for speed ( ∼8× faster than persistent extension). 
+
+C.2 Sufficiency Analysis 
+
+Before invoking expensive deep analysis, we per-form a fast sufficiency check to determine whether extension is needed. 21 Algorithm 6 Query Sufficiency Analysis  
+
+> 1:
+
+procedure ANALYZE QUERY REQUIRE -
+
+> MENTS
+
+(Q, Σ) 
+
+> 2:
+
+Ementioned ←
+
+EXTRACT ENTITY MENTIONS (Q) 
+
+> 3:
+
+Eschema ← GET ENTITY TYPES (Σ)  
+
+> 4:
+
+missing ← ∅  
+
+> 5:
+
+for e ∈ Ementioned do  
+
+> 6:
+
+enorm ← NORMALIZE (e) ▷
+
+“sovereign state” → “Country”  
+
+> 7:
+
+if enorm /∈ Eschema then  
+
+> 8:
+
+missing ← missing ∪ { e} 
+
+> 9:
+
+end if  
+
+> 10:
+
+end for  
+
+> 11:
+
+return (|missing | > 0, missing ) 
+
+> 12:
+
+end procedure C.2.1 Query-Based Sufficiency 
+
+For user queries, we extract entity mentions and compare against the current schema: Query sufficiency analysis extracts entity men-tions from queries and checks against schema vo-cabulary. If all mentions map to existing entities, extension is skipped; otherwise, deep extension is triggered. 
+
+C.2.2 Document-Based Sufficiency (Quick Analyze) 
+
+For new documents, we offer a fast compatibility check sampling 5 records with a single LLM call (∼5 seconds, ∼$0.01):  
+
+> # Quick analyze result for a new document matches_schema: false
+> new_entities: [Acquisition, Partnership] confidence: 0.85 reasoning: "Document␣contains␣M&A␣events␣not␣ modeled␣in␣schema"
+
+C.3 Deep Extension Pipeline 
+
+When sufficiency analysis indicates extension is needed, we invoke the full analysis pipeline. 
+
+C.3.1 Analysis Phase 
+
+Persistent extension reuses the same analyzers as initial schema generation (Section A): 1. Two-pass LLM discovery: Deep + valida-tion passes to extract entities and relationships from the new data. 2. Semantic enrichment: Detect additional en-tity types from data values (not field names alone). 
+
+Algorithm 7 Schema Diff Computation  
+
+> 1:
+
+procedure COMPUTE DIFF (analysis , Σ) 
+
+> 2:
+
+diff ← { new _entities : [] , new _attrs :
+
+{} , new _rels : [] } 
+
+> 3:
+
+Eexisting ← GET ENTITIES (Σ)  
+
+> 4:
+
+for e ∈ analysis .entities do  
+
+> 5:
+
+if e. type /∈ Eexisting then  
+
+> 6:
+
+diff .new _entities .APPEND (e) 
+
+> 7:
+
+else  
+
+> 8:
+
+Anew ← e. attrs \
+
+Eexisting [e. type ].attrs  
+
+> 9:
+
+if |Anew | > 0 then  
+
+> 10:
+
+diff .new _attrs [e. type ] ←
+
+Anew  
+
+> 11:
+
+end if  
+
+> 12:
+
+end if  
+
+> 13:
+
+end for  
+
+> 14:
+
+// Similar logic for relationships and struc-tural intelligence  
+
+> 15:
+
+return diff  
+
+> 16:
+
+end procedure 
+
+3. Structural analysis: Detect identity keys, for-eign keys, and JSON paths – all without LLM involvement. This produces a complete intelligence package methodologically identical to the initial schema. Query-scoped extension uses a lighter single-call analysis (Section C.6). 
+
+C.4 Diff-Based Merge 
+
+We compute a schema diff to identify additions without modifying existing definitions. 
+
+Merge rules. 
+
+• New entity types are appended (never replace existing). • New attributes extend existing entity defini-tions. • Conflicting types are flagged; existing defini-tion takes precedence. • Version metadata tracks each extension for audit. In query-scoped extension, only additions with LLM-assigned confidence ≥ 0.7 are merged; per-sistent extension merges all additions that survive the diff, since the full analysis pipeline already pro-vides high-quality outputs. Both modes enforce 22 the monotonicity invariant: existing definitions are never removed or modified. 
+
+C.5 Persistent Extension 
+
+Persistent extension writes the updated schema to disk with version tracking. 
+
+C.5.1 Version Management 
+
+Each extension increments the schema version and logs changes: 
+
+> # Schema header after extension schema_version: 2 extensions: - version: 2 timestamp: "2026-01-26T14:30:00Z" added_entities: [Acquisition] added_relationships: [ACQUIRED] added_attributes: Company: [acquisition_count] structural_changes: identity_keys: [Acquisition.deal_id] foreign_keys: [acquirer_qid -> entity_id]
+
+C.5.2 Extension Log 
+
+A separate JSON log provides detailed audit trail: 
+
+> {"timestamp": "2026-01-26T14:30:00Z", "source_document": "new_acquisitions.jsonl" }
+
+C.6 Query-Scoped Extension 
+
+Query-scoped extension modifies an in-memory copy without persisting changes. 
+
+C.6.1 Context Manager Pattern 
+
+We implement automatic cleanup via Python con-text managers:   
+
+> # Automatic revert after query processing
+> with extender.query_context(query) as
+> extended_schema: entities = extract_entities(data, extended_schema) answer = retrieve_and_answer(query, entities) # Schema automatically reverted here
+
+C.6.2 Extension Lifecycle 
+
+The extended schema is used for the current query’s retrieval and then automatically reverted via the context manager. Optional snapshots can be saved for manual review and later promotion to a persis-tent schema. 
+
+C.6.3 Snapshot for Manual Promotion 
+
+Query-scoped extensions can optionally be saved as snapshots for later review: 
+
+Algorithm 8 Query-Scoped Extension  
+
+> 1:
+
+procedure EXTEND FOR QUERY (Q, Σbase ) 
+
+> 2:
+
+analysis ←
+
+ANALYZE QUERY REQUIREMENTS (Q, Σbase ) 
+
+> 3:
+
+if ¬analysis .needs _extension then  
+
+> 4:
+
+return Σbase  
+
+> 5:
+
+end if  
+
+> 6:
+
+Σ′ ← DEEP COPY (Σ base ) 
+
+> 7:
+
+for e ∈ analysis .required _entities do  
+
+> 8:
+
+if e. confidence ≥ 0.7 then  
+
+> 9:
+
+ADD ENTITY (Σ ′, e ) 
+
+> 10:
+
+end if  
+
+> 11:
+
+end for  
+
+> 12:
+
+return Σ′ 
+
+> 13:
+
+end procedure  
+
+> 14:
+
+procedure REVERT TOBASE  
+
+> 15:
+
+Σ′ ← DEEP COPY (Σ base ) ▷ Discard extensions  
+
+> 16:
+
+end procedure 
+
+> result = extender.extend_for_query(query, save_snapshot=True) # Snapshot saved to: snapshots/ schema_20260126_143000.yaml # Later, manually review and load as persistent schema if useful
+
+Snapshots are YAML files written to a snap-shots/ directory. Promotion to a persistent schema requires manual review and loading – an intentional design choice to prevent untested query-driven en-tities from silently entering the production schema. 
+
+D Schema-Guided QA Agent: Technical Details 
+
+This appendix details the query-time agent de-scribed in Section 3.5. Given a query Q, a schema 
+
+Σ′ (possibly query-extended), structured data stores (DataFrames loaded via the schema’s source cat-alog), and a dense text index (FAISS over em-beddings), the agent performs schema-conditioned query analysis , tool routing , reliability gating , and 
+
+answer synthesis .
+
+D.1 Tools and I/O Contracts 
+
+The agent exposes a modular tool set with explicit I/O contracts. The core routing logic uses the first three; additional tools are available for dataset-specific needs. 
+
+SCHEMA LOOKUP (deterministic structured lookup). Input: entity type, key/value constraints, and an optional return field – all derived from Σ′.23 Execution: loads the relevant source DataFrame (identified by Σ′’s source catalog), applies exact-then-fuzzy constraint matching, and extracts the return field. Supports nested JSON-in-CSV fields via automatic parsing. Output: matching attribute values and per-constraint match scores. 
+
+VECTOR RAG (dense retrieval over unstructured evidence). Input: query string and optional enti-ty/temporal filters (e.g., ticker, quarter). Execu-tion: encodes the query with the index’s embed-ding model, applies FAISS IDSelector -based pre-filtering when entity constraints are available, and optionally reranks candidates with a cross-encoder (BAAI/bge-reranker-large). Output: top-k text chunks with similarity scores. 
+
+EXTERNAL SEARCH (web search for OOD queries). Input: query string. Output: web snippets for queries that fall outside the schema’s coverage (see Section D.3). 
+
+GRAPH TRAVERSE (link following, dataset-specific). Used for benchmarks requiring exter-nal knowledge traversal (e.g., Wikipedia link fol-lowing in HybridQA, Wikidata entity lookups in BlendQA). Not invoked by the core routing policy; activated only when the schema declares linked external sources. 
+
+D.2 Schema-Conditioned Query Analysis 
+
+The agent extracts (i) candidate entity types from 
+
+Σ′ and (ii) an expected answer type. In our im-plementation, entity-type selection is performed either via lightweight heuristics (e.g., table-column typing in HybridQA) or via constrained LLM classification over the schema vocabulary (e.g., ComplexTR). Answer type is predicted as one of { string , number , date , entity list }, which guides tool selection and output validation. 
+
+D.3 OOD Detection 
+
+The two-stage reliability gating described in Sec-tion 3.5 is implemented as follows. 
+
+Pre-retrieval (Stage 1). Before any tool is in-voked, the agent checks: 1. Temporal OOD : keywords indicating real-time information needs (“current”, “latest”, “today”) or year references beyond Σ′’s tem-poral range. 2. Entity OOD : extracted entity mentions (e.g., tickers) that do not appear in Σ′’s known-value dictionaries. If either check fires, the query is flagged OOD and routed directly to E XTERNAL SEARCH .
+
+Post-retrieval (Stage 2). After tool execution, the agent checks: 1. Retrieval confidence : if the maximum sim-ilarity score across retrieved passages falls below a threshold (default 0.3), the result is flagged as low-confidence. 2. Answer grounding : if the generated answer contains uncertainty phrases (e.g., “I cannot determine”), the result is flagged. Flagged queries trigger a fallback to E XTER -
+
+> NAL
+
+SEARCH and confidence is discounted. 
+
+D.4 Routing Policy 
+
+Routing is schema-driven : the agent prefers deter-ministic structure when the schema exposes typed, discrete-valued fields. The policy follows a prefer-ence order: • If Q’s constraints map to typed columns with discrete values in Σ′ (e.g., identifier fields, categorical attributes, temporal keys), invoke SCHEMA LOOKUP on the source identified by 
+
+Σ′’s entity-to-source mapping. • If Q requires descriptive evidence or Σ′ in-dicates unstructured fields are relevant, in-voke V ECTOR RAG with entity/temporal pre-filtering derived from Q’s constraints. • If the pre-retrieval OOD gate fires, route to EXTERNAL SEARCH .• If S CHEMA LOOKUP returns empty, the agent retries with VECTOR RAG; if both local tools are exhausted, it escalates to E XTER -
+
+> NAL
+
+SEARCH .
+
+D.5 Plan–Execute–Retry Loop 
+
+Algorithm 9 summarizes the agent loop, includ-ing the retry mechanism with failure summaries described in Section 3.5. 
+
+Confidence decomposition. The composite con-fidence c = clink · cnode · cground decomposes as fol-lows. clink captures path confidence (1.0 for single-tool plans, discounted for multi-tool compositions). 
+
+cnode = min i mi is the minimum constraint-match score across all query constraints, where mi = 1 .0
+
+for exact match and 0.8 for substring containment 24 Algorithm 9 Schema-Guided QA Agent with Reli-ability Gating  
+
+> 1:
+
+procedure ANSWER (Q, Σ, D, I) ▷ D: data stores, I: text index  
+
+> 2:
+
+Σ′ ← MAYBE EXTEND SCHEMA (Q, Σ) 
+
+> 3:
+
+if PRE RETRIEVAL OOD( Q, Σ′) then re-turn EXTERNAL SEARCH (Q) 
+
+> 4:
+
+end if  
+
+> 5:
+
+(T, A ) ← ANALYZE QUERY (Q, Σ′) ▷
+
+entity types, answer type  
+
+> 6:
+
+failure ← NONE  
+
+> 7:
+
+for r = 0 to Rmax do  
+
+> 8:
+
+P ← ROUTE -TOOLS (Q, T, A, Σ′, failure ) 
+
+> 9:
+
+E ← S 
+
+> p∈P
+
+EXECUTE (p, Q, Σ′, D, I) 
+
+> 10:
+
+ˆy ← EXTRACT ANSWER (Q, E) 
+
+> 11:
+
+(ˆ yg, g ) ← GROUND ANSWER (ˆy, E) ▷
+
+grounded answers, type  
+
+> 12:
+
+c ← clink · cnode · cground (g) 
+
+> 13:
+
+if ˆyg̸ = ∅ then return (ˆ yg, c ) 
+
+> 14:
+
+end if  
+
+> 15:
+
+failure ← BUILD FAILURE SUM -
+
+> MARY
+
+(E) 
+
+> 16:
+
+end for  
+
+> 17:
+
+return (∅, 0) ▷ abstain after Rmax retries  
+
+> 18:
+
+end procedure 
+
+match. cground reflects evidence support: 1.0 if an-swers match structured candidates exactly, 0.9 for passage-supported answers, 0.7 for partial passage support, and 0.0 when no evidence supports the answer. 
+
+Failure summary and retry. When no grounded answer is found, the agent builds a structured fail-ure summary identifying: (i) which tools were tried and returned empty, and (ii) which tools were not 
+
+tried and should be included in the next attempt. For example, if S CHEMA LOOKUP returned no can-didates and V ECTOR RAG was not invoked, the failure summary mandates V ECTOR RAG in the retry. If all local tools are exhausted, E XTER -
+
+> NAL
+
+SEARCH is escalated. 
+
+D.6 Execution Traces and Diagnostics 
+
+For each query we record: invoked tools, tool outputs (e.g., number of structured matches, re-trieved passages, match scores), and latency. These traces support routing diagnostics such as tool us-age rates, OOD detection rates, and tool-specific failure modes, complementing end-to-end QA met-rics. 
+
+E LLM Prompts 
+
+This section reproduces the core prompt templates used in schema generation (§A), KG ingestion (§B), and the QA agent (§D). Each prompt is shown in condensed form with variable placehold-ers ( {...} ) indicating inputs injected at runtime. Output-format sections show illustrative instanti-ations; actual entity types, relationship types, and IDs are populated from the discovered schema at runtime. 
+
+E.1 Schema Discovery Prompt (Deep Discovery) 
+
+This prompt is the first LLM call in the two-pass schema generation pipeline (§A.6). It receives the field catalog produced by the structural ana-lyzer and a set of matched samples, and asks the model to propose entity types, relationships, tem-poral configuration, and extraction methods. At runtime, format-adaptive interpretation rules (e.g., table-column entity discovery for tabular sources, nested-structure handling for JSON) are automati-cally selected based on the detected source format; these are omitted here for space. 25 Deep-Discovery Prompt Template 
+
+You are an expert schema discovery agent. Your job is to infer an initial single-source schema by OBSERVING ONLY: 1) the FIELD CATALOG (authoritative list of fields), and 2) the SAMPLE DATA provided (may include multiple samples). DO NOT invent fields, entities, or relationships that are not evidenced in the samples. PRIORITIZE COMPLETENESS: model ALL entity types and relationships across all samples provided. 
+
+Dataset: {description} 
+
+Source Format: {format} (JSON / CSV / Parquet / Text / Hybrid) 
+
+Total Records: {num_records} 
+
+FIELD CATALOG (authoritative): 
+
+{catalog_json} 
+
+SAMPLE DATA (read ALL carefully; only evidence): 
+
+{sample_str} 
+
+=== STEP A – OBSERVE (EVIDENCE FIRST) === 
+
+List concrete patterns: identifiers/keys, repeated labels, turn-taking markers, date/time expressions, nested structures. For each observation capture field_id + short snippet. 
+
+=== STEP B – ENTITIES (COMPREHENSIVE DISCOVERY) === 
+
+Discover TWO kinds of entities: 1. INSTANCE-BASED: same specific instance appears multiple times (e.g., same person, organization, identifier). 2. CONCEPTUAL / CATEGORICAL: different instances of the same concept type (e.g., FinancialMetric, Product, TimePeriod). For each entity provide: name, description, anchor (primary key or natural key), attributes (field_id, name, type_guess), extraction method (field | nested_field | pattern | llm), examples, and confidence in [0,1]. Include a SourceRecord entity for provenance tracking. 
+
+=== STEP C – RELATIONSHIPS (COMPREHENSIVE) === 
+
+Propose ALL relationships evidenced in the data: - STRUCTURAL (foreign keys, co-occurrence in records) - SEMANTIC (text spans, possessive/attributive patterns) - IMPLICIT (metric → time period when co-occurring) For each: type (UPPER_SNAKE), source/target entities, cardinality, evidence snippet, extraction strategy (join_on_field | co_-occurrence | within_text_span | semantic_-extraction), and confidence. 
+
+=== STEP D – TEMPORAL CONFIG === 
+
+Enable temporal ONLY if sample shows time-bound relationships. Choose: edge_properties | reified_nodes | date_-nodes | none. 
+
+OUTPUT: strict JSON with keys {observations, entities, relationships, temporal, notes}. 
+
+E.2 Schema Validation Prompt 
+
+The second LLM call (§A.6) reviews additional (diverse) samples against the existing schema to detect gaps. It preserves the existing schema and proposes additions only .Validation & Extension Prompt Template 
+
+You are a schema validation + extension agent. Review ADDITIONAL SAMPLES and the FIELD CATALOG to find NEW patterns, entities, or relationships that complement the existing schema. 
+
+GUIDELINES: 
+
+1) Preserve existing schema by default. 2) Add NEW entities for any distinct uncaptured concepts. 3) Add NEW relationships for any clear connections. 4) Add NEW attributes for existing entities if found. 5) Note issues but do not remove existing elements. 
+
+FIELD CATALOG (authoritative): 
+
+{catalog_summary} 
+
+EXISTING SCHEMA (authoritative; must be preserved): 
+
+Entities: {entity_summary} Relationships: {relationship_summary} Temporal: {temporal_info} 
+
+ADDITIONAL SAMPLES (only for gap finding): 
+
+{samples_str} 
+
+WHAT TO LOOK FOR: 
+
+Step 1 – Check field catalog for uncovered fields that represent distinct concepts. Step 2 – Check sample data: Add entity if: distinct queryable concept, conceptual category, or recurring multi-context concept. Add relationship if: structural or semantic connection observed, including LLM-extractable ones. 
+
+EVIDENCE RULES: 
+
+Every addition requires: evidence snippet (≤25 words), source field_id, extraction method (field | nested_field | pattern | llm), confidence in [0,1]. 
+
+OUTPUT: strict JSON with keys {added_-entities, added_relationships, added_-attributes, temporal_changes, issues, notes}. 
+
+E.3 Query-Driven Schema Extension Prompt 
+
+When the QA agent encounters a query whose required concepts are not covered by the cur-rent schema, the QueryDrivenSchemaExtender 
+
+invokes this analysis prompt to determine whether on-the-fly extension is warranted (§C.6). 26 Query-Driven Schema Analysis Prompt 
+
+Analyze this user query to determine if we need additional entity types or relationships beyond the current knowledge graph schema. 
+
+Query: "{query}" 
+
+Existing entities: {existing_entities} 
+
+Existing relationships: {existing_-relationships} 
+
+Task: 
+
+1. Identify entity types mentioned or implied. 2. Determine if any are MISSING from existing entities. 3. Identify any relationships needed that are MISSING. 4. For each missing item, provide: - Type name - Confidence (0.0–1.0) - Reason why needed - Example instances from the query - Attributes to track 
+
+Return JSON: 
+
+{ "needs_extension": true/false, "required_entities": [ {"type": "...", "confidence": 0.95, "reason": "...", "examples": [...], "attributes": [...]} ], "required_relationships": [ {"type": "...", "source_entity": "...", "target_entity": "...", "confidence": 0.9, "reason": "..."} ], "reasoning": "..." } Important: Only suggest extensions if truly needed. Return empty lists if existing schema is sufficient. 
+
+E.4 QA Agent: Pre-Retrieval Prompt 
+
+The pre-retrieval prompt performs schema-conditioned query analysis and tool selection (§D.2, §D.4). It receives the full schema and the user query, and outputs a tool invocation plan. An OOD gate (§D.3) is applied before tool execution. Pre-Retrieval: Schema Analysis & Tool Selec-tion 
+
+You are a schema-guided question-answering agent. Analyze the question against the schema to determine which tools to invoke. 
+
+=== SCHEMA (YAML) === 
+
+{schema_yaml} 
+
+=== AVAILABLE TOOLS === SchemaLookup(entity_type, constraints, return_field) 
+
+Deterministic lookup on structured data sources. Use for: typed attribute queries, identifier lookups. 
+
+VectorRAG(query, filters, top_k) 
+
+Dense retrieval over unstructured text passages. Use for: descriptive evidence, open-ended questions. 
+
+GraphTraverse(start_entity, pattern) 
+
+Follow links in the knowledge graph. Use for: multi-hop reasoning, relationship traversal. 
+
+ExternalSearch(query) 
+
+Web search fallback for out-of-distribution queries. Use for: queries outside schema coverage. 
+
+=== QUESTION === 
+
+{query} 
+
+=== INSTRUCTIONS === 
+
+1. Parse the schema to identify relevant entity types, relationships, and field semantics. 2. Check for OOD signals: temporal keywords (“current”, “latest”), entity mentions absent from schema. If OOD, route directly to ExternalSearch. 3. Select tools based on query type: - Typed, discrete-valued constraints →
+
+SchemaLookup - Descriptive / unstructured evidence →
+
+VectorRAG - Multi-hop or relationship queries →
+
+GraphTraverse - Out-of-distribution → ExternalSearch 4. Generate tool calls with schema-derived parameters. 
+
+OUTPUT: 
+
+{tool_calls} 
+
+27 F Adapted GraphRAG Baseline 
+
+Adapted GraphRAG baseline. 
+
+GraphRAG (Edge et al., 2024) builds community-summarized graphs over text corpora and retrieves via community reports, targeting homogeneous text summarization rather than multi-source schema-guided QA. Applying it to our setting requires serializing heterogeneous tables, JSON, and structured records into textual evidence units – design choices absent from GraphRAG’s original formulation. We therefore report this comparison as an appendix diagnostic rather than in the main controlled baseline block. The adapted pipeline uses the same GPT-4.1 backbone, dataset-provided sources, exclusion manifest, and evaluation harness as the controlled baselines, but does not use our induced schema, foreign-key paths, provenance graph, or schema-conditioned router. We aug-ment the standard GraphRAG indexing pipeline with three dataset-aware preprocessing steps: (1) metadata saturation, where key identifiers are re-injected every 800 characters so they survive chunking and remain available at retrieval time; (2) structured-data serialization, where tables are converted to pipe-delimited markdown with explicit header rows and paragraphs are appended as contiguous text blocks, preserving the tabular-textual duality of the source; and (3) domain-tuned entity schemas, where entity types are customized per dataset (e.g., adding metric, segment, and date for financial QA) rather than relying on generic defaults. At retrieval time, we shift weight toward text units and increase the entity/relationship fan-out ( top k = 30 ) relative to GraphRAG defaults, favoring fine-grained lexical evidence over commu-nity summaries for fact-centric QA. We note that GraphRAG is least disadvantaged on ComplexTR, whose corpus consists of homogeneous textual fact sentences from a single source – the setting GraphRAG was designed for – but drops noticeably on BlendQA and TAT-QA, where heterogeneous tables, structured records, and passages must be jointly queried. HybridQA is omitted because adapting GraphRAG to its 79K-document corpus was computationally prohibitive for this diagnostic assessment. 
+
+G Use of AI Assistants 
+
+AI assistants were used during development for code debugging and polishing the manuscript’s lan-guage. All scientific claims, experimental design,                                  
+
+> Table 10: Adapted GraphRAG results on three bench-marks alongside our Schema-Guided results from Ta-ble 2. GraphRAG uses dataset-aware serialization, domain-tuned entity schemas, and the same GPT-4.1 backbone, sources, exclusions, and evaluation harness, but not our induced schema, FK paths, provenance graph, or schema-conditioned router.
+> Dataset Method EM F1 BLEU LJ
+> BLEND QA GraphRAG 18.5 32.7 34.9 62.1 Ours 29.3 48.9 54.1 72.3
+> TAT-QA GraphRAG 24.8 23.4 22.7 48.1 Ours 74.3 82.6 68.6 93.2
+> COMPLEX TR GraphRAG 45.2 50.1 52.2 50.7 Ours 74.5 82.2 82.0 79.5
+
+system architecture, results, and final text were de-vised and verified by the authors. 28

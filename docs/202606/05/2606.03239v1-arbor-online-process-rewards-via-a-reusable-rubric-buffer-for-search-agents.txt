@@ -1,0 +1,749 @@
+Title: ARBOR: Online Process Rewards via a Reusable Rubric Buffer for Search Agents
+
+URL Source: https://arxiv.org/pdf/2606.03239v1
+
+Published Time: Wed, 03 Jun 2026 00:42:25 GMT
+
+Number of Pages: 18
+
+Markdown Content:
+# ARBOR: Online Process Rewards via a Reusable Rubric Buffer for Search Agents 
+
+Zheng Liu 1,∗, Longxiang Zhang 2, Xintong Wang 2, Zhiang Xu 2, Shaoxiong Zhan 1,Xin Shan 3, Wen Huang 1, Tao Dai 4,†, Shu-Tao Xia 1, Chengfu Huo 2, Liang Ding 2,†
+
+1 Tsinghua University 2 Alibaba Group 3 Peking University 4 Shenzhen University 
+
+liu-z24@mails.tsinghua.edu.cn , {daitao.edu, liangding.liam}@gmail.com ,
+
+Abstract 
+
+LLM-based search agents are trained predomi-nantly with outcome-only reward, leaving the search process itself unsupervised. This signal degenerates on outcome-homogeneous groups where all sampled trajectories share the same correctness, yielding zero within-group advan-tage and no gradient. Existing process supervi-sion either trains a costly verifier or generates per-query rubrics that are inconsistent across queries and discarded after one use. We pro-pose ARBOR (Adaptive Rubric Buffer for 
+
+Online Reward), a reusable process-reward framework that maintains a rubric memory shared across queries. Query-local drafts in-duced from contrastive trajectories are admit-ted, consolidated into cross-query common rubrics, and retired as the policy evolves. A small active subset of common rubrics scores trajectories via sparse pairwise judging, and the resulting scores are added to the base reward, providing process-level gradient even when out-come reward is uniform. ARBOR consistently outperforms GRPO and DAPO baselines on four multi-hop QA benchmarks, raising aver-age LLM-judge accuracy by up to 4.2 points and converting up to 42% of otherwise-zero-gradient training groups into informative ones. 1
+
+1 Introduction 
+
+LLM-based agents that interact with external en-vironments under reasoning-and-acting paradigms such as ReAct (Yao et al., 2023) have become a standard approach to complex tasks. A representa-tive case is the search agent (Press et al., 2023; Xi et al., 2025), which answers multi-hop questions re-quiring external knowledge by iteratively rewriting queries, retrieving evidence, filtering observations, and integrating them into a final answer. This in-teraction pattern lets search agents substantially 
+
+> *
+
+Work done during an internship at Alibaba. 
+
+> †
+
+Corresponding authors. 
+
+> 1
+
+We will release our code and models after the review process. When was the town, located approximately 45 miles north -west of London where Gerald Eve                      
+
+> LLP has offices, formally designated as a new town?
+> Shared Prefix
+> Find Gerald Eve office town ~45 mi les NW of London →find its new -town designation year.
+> Gerald Eve LLP offices locations
+> Offices in London, West Malling, Manchester, Milton Keynes, Birmingham, Cardiff, Glasgow...
+> Query
+> Search
+> Think
+> Result
+> Trajectory B
+> Several offices listed. Check each one's
+> distance from London. Start with West Malling.
+> distance London to West Malling
+> 27 –32 miles
+> Not ~45 miles. Try the next: Manchester .
+> . . .7 more searches
+> 23 January 1967
+> Low Quality Think Think
+> Search
+> Result
+> Think
+> Answer
+> Bad Search Query
+> Correct but Inefficient
+> Trajectory A
+> Milton Keynes is more likely a ‘new town’; verify
+> the distance.
+> distance London to Milton Keynes
+> 46 –57 miles
+> 46 -57 miles fits the “approximately 45 miles .
+> Confirm if Milton Keynes is a new town and
+> when it was formally designated .
+> . . . 1 confirming search
+> 23 January 1967
+> Think
+> Search
+> Result
+> Think
+> Answer
+> High Quality Think
+> Good Search Query
+> Correct and Efficient
+
+Figure 1: Process quality divergence under identical outcomes. Two trajectories from the same query reach the same answer yet differ markedly in search efficiency. 
+
+outperform LLMs that answer directly on multi-hop QA and other complex information-retrieval tasks. Recent systems such as Search-R1 (Jin et al., 2025) and R1-Searcher (Song et al., 2025), together with other search-agent RL studies (Li et al., 2025; Jiang et al., 2025), further show that RL is an ef-fective way to push the capability ceiling of search agents and has become the dominant paradigm for their training. Within this paradigm, the RL stage relies almost exclusively on outcome-only reward, using final-answer correctness as the reward signal together with a format penalty (Shao et al., 2024; Yu et al., 2025), and provides no supervision on the search process itself. Trajectories sampled from the same query can follow very different search paths even when they arrive at the same outcome, as illustrated in Fig-ure 1: one may reason carefully through targeted re-trieval while another stumbles onto the answer after redundant detours, but final-answer correctness as-signs them identical reward. Under group-relative objectives such as GRPO (Shao et al., 2024), iden-tical within-group reward produces zero relative 1
+
+> arXiv:2606.03239v1 [cs.CL] 2 Jun 2026
+
+advantage and no policy gradient, so process dif-ferences that could inform better search behav-ior contribute nothing to training. Such outcome-homogeneous groups are far from rare in search-agent RL training (see Section 4.3), making them a major bottleneck for outcome-only reward. Adding process-level supervision is a natural re-sponse, yet existing routes do not fit search agents cleanly. Training a process reward model (PRM) requires rollout-based annotation or value estima-tion over intermediate reasoning states (Lightman et al., 2024; Wang et al., 2024; Luo et al., 2024; Cui et al., 2025); in search agents, this can require rolling back from intermediate states and invok-ing search APIs at prohibitive cost, while forcing the inherently qualitative nature of search behav-ior into discrete step-correctness labels. Query-specific LLM-generated rubrics, exemplified by Rubrics-as-Rewards (Gunjal et al., 2026), sidestep verifier training but produce inconsistent criteria across queries and are discarded after one use, so they cannot stably reflect process regularities across queries or evolve with the policy. These limitations point to three properties that a process reward suited to search-agent RL should possess. First, it should supervise the search pro-cess itself, supplying learning signal for the process quality that outcome-only reward overlooks; this property matters most on outcome-homogeneous groups, where process supervision is the only avail-able within-group signal. Second, the process cri-teria should be general, cross-query reusable stan-dards, rather than query-specific rubrics that may conflict across queries. Third, the effectiveness of process criteria decays as the policy’s behavior dis-tribution evolves, so the criteria themselves must be updated continuously rather than fixed once. We propose ARBOR (Adaptive Rubric Buffer for Online Reward), a reusable process-reward framework for search-agent RL training. The core component is a rubric memory consisting of a can-didate pool, which holds query-local drafts induced from contrastive trajectories within a query-group, and a common pool, which stores rubrics consol-idated into reusable cross-query process criteria. An online lifecycle of admission, consolidation, and retirement consolidates candidate drafts into common rubrics and retires stale ones, so that the common pool provides a unified criterion across queries and evolves with the policy’s behavior dis-tribution. Reward shaping invokes only a small ac-tive subset of common rubrics. Trajectories within a query-group are scored pairwise under each ac-tive rubric, and the resulting scores are added to the base reward. The reusable common pool remains effective even on outcome-homogeneous groups, where it still yields within-group process discrimi-nation that outcome-only reward cannot. Figure 2 shows the overall framework. Our contributions are as follows: (1) we pro-pose ARBOR, a reusable process-reward frame-work that provides within-group process supervi-sion even when outcome-only reward yields zero gradient; (2) we design a rubric memory with an on-line admission, consolidation, and retirement life-cycle that maintains consistent cross-query process criteria and evolves with the policy; and (3) AR-BOR consistently outperforms GRPO and DAPO across three Qwen3 scales on four multi-hop QA benchmarks, improving average LLM-judge accu-racy by up to 4.2 points and converting up to 42% 
+
+of outcome-homogeneous groups into ones with nonzero reward variance. 
+
+2 Related Work 
+
+2.1 RL Reward Design for Search Agents 
+
+Reward design for RL-trained search agents has evolved along three lines. The dominant paradigm relies on outcome-only reward, using final-answer correctness or F1 plus format penalties, and leaves the search process entirely unsupervised. Search-R1 (Jin et al., 2025), R1-Searcher (Song et al., 2025), and Search-o1 (Li et al., 2025) are repre-sentative of this approach. A second line augments outcome reward with task-specific process heuris-tics such as information gain, path coverage, or retrieval cost, as in StepSearch (Zheng et al., 2025), Search-P1 (Xia et al., 2026), SIGHT (Zhong et al., 2026), InfoFlow (Luo et al., 2025), and TIPS (Xie et al., 2026b), but these metrics cannot capture qual-itative aspects of search strategy. A third line trains a process reward model (PRM) to provide step-level feedback, with supervision constructed in dif-ferent ways: PRM800K (Lightman et al., 2024) uses human annotation, Math-Shepherd (Wang et al., 2024) and OmegaPRM (Luo et al., 2024) use rollout-value estimation, and PRIME (Cui et al., 2025) infers from outcomes. In the search-agent setting, representative attempts include PPR (Xu et al., 2025) with pre-defined principles and a category-aware PRM, ReasonRAG (Zhang et al., 2025b) with MCTS-constructed step-level anno-tations followed by process-supervised DPO, and 2Contrastive Induction                     
+
+> Where was the director of
+> Inception born?
+> !!
+> Trajectories !%
+> …
+> "Inception director" →Nolan
+> "Nolan birthplace"
+> →"London ,England" ✔
+> "Inception director
+> birthplace" →"England"
+> ReAct
+> !"#$%
+> &
+> "Inception facts ?"
+> →“USA "✘!)*$+(
+> &
+> ……
+> (!!,!"#$%
+> &)
+> (!!,!)*$+(
+> &)
+
+Rubric Buffer                    
+
+> Consolidation
+> Draft Rubric Judge
+> Candidate Pool #
+> Decomposes multi -hop into entity →
+> attribute sub -queries
+> Constraint propagation ...
+> Avoids redundant queries
+> ... (drafts accumulate)
+> Common Pool $
+> Precise entity -attribut etargeting
+> Evidence -guided termination
+> Precision in relational queries
+> ... (common rubrics )
+> (&'( <*&)
+> Retirement
+> ,'<,()*
+> -'>/
+
+Active Scoring & Reward                     
+
+> Selected Active Rubrics
+> Precise entity -attribut etargeting
+> Evidence -guided termination
+> Win: 1
+> Tie: 0.5
+> Loss: 0
+> Sparse Pairwise Scoring
+> "(*(#, ="-#+. +%̃'$/-$0'
+> Reward Integration
+> Neighbor Edge
+> &
+> Diameter Edge
+> '$/-$0'
+> Policy Update
+> Policy Model Search
+
+Figure 2: Overview of ARBOR. (a) Contrastive induction extracts query-local draft rubrics from trajectories within a query-group. (b) The rubric buffer M admits drafts into a candidate pool D, consolidates them into a common pool P, and retires stale rubrics, forming an online admission–consolidation–retirement lifecycle. (c) At each step, two active common rubrics are selected and used to score trajectories via sparse pairwise scoring, and the centered rubric scores are added to the base reward. 
+
+LeTS (Zhang et al., 2025a) with a mixture of step-wise process reward and outcome reward. Existing work either ignores the quality of the search process entirely, reduces it to quantifiable but semantically shallow domain metrics, or relies on a separately trained verifier. Against this back-ground, ARBOR provides process-level feedback that continues to discriminate within a query-group even when its outcomes are homogeneous, restor-ing a learning signal precisely where outcome-only reward fails. 
+
+2.2 Rubric-Based Reward Signals 
+
+While rubric-conditioned evaluators such as Prometheus (Kim et al., 2024) and LLM-Rubric (Hashemi et al., 2024) use predefined rubrics to structure LLM-as-a-judge assessment, recent work applies rubrics directly as RL reward signals. Most methods generate rubrics per query without cross-query sharing, which may cause con-flicts across queries. Rubrics-as-Rewards (Gun-jal et al., 2026) uses static query-specific check-lists as on-policy rewards; similar per-query ap-proaches include (Wang et al., 2025; He et al., 2025; Zhou et al., 2026). Several systems fur-ther evolve rubrics or their generators during train-ing (Xu et al., 2026; Sheng et al., 2026; Shao et al., 2026), addressing staleness but still without shar-ing across queries. Auto-Rubric (Xie et al., 2026a), AdaRubric (Ding, 2026), and OpenRS (Jia et al., 2026) achieve reusability across instances through offline rubric generation, but do not co-evolve with the policy during RL training. ARBOR combines cross-query reusability with online adaptation: a persistent rubric buffer con-solidates query-local drafts into shared common rubrics and continuously retires outdated ones, keeping process standards consistent across queries and aligned with the evolving policy. 
+
+3 Method 
+
+3.1 Overview and Problem Setup 
+
+We consider RL training for search agents. Given a query q, the policy produces a trajectory τ through multiple rounds of think, search, and observe inter-actions and finally outputs an answer. At each train-ing step, we sample K trajectories from the same query to form a query-group Gq = {τ1, . . . , τ K },where trajectories share the same query and envi-ronment and diverge only through policy sampling. During training, ARBOR maintains a single rubric memory M shared across all queries. At every step, ARBOR uses a small number of cur-3rently active natural-language process rubrics from 
+
+M to score the trajectories in Gq along process di-mensions, and the resulting score is additively com-bined with the existing RL reward as an auxiliary process-level signal for the policy optimizer. M
+
+itself evolves throughout training under an online admission, consolidation, and retirement lifecycle, with its contents updated in step with the policy behavior distribution. 
+
+3.2 Contrastive Local Rubric Induction 
+
+ARBOR induces query-local draft rubrics from each query-group Gq through contrastive induction. Let F1(τ ) denote the token-level F1 of trajectory 
+
+τ against the gold answer. We select the highest-scoring trajectory as a positive anchor, the lowest-scoring trajectory as a worst-case negative, and the strongest remaining trajectory as a hard negative: 
+
+τ + = arg max  
+
+> τ∈G q
+
+F1(τ ),τ − 
+
+> worst
+
+= arg min  
+
+> τ∈G q
+
+F1(τ ),τ − 
+
+> hard
+
+= arg max     
+
+> τ∈G q\{ τ+}
+
+F1(τ ).
+
+(1) These anchors define two complementary contrasts. The pair (τ +, τ −
+
+> worst
+
+) exposes large-scale success-failure differences and surfaces critical process deviations, whereas (τ +, τ −
+
+> hard
+
+) provides a finer-grained comparison between trajectories of similar correctness and isolates more subtle process differ-ences. Both pairs are provided jointly to an exter-nal LLM, which summarizes a small set of natural-language process rubrics as query-local drafts. This design captures both coarse and fine process dis-tinctions while reducing induction from exhaustive 
+
+O(K2) pairing to constant cost. The induction prompt is restricted to search be-havior rather than answer content. The LLM is in-structed to identify process behaviors that causally separate successful trajectories from failed ones, focusing on search strategy and reasoning process, such as query formulation, evidence use, and stop-ping judgments. Each induced rubric specifies both what a high-scoring response does and what a low-scoring response does along the dimension. The full induction prompt is provided in Appendix E.1. All-correct and all-wrong groups skip the induc-tion stage, as they provide no correctness contrast from which to infer new rubrics. Common rubrics already saved in M, however, can still score these groups under Section 3.4, providing within-group discrimination when the outcome signal collapses. Corner cases are detailed in Appendix A.1. The resulting drafts enter the memory pipeline of Section 3.3 and can affect future training only after surviving admission and consolidation. 
+
+3.3 Rubric Memory and Lifecycle 
+
+ARBOR maintains a single rubric memory M =(D, P) shared across all queries. The candidate pool D temporarily stores the query-local drafts induced in Section 3.2, awaiting abstraction into reusable standards. The common rubric pool P
+
+stores rubrics that have been distilled from D and serves as the signal source for reward shaping in Section 3.4. Throughout training, M evolves through three mechanisms, namely admission, con-solidation, and retirement, keeping its contents up-dated in step with the policy behavior distribution. 
+
+Admission. Each draft rubric scores the trajec-tories in its source group via the pairwise judging procedure of Section 3.4. Let sri denote the score of trajectory τi under draft r. A draft is admitted to 
+
+D only if its scores satisfy two conditions: 
+
+Var i∈G q (sri ) ≥ δv,
+
+Pearson  {sri }, {F1(τi)} ≥ ρmin . (2) The variance condition rules out drafts that fail to discriminate on the samples they were induced from. The correlation condition requires that rubric scores are aligned with outcome correctness, re-jecting drafts that penalize correct behavior. Drafts failing either condition are discarded immediately. 
+
+Consolidation. Once the number of drafts in D
+
+reaches a fixed threshold, ARBOR sends all can-didate drafts together with the existing common rubrics in P to an external LLM. The LLM is instructed to identify recurring process patterns across the candidates and abstract them into cross-query general standards. Existing rubrics in P
+
+are provided as context so that the LLM only pro-duces standards covering new dimensions. Each output rubric is further deduplicated against P by sentence-embedding similarity as a safeguard. Af-ter consolidation, D is cleared. The full consolida-tion prompt is provided in Appendix E.2. 
+
+Retirement. Common rubrics are not assumed to remain valid for the entire training run. As the pol-icy evolves, a rubric that once discriminated good from bad may lose its power because the policy has uniformly mastered or failed the corresponding 4behavior. ARBOR tracks two long-term signals for each common rubric r ∈ P , corresponding to the same two dimensions checked at admission stage but accumulated over the rubric’s entire active life-time. The first is a consecutive low-variance count 
+
+nr, the number of consecutive activations on which the within-group score variance under r falls below 
+
+δv, measuring whether r still discriminates among trajectories. The second is a cumulative Pearson correlation ρr between the per-trajectory scores un-der r and the trajectory F1 across all activations of 
+
+r, measuring whether r aligns with correct behav-ior. Either nr exceeding its tolerance or ρr < ρ min 
+
+triggers removal from P.In addition, when consolidation attempts to write a new common rubric into a P that has already reached its capacity limit, the entry with the low-est cumulative within-group variance is replaced, provided its tracked statistics have matured over a sufficient number of activations. This prevents newly admitted rubrics from being evicted before their quality signals stabilize. 
+
+3.4 Process Scoring and Reward Shaping 
+
+At each training step, ARBOR selects a small active subset of common rubrics from P, scores the tra-jectories in Gq under those rubrics via pairwise pro-cess comparison, and integrates the resulting scores into the reward after within-group centering. Be-cause common rubrics are cross-query process stan-dards independent of any specific query, they can discriminate among trajectories even in outcome-homogeneous groups where the base reward is iden-tical for all samples, sustaining process-level super-vision when the outcome signal collapses. 
+
+Active selection. At each step, ARBOR activates exactly two common rubrics from P. One slot is held by the rubric with the highest cumulative cor-relation ρr, serving as the primary process signal; the other rotates among the next strongest candi-dates by a least-recently-used policy. Activating only two rubrics avoids the linear blowup of judge cost and the within-group signal dilution that would result from scoring under the full pool. Rotation ensures that non-top rubrics still accumulate ρr
+
+and nr, keeping the retirement mechanism of Sec-tion 3.3 operational. When P is empty, the step falls back to the base reward, so the cold-start phase introduces no unverified rubric signal. 
+
+Group-stage process scoring. Under each active common rubric, ARBOR performs within-group pairwise comparisons among the trajectories in Gq
+
+via an external LLM judge that returns win , tie , or 
+
+loss . A full round-robin would require O(|G q|2)
+
+judge calls, which is prohibitively expensive. AR-BOR therefore sorts the trajectories by base reward and builds a sparse connected graph with O(|G q|)
+
+edges using two kinds of edges. As illustrated in Figure 2, neighbor edges link adjacent trajectories in the sorted order, providing fine-grained local comparisons between similarly ranked trajectories; diameter edges connect distant trajectories, provid-ing high-contrast pairs for more decisive judgments. Each pairwise call randomizes the presentation or-der of the two trajectories, eliminating positional bias of the LLM judge. Wins , ties , and losses are scored as 1, 0.5, and 0, respectively. The score of 
+
+τi under a rubric is the mean over its incident edges, and averaging across the active rubrics yields the composite process score srubric  
+
+> i
+
+.
+
+Centering and reward integration. Before en-tering the reward, ARBOR applies a per-batch vari-ance filter. If an active rubric’s within-group vari-ance falls below δv on a batch, its scores are dis-carded to avoid injecting uninformative noise. The scores from the filtered active rubrics are then cen-tered within each query-group, 
+
+˜srubric  
+
+> i
+
+= srubric  
+
+> i
+
+− 1
+
+|G q|
+
+X
+
+> j∈G q
+
+srubric  
+
+> j
+
+, (3) and the final reward uses additive shaping, 
+
+Rtotal  
+
+> i
+
+= Rbase  
+
+> i
+
++ λ · ˜srubric  
+
+> i
+
+,Rbase  
+
+> i
+
+=
+
+(
+
+RF1  
+
+> i
+
+if format valid 
+
+−1 otherwise , (4) where RF1  
+
+> i
+
+is the token-level F1 of the final answer and λ is fixed throughout training. Group center-ing gives the rubric term zero mean within each query-group, and negative centered scores are fur-ther attenuated by a factor α, encouraging stronger search behavior without over-penalizing merely less-preferred trajectories. For format-invalid tra-jectories, the rubric term is forced to zero, preserv-ing the format penalty imposed by Rbase  
+
+> i
+
+.
+
+4 Experiments 
+
+4.1 Experimental Setup Datasets. Our training follows a two-stage SFT-then-RL procedure. SFT uses a search-tool subset of Tool-Star (Dong et al., 2025) and STILL (Min 5Method Bamboogle HotpotQA MuSiQue 2Wiki Avg.                                                                                                                                                                                                   
+
+> EM F1 Acc. EM F1 Acc. EM F1 Acc. EM F1 Acc. EM F1 Acc.
+> Qwen3-4B
+> + TIR Prompting 46.4 55.3 61.1 30.4 38.5 46.2 9.2 16.2 19.8 32.8 42.3 47.2 29.7 38.1 43.6 + GRPO 61.6 69.8 71.0 44.9 54.5 57.4 17.0 26.9 26.5 60.9 68.3 67.6 46.1 54.9 55.6 + DAPO 63.7 72.7 74.2 44.2 53.9 57.0 16.4 25.9 25.2 60.2 67.7 68.1 46.1 55.1 56.1 + ARBOR 65.1 73.0 76.2 45.4 55.6 59.7 17.0 25.7 27.8 64.2 72.4 74.6 47.9 56.7 59.6 Qwen3-8B
+> + TIR Prompting 31.2 38.1 41.3 15.7 20.2 22.9 6.2 9.8 11.6 9.7 13.8 15.1 15.7 20.5 22.7 + GRPO 61.0 69.4 72.2 44.4 55.0 57.8 17.4 26.7 26.6 64.8 71.0 71.1 46.9 55.5 56.9 + DAPO 61.9 70.1 73.1 45.8 54.9 57.7 17.0 25.8 26.2 63.8 69.7 69.6 47.1 55.1 56.7 + ARBOR 65.3 72.9 76.5 47.8 58.6 62.9 18.3 26.8 29.5 64.2 73.3 75.3 48.9 57.9 61.1 Qwen3-14B
+> + TIR Prompting 42.1 50.3 49.9 27.8 34.6 39.2 8.6 16.0 17.4 26.1 31.9 34.4 26.2 33.2 35.2 + GRPO 61.9 71.5 72.8 48.1 58.4 62.3 19.4 29.9 31.6 69.8 76.2 76.4 49.8 59.0 60.8 + DAPO 65.8 74.1 74.9 46.2 57.5 61.1 17.2 27.1 27.3 67.6 73.4 72.9 49.2 58.0 59.1 + ARBOR 67.5 75.8 78.6 48.6 59.1 63.6 19.1 28.7 31.6 69.8 76.3 77.3 51.3 60.0 62.8
+
+Table 1: Overall performance on 4 knowledge-intensive reasoning tasks. ARBOR achieves the best average EM, F1 and LLM-judge accuracy at all three scales. The top two outcomes in each column are bolded and underlined. 
+
+et al., 2024), filtered to remove Python-tool ex-amples, yielding approximately 16K training ex-amples. RL training uses 2K QA examples ran-domly sampled from the ARPO Deep Reasoning Tasks (Dong et al., 2026). Evaluation is on four multi-hop QA benchmarks: Bamboogle (Press et al., 2023), HotpotQA (Yang et al., 2018), MuSiQue (Trivedi et al., 2022) and 2WikiMulti-HopQA (Ho et al., 2020). The test split strategy fol-lows the convention of ARPO (Dong et al., 2026). Benchmark details are provided in Appendix B.1. 
+
+Baselines. We use Qwen3-8B (Yang et al., 2025) as the main backbone, with Qwen3-4B and Qwen3-14B for cross-scale verification, comparing three methods on each backbone: (1) TIR Prompting, which injects the search-tool specification but per-forms no RL fine-tuning; (2) GRPO (Shao et al., 2024), which uses base reward as the sole reward; and (3) DAPO (Yu et al., 2025), which discards outcome-homogeneous query-groups from policy updates, providing a contrast on how to handle the zero-gradient groups that ARBOR exploits. 
+
+Implementation Details. All training runs on a single node with 8 ×H100 GPUs using Slime (Zhu et al., 2025) as the RL framework. The search tool is Google Search, returning 10 results per query. The base reward is token-level F1 with a format penalty. For ARBOR, induction, consolidation, and pairwise judging all call Qwen3-Plus 2 (Alibaba Cloud, 2025) as the external LLM. Consolidation 
+
+> 2Model id: qwen-plus-2025-04-28. Accessed: 2026-05
+
+deduplication uses BGE-M3 (Chen et al., 2024) sentence embeddings, and the reward shaping coef-ficient is fixed to λ = 0 .1. Remaining hyperparam-eters are listed in Appendix B.3. 
+
+Evaluation Metrics. We report Exact Match (EM), token-level F1, and LLM-judge accuracy with Qwen3-Plus as the judge. All numbers are pass@1 averaged over 5 independent evaluation runs to reduce sampling variance. The LLM-judge prompt is given in Appendix E.4. 
+
+4.2 Main Results 
+
+Table 1 presents the main results across four multi-hop QA benchmarks. ARBOR achieves the best average performance at every model scale. We highlight three observations from the results. 
+
+ARBOR consistently improves over outcome-only baselines. ARBOR improves average LLM-judge accuracy over GRPO by 4.0 , 4.2 , and 2.0 
+
+points at 4B, 8B, and 14B, and also uniformly out-performs DAPO at all three scales. The improve-ments are consistent across evaluation metrics, with gains observed not only in LLM-judge accuracy but also in EM and F1. TIR Prompting performs sub-stantially worse than all RL-trained variants, con-firming that tool access alone is insufficient without policy optimization. Its non-monotonic scaling is mainly caused by answer-format failures under the strict evaluator, as diagnosed in Appendix C.1. 
+
+Exploiting outcome-homogeneous groups out-performs discarding them. DAPO’s gains over 6Model Reward All-corr. ↓ All-wrong ↓ Mixed-uni. ↓ Total ↓                                    
+
+> Qwen3-4B
+> Rbase 26.9% 14.7% 2.9% 44.5%
+> Rtotal 22.2% 6.0% 2.2% 30.4%
+> ∆rel −17 .5% −59 .2% −24 .1% −31 .7%
+> Qwen3-8B
+> Rbase 23.5% 14.3% 2.9% 40.7%
+> Rtotal 16.2% 5.6% 1.6% 23.4%
+> ∆rel −31 .1% −60 .8% −44 .8% −42 .5%
+> Qwen3-14B
+> Rbase 30.1% 14.3% 3.5% 48.0%
+> Rtotal 23.9% 6.6% 2.0% 32.5%
+> ∆rel −20 .6% −53 .8% −42 .9% −32 .3%
+
+Table 2: Reward-homogeneous group fractions dur-ing ARBOR training. Groups are measured on Rbase 
+
+(before rubric shaping) and Rtotal (after rubric shaping). 
+
+GRPO are inconsistent across scales, turning neg-ative at 14B ( −1.7 points), while ARBOR consis-tently outperforms GRPO at all scales. An impor-tant difference is how the methods handle outcome-homogeneous groups: DAPO discards them en-tirely from policy updates, whereas ARBOR re-tains them and applies reusable process rubrics to provide within-group discrimination. ARBOR’s lead over DAPO is uniformly large ( +3.5 to +4.4 
+
+points across all backbones), confirming that ex-ploiting these groups through process reward is more effective than discarding them. 
+
+Process supervision translates into semantic an-swer gains. ARBOR’s largest gains appear on LLM-judge accuracy: +4.0, +4.2, and +2.0 points over GRPO at 4B, 8B, and 14B, exceeding the cor-responding EM gains (+1.8, +2.0, +1.5) and F1 gains (+1.8, +2.4, +1.0). This pattern is consis-tent with ARBOR’s design: rubrics reward better query formulation, evidence use, and answer syn-thesis rather than final-answer string overlap. The result suggests that reusable process supervision improves answer quality in ways that are better captured by semantic evaluation than by lexical-overlap metrics alone. To ensure these gains are not evaluator-specific, Appendix C.2 verifies the same trend under DeepSeek-V4-Pro (DeepSeek-AI, 2026) as an independent evaluator. 
+
+4.3 No-Gradient Group Rescue 
+
+A direct test of the motivating claim from Section 1 is whether rubric scoring provides within-group discrimination on groups where outcome-only re-ward produces zero gradient. Table 2 reports the fraction of groups with zero within-group reward variance, measured first under Rbase alone and then under Rtotal . A drop indicates that rubric scoring introduced reward discrimination that the outcome signal could not provide. Groups are further split Qwen3-4B Qwen3-8B Qwen3-14B       
+
+> 54
+> 56
+> 58
+> 60
+> 62
+> 64
+> Avg. Accuracy
+> 55.6
+> 56.9
+> 60.8
+> 56.9 56.9 56.7
+> 58.6 58.5
+> 60.1
+> 59.6
+> 61.1
+> 62.8
+> +1.0
+> +2.6
+> +2.7
+> GRPO RaR-style w/o memory ARBOR
+
+Figure 3: Effect of reusable rubric memory. Average LLM-judge accuracy across four benchmarks. 
+
+by outcome pattern: all-correct groups have F1=1 on every trajectory with valid format, all-wrong 
+
+groups have F1=0 on every trajectory including format-invalid cases, and mixed-uniform groups share the same partial F1 across all trajectories. Rubric scoring reduces all three types at ev-ery scale. The effect concentrates on all-wrong 
+
+groups, where the relative reduction reaches 54– 61% . These groups represent queries the policy has not yet learned to solve, and rubric scoring di-rectly helps here by distinguishing more promising search strategies from less promising ones, provid-ing within-group discrimination that the base re-ward cannot. The reduction on all-correct groups is smaller ( 18–31% ), as the active rubrics are primar-ily induced from success-failure contrasts and less attuned to the subtler process differences among trajectories that all succeed. Overall, rubric scor-ing converts 32–42% of outcome-homogeneous groups into ones with nonzero within-group reward variance, enabling policy learning on these groups. 
+
+4.4 Effect of Reusable Rubric Memory 
+
+To isolate the contribution of reusable rubric mem-ory, Figure 3 compares ARBOR with two no-memory rubric variants. RaR-style, adapted from Rubrics-as-Rewards (Gunjal et al., 2026), uses static query-specific rubrics generated from the question and reference answer to score rollouts of the corresponding query. The w/o memory variant uses ARBOR’s contrastive induction but discards each rubric after scoring its source query-group. Detailed experimental setup and full results are provided in Appendix C.3. No-memory rubric feedback is not sufficient to explain ARBOR’s gains. RaR-style is weak and unstable: it slightly improves average accuracy over GRPO at 4B (+1.3 points), matches GRPO at 8B, and falls substantially below GRPO at 14B 7Common rubric Uses   
+
+> Precise Entity-Attribute Targeting with Canonical Framing 101 Evidence-Sufficiency-Guided Termination with Cross-Validated Convergence 84 Precision in Relational Query Formulation 55 Constraint-Integrated Entity-Attribute Binding 54 Constraint-Consistent Interpretation of Question Semantics and Intent 54
+
+Table 3: Top-5 most reused common rubrics during training. Uses denotes the number of query-groups each rubric is activated to score. 
+
+(-4.1 points). The w/o memory variant is stronger than RaR-style at all three scales, showing that contrastive process rubrics are more useful than reference-conditioned instance checklists. How-ever, it still lacks the stability of reusable memory. ARBOR outperforms w/o memory by 1.0 , 2.6 , and 
+
+2.7 accuracy points at 4B, 8B, and 14B, and outper-forms RaR-style by 2.7 , 4.2 , and 6.1 points. These margins indicate that the main benefit is not merely adding rubric-shaped reward, but converting local observations into common process criteria that can be filtered and reused across later query-groups. 
+
+4.5 Common-Rubric Reuse 
+
+A central claim of ARBOR is that consolidated common rubrics serve as reusable cross-query pro-cess standards rather than one-shot rewards. We verify this by ranking all common rubrics produced during training by the number of query-groups each one is activated to score. The top 5% of rubrics by this ranking account for 20% of all scoring events and the top 20% account for 44%, as detailed in Appendix C.4. This confirms that a small core of high-quality rubrics emerges and consistently drives process supervision across diverse queries. Table 3 lists the most reused rubrics, all of which encode generic process behaviors such as precise entity-attribute targeting and evidence-guided ter-mination. None references an entity or fact specific to any individual query, confirming that the consoli-dation step successfully abstracts query-local drafts into genuinely cross-query standards. A concrete consolidation case is shown in Appendix D. 
+
+4.6 Hyperparameter Sensitivity 
+
+ARBOR adds a process reward term and a rubric memory mechanism, so we evaluate sensitivity to the two hyperparameters most tied to them: the reward coefficient λ, which controls the strength of 0.05 0.1 0.15 0.2       
+
+> λ
+> 56
+> 58
+> 60
+> 62
+> Avg. Accuracy
+> 59.5
+> 61.0
+> 58.3
+> 59.8
+> (a) Reward Coefficient λ
+> 4816 32
+> Kconsol
+> 56
+> 58
+> 60
+> 62
+> 58.8
+> 61.0
+> 58.8
+> 56.6 GRPO
+> (b) Consolidation Threshold Kconsol
+
+Figure 4: Hyperparameter sensitivity on λ and 
+
+Kconsol . The dashed line marks the GRPO baseline. 
+
+the process signal, and the consolidation threshold 
+
+Kconsol , which controls how quickly local drafts are converted into reusable common rubrics. Figure 4 shows the results. Panel (a) varies λ.Performance peaks at λ = 0 .1; smaller values un-derweight the rubric signal, while larger values allow noisy rubric scores to interfere with the out-come gradient. All four settings outperform GRPO, indicating that ARBOR is robust over a reason-able range of λ. Panel (b) varies Kconsol . This parameter trades off reliability against timeliness: small values trigger consolidation from limited evidence, while large values increase the lag be-tween induction and activation so that rubrics re-flect an outdated policy distribution. All values in 
+
+{4, 8, 16 } outperform the baseline, with the best at 
+
+Kconsol = 8 . At Kconsol = 32 , the consolidation lag causes rubrics to fall behind the evolving policy and performance drops. 
+
+5 Conclusion 
+
+In this work, we introduced ARBOR, a reusable process-reward framework designed to address the limitations of outcome-only rewards in search-agent RL. ARBOR induces natural-language pro-cess rubrics from contrastive trajectories, consol-idates them into a reusable cross-query memory, and manages the memory through an admission– consolidation–retirement lifecycle. This design jointly achieves process-level supervision, cross-query consistency, and co-evolution with the policy. Experiments across three model scales and four multi-hop QA benchmarks show that ARBOR con-sistently improves over outcome-only RL baselines, while ablations and reuse analyses confirm the im-portance of reusable rubric memory. These results suggest that process knowledge in agent training need not be ephemeral: when accumulated into reusable criteria that co-evolve with the policy, it provides a persistent and growing source of super-vision that outcome signals alone cannot offer. 8Limitations 
+
+First, ARBOR relies on an external LLM for rubric induction, consolidation, and pairwise judging, so the quality of rubric supervision is tied to the capa-bility of the external model. Models with stronger reasoning capacity may yield more precise rubrics and finer process discrimination. Second, our experiments validate ARBOR on multi-hop QA with a single search tool. Since the rubric mem-ory is task-agnostic by construction, extending it to broader tool-use settings such as code genera-tion and mathematical reasoning with retrieval is a straightforward direction. 
+
+References 
+
+Alibaba Cloud. 2025. Qwen-Plus Model Card. Model id: qwen-plus-2025-04-28. Accessed: 2026-05. Jianlyu Chen, Shitao Xiao, Peitian Zhang, Kun Luo, Defu Lian, and Zheng Liu. 2024. M3-embedding: Multi-linguality, multi-functionality, multi-granularity text embeddings through self-knowledge distillation. In Findings of the Asso-ciation for Computational Linguistics: ACL 2024 ,pages 2318–2335, Bangkok, Thailand. Association for Computational Linguistics. Ganqu Cui, Lifan Yuan, Zefan Wang, Hanbin Wang, Yuchen Zhang, Jiacheng Chen, Wendi Li, Bingxiang He, Yuchen Fan, Tianyu Yu, Qixin Xu, Weize Chen, Jiarui Yuan, Huayu Chen, Kaiyan Zhang, Xingtai Lv, Shuo Wang, Yuan Yao, Xu Han, and 6 others. 2025. Process reinforcement through implicit re-wards. Preprint , arXiv:2502.01456. Tri Dao. 2024. Flashattention-2: Faster attention with better parallelism and work partitioning. In Inter-national Conference on Learning Representations ,volume 2024, pages 35549–35562. DeepSeek-AI. 2026. DeepSeek-V4: Towards Highly Efficient Million-Token Context Intelligence. Liang Ding. 2026. Adarubric: Task-adaptive rubrics for reliable llm agent evaluation and reward learning. 
+
+Preprint , arXiv:2603.21362. Guanting Dong, Yifei Chen, Xiaoxi Li, Jiajie Jin, Hongjin Qian, Yutao Zhu, Hangyu Mao, Guorui Zhou, Zhicheng Dou, and Ji-Rong Wen. 2025. Tool-Star: Empowering llm-brained multi-tool rea-soner via reinforcement learning. arXiv preprint arXiv:2505.16410 .Guanting Dong, Hangyu Mao, Kai Ma, Licheng Bao, Yifei Chen, Zhongyuan Wang, Zhongxia Chen, Ji-azhen Du, Huiyang Wang, Fuzheng Zhang, Guorui Zhou, Yutao Zhu, Ji-Rong Wen, and Zhicheng Dou. 2026. Agentic Reinforced Policy Optimization. In 
+
+The Fourteenth International Conference on Learn-ing Representations .Anisha Gunjal, Anthony Wang, Elaine Lau, Vaskar Nath, Yunzhong He, Bing Liu, and Sean M. Hendryx. 2026. Rubrics as Rewards: Reinforcement Learning Beyond Verifiable Domains. In The Fourteenth Inter-national Conference on Learning Representations .Helia Hashemi, Jason Eisner, Corby Rosset, Benjamin Van Durme, and Chris Kedzie. 2024. Llm-rubric: A multidimensional, calibrated approach to automated evaluation of natural language texts. In Proceedings of the 62nd Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers) ,pages 13806–13834. Yun He, Wenzhe Li, Hejia Zhang, Songlin Li, Kar-ishma Mandyam, Sopan Khosla, Yuanhao Xiong, Nanshu Wang, Xiaoliang Peng, Beibin Li, Shengjie Bi, Shishir G. Patil, Qi Qi, Shengyu Feng, Julian Katz-Samuels, Richard Yuanzhe Pang, Sujan Gonu-gondla, Hunter Lang, Yue Yu, and 6 others. 2025. Advancedif: Rubric-based benchmarking and rein-forcement learning for advancing llm instruction fol-lowing. Preprint , arXiv:2511.10507. Xanh Ho, Anh-Khoa Duong Nguyen, Saku Sugawara, and Akiko Aizawa. 2020. Constructing a multi-hop qa dataset for comprehensive evaluation of reasoning steps. In Proceedings of the 28th International Con-ference on Computational Linguistics , pages 6609– 6625. Ruipeng Jia, Yunyi Yang, Yuxin Wu, Yongbo Gai, Siyuan Tao, Mengyu Zhou, Jianhe Lin, Xiaoxi Jiang, and Guanjun Jiang. 2026. Open rubric system: Scal-ing reinforcement learning with pairwise adaptive rubric. arXiv preprint arXiv:2602.14069 .Pengcheng Jiang, Xueqiang Xu, Jiacheng Lin, Jinfeng Xiao, Zifeng Wang, Jimeng Sun, and Jiawei Han. 2025. s3: You don’t need that much data to train a search agent via RL. In Proceedings of the 2025 Con-ference on Empirical Methods in Natural Language Processing , pages 21599–21617, Suzhou, China. As-sociation for Computational Linguistics. Bowen Jin, Hansi Zeng, Zhenrui Yue, Jinsung Yoon, Sercan O Arik, Dong Wang, Hamed Zamani, and Jiawei Han. 2025. Search-R1: Training LLMs to Reason and Leverage Search Engines with Reinforce-ment Learning. In Second Conference on Language Modeling .Seungone Kim, Jay Shin, yejin cho, Joel Jang, Shayne Longpre, Hwaran Lee, Sangdoo Yun, S Shin, Ryan, Sungdong Kim, James Thorne, and Minjoon Seo. 2024. Prometheus: Inducing fine-grained evaluation capability in language models. In International Con-ference on Learning Representations , volume 2024, pages 29927–29962. Xiaoxi Li, Guanting Dong, Jiajie Jin, Yuyao Zhang, Yu-jia Zhou, Yutao Zhu, Peitian Zhang, and Zhicheng Dou. 2025. Search-o1: Agentic search-enhanced large reasoning models. In Proceedings of the 2025 Conference on Empirical Methods in Natural Lan-guage Processing , pages 5420–5438. 
+
+9Hunter Lightman, Vineet Kosaraju, Yuri Burda, Harri-son Edwards, Bowen Baker, Teddy Lee, Jan Leike, John Schulman, Ilya Sutskever, and Karl Cobbe. 2024. Let’s verify step by step. In International Conference on Learning Representations , volume 2024, pages 39578–39601. Kun Luo, Hongjin Qian, Zheng Liu, Ziyi Xia, Shitao Xiao, Siqi Bao, Jun Zhao, and Kang Liu. 2025. In-foflow: Reinforcing search agent via reward density optimization. arXiv preprint arXiv:2510.26575 .Liangchen Luo, Yinxiao Liu, Rosanne Liu, Samrat Phatale, Meiqi Guo, Harsh Lara, Yunxuan Li, Lei Shu, Yun Zhu, Lei Meng, Jiao Sun, and Abhinav Rastogi. 2024. Improve mathematical reasoning in language models by automated process supervision. 
+
+Preprint , arXiv:2406.06592. Yingqian Min, Zhipeng Chen, Jinhao Jiang, Jie Chen, Jia Deng, Yiwen Hu, Yiru Tang, Jiapeng Wang, Xiaoxue Cheng, Huatong Song, Wayne Xin Zhao, Zheng Liu, Zhongyuan Wang, and Ji-Rong Wen. 2024. Imitate, explore, and self-improve: A repro-duction report on slow-thinking reasoning systems. 
+
+Preprint , arXiv:2412.09413. Ofir Press, Muru Zhang, Sewon Min, Ludwig Schmidt, Noah A Smith, and Mike Lewis. 2023. Measuring and narrowing the compositionality gap in language models. In Findings of the Association for Computa-tional Linguistics: EMNLP 2023 , pages 5687–5711. Samyam Rajbhandari, Jeff Rasley, Olatunji Ruwase, and Yuxiong He. 2020. Zero: Memory optimizations toward training trillion parameter models. In SC20: international conference for high performance com-puting, networking, storage and analysis , pages 1–16. IEEE. Rulin Shao, Akari Asai, Shannon Zejiang Shen, Hamish Ivison, Varsha Kishore, Jingming Zhuo, Xinran Zhao, Molly Park, Samuel G. Finlayson, David Sontag, Tyler Murray, Sewon Min, Pradeep Dasigi, Luca Sol-daini, Faeze Brahman, Wen tau Yih, Tongshuang Wu, Luke Zettlemoyer, Yoon Kim, and 2 others. 2026. Dr tulu: Reinforcement learning with evolving rubrics for deep research. Preprint , arXiv:2511.19399. Zhihong Shao, Peiyi Wang, Qihao Zhu, Runxin Xu, Junxiao Song, Xiao Bi, Haowei Zhang, Mingchuan Zhang, YK Li, Yang Wu, and Daya Guo. 2024. Deepseekmath: Pushing the limits of mathematical reasoning in open language models. arXiv preprint arXiv:2402.03300 .Leheng Sheng, Wenchang Ma, Ruixin Hong, Xiang Wang, An Zhang, and Tat-Seng Chua. 2026. Re-inforcing Chain-of-Thought Reasoning with Self-Evolving Rubrics. arXiv preprint arXiv:2602.10885 .Huatong Song, Jinhao Jiang, Yingqian Min, Jie Chen, Zhipeng Chen, Wayne Xin Zhao, Lei Fang, and Ji-Rong Wen. 2025. R1-searcher: Incentivizing the search capability in llms via reinforcement learning. 
+
+arXiv preprint arXiv:2503.05592 .Harsh Trivedi, Niranjan Balasubramanian, Tushar Khot, and Ashish Sabharwal. 2022. MuSiQue: Multi-hop Questions via Single-hop Question Composition. 
+
+Transactions of the Association for Computational Linguistics , 10:539–554. Peiyi Wang, Lei Li, Zhihong Shao, Runxin Xu, Damai Dai, Yifei Li, Deli Chen, Yu Wu, and Zhifang Sui. 2024. Math-shepherd: Verify and reinforce llms step-by-step without human annotations. In Proceedings of the 62nd Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers) ,pages 9426–9439. Pengkai Wang, Linus, Pengwei Liu, Zhijie Sang, Congkai Xie, and Hongxia Yang. 2025. Infimed-orbit: Aligning llms on open-ended complex tasks via rubric-based incremental training. Preprint ,arXiv:2510.15859. Yunjia Xi, Jianghao Lin, Yongzhao Xiao, Zheli Zhou, Rong Shan, Te Gao, Jiachen Zhu, Weiwen Liu, Yong Yu, and Weinan Zhang. 2025. A survey of llm-based deep search agents: Paradigm, optimiza-tion, evaluation, and challenges. arXiv preprint arXiv:2508.05668 .Tianle Xia, Ming Xu, Lingxiang Hu, Yiding Sun, Wen-wei Li, Linfang Shang, Liqun Liu, Peng Shu, Huan Yu, and Jie Jiang. 2026. Search-P1: Path-Centric Re-ward Shaping for Stable and Efficient Agentic RAG Training. arXiv preprint arXiv:2602.22576 .Lipeng Xie, Sen Huang, Zhuo Zhang, Anni Zou, Yun-peng Zhai, Dingchao Ren, Kezun Zhang, Haoyuan Hu, Boyin Liu, Haoran Chen, Zhaoyang Liu, and Bolin Ding. 2026a. Auto-rubric: Learning from im-plicit weights to explicit rubrics for reward modeling. 
+
+Preprint , arXiv:2510.17314. Yutao Xie, Nathaniel Thomas, Nicklas Hansen, Yang Fu, Li Erran Li, and Xiaolong Wang. 2026b. TIPS: Turn-level Information-Potential Reward Shaping for Search-Augmented LLMs. In The Fourteenth Inter-national Conference on Learning Representations .Peiran Xu, Zhuohao Li, Xiaoying Xing, Guannan Zhang, Debiao Li, and Kunyu Shi. 2025. Hy-brid reward normalization for process-supervised non-verifiable agentic tasks. arXiv preprint arXiv:2509.25598 .Ran Xu, Tianci Liu, Zihan Dong, Tony Yu, Ilgee Hong, Carl Yang, Linjun Zhang, Tao Zhao, and Haoyu Wang. 2026. Alternating reinforcement learning for rubric-based reward modeling in non-verifiable llm post-training. arXiv preprint arXiv:2602.01511 .An Yang, Anfeng Li, Baosong Yang, Beichen Zhang, Binyuan Hui, Bo Zheng, Bowen Yu, Chang Gao, Chengen Huang, Chenxu Lv, Chujie Zheng, Day-iheng Liu, Fan Zhou, Fei Huang, Feng Hu, Hao Ge, Haoran Wei, Huan Lin, Jialong Tang, and 41 others. 2025. Qwen3 technical report. Preprint ,arXiv:2505.09388. 
+
+10 Zhilin Yang, Peng Qi, Saizheng Zhang, Yoshua Bengio, William Cohen, Ruslan Salakhutdinov, and Christo-pher D Manning. 2018. HotpotQA: A dataset for diverse, explainable multi-hop question answering. In Proceedings of the 2018 conference on empiri-cal methods in natural language processing , pages 2369–2380. Shunyu Yao, Jeffrey Zhao, Dian Yu, Nan Du, Izhak Shafran, Karthik Narasimhan, and Yuan Cao. 2023. REACT: SYNERGIZING REASONING AND ACT-ING IN LANGUAGE MODELS. In 11th Inter-national Conference on Learning Representations, ICLR 2023 .Qiying Yu, Zheng Zhang, Ruofei Zhu, Yufeng Yuan, Xi-aochen Zuo, Yu Yue, Weinan Dai, Tiantian Fan, Gao-hong Liu, juncai liu, LingJun Liu, Xin Liu, Haibin Lin, Zhiqi Lin, Bole Ma, Guangming Sheng, Yuxuan Tong, Chi Zhang, Mofan Zhang, and 17 others. 2025. Dapo: An open-source llm reinforcement learning system at scale. In Advances in Neural Informa-tion Processing Systems , volume 38, pages 113222– 113244. Curran Associates, Inc. Qi Zhang, Shouqing Yang, Lirong Gao, Hao Chen, Xi-aomeng Hu, Jinglei Chen, Jiexiang Wang, Sheng Guo, Bo Zheng, Haobo Wang, and Junbo Zhao. 2025a. LeTS: Learning to think-and-search via process-and-outcome reward hybridization. In Pro-ceedings of the 2025 Conference on Empirical Meth-ods in Natural Language Processing , pages 5109– 5122, Suzhou, China. Association for Computational Linguistics. Wenlin Zhang, Xiangyang Li, Kuicai Dong, Yichao Wang, Pengyue Jia, Xiaopeng Li, Yingyi Zhang, Derong Xu, Zhaocheng Du, Huifeng Guo, Ruim-ing Tang, and Xiangyu Zhao. 2025b. Process vs. outcome reward: Which is better for agentic rag re-inforcement learning. In Advances in Neural Infor-mation Processing Systems , volume 38, pages 58701– 58729. Curran Associates, Inc. Xuhui Zheng, Kang An, Ziliang Wang, Yuhang Wang, and Yichao Wu. 2025. StepSearch: Igniting LLMs search ability via step-wise proximal policy optimiza-tion. In Proceedings of the 2025 Conference on Em-pirical Methods in Natural Language Processing ,pages 21805–21830, Suzhou, China. Association for Computational Linguistics. Yaowei Zheng, Richong Zhang, Junhao Zhang, Yanhan Ye, and Zheyan Luo. 2024. Llamafactory: Unified efficient fine-tuning of 100+ language models. In 
+
+Proceedings of the 62nd annual meeting of the as-sociation for computational linguistics (volume 3: system demonstrations) , pages 400–410. Wenlin Zhong, Jinluan Yang, Yiquan Wu, Yi Liu, Jian-hang Yao, and Kun Kuang. 2026. Sight: Reinforce-ment Learning with Self-Evidence and Information-Gain Diverse Branching for Search Agent. arXiv preprint arXiv:2602.11551 .Yang Zhou, Sunzhu Li, Shunyu Liu, Wenkai Fang, Kongcheng Zhang, Jiale Zhao, Jingwen Yang, Yihe Zhou, Jianwei Lv, Tongya Zheng, Hengtong Lu, Wei Chen, Yan Xie, and Mingli Song. 2026. Breaking the exploration bottleneck: Rubric-scaffolded reinforce-ment learning for general llm reasoning. Preprint ,arXiv:2508.16949. Zilin Zhu, Chengxing Xie, Xin Lv, and slime Con-tributors. 2025. slime: An LLM post-training framework for RL Scaling. https://github.com/ THUDM/slime . GitHub repository. Corresponding au-thor: Xin Lv. 
+
+A Method Details 
+
+A.1 Contrastive Induction Corner Cases 
+
+This section records the rules ARBOR follows when correctness scores within a query-group tie and when the two contrast pairs collapse into one, complementing Section 3.2. 
+
+Tie-breaking for anchor selection. When multi-ple trajectories share the highest F1, τ + is the one with the shortest response, and the same secondary key applies when selecting τ − 
+
+> hard
+
+and τ −
+
+> worst
+
+.
+
+Collapsed contrast pairs. When only one trajec-tory falls strictly below τ + in F1, τ − 
+
+> hard
+
+and τ −
+
+> worst
+
+resolve to the same trajectory; in this case only the 
+
+(τ +, τ −
+
+> hard
+
+) pair is sent to the LLM. When no trajec-tory falls below τ +, the group has no correctness divergence and induction is skipped entirely. 
+
+Homogeneous groups. For all-correct or all-wrong groups, new rubric generation is skipped en-tirely; existing common rubrics in P still score the group for reward shaping. For groups in which all trajectories share the same intermediate F1 value, no contrast pairs can be formed, and induction falls back to sending all trajectories to the LLM without positive/negative labels, letting it identify process differences directly. Induction is also skipped when fewer than two format-valid trajectories exist in the group. 
+
+B Training and Evaluation Details 
+
+B.1 Evaluation Benchmarks 
+
+We evaluate on the following four multi-hop QA benchmarks: • HotpotQA (Yang et al., 2018) is a Wikipedia-based multi-hop QA benchmark that requires aggregating evidence across multiple support-ing documents to answer a question. It is char-acterized by two representative question types: 11 reasoning over sentence-level supporting facts across documents, and comparison questions that contrast properties of two entities. • 2WikiMultiHopQA (Ho et al., 2020) is a multi-hop QA dataset constructed from both Wikipedia and Wikidata, combining unstruc-tured text with structured knowledge to sup-port multi-step reasoning. It provides ex-plicit evidence and reasoning paths, ensuring that answering each question requires genuine multi-hop inference. • MuSiQue (Trivedi et al., 2022) is designed to resist shortcut solutions by composing con-nected single-hop questions into multi-hop ones, such that proper multi-hop reasoning is required by construction. Unlike earlier benchmarks that can often be resolved with partial evidence, MuSiQue ensures that each step of the reasoning chain is necessary to reach the correct answer. • Bamboogle (Press et al., 2023) is a hand-crafted benchmark of 125 two-hop compo-sitional questions designed to be difficult for standard search engines to answer directly, while the supporting evidence for each ques-tion can be found in Wikipedia. It evaluates models on varied compositional questions that require combining information across multi-ple retrieval steps. Following Tool-Star (Dong et al., 2025) and ARPO (Dong et al., 2026), we evaluate on fixed held-out test splits: 200 examples for HotpotQA, 200 for 2WikiMultiHopQA, 200 for MuSiQue, and 125 for Bamboogle. 
+
+B.2 SFT and RL Training Supervised Fine-Tuning. Starting from Tool-Star (Dong et al., 2025) and STILL (Min et al., 2024), we filter out all examples that invoke Python as a tool and retain only search-tool in-teractions, yielding approximately 16K training ex-amples. Fine-tuning is conducted with LLaMAFac-tory (Zheng et al., 2024) using full-parameter opti-mization, DeepSpeed ZeRO Stage 3 (Rajbhandari et al., 2020), and FlashAttention-2 (Dao, 2024). We train for 3 epochs with a maximum sequence length of 15,000 tokens, an effective batch size of 16, a learning rate of 7 × 10 −6 with cosine decay and 10% linear warmup, in BF16 precision.                     
+
+> Hyperparameter Notation Default Rubric shaping coefficient λ0.1 Consolidation trigger Kconsol 8Admission variance threshold δv0.05 Correlation threshold ρmin 0.0 Retirement tolerance κ5Negative score attenuation factor α0.25 Maximum common pool size |P| max 6Active common rubrics per step —2Deduplication similarity threshold —0.9
+> Table 4: Default ARBOR hyperparameters used in the main experiments.
+
+Reinforcement Learning. RL training runs for 60 rollout steps using Slime (Zhu et al., 2025). We sample 8 trajectories per prompt with a roll-out batch size of 32, sampling temperature 0.7, a maximum context length of 36,864 tokens, and a maximum response length of 8,192 tokens. Each trajectory is limited to at most 12 agent turns and 10 search calls. The policy is updated with GRPO with token-level importance sampling (TIS), KL and entropy coefficients set to 0, and symmetric clipping with ϵclip = 0 .2. Optimization uses Adam with learning rate 1 × 10 −6 and weight decay 0.01. 
+
+B.3 ARBOR Hyperparameters 
+
+Table 4 lists the default ARBOR hyperparameters used in the main experiments. We elaborate on the key design choices below. 
+
+Kconsol = 8 is the number of candidate drafts that must accumulate in D before a consolidation round is triggered. κ = 5 is the maximum number of consecutive low-variance activations a common rubric is allowed before retirement. The deduplica-tion similarity threshold is set to 0.9, above which a newly produced common rubric is considered a duplicate of an existing one under BGE-M3 (Chen et al., 2024) cosine similarity. 
+
+C Additional Experimental Results 
+
+C.1 Format Sensitivity of TIR Prompting 
+
+The official evaluation used in Table 1 is strict-format gated: a response is scored only if it pro-duces a non-empty prediction and terminates with the required final-answer format. If the termination reason indicates a formatting or finalization failure, all official metrics are set to zero, including EM, F1, and LLM-judge accuracy. This protocol matches the training reward, where finalization is part of the task rather than a post-hoc parsing detail. 12 To diagnose the non-monotonic TIR Prompting results in the main table, Table 5 separates format-ting validity from answer quality. Official accu-racy follows the strict protocol above, valid-only 
+
+accuracy evaluates only responses that satisfy the required format, and recovery is the gap between the two LLM accuracies. Table 5 shows that the non-monotonic TIR re-sults are mainly driven by formatting failures. Qwen3-8B and Qwen3-14B have much lower valid rates than Qwen3-4B, which sharply lowers their official LLM-judge accuracies. On valid responses, however, they reach 48.6% and 52.4% LLM-judge accuracy, comparable to or higher than Qwen3-4B. Thus, the apparent weakness of larger TIR back-bones primarily reflects unreliable prompt-only fi-nalization under a strict protocol, not weaker search reasoning. We keep the strict official scores in the main table because correct finalization is part of the tool-use task and is also enforced during RL training. 
+
+C.2 Cross-Judge Robustness 
+
+To check whether the main LLM-judge trends depend on the same model family used by AR-BOR’s reward construction, we re-evaluate all fi-nal answers with DeepSeek-V4-Pro (DeepSeek-AI, 2026) as an independent post-hoc judge. DeepSeek-V4-Pro is not used for rubric induction, consolida-tion, pairwise scoring, or reward construction. Ta-ble 6 compares average LLM-judge accuracy under Qwen3-Plus and DeepSeek-V4-Pro. The indepen-dent judge preserves the same ranking: ARBOR remains the best method at all three scales, and its gains over GRPO remain close to the Qwen3-Plus gains. Overall, DeepSeek-V4-Pro is slightly stricter than Qwen3-Plus: its average scores are lower by 0.4–1.2 points across methods, but the drop is small and uniform. Despite this stricter inde-pendent judge, the relative ordering is preserved and ARBOR’s gains over GRPO remain nearly un-changed (+3.6, +4.0, and +1.9 points at 4B, 8B, and 14B). Thus, the main LLM-judge conclusion is robust across judge families rather than driven by a Qwen3-Plus-specific preference. 
+
+C.3 Setup and Full Results for Rubric Memory Ablation 
+
+Table 7 provides the per-benchmark results for the rubric memory ablation discussed in Section 4.4. RaR-style is our search-QA adaptation of 0% 20% 40% 60% 80% 100% 
+
+> Fraction of common rubrics (ranked by reuse)
+> 0%
+> 20%
+> 40%
+> 60%
+> 80%
+> 100%
+> Cumulative share of scoring events
+> 5%
+> 44%
+> even distribution
+> ARBOR
+
+Figure 5: Cumulative share of scoring events covered by the top fraction of common rubrics, ranked by reuse count. 
+
+Rubrics-as-Rewards (Gunjal et al., 2026), instan-tiated as a single-use instance-specific rubric re-ward. For each training query, the external rubric-generation LLM generates 5–10 reference-conditioned rubric items from only the question and ground-truth answer, without seeing sampled rollout trajectories. During RL, the judge model scores each full agent trajectory under the query-specific rubric set and returns a holistic 1–10 rating; we normalize it to [0 , 1] , center it within the rollout group, and add it to the base F1/format reward with the same shaping coefficient as ARBOR. The gen-erated rubrics are used only for their source query group and are never reused by later groups. The w/o memory variant instead keeps AR-BOR’s contrastive process-rubric induction from sampled trajectories, but discards each induced rubric after scoring its source query-group. Thus both variants have no reusable memory, while differing in whether their rubrics are reference-conditioned instance criteria or contrastively in-duced process criteria. 
+
+C.4 Reuse Distribution 
+
+Figure 5 plots the cumulative share of scoring events as a function of the fraction of common rubrics ranked by reuse. The curve sits well above the even-distribution diagonal. The top 5% of rubrics cover 20% of all scoring events, and the top 20% cover 44%. This concentration arises from the active selection mechanism in Section 3.4, which preferentially activates rubrics with high cumula-13 Model Valid Rate Official LLM Acc. Valid-only LLM Acc. Recovery             
+
+> Qwen3-4B 89.7 43.6 48.4 +4.8
+> Qwen3-8B 45.1 22.7 48.6 +25.9
+> Qwen3-14B 68.5 35.2 52.4 +17.2
+
+Table 5: Format sensitivity of TIR Prompting. All values are percentages averaged over four benchmarks and five evaluation runs.                                                                    
+
+> Backbone Method Judge Accuracy Gain over GRPO Qwen3-Plus DeepSeek ∆Qwen3-Plus DeepSeek
+> Qwen3-4B TIR Prompting 43.6 42.4 −1.2−12 .0−12 .7
+> GRPO 55.6 55.1 −0.50.0 0.0 DAPO 56.1 55.6 −0.5+0 .5+0 .5
+> ARBOR 59.6 58.7 −0.9+4 .0+3 .6
+> Qwen3-8B TIR Prompting 22.7 22.0 −0.7−34 .2−34 .6
+> GRPO 56.9 56.5 −0.40.0 0.0 DAPO 56.7 55.7 −1.0−0.2−0.8
+> ARBOR 61.1 60.6 −0.5+4 .2+4 .0
+> Qwen3-14B TIR Prompting 35.2 34.6 −0.6−25 .6−25 .3
+> GRPO 60.8 59.9 −0.90.0 0.0 DAPO 59.1 58.6 −0.5−1.7−1.3
+> ARBOR 62.8 61.8 −1.0+2 .0+1 .9
+
+Table 6: Cross-judge robustness of average LLM-judge accuracy. Qwen3-Plus is the main evaluation judge, while DeepSeek denotes DeepSeek-V4-Pro used only as an independent post-hoc judge. ∆ denotes DeepSeek accuracy minus Qwen3-Plus accuracy. Gain over GRPO denotes the average accuracy difference from GRPO under the corresponding judge. 
+
+tive correlation, so that a small core of validated rubrics accumulates most scoring events. 
+
+D Consolidation Case Study 
+
+We illustrate the consolidation process with a con-crete example. Table 8 shows three query-local candidate rubrics induced from different queries during RL training. Each candidate describes the same underlying process behavior, resolving the target entity with canonical naming before query-ing its attributes, but in different phrasings shaped by the specific query context. The consolidation module receives these and other similar candidates as input, identifies the shared process pattern, and produces the com-mon rubric Precise Entity-Attribute Targeting with Canonical Framing . The resulting common rubric unifies three variant phrasings of the same pro-cess standard into a single reusable criterion, while the query-specific framing of each candidate is ab-stracted away. This abstraction is what enables the common rubric to be reused across 101 query-groups throughout training. 
+
+E Prompts 
+
+This section reproduces the four prompts used in ARBOR. Placeholders inside braces are filled at runtime, and ellipses denote repeated structures over the corresponding lists. 
+
+E.1 Contrastive Induction 
+
+The induction prompt has a fixed instruction header followed by a per-call payload that fills in the ques-tion itself, the optional ground-truth answer, the contrast pairs, and the existing rubrics; the input fields are listed at the end of the header. The full header is reproduced in Table 9. 
+
+E.2 Consolidation 
+
+The consolidation prompt is invoked when the can-didate pool D accumulates enough drafts. Exist-ing common rubrics in P are passed in as a no-duplicate constraint, and the candidate drafts are grouped by query of origin. The full prompt is shown in Table 10. 
+
+E.3 Pairwise Judge 
+
+Pairwise judging is invoked once per edge in the sparse comparison graph (Section 3.4). The system 14 Method Bamboogle HotpotQA MuSiQue 2Wiki Avg. 
+
+EM F1 Acc. EM F1 Acc. EM F1 Acc. EM F1 Acc. EM F1 Acc. 
+
+Qwen3-4B 
+
++ GRPO 61.6 69.8 71.0 44.9 54.5 57.4 17.0 26.9 26.5 60.9 68.3 67.6 46.1 54.9 55.6 + RaR-style 63.0 70.0 72.3 45.1 54.3 57.7 16.9 25.7 27.0 60.2 68.8 70.5 46.3 54.7 56.9 + w/o memory 64.3 72.5 74.6 45.5 55.1 58.9 18.4 27.1 28.3 62.8 71.0 72.6 47.8 56.4 58.6 + ARBOR 65.1 73.0 76.2 45.4 55.6 59.7 17.0 25.7 27.8 64.2 72.4 74.6 47.9 56.7 59.6 
+
+Qwen3-8B 
+
++ GRPO 61.0 69.4 72.2 44.4 55.0 57.8 17.4 26.7 26.6 64.8 71.0 71.1 46.9 55.5 56.9 + RaR-style 60.0 67.8 70.7 43.9 54.5 57.4 17.3 25.5 28.1 65.1 71.3 71.3 46.6 54.8 56.9 + w/o memory 64.2 72.0 74.2 47.0 57.2 60.9 16.9 25.7 28.0 62.4 69.7 70.8 47.6 56.2 58.5 + ARBOR 65.3 72.9 76.5 47.8 58.6 62.9 18.3 26.8 29.5 64.2 73.3 75.3 48.9 57.9 61.1 
+
+Qwen3-14B 
+
++ GRPO 61.9 71.5 72.8 48.1 58.4 62.3 19.4 29.9 31.6 69.8 76.2 76.4 49.8 59.0 60.8 + RaR-style 59.8 68.8 69.4 45.3 55.5 58.7 17.2 26.9 27.8 66.8 71.6 70.9 47.3 55.7 56.7 + w/o memory 64.5 73.8 76.0 48.7 58.3 62.4 18.4 27.3 27.5 67.9 74.4 74.3 49.9 58.5 60.1 + ARBOR 67.5 75.8 78.6 48.6 59.1 63.6 19.1 28.7 31.6 69.8 76.3 77.3 51.3 60.0 62.8 
+
+Table 7: Per-benchmark results for the rubric memory ablation. Average columns report the mean over the four benchmarks; Section 4.4 discusses the averaged trends. 
+
+Source query Candidate rubric (title and description) 
+
+Did Ashok Chavan and Peppino Tirri share the same nationality? 
+
+Query Precision via Canonical Entity Anchoring. A high-scoring response formulates its first search query using the canonical, widely attested name format of the target entity rather than vague role descriptors, enabling direct retrieval of authoritative biographic identifiers. What is the date of death of the performer of song Story Of A Life? 
+
+Entity Disambiguation Before Attribute Search. A high-scoring response first identifies and confirms the canonical entity using unambiguous, attribute-robust evidence before searching for biographical attributes like date of death—ensuring subsequent searches are grounded in the right person. The university which David R. Marchant was a member of in 1994 is located in what city? 
+
+Precision-First Entity Identification Before Attribute Verification. A high-scoring response treats the target as a concrete, disambiguated artifact requiring authoritative identification before querying attributes, prioritizing queries that resolve the entity’s canonical identity in early steps. 
+
+Consolidated common rubric: Precise Entity-Attribute Targeting with Canonical Framing 
+
+Table 8: Consolidation case study for reusable rubric memory. Three query-local candidate rubrics from different queries describe the same entity-attribute targeting pattern in query-specific language, and the consolidation module abstracts them into a reusable common rubric. 
+
+prompt fixes the win/tie/loss output format, and the user prompt fills in the question, both responses, and the criterion derived from the active common rubric. Order randomization is applied at the call site by swapping which response receives the A label. The full prompt is shown in Table 11. 
+
+E.4 LLM-Judge Accuracy Evaluation 
+
+Final-answer accuracy on the four benchmarks is reported with an LLM judge that compares the predicted answer against the gold answer. The judge is invoked with the prompt in Table 12 and is configured to output the literal string Correct or Incorrect. 15 Contrastive Induction Prompt 
+
+You are evaluating a Deep Search Agent — a model that answers questions by iteratively searching the web, reading results, and synthesizing a final answer. Each response below contains the agent’s full trajectory: its reasoning, search queries issued, search results received, and the final answer. 
+
+Answer correctness is already scored separately via strict-format-gated F1. 
+
+Format compliance is part of trajectory quality. A response with malformed tags, missing or unclosed 
+
+<think >/<search >/<result >/<answer > structure, multiple final answer blocks, missing boxed final answer, or truncation must not be treated as a high-quality positive example, even if a raw answer can be recovered and happens to match the ground truth. 
+
+Ideal Search Agent Vision. An excellent Search Agent is defined by the quality of its reasoning and decisions at each step. The ideal agent: - Plans deliberately : Understands the question deeply, identifies what information is needed, and decomposes complex questions into clear sub-goals before searching. - Searches precisely : Formulates targeted queries using specific entity names and relationships to retrieve the right information directly. - Searches efficiently : Avoids redundant queries, unnecessary re-verification of already-established facts, and circular search patterns that waste the search budget without adding new information once the key uncertainty has been resolved. - Adapts intelligently : Searches further when genuine ambiguity, missing constraints, or conflicting evidence remain; synthesizes and answers when sufficient evidence has resolved the key uncertainty. - Answers confidently : Produces a well-reasoned, correctly formatted final answer once the question can be resolved. - Finalizes cleanly : Uses the required tool-call and answer format correctly, keeps tags properly paired and closed, and transitions cleanly from search to a single final answer without leaving unfinished structure. 
+
+Your Goal. Identify search strategy and reasoning process behaviors that CAUSE the agent to reach correct or incorrect answers .The key question is: what did successful responses do differently in their process (not their final answer) that led them to succeed? A good rubric targets a process behavior that, if improved, would lead to more correct answers. A bad rubric merely re-checks whether the answer content is correct (which F1 already does). 
+
+What to Look For. Examine the provided contrast pairs and identify specific process behaviors that caused some responses to succeed while others failed (or that made some stronger responses clearly better-executed than weaker ones). Use the Ideal Search Agent Vision above as a reference for what good process looks like, but ground your rubrics in concrete observations from the given trajectories — not generic best practices. Each rubric should capture a behavior dimension where the given responses actually differ , so that scoring produces meaningful variance across samples. 
+
+Rules. 
+
+- CRITICAL: Rubrics Must Target Process, Not Answer Content. Do NOT generate rubrics that verify whether specific facts, names, dates, or relationships in the final answer are correct — this is exactly what F1 already measures. - Format as Process Quality. Treat clean finalization and valid interaction structure as part of process quality. Format-invalid or truncated responses may be used as low-quality anchors when they reveal unfinished reasoning, invalid tool-use structure, or failure to produce a single parseable final answer. However, avoid generating rubrics that only duplicate the strict format checker; prefer criteria that connect format discipline with reasoning, evidence use, search control, and answer finalization. - Using Ground Truth. If a Ground Truth Answer is provided, use it to: (1) understand what information the agent needed to find; (2) identify which responses succeeded vs. failed; (3) then analyze: what search decisions (query formulation, result interpretation, search direction) caused the successful responses to find the right information while others did not? - Discriminative Power. Each rubric must produce actual score variance across the contrasted responses. Focus on observable differences in search behavior. If both sides exhibit the same search pattern, do not create a rubric for it. - Rubric Format. Each rubric should describe BOTH what a high-scoring response does AND what a low-scoring response does for the same dimension. This helps the judge accurately place each response on the full spectrum. - Balanced Closure Preference. Do not treat extra verification as an intrinsic virtue. When the retrieved evidence is already sufficient to resolve the key uncertainty, continuing to search, continuing to doubt, or delaying the final answer should be treated as low-scoring behavior rather than “thoroughness.” At the same time, do NOT reward premature closure. If important ambiguity, missing constraints, or conflicting evidence remain unresolved, stopping early and answering too soon should also be treated as low-scoring behavior. - Non-Redundancy. Do not duplicate Existing Rubrics in meaning or scope. If Existing Rubrics already cover the quality differences, return empty lists. 
+
+Output. Generate 1–3 rubrics total. Fewer high-quality process rubrics are far better than many generic ones. 
+
+{ "rubrics": [ { "title": "<concise label>", "description": "<what a high-scoring response does>", "counter_description": "<what a low-scoring response does>" } ] } 
+
+Inputs. 
+
+1. Question : The original question the agent is trying to answer. 2. Ground Truth Answer (if provided): The correct answer — use to understand what information was needed and which search strategies led to finding it. 3. Contrast Pairs : One or two higher-target vs. lower-target trajectory comparisons. 4. Existing Rubrics : Previously established rubrics — do not duplicate these. 
+
+Table 9: Contrastive induction prompt. The prompt induces query-local process rubrics from contrastive trajectory pairs. 
+
+16 Consolidation Prompt 
+
+You are a rubric consolidation expert. Your task is to distill specific, query-level scoring rubrics into generalized cross-query standards 
+
+that effectively differentiate response quality levels across queries. 
+
+Core Principles 
+
+1. Maximize Differentiation : Each standard should create meaningful scoring differences between strong and weak responses — avoid standards that most responses trivially satisfy or all inevitably fail. 2. Align with Sound Reasoning : Standards must reflect the core elements of correct reasoning — logical coherence, evidence accuracy, and conclusion reliability — rather than penalizing minor stylistic differences or irrelevant details. 3. Dual-Sided Standards : Each standard should describe BOTH the desired behavior (what good responses do) AND the undesired behavior (what weak responses lack) for the same dimension. 4. Balanced Closure : Do not treat early stopping as a generic virtue. Reward timely closure only when the key uncertainty has already been resolved; do not reward premature closure while ambiguity, missing constraints, or conflicting evidence remain. 
+
+Task 
+
+Identify 1–2 NEW, high-value standards by abstracting common patterns from the candidates below. 
+
+CRITICAL: Do NOT produce any standard that overlaps in meaning with the Existing Common Standards listed below, even if phrased differently. Abstraction Strategy 
+
+- Look for recurring quality patterns across multiple candidates — both strengths worth rewarding and weaknesses worth penalizing — then merge them into one general standard with both a DO (desired) and AVOID (undesired) description. - The description must be cross-query general : applicable to any query, not tied to specific queries. - Replace question-specific details with general language. Use parenthetical examples “(e.g., ...)” to clarify, but the core criterion must be broadly applicable. - × Too specific: “Correctly identifies that hydroxyzine pamoate is for anxiety while hydrochloride is for itching” - ✓ Generalized: “Accurately distinguishes functional or contextual differences between closely related entities (e.g., variant forms, sub-categories, similar-named concepts)” - × Too specific: “Fails to verify the founding year of MIT from the search results” - ✓ Generalized: “Fails to cross-verify key factual claims against retrieved evidence before drawing conclusions” - Do NOT create standards that penalize trivial issues unrelated to reasoning quality or answer correctness — stay focused on what genuinely separates strong responses from weak ones. - If the candidates are already well-covered by Existing Common Standards, return an empty list. 
+
+Existing Common Standards (already established — do NOT duplicate these): - {existing_title_1} DO: {existing_description_1} AVOID: {existing_counter_description_1} - {existing_title_2} DO: {existing_description_2} AVOID: {existing_counter_description_2} ... 
+
+New Candidates (specific rubrics from recent queries): Query 1: {query_1} - {candidate_title_1_1} DO: {candidate_description_1_1} AVOID: {candidate_counter_description_1_1} ... Query 2: {query_2} - {candidate_title_2_1} DO: {candidate_description_2_1} AVOID: {candidate_counter_description_2_1} ... 
+
+Output 
+
+{ "new_common_rubrics": [ { "title": "...", "description": "<what a high-scoring response does>", "counter_description": "<what a low-scoring response does>" } ] } 
+
+Table 10: Consolidation prompt. The prompt distills recurring patterns from candidate rubrics into reusable common rubrics while avoiding duplicates. 
+
+17 Pairwise Judge Prompt System: 
+
+You are an expert judge. You will be given a question (in <question >< /question > tags) and two responses labeled Response A and Response B (in <response_a >< /response_a > and <response_b >< /response_b > tags). You will also be given a scoring criterion (in <criterion >< /criterion > tags). Your task is to determine which response better satisfies the criterion. Consider the criterion carefully and compare both responses against it. Strictly judge only the given criterion, and do not use any considerations beyond that criterion. Format compliance is part of trajectory quality when it affects the criterion. If one response is malformed, truncated, unparseable, or fails to produce a single clean final answer, that should count against it for criteria involving coherent reasoning, valid tool-use/search-result structure, complete synthesis, or clean finalization. You MUST output JSON in exactly this format: {"winner": "A"} or {"winner": "B"} or {"winner": "TIE"} .- Output {"winner": "A"} if Response A clearly better satisfies the criterion. - Output {"winner": "B"} if Response B clearly better satisfies the criterion. - Output {"winner": "TIE"} if BOTH responses perfectly satisfy the criterion, OR if BOTH fail it entirely, OR if they are virtually indistinguishable in quality regarding this specific criterion. 
+
+User: 
+
+<question >{query} </question ><response_a >{response_a} </response_a ><response_b >{response_b} </response_b ><criterion >
+
+High-scoring response: {rubric_description} Low-scoring response: {rubric_counter_description} 
+
+</criterion >
+
+Table 11: Pairwise judge prompt. The prompt compares two trajectories under one active common rubric and outputs a win, tie, or loss. 
+
+LLM-Judge Accuracy Evaluation Prompt 
+
+Given a Question and its Golden Answer, verify whether the Predicted Answer is correct. The prediction is correct if it fully aligns with the meaning and key information of the Golden Answer. Respond with “Correct” if the prediction is correct and “Incorrect” otherwise. Golden Answer may have multiple options, and matching any one of them is considered correct. Question: {question} Golden Answer: {labeled_answer} Predicted Answer: {pred_answer} 
+
+Table 12: LLM-judge accuracy evaluation prompt. The prompt judges whether a predicted final answer matches the gold answer. 
+
+18
