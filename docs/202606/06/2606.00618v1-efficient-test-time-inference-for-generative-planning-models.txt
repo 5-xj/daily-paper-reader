@@ -1,0 +1,1145 @@
+Title: Efficient Test-time Inference for Generative Planning Models
+
+URL Source: https://arxiv.org/pdf/2606.00618v1
+
+Published Time: Tue, 02 Jun 2026 00:41:59 GMT
+
+Number of Pages: 35
+
+Markdown Content:
+# Efficient Test-time Inference for Generative Planning Models with OCL Search 
+
+Robert Gieselmann 1 Mihai Samson 1 Federico Pecora 2 Jeremy L. Wyatt 1
+
+Abstract 
+
+Generative models have emerged as a powerful paradigm for AI planning, yet their performance remains constrained by the training data distribu-tion. One approach is to improve generated solu-tions during inference by scaling test-time com-pute. A more efficient alternative is to optimize the inference process itself. In this paper, we show that a modified version of a classical Open-Closed List (OCL) search provides just such an efficient inference procedure. Our algorithm synergizes two learned components: a generative model that performs fast rollouts from intermediate states and a heuristic model that prioritizes among candidate reasoning paths. Key contributions include novel exploration control mechanisms and integration of learned models within the OCL framework. Across multiple combinatorial planning domains, our approach outperforms both neurosymbolic search baselines and classical solvers in computa-tional efficiency and solution quality. 
+
+1. Introduction 
+
+Automated planning seeks action sequences that transform an initial state into one satisfying goal conditions. Deep generative models have emerged as a promising paradigm for plan generation, offering fast synthesis across diverse domains (Rossetti et al., 2024b). However, solution quality is bounded by the training data, and collecting large-scale optimal datasets is often infeasible; even seemingly sim-ple domains like Blocksworld are NP-hard to solve opti-mally (Slaney & Thi´ ebaux, 2001). An alternative is to spend additional compute at inference time. Best-of-N sampling (Stiennon et al., 2020) repeatedly queries a generative model and returns the best generation, 
+
+> 1
+
+Amazon 2Work done while at Amazon. Correspondence to: Robert Gieselmann <robgie@amazon.com >.
+
+Proceedings of the 43 rd International Conference on Machine Learning , Seoul, South Korea. PMLR 306, 2026. Copyright 2026 by the author(s). 
+
+but does not balance exploration and exploitation to find better solutions at lower cost. Search algorithms like Monte Carlo Tree Search (MCTS) have become popular for test-time compute in formal reasoning domains such as theorem proving (Chen et al., 2024; Hubert et al., 2025) or code gen-eration (Antoniades et al., 2025). However, MCTS methods typically employ UCT-style selection (e.g., PUCT; Rosin, 2011) with exploration incentives growing with parent visi-tation counts. Because every traversal originates at the root, deeper nodes are visited less frequently, often yielding wide but shallow trees. This depth imbalance is problematic for long-horizon planning, where critical decisions deep in the tree remain underexplored. Open-Closed List (OCL) algorithms (Hart et al., 1968; Valenzano & Xie, 2016) like A* select nodes globally and underpin state-of-the-art symbolic planners (Helmert, 2003). However, unlike MCTS where generative models can serve as rollout policies, standard OCL provides no mechanism for fast candidate generation nor does it compensate for in-admissible heuristics. When trained on suboptimal demon-strations, learned heuristics overestimate cost-to-go, dispro-portionately inflating estimates for states far from the goal and causing greedy behavior that favors near-goal nodes. Moreover, querying generative models is computationally expensive, necessitating selective invocation. We present OCLG EN , a compute-efficient test-time search algorithm for autoregressive planning models that substan-tially improves plan quality. Our approach addresses these challenges through three innovations: (1) depth-partitioned selection maintains separate open lists per depth level, ensur-ing balanced exploration despite overestimating heuristics; (2) truncated rollouts with adaptive expansion uses the gen-erative model for fast multi-step synthesis while branching at low-confidence decision points; and (3) distributional heuristic estimation ranks nodes by a lower-percentile cost-to-go estimate, targeting their best attainable outcome. Experiments on four classical planning domains demon-strate that OCLG EN converges to shorter plans significantly faster than baselines. On problems with known optimal solutions, our method achieves 87.3% optimality across domains, compared to 49.8% for MCTS given the same compute budget. OCLG EN also provides an effective foun-1
+
+> arXiv:2606.00618v1 [cs.AI] 30 May 2026 Efficient Test-time Inference for Generative Planning Models
+
+dation for iterative self-improvement: after three refine-ment iterations, our method achieves 100% optimal plans on Blocksworld and 94.7% on Sokoban, compared to 13.5% and 51.3%, respectively, for the base model with Best-of-N sampling given the same runtime budget. In summary, our contributions include: • A modernized OCL framework with autoregressive models for fast rollout generation. • A distributional approach for deploying overestimating heuristics in search. • Comprehensive evaluation across four domains with ablations validating each design choice. • Demonstration of OCLG EN ’s effectiveness within a recursive self-improvement framework. 
+
+2. Related Work 
+
+Generative Models for AI Planning Deep generative models have emerged as a promising approach for planning by learning to generate solutions from collections of solved instances. Recent work has explored both pre-trained large language models (LLMs) and smaller domain-specialized transformers for plan generation. While LLMs can be fine-tuned for planning tasks (Pallagani et al., 2023), concerns about inference costs and reliability have motivated train-ing smaller transformers from scratch on planning data. These approaches typically formulate planning as autore-gressive sequence generation, predicting plans token by token. For example, PlanGPT (Rossetti et al., 2024b) trains a GPT2 model on plans from a domain-independent planner by splitting individual actions into sequences of operator name and object tokens. Extensions include integrating ac-tion validators during generation (Rossetti et al., 2024a), repairing invalid plans via local search (Tummolo et al., 2024), and leveraging symmetries for improved generaliza-tion (Fritzsche et al., 2025). Our work adopts the model architecture and tokenization scheme from (Rossetti et al., 2024b) and contributes an efficient inference algorithm. 
+
+Test-time Search Test-time inference in generative mod-els is increasingly framed as a search over candidate solu-tions or reasoning paths. Recent frameworks include Tree of Thoughts (Yao et al., 2023), which applies breadth-first search or depth-first search to deliberative reasoning, and rStar (Guan et al., 2025), which leverages MCTS for multi-step reasoning. In formal domains, DeepSeek-Prover-V1.5 (Xin et al., 2025) integrates MCTS with proof assistant feedback, while PG-TD (Zhang et al., 2023) combines AlphaZero-style search with test case execution for veri-fied code generation. While most of these methods target general LLM reasoning, in this work we focus on smaller, domain-specialized planning models, where the same search principles can substantially improve output quality. 
+
+Self-Improvement via Search Test-time search can serve as a standalone inference procedure or underpin recursive self-improvement, where search-generated solutions pro-vide supervision for retraining. Combining search and learn-ing in a self-improvement loop dates back to early checkers programs (Samuel, 1959), and has since been applied to classical planning via heuristic search with learned neural heuristics (Jabbari Arfaee et al., 2011; Groshev et al., 2018). The idea gained widespread attention with AlphaGo (Sil-ver et al., 2016) and AlphaZero (Silver et al., 2017), which coupled MCTS with deep networks trained via self-play. Similarly, the Expert Iteration (ExIt) framework (Anthony et al., 2017) formalizes this loop, where an expert search it-eratively supervises an apprentice policy. Analogous frame-works have recently been applied to fine-tuning transformers for reasoning (Lehnert et al., 2024; Zhang et al., 2024; Chen et al., 2024), theorem proving (Xin et al., 2025), and multi-step reasoning (Guan et al., 2025). The generative planning framework in Gieselmann et al. (2026) combines Best-of-N sampling with graph processing to refine a transformer in a recursive loop that iterates between data curation and model finetuning. We build on this work, focusing on efficient test-time search which further accelerates self-improvement. 
+
+3. Preliminaries 
+
+3.1. Classical Planning in PDDL 
+
+We focus on classical single-agent planning in deterministic, fully observable, discrete environments. A planning problem is specified by a finite set of objects O and a finite set of predicates P, where each predicate p ∈ P 
+
+has an associated arity arity( p). Grounded atoms are formed by instantiating predicates with objects: F =S
+
+> p∈P
+
+ p(o1, . . . , o arity( p)) | o1, . . . , o arity( p) ∈ O . Astate s ∈ S = 2 F represents the set of atoms that hold true in a given world configuration. Actions a ∈ A are grounded operators a = ⟨pre( a), add( a), del( a)⟩, where preconditions pre( a) ⊆ F , add effects add( a) ⊆ F , and delete effects del( a) ⊆ F determine applicability and out-come. An action a is applicable in state s when pre( a) ⊆ s,yielding successor state F (s, a ) = ( s \ del( a)) ∪ add( a).Goals sg ∈ G ⊆ 2F are partial state descriptions. A state s
+
+satisfies goal sg if sg ⊆ s. A plan τ = ( a0, . . . , a T −1) is valid if each action at is applicable in st, and executing the sequence from s0 via st+1 = F (st, a t) reaches a final state 
+
+sT satisfying the goal. In this work, we define optimality as minimum plan length. The Planning Domain Definition Language (PDDL) (Mc-Dermott et al., 1998; Fox & Long, 2003) serves as the stan-dard formalism in AI planning, underpinning benchmarks such as the International Planning Competition (Vallati et al., 2015). A PDDL domain defines predicates, typed objects, and operators specified through preconditions and effects. 2Efficient Test-time Inference for Generative Planning Models 
+
+Individual problem instances declare concrete objects, an initial state, and goal conditions. We use PDDL as the for-mal language to formulate problems, states, and plans while leveraging its structure to tokenize planning problems for autoregressive sequence generation. 
+
+3.2. Autoregressive Planning Models 
+
+We investigate test-time inference for generative models 
+
+πθ that produce distributions over actions conditioned on an initial state s0 ∈ S, a goal specification sg ∈ G,and the sequence of previous actions a<t ∈ At, i.e., 
+
+πθ (at | s0, s g , a <t ). Following Rossetti et al. (2024b), we model πθ as a decoder-only transformer (Radford et al., 2019) that represents states and actions by tokenizing PDDL descriptions of predicates, operator names and objects. This representation enables the model to navigate the combina-torially large space of grounded actions using a compact, fixed-size vocabulary. Actions are split into tokens and generated autoregressively. To illustrate, consider the Blocksworld domain — a classical planning benchmark where the objective is to rearrange a set of blocks (e.g., b1 , b2 , b3 ) into a specified goal configuration using four operators: pickup and putdown 
+
+for moving blocks to and from the table, and stack and 
+
+unstack for placing or removing blocks on top of one another. In this domain, the grounded action unstack b1 b2 (removing block b1 from atop block b2 ) is encoded as a sequence comprising the operator token unstack followed by argument tokens b1 and b2 . At each generation step, the newly predicted token is concatenated to the input sequence for the subsequent forward pass. The vocabulary is derived directly from PDDL domain and problem files, comprising predicate names, object identifiers, type declarations, and special delimiter tokens. A domain-specific upper bound on the number of objects ensures bounded representations. 
+
+4. Efficient Test-time Search for Autoregressive Planning 
+
+Using the generative model πθ defined in Section 3.2, we develop an efficient test-time search algorithm. Our objec-tive is to minimize plan length while generalizing across a distribution of problem instances PS×G . For each planning domain, a model πθ is trained via supervised learning on 
+
+Dtrain , a dataset of suboptimal plans generated by running a symbolic solver on a set of instances drawn from PS×G .
+
+4.1. OCL Search with Generative Models 
+
+We introduce OCLG EN , an efficient test-time search algo-rithm for generative planning models built on the Open-Closed List (OCL) framework (Hart et al., 1968; Valenzano & Xie, 2016). This framework represents a general class of graph search algorithms that includes, e.g., A∗. OCL search maintains an open list of frontier nodes pending exploration and a closed list that tracks already-visited states to prevent redundant expansions. At each iteration, a node n is se-lected from the open list O according to a priority function 
+
+f (n) = g(n) + h(n), where g(n) denotes the incurred path cost and h(n) the heuristic cost-to-go. The selected node is then moved to the closed list C and expanded to generate successors. Crucially, the framework detects when a node is revisited via a shorter path from the root, updates its g(n)
+
+value accordingly, and moves it back to O.
+
+Modifications. To adapt OCL search for generative plan-ning models, we introduce several modifications to the stan-dard framework. First, we introduce depth-partitioned se-lection , maintaining separate open lists per depth level (de-termined by g(n)) to balance exploration across the solution depth and counteract systematic heuristic overestimation. Second, we perform node expansions via truncated roll-outs using the generative model πθ rather than single-step transitions. This allows us to rapidly generate sequences of successor nodes, which effectively prunes large or com-binatorial action spaces. Within each rollout, we further apply adaptive expansion , using the generative model’s to-ken confidence to identify critical decision points. These branching points are expanded immediately, broadening exploration when the model is uncertain and narrowing it when the model is confident. Finally, we integrate a learned distributional heuristic model hϕ to guide node selection. Altogether, these components modernize OCL graph search by combining even depth-level coverage with heuristic value guidance, while dynamically constraining breadth based on model confidence. We detail each modification below. 
+
+4.2. Depth-Partitioned Selection 
+
+Heuristic models optimized to predict the cost-to-go h(n)
+
+from suboptimal training data systematically overestimate the true cost-to-go h∗(n). To observe how this biases selection, we model the resulting bias as multiplicative, 
+
+h(n) ≈ α h ∗(n) for some α > 1.Consider a pathological case: two unvisited frontier nodes, 
+
+n1 and n2, situated on different branches but projected to yield solutions of identical total length L (i.e., g(n1) + 
+
+h∗(n1) = g(n2) + h∗(n2) = L). Assuming uniform unit action costs, the occured cost g(n) equals the node’s depth d.Suppose n1 is shallower than n2 (g(n1) < g (n2)). Under our bias model, the priority function evaluates to: 
+
+f (n) = g(n) + α(L − g(n)) = αL − (α − 1) g(n). (1) Because f (n) is strictly decreasing with respect to g(n),the scores satisfy f (n2) < f (n1). Consequently, se-lecting the node with the lowest f -score from a global 3Efficient Test-time Inference for Generative Planning Models a) Select depth bucket (g-cost) b) Select node from depth-specific open list (h-cost) c) Partial rollout with generative model d) Adaptive node expansion based on model confidence 
+
+> Selected node Rollout successor node Expansion successor node
+
+Figure 1. Illustration of one iteration with OCLGen. Note that we maintain a graph structure of states and transitions that is updated after every search iteration. 
+
+open list O (as in standard A∗) strictly prefers the deeper node n2, despite both offering paths to equally good so-lutions. The search thus systematically over-commits to deeper, arbitrary branches, leaving promising shallower al-ternative routes—where course corrections are most valu-able—unexpanded. To mitigate this, we partition the unvisited nodes by depth, maintaining a separate open list Od for each depth level d
+
+(where g(n) = d). At each iteration, we first select a depth level ds (Figure 1a), then extract a node ns from Ods based on the heuristic estimate hϕ (Figure 1b). This two-stage selection ensures even exploration across potential solution lengths. Crucially, at a fixed depth d, pairwise comparisons within Od depend only on the ranking signal αh ∗(n). Thus, our learned heuristic hϕ provides a useful ranking signal within each depth level despite its absolute overestimation. We investigate two strategies for selecting ds from 
+
+{0, 1, . . . , d max − 1}, where dmax is the depth of the shal-lowest goal state found so far (or the maximum graph depth if no solution exists): Uniform selection samples ds uni-formly at random, while Scan selection iterates sequentially from d = 0 to dmax − 1, ensuring systematic coverage across all levels. 
+
+4.3. Confidence-based Node Expansion 
+
+Having selected a depth level ds and extracted the highest-scoring node ns ∈ O ds according to the heuristic hϕ, we perform a truncated rollout starting from ns with the genera-tive model πθ (Figure 1c), producing a partial plan segment 
+
+(a0, a 1, . . . ). The rollout is capped at a fixed number of to-kens, chosen shorter than the longest plan’s token sequence in the training data; this reduces computational overhead while still providing useful search guidance. We then de-cide, action by action, where to branch. For each generated action in the rollout, we compute a confidence value by taking the minimum probability assigned to any of the sam-pled tokens comprising that action (operator and argument tokens). We then apply adaptive expansion (Figure 1d): for each node ni and outgoing action ai along the rollout where the action’s confidence value falls below a threshold 
+
+τconf , we generate valid successor states as in classical node expansion and move node ni to C. Nodes whose outgoing action has confidence above τconf are not expanded, con-centrating computational resources on the critical decision points where exploration is most valuable. This contrasts with best-of-N sampling, which redraws complete plans and repeatedly regenerates the high-confidence segments shared across samples. Low confidence flags the decision points worth exploring; one plausible source is that the train-ing data contains multiple alternative solutions to similar problems, leading the model to spread probability across competing actions. To quantify the resulting savings, assume a constant branch-ing factor b. Exhaustive expansion explores Pdk=1 bk nodes to reach depth d. Adaptive expansion instead follows confi-dent actions greedily (local branching factor 1) and branches exhaustively otherwise (local branching factor b). If the model is confident at fraction γ ∈ [0 , 1] of decision steps, the expected branching factor becomes 
+
+˜b = (1 − γ) b + γ (2) and, assuming branching decisions are approximately in-dependent across nodes, the expected number of explored nodes to depth d becomes Pdk=1 ˜b k. At γ = 0 , Equation (2) recovers full expansion; at γ = 1 , the sum collapses to d (a single path). Because the node count grows as ˜b k, even a modest γ compounds into substantial savings with depth, making rollouts with adaptive expansion especially effective in domains with large combinatorial action spaces. All newly generated but unexpanded nodes are assigned to their respective depth-partitioned open lists Od (or the closed list C if their state has already been visited). Con-sistent with standard OCL search, we update g-costs and reassign nodes to the appropriate depth list Od.
+
+4.4. Distributional Heuristic Model 
+
+We frame cost-to-go prediction as a discrete classifica-tion task over the set of possible remaining plan lengths 
+
+L = {0, 1, . . . , L max }. The model, parameterized by ϕ,outputs a conditional probability distribution Pϕ(c | s, s g )
+
+representing the predicted probability that the true remain-ing plan length from state s to goal sg is exactly c ∈ L . This model is trained via maximum likelihood estimation using a standard cross-entropy loss on Dtrain . The scalar heuristic value hϕ(n) used downstream for search is extracted as a summary statistic from this distribution. Because the model is trained on suboptimal demonstrations, 
+
+Pϕ concentrates on suboptimal plan lengths, leaving the true optimal cost-to-go h∗ in its lower tail. Depth partitioning (Section 4.2) already neutralizes the bias that overestimation induces when comparing nodes across depths; the choice of summary statistic plays a complementary role within a depth. Since search ultimately retains only the best plan 4Efficient Test-time Inference for Generative Planning Models 
+
+reachable from a node, we want hϕ to rank nodes by their best attainable completion rather than their typical, subop-timal one. We therefore summarize Pϕ by its lower k-th percentile rather than the mode, targeting the optimistic tail. While selecting the k-th percentile is not universally more optimistic than the mode for all distribution shapes, it empir-ically provides a useful ranking signal in our domains (see Appendix F.3). For unexpanded nodes ni along a rollout (where confidence exceeded τconf ), we minimize forward passes through the heuristic model by backing up the estimate from the near-est downstream expanded node nj . Specifically, we set 
+
+h(ni) = hϕ(nj ) + g(nj ) − g(ni), unless ni is the final state of the rollout. 
+
+4.5. Base Model Improvements via Action Compilation 
+
+Building on Rossetti et al. (2024b), we introduce a new training data augmentation strategy that samples a random offset for each ground-truth plan, computes the correspond-ing intermediate state using a formal plan validator (Howey et al., 2004), and constructs training examples from these intermediate states paired with their remaining action se-quences. This exposes the model to diverse starting states and shorter planning horizons, improving generalization necessary when calling the model on intermediate states within the search graph. We apply this strategy when train-ing both policy and heuristic models. Empirical validation is provided in Appendix F.1. 
+
+4.6. Algorithm Overview 
+
+We structure OCLG EN as an anytime algorithm — one that returns a valid solution at any point and continues refining it as more compute becomes available. Initially, we execute 
+
+Ninit full rollouts from s0 to establish baseline solutions and populate the search graph with goal-reaching trajecto-ries. The algorithm then iteratively refines these solutions through depth-partitioned search until a compute budget is reached (e.g., a maximum number of iterations or wall-clock time). Algorithm 1 provides pseudocode for the main search loop, and Figure 1 illustrates each step visually. Each iteration proceeds as follows: (a) select depth chooses a depth level to focus expansion; (b) select node picks a promising node from the corresponding open list; (c) 
+
+partial rollout generates a truncated trajectory from the selected node toward sg ; (d) adaptive expansion 
+
+uses rollout confidence to decide which intermediate states to expand; and (e) newly generated nodes are scored and added to the graph, with g-costs updated and nodes reas-signed to their depth-partitioned open lists Od or the closed list C if their state has already been visited. Upon termina-tion, the algorithm returns the lowest-cost plan found. 
+
+Algorithm 1 Depth-partitioned OCL for Generative Models                                                             
+
+> Input : Initial state s0, goal sg, iterations niters , initial rollouts Ninit ,generative model πθ, heuristic model hϕ
+> # Initialize empty search graph
+> G←SearchGraph () # Add root node to graph
+> G.add (Node (s0, g = 0, h = hϕ(s0, s g))) # Execute initial rollouts to populate graph
+> G←initial rollouts (G,πθ,s0,sg,Ninit )# Main search loop
+> for iiter in 1. . . n iters do
+> # Select a depth level
+> ds←select depth (G,iiter )(Fig. 1a) # Select node from depth-specific open list
+> ns←select node (G,ds)(Fig. 1b) # Generate new nodes from rollout
+> Sroll ←partial rollout (πθ,ns,sg)(Fig. 1c) # Generate new child nodes by expansion
+> Sexp ←adaptive expansion (ns,sg,Sroll )(Fig. 1d) # Query hϕon expanded nodes; assign heuristics via back-propagation to remaining rollout nodes
+> H ← assign heuristics (Sexp ,Sroll ,hϕ,sg)# Add new nodes to graph
+> for (si, h i)in Hdo
+> G.add (Node (si, g = g(parent (si))+1 , h = hi))
+> end for end for return G.get best plan()
+
+5. Experiments 
+
+We provide a large-scale evaluation of test-time inference methods for generative planning in classical AI planning domains. Our experiments address the following questions: 1. Does OCLG EN produce shorter plans than baseline methods for a given compute budget while maintaining high completion rates? 2. Does OCLG EN significantly increase the proportion of generated solutions that are optimal? 3. Which components of our method contribute most to its effectiveness? 4. To what extent is OCLG EN suitable as the basis for a model self-improvement framework? 
+
+5.1. Test-time Inference Benchmark Planning Domains. We consider the following domains with varying challenges and levels of complexity: • Blocksworld : A classic domain where blocks must be rearranged into goal configurations. Optimal planning is NP-hard (Slaney & Thi´ ebaux, 2001). • Logistics : A transportation domain where packages are delivered between locations using trucks and airplanes across multiple cities. • Labyrinth : A navigation domain on a grid where the agent can move between connected cells or shift entire rows/columns, with cells wrapping around edges. 5Efficient Test-time Inference for Generative Planning Models 
+
+• Sokoban : A puzzle domain where an agent pushes boxes to target locations while navigating around walls. Solving Sokoban is known to be PSPACE-complete (Culberson, 1998). 
+
+Training and Evaluation Setup. For each domain, we train πθ and hϕ on 10 5 problem instances with suboptimal solutions generated by Fast Downward (LAMA-first config-uration (Richter & Westphal, 2010)). Both models use the data augmentation described in Section 4.5. We evaluate on 1000 held-out test instances per domain. We use the GPT-2 (Radford et al., 2019) architecture to implement πθ , and a smaller BERT encoder (Devlin et al., 2019) for hϕ. Both models are trained using the standard cross-entropy loss. Final models are selected based on the checkpoint with the lowest validation loss. Further details on model architecture and training hyperparameters are provided in App. C. 
+
+Baselines. We compare against the following baselines: • MCTS (full rollouts) : Monte Carlo Tree Search using 
+
+πθ for rollouts and with PUCT selection. We use hϕ to compute values of unsuccessful rollouts. • MCTS (partial rollouts) : MCTS with shorter rollouts, using hϕ to obtain a value for backpropagation from the last state of the rollout. • OCL-Anytime A* : Classical A* search using hϕ as the heuristic, run in anytime mode. • OCL-GBFS : Greedy best-first search using hϕ as the heuristic for node prioritization. • Best-of-N : Generates a set of plan sequences with πθ
+
+given a runtime limit and returns the shortest valid one. • FD-LAMA-anytime : Fast Downward with LAMA configuration (Richter & Westphal, 2010) which re-turns the best solution within the time limit. • FD-LAMA-first : This baseline returns the first so-lution found by FD-LAMA-anytime. This method generated our data for generative model pretraining. • FD-optimal : Fast Downward with the LM-Cut heuris-tic (48h timeout), establishing reference sets of optimal plans for each domain. All learned methods use the same generative and heuristic models, isolating the effect of the inference algorithm. A 10-minute timeout is given per problem (except for FD solvers). For OCLG EN , we evaluate two different depth selection strategies uniform and scan (Section 4.2). We empirically determined an action confidence threshold τconf =0 .95 for all domains, except for Logistics where we use τconf =0 .2.More details on hyperparameter choices for inference are given in Appendix D. 
+
+Plan Lengths. Table 1 presents completion rates and plan lengths across all domains. OCLG EN achieves the best combination of completion rate and plan quality among all methods operating within the 10-minute budget per problem instance. Both OCLG EN variants attain near-perfect completion rates (99.7–100%) while producing con-sistently shorter plans than competing approaches. Notably, OCLG EN reduces average plan length by 19.6% compared to MCTS with full rollouts on Blocksworld and by 17.8% on Labyrinth. While MCTS with partial rollouts and search-based methods (OCL-Anyt. A*, OCL-GBFS) achieve com-petitive results on simpler domains, they fail to scale to the more challenging Logistics and Sokoban benchmarks, with completion rates dropping to 1.3–37.3%. Best-of-N sampling achieves high completion rates but consistently yields longer plans than OCLG EN across all domains. The FD-optimal solver, even with a 48-hour time limit, solves only 16.9–63% of instances on Blocksworld, Logistics, and Sokoban, underscoring the inherent difficulty of these domains. Finally, the uniform and scan selection strate-gies yield comparable performance, while uniform achieves slightly shorter plans overall except for Sokoban. 
+
+Solution Optimality. Table 2 examines plan statistics on the subset of instances for which optimal solutions are known (solved by FD-optimal within 48h). OCLG EN yields the most optimal solutions among all learning methods, solving 83.8% (528/630) of Blocksworld, 61.5% (104/169) of Logistics, 98.8% (988/1000) of Labyrinth, and 77.1% (377/489) of Sokoban with the uniform variant. The 
+
+scan variant performs comparably, marginally improving the Sokoban rate to 78.5% (384/489). This represents a 2.9 × improvement over MCTS with full rollouts on Blocksworld and a 1.6 × improvement on Labyrinth. No-tably, OCLG EN ’s ( uniform ) average plan lengths on solved instances closely approach those of the FD-optimal solver: within 1.7% on Blocksworld (30.64 vs. 30.12), 5.2% on Logistics (28.73 vs. 27.31), 0.2% on Labyrinth (12.99 vs. 12.96), and 3.0% on Sokoban (48.45 vs. 47.03). While OCL-Anyt. A* achieves competitive optimality rates on Blocksworld (336/630) and Labyrinth (975/1000), it fails to solve the majority of Logistics and Sokoban instances within the time limit. On this subset, FD-LAMA-anytime (10min) yields more optimal solutions in Blocksworld, Lo-gistics, and Sokoban. However, these instances favor lower-complexity problems solvable by FD-optimal within 48 hours. Crucially, on the full test set—which spans higher-complexity problems—OCLG EN scales significantly better, producing shorter plans than FD-LAMA-anytime across all four domains (Table 1). Moreover, we later show that our method can distill its search results back into the model, surpassing FD-LAMA-anytime even on this subset after recursive self-improvement (Section 5.4). Overall, these results demonstrate that OCLG EN significantly increases the percentage of optimal solutions while maintaining high completion rates. 6Efficient Test-time Inference for Generative Planning Models 
+
+Blocksworld Logistics Labyrinth Sokoban Method (tmax =10min) Comp.[ %] Length Comp. [ %] Length Comp. [ %] Length Comp. [ %] Length 
+
+OCLGen (uniform) 100.0 43.88 (± 0.68) 100.0 155.83 (± 3.57) 100.0 12.99 (± 0.13) 99.9 128.67 (± 3.15) 
+
+OCLGen (scan) 100.0 44.10 (± 0.70) 100.0 157.63 (± 3.51) 100.0 13.00 (± 0.13) 99.7 128.10 (± 3.15) MCTS (full rollouts) 100.0 54.56 (± 0.93) 100.0 158.75 (± 3.52) 100.0 15.81 (± 0.23) 99.8 131.30 (± 3.23) MCTS (partial rollouts) 100.0 53.81 (± 0.91) 29.3 40.31 (± 1.30) 100.0 14.77 (± 0.19) 37.3 38.34 (± 0.93) OCL-Anyt. A* 71.1 37.07 (± 0.71) 1.6 2.81 (± 0.70) 100.0 13.04 (± 0.13) 33.5 37.30 (± 1.10) OCL-GBFS 89.5 65.23 (± 1.50) 1.3 2.46 (± 0.85) 99.2 18.03 (± 0.43) 35.9 48.38 (± 1.71) Best-of-N 99.9 61.56 (± 1.03) 100.0 157.00 (± 3.47) 100.0 17.42 (± 0.25) 98.8 132.25 (± 3.22) FD-LAMA-anytime (tmax =10min) 100.0 45.05 (± 0.73) 100.0 161.00 (± 3.57) 100.0 19.77 (± 0.41) 99.4 141.43 (± 3.84) FD-LAMA-anytime (tmax =20min) 100.0 44.85 (± 0.72) 100.0 160.93 (± 3.57) 100.0 16.25 (± 0.32) 100.0 143.43 (± 3.84) FD-LAMA-first (tmax =20min) 100.0 79.43 (± 1.50) 100.0 165.32 (± 3.42) 100.0 25.78 (± 0.50) 100.0 149.05 (± 3.62) FD-optimal (tmax =48h) 63.0 30.12 (± 0.48) 16.9 27.31 (± 1.48) 100.0 12.96 (± 0.12) 48.9 47.03 (± 1.08) 
+
+Table 1. Benchmark on unseen problems (1000 per domain). Comp.: Completion (%); Length: Mean plan length (± std. error). 
+
+Blocksworld Logistics Labyrinth Sokoban Method (tmax =10min) Optimal Length (solved) Optimal Length (solved) Optimal Length (solved) Optimal Length (solved) 
+
+OCLGen (uniform) 528 / 630 30.64 (630 / 630) 104 / 169 28.73 (169 / 169) 988 / 1000 12.99 (1000 / 1000) 377 / 489 48.45 (489 / 489) 
+
+OCLGen (scan) 522 / 630 30.67 (630 / 630) 99 / 169 28.99 (169 / 169) 987 / 1000 13.00 (1000 / 1000) 384 / 489 48.29 (489 / 489) MCTS (full rollouts) 180 / 630 36.48 (630 / 630) 64 / 169 29.70 (169 / 169) 605 / 1000 15.81 (1000 / 1000) 291 / 489 49.52 (488 / 489) MCTS (partial rollouts) 186 / 630 36.48 (630 / 630) 64 / 169 26.23 (160 / 169) 671 / 1000 14.77 (1000 / 1000) 271 / 489 38.34 (373 / 489) OCL-Anyt. A* 336 / 630 31.25 (594 / 630) 16 / 169 2.81 (16 / 169) 975 / 1000 13.04 (1000 / 1000) 293 / 489 36.55 (333 / 489) OCL-GBFS 146 / 630 42.69 (626 / 630) 12 / 169 3.46 (13 / 169) 589 / 1000 18.03 (992 / 1000) 160 / 489 43.85 (341 / 489) Best-of-N 85 / 630 42.40 (630 / 630) 59 / 169 29.93 (169 / 169) 444 / 1000 17.42 (1000 / 1000) 251 / 489 50.87 (484 / 489) FD-LAMA-anytime (tmax =10min) 591 / 630 30.53 (630 / 630) 105 / 169 28.56 (169 / 169) 459 / 1000 19.77 (1000 / 1000) 421 / 489 47.84 (489 / 489) FD-LAMA-anytime (tmax =20min) 601 / 630 30.48 (630 / 630) 106 / 169 28.51 (169 / 169) 653 / 1000 16.25 (1000 / 1000) 441 / 489 47.58 (489 / 489) FD-LAMA-first (tmax =20min) 62 / 630 52.45 (630 / 630) 47 / 169 31.21 (169 / 169) 249 / 1000 25.78 (1000 / 1000) 121 / 489 58.08 (489 / 489) FD-optimal (tmax =48h) 630 / 630 30.12 (630 / 630) 169 / 169 27.31 (169 / 169) 1000 / 1000 12.96 (1000 / 1000) 489 / 489 47.03 (489 / 489) 
+
+Table 2. Benchmark on subset of known optimal problems. Optimal: num. solved optimally; Length: Plan length (num. solved). 
+
+Plan Quality Convergence. Figure 2 shows the average plan length and completion rates against runtime. Note that average plan lengths initially increase as shorter prob-lems tend to be solved first. Across all domains, OCLG EN 
+
+achieves shorter plans significantly faster than baseline meth-ods. On Blocksworld, it reaches an average plan length of 50 steps within 30 seconds, a quality that MCTS and Best-of-N fail to match even after 5 minutes of runtime. Sim-ilarly, in Labyrinth, OCLG EN converges to near-optimal lengths ( ∼13 steps) in under 200 seconds, while MCTS requires the full 600-second budget to plateau at a substan-tially higher length. This pattern holds in Logistics and Sokoban, where OCLG EN consistently achieves lower plan lengths after completion rates stabilized. The steeper de-scent of OCLG EN ’s curves indicates more effective use of compute: each additional second of runtime yields greater plan quality improvements compared to the baselines. Im-portantly, as shown in Figure 3, this improved plan quality does not come at the cost of completion rate. OCLG EN 
+
+reaches near-perfect completion rates within seconds on Blocksworld, Labyrinth, and Logistics, and remains com-petitive with MCTS on Sokoban. 
+
+5.2. Generalization Beyond Training Data 
+
+Table 3 evaluates OCLG EN (uniform) on problem instances where the training data planner (FD-LAMA with a 20-minute budget) failed to find a solution. OCLG EN solves                
+
+> Logistics Sokoban Method (tmax =10min) Comp.[ %]Length Comp.[ %]Length
+> OCLGen (uniform) 100.0 374.85 (± 4.71) 93.6 348.94 (± 3.66) Best-of-N [ Nmax =∞]98.5 376.09 (± 3.59) 90.8 364.27 (± 4.19)
+
+Table 3. Completion rate and plan length statistics of OCLG EN 
+
+(uniform) and Best-of-N on unseen problems for which the training data generation with FD-LAMA-first ( tmax =20 min) failed (number of problems: 66 for Logistics and 250 for Sokoban). Comp.: Completion (%); Length: Mean plan length (± std. error). 
+
+100% of these challenging Logistics instances and 93.6% of Sokoban instances. This indicates that the generative model learns transferable strategies rather than merely overfitting the training data. Furthermore, OCLG EN consistently out-performs Best-of-N sampling on these difficult instances, improving completion rates by 1.5 percentage points on Logistics and 2.8 percentage points on Sokoban, while also producing shorter plans (374.85 vs. 376.09 on Logistics; 348.94 vs. 364.27 on Sokoban). 
+
+5.3. Ablations 
+
+To evaluate the contribution of each component in OCLG EN , we systematically ablate three key design choices across all four domains: (1) depth partitioning ,(2) adaptive expansion , and (3) the percentile-based cost-to-go estimator . For each ablation, we remove or replace a single component while keeping all other settings fixed, us-7Efficient Test-time Inference for Generative Planning Models 0 20 40 60 80 100 
+
+> Runtime (seconds)
+> 45
+> 50
+> 55
+> 60
+> 65
+> Average Plan Length (± 1 SE)
+> a) Blocksworld - Plan Length vs Runtime
+> OCLGen (scan)
+> OCLGen (uniform)
+> Best-of-N
+> MCTS
+> MCTS (partial R.)
+
+(a) Blocksworld 0 50 100 150 200 250 300  
+
+> Runtime (seconds)
+> 150
+> 152
+> 154
+> 156
+> 158
+> 160
+> 162
+> 164
+> Average Plan Length (± 1 SE)
+> b) Logistics - Plan Length vs Runtime
+> OCLGen (scan)
+> OCLGen (uniform)
+> Best-of-N
+> MCTS
+
+(b) Logistics 0 100 200 300 400 500 600  
+
+> Runtime (seconds)
+> 10
+> 12
+> 14
+> 16
+> 18
+> 20
+> 22
+> Average Plan Length (± 1 SE)
+> c) Labyrinth - Plan Length vs Runtime
+> OCLGen (scan)
+> OCLGen (uniform)
+> Best-of-N
+> MCTS
+> MCTS (partial R.)
+> Anytime A*
+
+(c) Labyrinth 0 100 200 300 400 500 600  
+
+> Runtime (seconds)
+> 122.5
+> 125.0
+> 127.5
+> 130.0
+> 132.5
+> 135.0
+> 137.5
+> 140.0
+> 142.5
+> Average Plan Length (± 1 SE)
+> d) Sokoban - Plan Length vs Runtime
+> OCLGen (scan)
+> OCLGen (uniform)
+> Best-of-N
+> MCTS
+
+(d) Sokoban 
+
+Figure 2. Plan length over time across all domains. OCLG EN rapidly converges to shorter plans compared to baseline methods. 0 20 40 60 80 100 
+
+> Runtime (seconds)
+> 97.5
+> 98.0
+> 98.5
+> 99.0
+> 99.5
+> 100.0
+> Completion Rate (%)
+> Blocksworld - Completion Rate vs Runtime
+> OCLGen (scan)
+> OCLGen (uniform)
+> Best-of-N
+> MCTS
+> MCTS (partial R.)
+
+(a) Blocksworld 0 50 100 150 200 250 300  
+
+> Runtime (seconds)
+> 99.5
+> 99.6
+> 99.7
+> 99.8
+> 99.9
+> 100.0
+> Completion Rate (%)
+> Logistics - Completion Rate vs Runtime
+> OCLGen (scan)
+> OCLGen (uniform)
+> Best-of-N
+> MCTS
+
+(b) Logistics 0 100 200 300 400 500 600  
+
+> Runtime (seconds)
+> 99.60
+> 99.65
+> 99.70
+> 99.75
+> 99.80
+> 99.85
+> 99.90
+> 99.95
+> 100.00
+> Completion Rate (%)
+> Labyrinth - Completion Rate vs Runtime
+> OCLGen (scan)
+> OCLGen (uniform)
+> Best-of-N
+> MCTS
+> MCTS (partial R.)
+> Anytime A*
+
+(c) Labyrinth 0 100 200 300 400 500 600  
+
+> Runtime (seconds)
+> 97.5
+> 98.0
+> 98.5
+> 99.0
+> 99.5
+> 100.0
+> Completion Rate (%)
+> Sokoban - Completion Rate vs Runtime
+> OCLGen (scan)
+> OCLGen (uniform)
+> Best-of-N
+> MCTS
+
+(d) Sokoban 
+
+Figure 3. Completion rate over time across all domains. 
+
+Domain Metric w/o Depth w/o Adaptive w/o Percentile selection expansion estimate (mode) Blocksworld 
+
+Optim. 366 / 630 496 / 630 486 / 630 Comp.[%] 100.0 100.0 100.0 Length 48.81 (± 0.87) 44.35 (± 0.69) 44.68 (± 0.70) 
+
+Logistics 
+
+Optim. 78 / 169 98 / 169 98 / 169 Comp.[%] 99.9 100.0 100.0 Length 159.23 (± 3.52) 155.82 (± 3.47) 156.11 (± 3.48) 
+
+Labyrinth 
+
+Optim. 979 / 1000 983 / 1000 980 / 1000 Comp.[%] 100.0 100.0 100.0 Length 13.08 (± 0.15) 13.02 (± 0.13) 13.03 (± 0.13) 
+
+Sokoban 
+
+Optim. 353 / 489 341 / 489 350 / 489 Comp.[%] 99.7 100.0 99.8 Length 129.39 (± 3.17) 129.73 (± 3.15) 129.52 (± 3.17) 
+
+Table 4. Ablation study across problem domains. Comp.: Comple-tion rate (%); Length: Plan length (mean ± std. error). 
+
+ing OCLG EN (uniform) as the base configuration. Table 4 reports completion rates and plan lengths across 1000 test instances per domain, again given a 10-min runtime limit. Each component provides incremental improvements that collectively drive the full method’s performance. 
+
+Impact of Depth Partitioning. Table 4 shows that re-moving depth-based selection leads to notably longer plans, particularly on Blocksworld (48.81 vs. 43.88) and Logistics (159.23 vs. 155.83). Without depth partitioning, the search tends to over-exploit deep branches, reducing the diversity of explored trajectories and ultimately yielding suboptimal solutions. 
+
+Confidence-based Adaptive Expansion. The adaptive expansion mechanism dynamically decides when to expand the search tree based on rollout confidence. Removing this component yields comparable completion rates and overall longer plans (e.g. 44.35 vs. 43.88 on Blocksworld). The adaptive threshold allows OCLG EN to allocate more computational effort to uncertain regions of the search space while quickly committing to high-confidence trajectories, leading to an improvement in plan quality. 
+
+Influence of Heuristic Point Estimator. We compare our percentile-based cost-to-go estimate against using the mode of the predicted distribution. Table 4 shows that re-placing the percentile estimate with the mode results in marginally longer plans across all domains. While the dif-ferences are modest, the percentile-based estimator yields more optimistic cost-to-go estimates that counteract overes-timation bias, improving plan quality on Blocksworld (43.88 vs. 44.68) and Logistics (155.83 vs. 156.11). 
+
+5.4. OCLGen for Model Self-Improvement 
+
+We evaluate the use of OCLG EN for recursive model self-improvement. Given a random subset of training problems, we run our search algorithm for a fixed runtime budget on each problem instance to compute improved plans, then fine-tune both πθ and hϕ on this data. This procedure is applied recursively, using updated model weights from the previ-ous iteration to generate improved plans on newly sampled problems. We compare OCLG EN (uniform) and MCTS (full rollouts) for nloop =3 iterations of self-improvement in Blocksworld and Sokoban. At each iteration, we sam-ple 3000 problems and run the search method on each of these given a time limit of 3 minutes in Blocksworld and 5 8Efficient Test-time Inference for Generative Planning Models                                        
+
+> OCLGen (uniform) MCTS (full rollouts)
+> iloop Comp.[%] Length Comp.[%] Length
+> Blocksw.  099.9 69.51 (± 1.24) 99.9 69.51 (± 1.24) 199.2 47.70 (± 0.84) 99.9 62.20 (± 1.18) 299.6 41.81 (± 0.58) 99.9 57.30 (± 1.06) 399.3 41.40 (± 0.57) 99.9 53.15 (± 0.98)
+> Sokob.  095.8 135.00 (± 3.38) 95.8 135.00 (± 3.38) 195.2 128.41 (± 3.25) 95.1 128.89 (± 3.24) 293.5 123.93 (± 3.17) 93.9 125.94 (± 3.18) 393.4 121.88 (± 3.11) 93.9 124.48 (± 3.16)
+
+Table 5. Self-improvement plan statistics on the test dataset (1000 samples) using best-of-N sampling ( N =10 ). Comp.: Completion rate (%); Length: Plan length (mean ± std. error).                    
+
+> OCLGen (uniform) MCTS (full rollouts)
+> Blocksw.  Plan Length 40.74 (± 0.55) 44.89 (± 0.70) Compl. [%] 100.0 100.0 Plan length (optimal) 30.12 (± 0.48) 31.14 (± 0.53) Optimal 630 / 630 (100.0%) 450 / 630 (71.4%)
+> Sokob.  Plan Length 123.60 (± 3.02) 125.06 (± 3.08) Compl. [%] 99.8 99.3 Plan length (optimal) 47.17 (± 1.09) 47.55 (± 1.10) Optimal 463 / 489 (94.7%) 400 / 489 (81.8%)
+
+Table 6. Results on Blocksworld and Sokoban with OCLG EN 
+
+and MCTS ( tmax =10min) after nloop = 3 iteration of model self-improvement on the test sets from Table 1 (1000 samples). Comp.: Completion rate (%); Length: Plan length (mean ± std. error). Optimal: number solved optimally. 
+
+minutes in Sokoban (further details in Appendix E). Table 5 reports the test set evaluation of the finetuned gen-erative models after each self-improvement iteration using Best-of-N sampling ( N =10 ). Both methods maintain near-full completion on Blocksworld, but OCLG EN consistently produces shorter plans, providing a higher quality training signal. On Sokoban, a similar pattern is observed, although completion rates drop for both methods, presumably be-cause finetuning on improved plans reduces policy entropy, decreasing diversity within the Best-of-N batch. Table 6 details the test set evaluation of our final models, which utilize test-time search after three rounds of self-improvement. On Blocksworld, OCLG EN yields signifi-cantly shorter plans (40.74 vs. 44.89) and achieves 100% optimal solutions (vs. 71.4% for MCTS). On Sokoban, our method produces shorter plans (123.60 vs. 125.06) and achieves 94.7% optimal solutions (vs. 81.8% for MCTS), while recovering from the completion rate drop observed with the model alone to achieve 99.8% completion. No-tably, on the problem subsets with known optimal solutions, self-improvement with OCLG EN surpasses the FD-LAMA-anytime solver (601/630 on Blocksworld and 441/489 on Sokoban at a 20-minute budget; Table 2). These results demonstrate the suitability of OCLG EN for efficient model self-improvement.              
+
+> Blocksworld Sokoban
+> nloop 0303Mode 8.68 (± 0.24) 0.44 (± 0.02) 5.28 (± 0.17) 3.05 (± 0.11) Perc. 4.07 (± 0.12) 0.66 (± 0.02) 3.31 (± 0.12) 2.51 (± 0.08)
+
+Table 7. MAE (mean absolute error) ± std. error of heuristic models on the subset of known optimal solutions. Values are reported for both mode-based and percentile-based heuristics. 
+
+5.5. Accuracy of Heuristic Model 
+
+Table 7 reports mean absolute error (MAE) statistics for Blocksworld and Sokoban before and after self-improvement. The MAE is computed on the subset of in-stances with known optimal solutions, using either the mode 
+
+or k-th percentile to derive scalar values from the predicted cost-to-go distributions ( k = 3 and k = 10 for Blocksworld and Sokoban, respectively). As expected, percentile-based estimates yield lower MAE than mode-based estimates for all base models ( nloop = 0 ), reducing the gap to optimality. This behavior holds consistently across all four domains (see Table 15 in the Appendix). Self-improvement via OCLG EN (nloop = 3 ) substantially reduces the model’s MAE – for example, from 4.07 to 0.66 on Blocksworld and from 3.31 to 2.51 on Sokoban (per-centile method). This confirms that OCLG EN not only discovers better solutions across self-improvement rounds, but also successfully refines the heuristic model. 
+
+6. Conclusion 
+
+We present OCLG EN , a test-time search algorithm adapting classical OCL search to autoregressive generative planning models. Key innovations include depth-partitioned selec-tion, partial rollouts with adaptive expansion, and learned distributional heuristics. Across four domains, OCLG EN 
+
+delivers near-optimal plans at high completion rates, out-performing neurosymbolic and classical baselines on the full test set. Finally, on the known-optimal subsets, recur-sive self-improvement yields a 100% optimality rate on Blocksworld and 94.7% on Sokoban. 
+
+Future Work. Our depth selection strategies are currently uninformed, following fixed schedules. Adaptive strate-gies that concentrate search effort on the most promising depths may yield further gains. Characterizing when re-cursive self-improvement provably converges to optimal solutions remains an open theoretical question. Scaling to larger problems and generalizing to object counts or grid sizes outside the training distribution remain open chal-lenges, as does transfer to new domains. Finally, our method assumes suboptimal initial solutions for pretraining. Ex-tending OCLG EN to support efficient policy improvement without prior data represents a compelling future direction. 9Efficient Test-time Inference for Generative Planning Models 
+
+Impact Statement 
+
+This paper presents work whose goal is to advance the field of Machine Learning. There are many potential societal consequences of our work, none which we feel must be specifically highlighted here. 
+
+References 
+
+Anthony, T., Tian, Z., and Barber, D. Thinking fast and slow with deep learning and tree search. Advances in neural information processing systems , 30, 2017. Antoniades, A., ¨Orwall, A., Zhang, K., Xie, Y., Goyal, A., and Wang, W. Y. SWE-search: Enhancing soft-ware agents with monte carlo tree search and iterative refinement. In The Thirteenth International Confer-ence on Learning Representations , 2025. URL https: //openreview.net/forum?id=G7sIFXugTX .Chen, G., Liao, M., Li, C., and Fan, K. Alphamath almost zero: Process supervision without process. In The Thirty-eighth Annual Conference on Neural Information Pro-cessing Systems , 2024. URL https://openreview. net/forum?id=VaXnxQ3UKo .Coulom, R. Efficient selectivity and backup operators in monte-carlo tree search. In van den Herik, H. J., Ciancar-ini, P., and Donkers, H. H. L. M. J. (eds.), Computers and Games , pp. 72–83, Berlin, Heidelberg, 2007. Springer Berlin Heidelberg. ISBN 978-3-540-75538-8. Culberson, J. Sokoban is pspace complete. Proceedings of the International Conference on Fun with Algorithms , pp. 65–76, 1998. Devlin, J., Chang, M.-W., Lee, K., and Toutanova, K. Bert: Pre-training of deep bidirectional transformers for lan-guage understanding. In Proceedings of the 2019 confer-ence of the North American chapter of the association for computational linguistics: human language technologies, volume 1 (long and short papers) , pp. 4171–4186, 2019. Eifler, R. and Fi ˇser, D. Labyrinth PDDL domain. 
+
+https://github.com/ipc2023-classical/ domain-labyrinth , 2023. Fox, M. and Long, D. Pddl2.1: An extension to pddl for expressing temporal planning domains. Journal of Ar-tificial Intelligence Research , 20:61–124, 2003. ISSN 1076-9757. doi: 10.1613/jair.1129. URL http://dx. doi.org/10.1613/jair.1129 .Fritzsche, M., Gestrin, E., and Seipp, J. Symmetry-aware transformer training for automated planning. arXiv preprint arXiv:2508.07743 , 2025. Gieselmann, R., von Huelsen, H., Samson, M., Meyer, M.-C., Piotrowski, D., Radomskyi, O., Okamoto, J., Go-jayev, T., Painter, M., Brown, G., Pecora, F., and Wyatt, J. L. Self-improvement for fast, high-quality plan genera-tion, 2026. URL https://arxiv.org/abs/2605. 03625 .Groshev, E., Goldstein, M., Tamar, A., Srivastava, S., and Abbeel, P. Learning generalized reactive policies using deep neural networks. In Intl. Conf. on Automated Plan-ning and Scheduling , volume 28, pp. 408–416, 2018. Guan, X., Zhang, L. L., Liu, Y., Shang, N., Sun, Y., Zhu, Y., Yang, F., and Yang, M. rstar-math: Small llms can master math reasoning with self-evolved deep thinking. arXiv preprint arXiv:2501.04519 , 2025. Hart, P. E., Nilsson, N. J., and Raphael, B. A formal basis for the heuristic determination of minimum cost paths. 
+
+IEEE Transactions on Systems Science and Cybernetics ,4(2):100–107, 1968. doi: 10.1109/TSSC.1968.300136. Helmert, M. Complexity results for standard bench-mark domains in planning. Artificial Intelligence ,143(2):219–262, 2003. ISSN 0004-3702. doi: https://doi.org/10.1016/S0004-3702(02)00364-8. URL https://www.sciencedirect.com/ science/article/pii/S0004370202003648 .Howey, R., Long, D., and Fox, M. Val: Automatic plan validation, continuous effects and mixed initiative plan-ning using pddl. In 16th IEEE Intl. Conf. on Tools with Artificial Intelligence , pp. 294–301. IEEE, 2004. Hubert, T., Mehta, R., Sartran, L., Schmitt, J.-B., Buchlovsky, P., Coward, S., Fletcher, G., Holland, G., Huang, E., Hubert, T., et al. Olympiad-level formal math-ematical reasoning with reinforcement learning. Nature ,2025. doi: 10.1038/s41586-025-09833-y. URL https: //doi.org/10.1038/s41586-025-09833-y .Jabbari Arfaee, S., Zilles, S., and Holte, R. C. Learn-ing heuristic functions for large state spaces. Arti-ficial Intelligence , 175(16):2075–2098, 2011. ISSN 0004-3702. doi: https://doi.org/10.1016/j.artint.2011.08. 001. URL https://www.sciencedirect.com/ science/article/pii/S0004370211000877 .Lehnert, L., Sukhbaatar, S., Su, D., Zheng, Q., Mcvay, P., Rabbat, M., and Tian, Y. Beyond a*: Better planning with transformers via search dynamics bootstrapping. arXiv preprint arXiv:2402.14083 , 2024. McDermott, D., Ghallab, M., Howe, A., Knoblock, C., Ram, A., Veloso, M., Weld, D., and Wilkins, D. Pddl-the plan-ning domain definition language. Technical Report TR-98-003/DCS TR-1165, Yale Center for Computational Vision and Control, 1998. 10 Efficient Test-time Inference for Generative Planning Models 
+
+Pallagani, V., Muppasani, B., Srivastava, B., Rossi, F., Horesh, L., Murugesan, K., Loreggia, A., Fabiano, F., Joseph, R., Kethepalli, Y., et al. Plansformer tool: Demon-strating generation of symbolic plans using transformers. In IJCAI , 2023. Radford, A., Wu, J., Child, R., Luan, D., Amodei, D., Sutskever, I., et al. Language models are unsupervised multitask learners. OpenAI blog , 1(8):9, 2019. Richter, S. and Westphal, M. The lama planner: Guiding cost-based anytime planning with landmarks. Journal of Artificial Intelligence Research , 39:127–177, 2010. Rosin, C. D. Multi-armed bandits with episode context. 
+
+Annals of Mathematics and Artificial Intelligence , 61(3): 203–230, March 2011. ISSN 1012-2443. doi: 10.1007/ s10472-011-9258-6. URL https://doi.org/10. 1007/s10472-011-9258-6 .Rossetti, N., Tummolo, M., Gerevini, A. E., Olivato, M., Putelli, L., and Serina, I. Enhancing gpt-based planning policies by model-based plan validation. In Intl. Conf. on Neural-Symbolic Learning and Reasoning . Springer, 2024a. Rossetti, N., Tummolo, M., Gerevini, A. E., Putelli, L., Serina, I., Chiari, M., and Olivato, M. Learning general policies for planning through gpt models. In Intl. Conf. on Automated Planning and Scheduling , volume 34, pp. 500–508, 2024b. Samuel, A. L. Some studies in machine learning using the game of checkers. IBM Journal of Research and Development , 3(3):210–229, 1959. doi: 10.1147/rd.33. 0210. Seipp, J., Torralba, ´A., and Hoffmann, J. PDDL gen-erators. https://doi.org/10.5281/zenodo. 6382173 , 2022. Silver, D., Huang, A., Maddison, C. J., Guez, A., Sifre, L., Van Den Driessche, G., Schrittwieser, J., Antonoglou, I., Panneershelvam, V., Lanctot, M., et al. Mastering the game of go with deep neural networks and tree search. 
+
+Nature , 529(7587):484–489, 2016. Silver, D., Hubert, T., Schrittwieser, J., Antonoglou, I., Lai, M., Guez, A., Lanctot, M., Sifre, L., Kumaran, D., Grae-pel, T., et al. Mastering chess and shogi by self-play with a general reinforcement learning algorithm. arXiv preprint arXiv:1712.01815 , 2017. Slaney, J. and Thi ´ebaux, S. Blocks world revisited. Artificial Intelligence , 125(1):119–153, 2001. ISSN 0004-3702. doi: https://doi.org/10.1016/S0004-3702(00)00079-5. URL https://www.sciencedirect.com/ science/article/pii/S0004370200000795 .Stiennon, N., Ouyang, L., Wu, J., Ziegler, D., Lowe, R., Voss, C., Radford, A., Amodei, D., and Christiano, P. F. Learning to summarize with human feedback. Advances in neural information processing systems , 33:3008–3021, 2020. Taitler, A., Alford, R., Espasa, J., Behnke, G., Fi ˇser, D., Gimelfarb, M., Pommerening, F., Sanner, S., Scala, E., Schreiber, D., Segovia-Aguas, J., and Seipp, J. The 2023 international planning competition. AI Mag. , 45(2): 280–296, June 2024. ISSN 0738-4602. doi: 10.1002/aaai. 12169. URL https://doi.org/10.1002/aaai. 12169 .Tummolo, M., Rossetti, N., Gerevini, A. E., Olivato, M., Putelli, L., and Serina, I. Integrating classical planners with gpt-based planning policies. In Intl. Conf. of the Italian Association for Artificial Intelligence , pp. 315– 329. Springer, 2024. Valenzano, R. and Xie, F. On the completeness of best-first search variants that use random exploration. Pro-ceedings of the AAAI Conference on Artificial Intel-ligence , 30(1), Feb. 2016. doi: 10.1609/aaai.v30i1. 10081. URL https://ojs.aaai.org/index. php/AAAI/article/view/10081 .Vallati, M., Chrpa, L., Grzes, M., McCluskey, T. L., Roberts, M., and Sanner, S. The 2014 international planning com-petition: Progress and trends. Artificial Intelligence Mag-azine (AI Magazine) , 36(3):90–98, 2015. Xin, H., Ren, Z., Song, J., Shao, Z., Zhao, W., Wang, H., Liu, B., Zhang, L., Lu, X., Du, Q., Gao, W., Zhang, H., Zhu, Q., Yang, D., Gou, Z., Wu, Z., Luo, F., and Ruan, C. Deepseek-prover-v1.5: Harnessing proof as-sistant feedback for reinforcement learning and monte-carlo tree search. In The Thirteenth International Confer-ence on Learning Representations , 2025. URL https: //openreview.net/forum?id=I4YAIwrsXa .Yao, S., Yu, D., Zhao, J., Shafran, I., Griffiths, T., Cao, Y., and Narasimhan, K. Tree of thoughts: Deliberate problem solving with large language models. Advances in neural information processing systems , 36:11809–11822, 2023. Zhang, D., Zhoubian, S., Yue, Y., Dong, Y., and Tang, J. Rest-mcts*: Llm self-training via process reward guided tree search. arXiv preprint arXiv:2406.03816 , 2024. Zhang, S., Chen, Z., Shen, Y., Ding, M., Tenenbaum, J. B., and Gan, C. Planning with large language models for code generation. In The Eleventh International Conference on Learning Representations , 2023. URL https:// openreview.net/forum?id=Lr8cOOtYbfL .11 Efficient Test-time Inference for Generative Planning Models 
+
+A. Datasets 
+
+We construct dedicated datasets for each of the four planning domains evaluated in this work. Each dataset comprises 100k training instances, 1k validation instances for model selection, and 1k held-out test instances. All problem instances are unique and paired with reference solutions obtained using Fast Downward (Helmert, 2003) in the LAMA-first configuration with a 20-minute timeout. Instances that could not be solved within this time limit were excluded from the training datasets. 
+
+Blocksworld We generate Blocksworld instances containing 3 to 25 blocks using the generator from (Seipp et al., 2022). All generated instances were solvable by FD-LAMA within the 20-minute budget. The distribution of instances follows a logarithmic scaling with respect to the number of blocks, as the limited number of unique configurations for small block counts precludes a uniform distribution. 
+
+Logistics Our Logistics dataset covers a broad range of problem sizes: 1–50 cities with 1–5 locations each, 1–50 packages, 1–10 airplanes, and one truck per city. Instances are sampled uniformly over all valid combinations of these parameters. Fast Downward solved 99.97% of generated instances within the time limit; additional instances were generated to ensure the target dataset sizes. 
+
+Labyrinth Labyrinth was introduced in IPC 2023 (Taitler et al., 2024). We generate a plan dataset with 3 × 3 and 4 × 4
+
+grids, which remain challenging while ensuring sufficient training coverage using FD-LAMA. Problem instances were generated using the official IPC 2023 generator (Eifler & Fiˇ ser, 2023). 
+
+Sokoban The Sokoban PDDL domain appeared in IPC 2008 and 2011. We constrain our instances to grid sizes between 
+
+5 × 5 and 14 × 14 , with 1–10 boxes and up to 10 walls. We use the generator from (Seipp et al., 2022). 12 Efficient Test-time Inference for Generative Planning Models 
+
+B. Baselines 
+
+Monte Carlo Tree Search. We implemented Monte Carlo Tree Search using a PUCT-style selection policy similar to Silver et al. (2016). Specifically, we maintain separate Q-values: Qopt for expected plan length (normalized by plan lengths of neighboring actions) following a transition, and Qsat for the expected probability of finding a solution. The overall Q-value is computed as a convex combination of Qopt and Qsat using a mixing coefficient α. To compute the policy prior P (s, a ), we determine action probabilities from token sequences by computing the geometric mean of token probabilities for individual action sequences, then normalize over the set of possible actions at a state. The selection policy is a∗ = arg max a∈A 
+
+
+
+α Q sat (s, a ) + (1 − α) Qopt (s, a ) + cPUCT P (s, a )
+
+√P   
+
+> bN(s,b )1+ N(s,a )
+
+
+
+. For all experiments, we set α = 0 .1
+
+and cPUCT = 1 .0. We also incorporate progressive widening (Coulom, 2007), which significantly improved performance. For MCTS with partial rollouts, we use a maximum token limit of 50. We use the heuristic model hϕ to estimate the cost-to-go of unsuccessful rollouts. 
+
+Anytime A*. We implement a version of Anytime A* using our learned heuristic hϕ to guide the search. Similar to our method, we use the lower percentile to obtain heuristic point estimates from distributions. At every step, we select the node with the lowest f value from the open list, where f = g + h. The search does not stop once a goal is found but continues until the runtime limit is exhausted or no unvisited nodes remain in the open list. 
+
+Greedy Best-First Search. This method is similar to Anytime A* but purely uses the learned heuristic hϕ to guide the search (i.e., f = h). Again, the search continues after finding a goal until the runtime limit is exhausted or no unvisited nodes remain. 
+
+Best-of-N. This method involves repeated sampling from the generative model πθ . For all experiments, we use a softmax temperature of Tsoftmax = 1 and sample a batch of 10 plans. The generated plans are then validated for syntactic and semantic correctness, and we report the shortest valid plan in the batch. For the experiments, we terminate once the time limit of 
+
+tmax =10 minutes is reached. Table 8 presents the number of candidate plans per domain generated by Best-of-N within this runtime budget. 
+
+Domain Number of Generated Plans (tmax =10 min) Blocksworld 24768.9 ± 11816.0 Logistics 7243.4 ± 14927.1 Labyrinth 10953.1 ± 16137.1 Sokoban 2186.5 ± 4266.4  
+
+> Table 8. Number of generated plans (mean ± std. dev.) with Best-of-N for the experiments in Table 1
+
+13 Efficient Test-time Inference for Generative Planning Models 
+
+C. Training Details 
+
+We train domain-specific policy and heuristic cost models on 4 compute instances, each equipped with 8 NVIDIA A100 GPUs (40GB VRAM). Table 9 shows the transformer architecture and training hyperparameters for the generative model. Table 10 shows corresponding hyperparameters for the heuristic cost model. We use the same model architectures across all domains. 
+
+Hyperparameter Value 
+
+Architecture 
+
+Type Transformer Decoder (GPT2) Transformer blocks ( nlayer ) 12 Attention heads ( nhead ) 12 Embedding dimension ( nembd ) 768 Feedforward dimension ( ninner ) 3072 
+
+Optimization 
+
+Learning rate 5e-5 Scheduler Cosine Warmup steps 1000 Optimizer AdamW Batch size per GPU (BW / Log / Lab / Sok) 6 / 4 / 6 / 1 
+
+Training 
+
+Max sequence length 14000 Epochs (BW / Log / Lab / Sok) 100 / 100 / 100 / 100  
+
+> Table 9. Training hyperparameters for the generative model. Unless otherwise indicated, values are identical across domains (BW: Blocksworld, Log: Logistics, Lab: Labyrinth, Sok: Sokoban).
+
+Hyperparameter Value 
+
+Architecture 
+
+Type Transformer Encoder (BERT) Transformer blocks ( nlayer ) 6Attention heads ( nhead ) 12 Embedding dimension ( nembd ) 768 Feedforward dimension ( ninner ) 1536 
+
+Optimization 
+
+Learning rate 5e-5 Scheduler No Warmup steps 1000 Optimizer AdamW Batch size per GPU 16 
+
+Training 
+
+Max sequence length 14000 Epochs 500  
+
+> Table 10. Training hyperparameters for the heuristic model. Unless otherwise indicated, values are identical across domains (BW: Blocksworld, Log: Logistics, Lab: Labyrinth, Sok: Sokoban).
+
+14 Efficient Test-time Inference for Generative Planning Models 
+
+D. Test-time Inference Hyperparameters 
+
+For all methods that employ rollouts, we use softmax temperature Tsoftmax = 1 and sample plans in batches of 10. To further reduce the branching factor for highly complex problem instances, we use a simple heuristic based on the number of grounded actions in a problem instance. Specifically, if the number of grounded actions exceeds a predefined threshold τ|A| 
+
+(in practice, this occurs only for a small portion of problems in Logistics), we perform expansions in OCLG EN by sampling a batch of actions from πθ with batch size 32; otherwise, we enumerate all successor states using the grounded operator models. 
+
+Hyperparameter Value 
+
+Ninit 3Max tokens per rollout (BW/Log/Lab/Sok) 50 / 2000 / 50 / 2000 Confidence threshold τconf (BW/Log/Lab/Sok) 0.95 / 0.2 / 0.95 / 0.95 Heuristic Percentile k (BW/Log/Lab/Sok) 3 / 10 / 3 / 10 Policy expansion threshold τ|A| 10 7 
+
+> Table 11. Test-time hyperparameters for our method. Unless otherwise indicated, values are identical across domains (BW: Blocksworld, Log: Logistics, Lab: Labyrinth, Sok: Sokoban).
+
+15 Efficient Test-time Inference for Generative Planning Models 
+
+E. Self-improvement Details 
+
+Our self-improvement pipeline runs for nloop = 3 iterations on Blocksworld and Sokoban. Every iteration samples 3000 problems per domain, executing the search method with tmax = 3 minutes (Blocksworld) and tmax = 5 minutes (Sokoban). We collect the successfully optimized plans to finetune both the generative model and the heuristic using standard cross-entropy loss. To maintain a consistent training set size, instances unsolved within the time limit default to their original suboptimal training plans. The respective training configurations are detailed in Tables 12 and 13. 
+
+Hyperparameter Value 
+
+Optimization 
+
+Learning rate 1e-5 Optimizer AdamW Batch size per GPU (BW / Sok) 6 / 1 
+
+Training 
+
+Epochs (BW/ Sok) 100 / 50 Finetuning dataset size 3000  
+
+> Table 12. Finetuning hyperparameters for the generative model. Unless otherwise indicated, values are identical across domains.
+
+Hyperparameter Value 
+
+Optimization 
+
+Learning rate 1e-5 Optimizer AdamW Batch size per GPU 16 / 16 
+
+Training 
+
+Epochs (BW/ Sok) 100 / 50 Finetuning dataset size 3000  
+
+> Table 13. Finetuning hyperparameters for the heuristic model. Unless otherwise indicated, values are identical across domains.
+
+16 Efficient Test-time Inference for Generative Planning Models 
+
+F. Additional Results 
+
+F.1. Data Augmentation via Action Compilation 
+
+In Section 4.5, we introduce a data augmentation method for training our generative planning model. Given the plan sequences in Dtrain , we use the operator effects specified in the PDDL domain definition to compile intermediate states along each plan, generating new state-plan pairs. We apply this procedure when training both the generative model and the heuristic model. During batch generation, we first sample a random offset within the plan length, then compute the corresponding intermediate state by sequentially applying operator effects up to this offset. A new training sample is formed by pairing this intermediate state with the remaining plan suffix. The results in Table 14 compare models trained with and without this state compilation augmentation. The evaluation, performed on 1000 unseen problem instances per domain, uses Best-of-N sampling with N = 10 for both model variants. Outside of Blocksworld, where the two variants perform comparably, augmentation improves completion rate on Logistics, Labyrinth, and Sokoban, and shortens plans on Labyrinth and Sokoban. Overall, exposing the model to intermediate states during training enhances its ability to generalize across planning instances. 
+
+Blocksworld Logistics Labyrinth Sokoban GM Training Treatment Comp.[ %] Length Comp. [ %] Length Comp. [ %] Length Comp. [ %] Length w/o compilation 100.0 69.06 (± 1.25) 99.0 161.83 (± 3.60) 98.60 25.44 (± 0.55) 91.2 141.02 (± 3.58) w/ compilation 99.9 69.51 (± 1.24) 99.8 162.17 (± 3.58) 99.90 24.23 (± 0.55) 95.8 135.00 (± 3.38) 
+
+Table 14. Performance comparison across problem domains for a generative planning model with and without action compilation. Comp.: Completion (%); Length: Plan length (mean ± std error). 
+
+F.2. Accuracy of the learned cost model 
+
+Figures 4–7 show the per-domain distribution of absolute errors between hϕ’s predictions and the held-out (suboptimal) test labels, characterizing how closely the heuristic fits the data-generating planner. Accuracy against the true optimal cost-to-go is reported separately in Table 15. 0 10 20 30 40 50 60 70 80 
+
+> Absolute Error
+> 0.0
+> 0.1
+> 0.2
+> 0.3
+> 0.4
+> 0.5
+> Probability
+> Blocksworld - Absolute error of predicted heuristic
+> cost (mode) w.r.t test labels (suboptimal)
+> Mean absolute error: 4.54
+
+Figure 4. Blocksworld - Distribution of absolute errors of learned heuristic cost model with respect to test labels (suboptimal data). 
+
+17 Efficient Test-time Inference for Generative Planning Models 0 10 20 30 40 
+
+Absolute Error 
+
+0.00 
+
+0.02 
+
+0.04 
+
+0.06 
+
+0.08 
+
+0.10 
+
+0.12 
+
+0.14 
+
+0.16 
+
+> Probability
+
+Logistics - Absolute error of predicted heuristic 
+
+cost (mode) w.r.t test labels (suboptimal) 
+
+> Mean absolute error: 5.29
+
+Figure 5. Logistics - Distribution of absolute errors of learned heuristic cost model with respect to test labels (suboptimal data). 0 10 20 30 40 50 60 
+
+Absolute Error 
+
+0.0 
+
+0.1 
+
+0.2 
+
+0.3 
+
+0.4 
+
+0.5 
+
+> Probability
+
+Labyrinth - Absolute error of predicted heuristic 
+
+cost (mode) w.r.t test labels (suboptimal) 
+
+> Mean absolute error: 3.95
+
+Figure 6. Labyrinth - Distribution of absolute errors of learned heuristic cost model with respect to test labels (suboptimal data). 0 25 50 75 100 125 150 175 
+
+Absolute Error 
+
+0.00 
+
+0.05 
+
+0.10 
+
+0.15 
+
+0.20 
+
+0.25 
+
+0.30 
+
+0.35 
+
+> Probability
+
+Sokoban - Absolute error of predicted heuristic 
+
+cost (mode) w.r.t test labels (suboptimal) 
+
+> Mean absolute error: 7.78
+
+Figure 7. Sokoban - Distribution of absolute errors of learned heuristic cost model with respect to test labels (suboptimal data). 
+
+18 Efficient Test-time Inference for Generative Planning Models 
+
+F.3. Illustrations of Learned Cost Distribution 0 50 100 150 200 250 300 
+
+Predicted Cost 
+
+0.00 
+
+0.02 
+
+0.04 
+
+0.06 
+
+0.08 
+
+0.10 
+
+> Probability
+
+Blocksworld - Example of predicted cost distribution 
+
+label (suboptimal): 56 
+
+mode: 46 
+
+3-th percentile: 40 0 50 100 150 200 250 300 
+
+Predicted Cost 
+
+0.00 
+
+0.01 
+
+0.02 
+
+0.03 
+
+0.04 
+
+0.05 
+
+0.06 
+
+0.07 
+
+> Probability
+
+Blocksworld - Example of predicted cost distribution 
+
+label (suboptimal): 82 
+
+mode: 96 
+
+3-th percentile: 64 0 50 100 150 200 250 300 
+
+Predicted Cost 
+
+0.00 
+
+0.01 
+
+0.02 
+
+0.03 
+
+0.04 
+
+> Probability
+
+Blocksworld - Example of predicted cost distribution 
+
+label (suboptimal): 206 
+
+mode: 230 
+
+3-th percentile: 114 
+
+Figure 8. Blocksworld - Examples of cost distribution generated by the learned heuristic model. 
+
+19 Efficient Test-time Inference for Generative Planning Models 0 100 200 300 400 500 600 
+
+Predicted Cost 
+
+0.000 
+
+0.005 
+
+0.010 
+
+0.015 
+
+0.020 
+
+0.025 
+
+0.030 
+
+0.035 
+
+0.040 
+
+> Probability
+
+Logistics - Example of predicted cost distribution 
+
+label (suboptimal): 135 
+
+mode: 126 
+
+10-th percentile: 107 0 100 200 300 400 500 600 
+
+Predicted Cost 
+
+0.00 
+
+0.02 
+
+0.04 
+
+0.06 
+
+0.08 
+
+> Probability
+
+Logistics - Example of predicted cost distribution 
+
+label (suboptimal): 319 
+
+mode: 321 
+
+10-th percentile: 313 0 100 200 300 400 500 600 
+
+Predicted Cost 
+
+0.00 
+
+0.05 
+
+0.10 
+
+0.15 
+
+0.20 
+
+0.25 
+
+0.30 
+
+> Probability
+
+Logistics - Example of predicted cost distribution 
+
+label (suboptimal): 12 
+
+mode: 7 
+
+10-th percentile: 5 
+
+Figure 9. Logistics - Examples of cost distribution generated by the learned heuristic model. 
+
+20 Efficient Test-time Inference for Generative Planning Models 0 25 50 75 100 125 150 175 200 
+
+Predicted Cost 
+
+0.0 
+
+0.2 
+
+0.4 
+
+0.6 
+
+0.8 
+
+> Probability
+
+Labyrinth - Example of predicted cost distribution 
+
+label (suboptimal): 17 
+
+mode: 15 
+
+3-th percentile: 11 0 25 50 75 100 125 150 175 200 
+
+Predicted Cost 
+
+0.00 
+
+0.01 
+
+0.02 
+
+0.03 
+
+0.04 
+
+0.05 
+
+0.06 
+
+0.07 
+
+0.08 
+
+> Probability
+
+Labyrinth - Example of predicted cost distribution 
+
+label (suboptimal): 35 
+
+mode: 39 
+
+3-th percentile: 23 0 25 50 75 100 125 150 175 200 
+
+Predicted Cost 
+
+0.00 
+
+0.05 
+
+0.10 
+
+0.15 
+
+0.20 
+
+0.25 
+
+> Probability
+
+Labyrinth - Example of predicted cost distribution 
+
+label (suboptimal): 29 
+
+mode: 17 
+
+3-th percentile: 13 
+
+Figure 10. Labyrinth - Examples of cost distribution generated by the learned heuristic model. 
+
+21 Efficient Test-time Inference for Generative Planning Models 0 50 100 150 200 250 300 350 400 
+
+Predicted Cost 
+
+0.00 
+
+0.05 
+
+0.10 
+
+0.15 
+
+0.20 
+
+> Probability
+
+Sokoban - Example of predicted cost distribution 
+
+label (suboptimal): 45 
+
+mode: 47 
+
+10-th percentile: 45 0 50 100 150 200 250 300 350 400 
+
+Predicted Cost 
+
+0.00 
+
+0.01 
+
+0.02 
+
+0.03 
+
+0.04 
+
+0.05 
+
+0.06 
+
+> Probability
+
+Sokoban - Example of predicted cost distribution 
+
+label (suboptimal): 269 
+
+mode: 294 
+
+10-th percentile: 280 0 50 100 150 200 250 300 350 400 
+
+Predicted Cost 
+
+0.00 
+
+0.02 
+
+0.04 
+
+0.06 
+
+0.08 
+
+0.10 
+
+> Probability
+
+Sokoban - Example of predicted cost distribution 
+
+label (suboptimal): 62 
+
+mode: 88 
+
+10-th percentile: 64 
+
+Figure 11. Sokoban - Examples of cost distribution generated by the learned heuristic model. 
+
+22 Efficient Test-time Inference for Generative Planning Models 
+
+F.4. Heuristic model vs. true optimal cost-to-go 
+
+We compare the predictions of our learned heuristic model against the true optimal cost-to-go for the subset of solved problems with known optimal solutions. Table 15 reports the mean absolute error (MAE) and mean error (ME; prediction −
+
+ground truth ) statistics across all domains. We evaluate both the predicted heuristic value with the highest probability (Mode) and the value obtained through percentile estimation (Perc.). BW BW ( nloop =3 ) Log Lab Sok Sok ( nloop =3 )MAE Mode 8.68 ± 0.24 0.44 ± 0.02 3.41 ± 0.09 2.32 ± 0.10 5.28 ± 0.17 3.05 ± 0.11 
+
+Perc. 4.07 ± 0.12 0.66 ± 0.02 3.07 ± 0.08 1.07 ± 0.04 3.31 ± 0.12 2.51 ± 0.08 
+
+ME Mode 8.68 ± 0.24 0.21 ± 0.02 1.40 ± 0.11 2.11 ± 0.10 4.79 ± 0.17 1.81 ± 0.12 
+
+Perc. 3.99 ± 0.12 −0.51 ± 0.02 −0.56 ± 0.10 0.56 ± 0.05 2.23 ± 0.13 −0.48 ± 0.09   
+
+> Table 15. MAE (mean absolute error) and ME (mean error) statistics ( ±std. error) with respect to the subset of known optimal data. Shown for both mode and percentile-based heuristic estimation across domains.
+
+These results confirm the benefit of our percentile-based approach, which consistently shifts the predictions of the base heuristic model closer to the true optimal costs. Moreover, the self-improvement loop ( nloop = 3 ) further reduces the estimation error of both configurations, substantially improving overall heuristic accuracy. 
+
+F.5. Model Generalization to Larger Number of Objects 
+
+Sec. 5.2 shows that OCLG EN generates valid plans where FD-LAMA failed, and outperforms Best-of-N sampling. Generalization beyond trained object counts is limited by the generative model’s token vocabulary, which is a limitation shared by all baselines, not specific to our inference method. Yet, we ran an additional experiment: training on Blocksworld with 3–25 blocks while excluding problems with 11, 12, 18, or 19 blocks, then testing on those (interpolate) and testing on instances with 26 to 40 blocks (extrapolate). The model with Best-of-N solved 100% of interpolation instances but 0% of extrapolation (unseen object names). The results on extrapolation are not surprising since the inputs during testing contain unobserved object name tokens (e.g. block31). In order to improve generalization to unseen object names, we retrained the base model while augmenting the data by randomly shuffling object names during the batch generation. With this new generative model, Best-of-N achieved 74.0% completion on the extrapolation set within a 10min time limit per problem. Test-time search with OCLG EN further improved the completion rate to 79.9%. 
+
+F.6. Statistical Analysis 
+
+Table 1 in Section 5 presents the mean plan length and standard errors of all methods across different domains. Yet, in order to determine statistical significance, simply analyzing these statistics alone is insufficient since we test on the same 1000 instances per domain where problem difficulty dominates the variance. For example, the standard deviation of plan length is close to 110 on the Logistics test set. This shared structure means measurements are highly correlated across methods (ρ > 0.81 , often > 0.99 ), so unpaired comparisons vastly inflate the standard error and mask consistent improvements. For example, in Logistics the unpaired SE of the difference is 4.94 , while the paired SE is just 0.11 — a 45 × reduction. We therefore perform Wilcoxon signed-rank tests on paired per-problem differences ∆i = LOCLGen ,i − Lbaseline ,i , comparing OCLGen against MCTS (full rollouts), the strongest baseline with comparable completion rates: Domain N Mean ∆ Cohen’s d Wilcoxon p
+
+Blocksworld 1000 −10 .68 ± 0.31 −1.08 5.4 · 10 −136 
+
+Logistics 1000 −2.92 ± 0.11 −0.81 1.4 · 10 −110 
+
+Labyrinth 1000 −2.82 ± 0.15 −0.60 1.0 · 10 −66 
+
+Sokoban 998 −2.55 ± 0.21 −0.39 3.2 · 10 −48   
+
+> Table 16. Statistical comparison of OCLG EN vs. MCTS across domains.
+
+Table 17 extends this comparison to a self-improvement setting, where both methods undergo 3 iterations of self-improvement 23 Efficient Test-time Inference for Generative Planning Models 
+
+using their respective internal search strategies (OCLGen vs. MCTS). Domain N Mean ∆ Cohen’s d Wilcoxon p
+
+Blocksworld 1000 −4.15 ± 0.19 −0.69 4.1 × 10 −89 
+
+Sokoban 992 −2.08 ± 0.13 −0.51 2.6 × 10 −56   
+
+> Table 17. Statistical comparison of OCLG EN vs. MCTS (self-improvement, 3 iterations) across domains.
+
+Across all domains and both experimental settings, the Wilcoxon signed-rank test returns p-values that are vanishingly small, ranging from 5.4 × 10 −136 in Blocksworld to 3.2 × 10 −48 in Sokoban (Table 16). All results comfortably exceed any conventional significance threshold (e.g., α = 0 .05 or even α = 0 .001 ). The self-improvement setting (Table 17) confirms this pattern, with p-values of 4.1 × 10 −89 and 2.6 × 10 −56 for Blocksworld and Sokoban respectively. The Cohen’s d values provide a far more informative picture of OCLGen’s advantage. Using the conventional benchmarks (|d| = 0 .2 small, |d| = 0 .5 medium, |d| = 0 .8 large), the results reveal a consistent but domain-dependent advantage for OCLGen. In Table 16, Blocksworld shows the strongest effect ( d = −1.08 ), a large effect by any standard, accompanied by the largest absolute mean difference of −10 .68 ± 0.31 steps. Logistics follows with a large effect ( d = −0.81 , ∆ = −2.92 ± 0.11 ), reflecting a similar advantage. Labyrinth yields a medium-to-large effect ( d = −0.60 , ∆ = −2.82 ± 0.15 ), while Sokoban shows a smaller effect ( d = −0.39 , ∆ = −2.55 ± 0.21 ), falling in the small-to-medium range. In Table 17, both methods undergo 3 iterations of refinement using their own internal strategy before being compared head-to-head. OCLGen maintains a meaningful advantage over self-improved MCTS in both tested domains. Blocksworld yields 
+
+d = −0.69 (medium-to-large) with ∆ = −4.15 ± 0.19 , and Sokoban yields d = −0.51 (medium) with ∆ = −2.08 ± 0.13 .Taken together, the results demonstrate that OCLGen consistently and substantially outperforms MCTS in plan length across all tested domains. The statistical evidence is unambiguous, and the effect sizes range from practically meaningful (d ≈ − 0.39 in Sokoban) to large ( d ≈ − 1.08 in Blocksworld). When both methods are given equal opportunity to self-improve over 3 iterations, OCLGen retains its advantage with medium-to-large effects in both domains. 24 Efficient Test-time Inference for Generative Planning Models 
+
+G. PDDL Domain files 
+
+G.1. Blocksworld 
+
+Listing 1. Blocksworld domain file 
+
+(define (domain blocksworld-4ops) (:requirements :strips) (:predicates (clear ?x) (on-table ?x) (arm-empty) (holding ?x) (on ?x ?y)) (:action pickup :parameters (?ob) :precondition (and (clear ?ob) (on-table ?ob) (arm-empty)) :effect (and (holding ?ob) (not (clear ?ob)) (not (on-table ?ob)) (not (arm-empty)))) (:action putdown :parameters (?ob) :precondition (holding ?ob) :effect (and (clear ?ob) (arm-empty) (on-table ?ob) (not (holding ?ob)))) (:action stack :parameters (?ob ?underob) :precondition (and (clear ?underob) (holding ?ob)) :effect (and (arm-empty) (clear ?ob) (on ?ob ?underob) (not (clear ?underob)) (not (holding ?ob)))) (:action unstack :parameters (?ob ?underob) :precondition (and (on ?ob ?underob) (clear ?ob) (arm-empty)) :effect (and (holding ?ob) (clear ?underob) (not (on ?ob ?underob)) (not (clear ?ob)) (not (arm-empty))))) 
+
+25 Efficient Test-time Inference for Generative Planning Models 
+
+G.2. Logistics 
+
+Listing 2. Logistics domain file 
+
+(define (domain logistics) (:requirements :strips :typing) (:types package location vehicle - object truck airplane - vehicle city airport - location) (:predicates (at ?vehicle-or-package - (either vehicle package) ?location - location) (in ?package - package ?vehicle - vehicle) (in-city ?loc-or-truck - (either location truck) ?citys - city)) (:action load-truck :parameters (?obj - package ?truck - truck ?loc - location) :precondition (and (at ?truck ?loc) (at ?obj ?loc)) :effect (and (not (at ?obj ?loc)) (in ?obj ?truck))) (:action load-airplane :parameters (?obj - package ?airplane - airplane ?loc - airport) :precondition (and (at ?obj ?loc) (at ?airplane ?loc)) :effect (and (not (at ?obj ?loc)) (in ?obj ?airplane))) (:action unload-truck :parameters (?obj - package ?truck - truck ?loc - location) :precondition (and (at ?truck ?loc) (in ?obj ?truck)) :effect (and (not (in ?obj ?truck)) (at ?obj ?loc))) (:action unload-airplane :parameters (?obj - package ?airplane - airplane ?loc - airport) :precondition (and (in ?obj ?airplane) (at ?airplane ?loc)) :effect (and (not (in ?obj ?airplane)) (at ?obj ?loc))) 
+
+26 Efficient Test-time Inference for Generative Planning Models 
+
+(:action drive-truck :parameters (?truck - truck ?loc-from - location ?loc-to - location ?city - city) :precondition (and (at ?truck ?loc-from) (in-city ?loc-from ?city) (in-city ?loc-to ?city)) :effect (and (not (at ?truck ?loc-from)) (at ?truck ?loc-to))) (:action fly-airplane :parameters (?airplane - airplane ?loc-from - airport ?loc-to - airport) :precondition (at ?airplane ?loc-from) :effect (and (not (at ?airplane ?loc-from)) (at ?airplane ?loc-to))) )
+
+27 Efficient Test-time Inference for Generative Planning Models 
+
+G.3. Labyrinth 
+
+Listing 3. Labyrinth domain file 
+
+(define (domain labyrinth) (:requirements :adl :action-costs :strips :typing :numeric-fluents) (:types card - object direction - object directionV - direction directionH - direction gridpos - object )(:constants s n - directionV w e - directionH )(:predicates (next ?p1 - gridpos ?p2 - gridpos) (max-pos ?p - gridpos) (min-pos ?p - gridpos) (blocked ?c - card ?d - direction) (robot-at ?c - card) (card-at ?c - card ?x - gridpos ?y - gridpos) (left) (cards-moving) (cards-moving-west) (cards-moving-east) (cards-moving-south) (cards-moving-north) (next-moving-card ?c - card) (new-headtail-card ?c - card) )(:functions (total-cost) - number (move-robot-cost) - number (move-card) - number )(:action move-west :parameters (?cfrom - card ?xfrom - gridpos ?yfrom - gridpos ?dfrom - directionH ?cto 
+
+,→ - card ?xto - gridpos ?yto - gridpos ?dto - directionH) :precondition (and (not (cards-moving)) (= ?dfrom w) (robot-at ?cfrom) (card-at ?cfrom ?xfrom ?yfrom) (card-at ?cto ?xto ?yto) (next ?xfrom ?xto) (= ?yfrom ?yto) (not (= ?dfrom ?dto)) (not (blocked ?cfrom ?dfrom)) (not (blocked ?cto ?dto)) ):effect (and (not (robot-at ?cfrom)) (robot-at ?cto) (increase (total-cost) (move-robot-cost)) 
+
+28 Efficient Test-time Inference for Generative Planning Models 
+
+))(:action move-east :parameters (?cfrom - card ?xfrom - gridpos ?yfrom - gridpos ?dfrom - directionH ?cto 
+
+,→ - card ?xto - gridpos ?yto - gridpos ?dto - directionH) :precondition (and (not (cards-moving)) (= ?dfrom e) (robot-at ?cfrom) (card-at ?cfrom ?xfrom ?yfrom) (card-at ?cto ?xto ?yto) (next ?xto ?xfrom) (= ?yfrom ?yto) (not (= ?dfrom ?dto)) (not (blocked ?cfrom ?dfrom)) (not (blocked ?cto ?dto)) ):effect (and (not (robot-at ?cfrom)) (robot-at ?cto) (increase (total-cost) (move-robot-cost)) ))(:action move-north :parameters (?cfrom - card ?xfrom - gridpos ?yfrom - gridpos ?dfrom - directionV ?cto 
+
+,→ - card ?xto - gridpos ?yto - gridpos ?dto - directionV) :precondition (and (not (cards-moving)) (= ?dfrom n) (robot-at ?cfrom) (card-at ?cfrom ?xfrom ?yfrom) (card-at ?cto ?xto ?yto) (next ?yfrom ?yto) (= ?xfrom ?xto) (not (= ?dfrom ?dto)) (not (blocked ?cfrom ?dfrom)) (not (blocked ?cto ?dto)) ):effect (and (not (robot-at ?cfrom)) (robot-at ?cto) (increase (total-cost) (move-robot-cost)) ))(:action move-south :parameters (?cfrom - card ?xfrom - gridpos ?yfrom - gridpos ?dfrom - directionV ?cto 
+
+,→ - card ?xto - gridpos ?yto - gridpos ?dto - directionV) :precondition (and (not (cards-moving)) (= ?dfrom s) (robot-at ?cfrom) (card-at ?cfrom ?xfrom ?yfrom) (card-at ?cto ?xto ?yto) (next ?yto ?yfrom) (= ?xfrom ?xto) (not (= ?dfrom ?dto)) (not (blocked ?cfrom ?dfrom)) 
+
+29 Efficient Test-time Inference for Generative Planning Models 
+
+(not (blocked ?cto ?dto)) ):effect (and (not (robot-at ?cfrom)) (robot-at ?cto) (increase (total-cost) (move-robot-cost)) ))(:action start-move-card-west :parameters(?cm - card ?x - gridpos ?y - gridpos ?cnext - card ?nextx - gridpos) :precondition (and (not (cards-moving)) (not (cards-moving-west)) (not (robot-at ?cm)) (card-at ?cm ?x ?y )(min-pos ?x) (card-at ?cnext ?nextx ?y) (next ?nextx ?x) ):effect (and (cards-moving) (cards-moving-west) (not (card-at ?cm ?x ?y )) (new-headtail-card ?cm) (next-moving-card ?cnext) (increase (total-cost) (move-card)) ))(:action move-card-west :parameters(?cm - card ?x - gridpos ?y - gridpos ?cnext - card ?nextx - gridpos ?prevx -
+
+,→ gridpos) :precondition (and (cards-moving) (cards-moving-west) (not (robot-at ?cm)) (next-moving-card ?cm) (card-at ?cm ?x ?y )(card-at ?cnext ?nextx ?y) (next ?x ?prevx) (next ?nextx ?x) ):effect (and (cards-moving) (cards-moving-west) (not (card-at ?cm ?x ?y)) (card-at ?cm ?prevx ?y) (not (next-moving-card ?cm)) (next-moving-card ?cnext) (increase (total-cost) (move-card)) ))(:action stop-move-card-west :parameters(?cm - card ?x - gridpos ?y - gridpos ?prevx - gridpos ?newtc - card) :precondition (and (cards-moving) (cards-moving-west) 
+
+30 Efficient Test-time Inference for Generative Planning Models 
+
+(not (robot-at ?cm)) (next-moving-card ?cm) (card-at ?cm ?x ?y )(next ?x ?prevx) (max-pos ?x) (new-headtail-card ?newtc) ):effect (and (not (cards-moving)) (not (cards-moving-west)) (not (card-at ?cm ?x ?y)) (card-at ?cm ?prevx ?y) (card-at ?newtc ?x ?y) (not (new-headtail-card ?newtc)) (not (next-moving-card ?cm)) (increase (total-cost) (move-card)) ))(:action start-move-card-east :parameters(?cm - card ?x - gridpos ?y - gridpos ?cnext - card ?nextx - gridpos) :precondition (and (not (cards-moving)) (not (cards-moving-east)) (not (robot-at ?cm)) (card-at ?cm ?x ?y )(max-pos ?x) (card-at ?cnext ?nextx ?y) (next ?x ?nextx) ):effect (and (cards-moving) (cards-moving-east) (not (card-at ?cm ?x ?y )) (new-headtail-card ?cm) (next-moving-card ?cnext) (increase (total-cost) (move-card)) ))(:action move-card-east :parameters(?cm - card ?x - gridpos ?y - gridpos ?cnext - card ?nextx - gridpos ?prevx -
+
+,→ gridpos) :precondition (and (cards-moving) (cards-moving-east) (not (robot-at ?cm)) (next-moving-card ?cm) (card-at ?cm ?x ?y )(card-at ?cnext ?nextx ?y) (next ?prevx ?x) (next ?x ?nextx) ):effect (and (cards-moving) (cards-moving-east) (not (card-at ?cm ?x ?y)) (card-at ?cm ?prevx ?y) (not (next-moving-card ?cm)) (next-moving-card ?cnext) 
+
+31 Efficient Test-time Inference for Generative Planning Models 
+
+(increase (total-cost) (move-card)) ))(:action stop-move-card-east :parameters(?cm - card ?x - gridpos ?y - gridpos ?prevx - gridpos ?newtc - card) :precondition (and (cards-moving) (cards-moving-east) (not (robot-at ?cm)) (next-moving-card ?cm) (card-at ?cm ?x ?y )(next ?prevx ?x) (min-pos ?x) (new-headtail-card ?newtc) ):effect (and (not (cards-moving)) (not (cards-moving-east)) (not (card-at ?cm ?x ?y)) (card-at ?cm ?prevx ?y) (card-at ?newtc ?x ?y) (not (new-headtail-card ?newtc)) (not (next-moving-card ?cm)) (increase (total-cost) (move-card)) ))(:action start-move-card-north :parameters(?cm - card ?x - gridpos ?y - gridpos ?cnext - card ?nexty - gridpos) :precondition (and (not (cards-moving)) (not (cards-moving-north)) (not (robot-at ?cm)) (card-at ?cm ?x ?y )(min-pos ?y) (card-at ?cnext ?x ?nexty) (next ?nexty ?y) ):effect (and (cards-moving) (cards-moving-north) (not (card-at ?cm ?x ?y )) (new-headtail-card ?cm) (next-moving-card ?cnext) (increase (total-cost) (move-card)) ))(:action move-card-north :parameters(?cm - card ?x - gridpos ?y - gridpos ?cnext - card ?nexty - gridpos ?prevy -
+
+,→ gridpos) :precondition (and (cards-moving) (cards-moving-north) (not (robot-at ?cm)) (next-moving-card ?cm) (card-at ?cm ?x ?y )(card-at ?cnext ?x ?nexty) (next ?y ?prevy) 
+
+32 Efficient Test-time Inference for Generative Planning Models 
+
+(next ?nexty ?y) ):effect (and (cards-moving) (cards-moving-north) (not (card-at ?cm ?x ?y)) (card-at ?cm ?x ?prevy) (not (next-moving-card ?cm)) (next-moving-card ?cnext) (increase (total-cost) (move-card)) ))(:action stop-move-card-north :parameters(?cm - card ?x - gridpos ?y - gridpos ?prevy - gridpos ?newtc - card) :precondition (and (cards-moving) (cards-moving-north) (not (robot-at ?cm)) (next-moving-card ?cm) (card-at ?cm ?x ?y )(next ?y ?prevy) (max-pos ?y) (new-headtail-card ?newtc) ):effect (and (not (cards-moving)) (not (cards-moving-north)) (not (card-at ?cm ?x ?y)) (card-at ?cm ?x ?prevy) (card-at ?newtc ?x ?y) (not (new-headtail-card ?newtc)) (not (next-moving-card ?cm)) (increase (total-cost) (move-card)) ))(:action start-move-card-south :parameters(?cm - card ?x - gridpos ?y - gridpos ?cnext - card ?nexty - gridpos) :precondition (and (not (cards-moving)) (not (cards-moving-south)) (not (robot-at ?cm)) (card-at ?cm ?x ?y )(max-pos ?y) (card-at ?cnext ?x ?nexty) (next ?y ?nexty) ):effect (and (cards-moving) (cards-moving-south) (not (card-at ?cm ?x ?y )) (new-headtail-card ?cm) (next-moving-card ?cnext) (increase (total-cost) (move-card)) ))(:action move-card-south :parameters(?cm - card ?x - gridpos ?y - gridpos ?cnext - card ?nexty - gridpos ?prevy -
+
+33 Efficient Test-time Inference for Generative Planning Models 
+
+,→ gridpos) :precondition (and (cards-moving) (cards-moving-south) (not (robot-at ?cm)) (next-moving-card ?cm) (card-at ?cm ?x ?y )(card-at ?cnext ?x ?nexty) (next ?prevy ?y) (next ?y ?nexty) ):effect (and (cards-moving) (cards-moving-south) (not (card-at ?cm ?x ?y)) (card-at ?cm ?x ?prevy) (not (next-moving-card ?cm)) (next-moving-card ?cnext) (increase (total-cost) (move-card)) ))(:action stop-move-card-south :parameters(?cm - card ?x - gridpos ?y - gridpos ?prevy - gridpos ?newtc - card) :precondition (and (cards-moving) (cards-moving-south) (not (robot-at ?cm)) (next-moving-card ?cm) (card-at ?cm ?x ?y )(next ?prevy ?y) (min-pos ?y) (new-headtail-card ?newtc) ):effect (and (not (cards-moving)) (not (cards-moving-south)) (not (card-at ?cm ?x ?y)) (card-at ?cm ?x ?prevy) (card-at ?newtc ?x ?y) (not (new-headtail-card ?newtc)) (not (next-moving-card ?cm)) (increase (total-cost) (move-card)) ))(:action leave :parameters(?c - card ?prow - gridpos ?pcolumn - gridpos) :precondition (and (not (cards-moving)) (robot-at ?c) (card-at ?c ?prow ?pcolumn) (max-pos ?prow) (max-pos ?pcolumn) (not (blocked ?c s )) ):effect (and (increase (total-cost) (move-card)) (left) 
+
+34 Efficient Test-time Inference for Generative Planning Models 
+
+)))
+
+G.4. Sokoban 
+
+Listing 4. Sokoban domain file 
+
+(define (domain typed-sokoban) (:requirements :typing) (:types LOC DIR) (:predicates (at-robot ?l - LOC) (has-box ?l - LOC) (adjacent ?l1 - LOC ?l2 - LOC ?d - DIR) (clear ?l - LOC) )(:action move :parameters (?from - LOC ?to - LOC ?dir - DIR) :precondition (and (clear ?to) (at-robot ?from) (adjacent ?from ?to ?dir)) :effect (and (at-robot ?to) (not (at-robot ?from))) )(:action push :parameters (?rloc - LOC ?bloc - LOC ?floc - LOC ?dir - DIR) :precondition (and (at-robot ?rloc) (has-box ?bloc) (clear ?floc) (adjacent ?rloc ?bloc ?dir) (adjacent ?bloc ?floc ?dir)) :effect (and (at-robot ?bloc) (has-box ?floc) (clear ?bloc) (not (at-robot ?rloc)) (not (has-box ?bloc)) (not (clear ?floc))) )
+
+35
