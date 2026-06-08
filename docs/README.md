@@ -6,53 +6,38 @@
 </div>
 
 ## 每次日报
-- 最新运行日期：2026-06-07
-- 运行时间：2026-06-07 20:20:14 UTC
+- 最新运行日期：2026-06-08
+- 运行时间：2026-06-08 21:59:17 UTC
 - 运行状态：成功
-- 本次总论文数：11
-- 精读区：6
-- 速读区：5
+- 本次总论文数：6
+- 精读区：2
+- 速读区：4
 
 ### 今日简报（AI）
-今日更新11篇，精读2篇高分论文聚焦符号回归的新方法：GP-GOMEA同时演化常量与表达式结构，以及贝叶斯支持选择实现不确定性感知。最值得关注的是这两篇9分论文为符号回归提供了更鲁棒和可解释的建模方向。建议优先精读这两篇，速读可关注因果发现基准的一致性评估。
-- 详情：[/202606/07/README](/202606/07/README)
+今日推荐6篇论文，精读2篇聚焦符号回归与复杂系统公式发现。最值得关注的是无数据符号回归求解方程和多尺度深度公式发现两个方向。建议优先阅读精读列表中的论文，尤其是评分9.0的两篇。
+- 详情：[/202606/08/README](/202606/08/README)
 
 ### 精读区论文标签
-1. [Simultaneous Model-Based Evolution of Constants and Expression Structure in GP-GOMEA for Symbolic Regression](/202606/07/2606.02236v1-simultaneous-model-based-evolution-of-constants-and-expression-structure-in-gp-gomea-for-symbolic-regression)  
+1. [A Data-Free Symbolic Regression Approach for Solving Equations](/202606/08/2606.07152v1-a-data-free-symbolic-regression-approach-for-solving-equations)  
+   标签：评分：9.0/10、query:ad
+   evidence：无数据符号回归求解方程
+2. [Discovering Multiscale Deep Formulas in Complex Systems via Neural-Guided Lambda Calculus](/202606/08/2606.07426v1-discovering-multiscale-deep-formulas-in-complex-systems-via-neural-guided-lambda-calculus)  
    标签：评分：9.0/10、query:sr
-   evidence：在遗传规划符号回归中同时演化常数与表达式结构
-2. [Uncertainty-Aware Symbolic Regression through Bayesian Support Selection](/202606/07/2606.04042v1-uncertainty-aware-symbolic-regression-through-bayesian-support-selection)  
-   标签：评分：9.0/10、query:ad
-   evidence：贝叶斯支持选择的符号回归方法
-3. [MLEvolve: A Self-Evolving Framework for Automated Machine Learning Algorithm Discovery](/202606/07/2606.06473v1-mlevolve-a-self-evolving-framework-for-automated-machine-learning-algorithm-discovery)  
-   标签：评分：9.0/10、query:ad
-   evidence：基于大语言模型的多智能体框架，用于自动化机器学习算法发现，结合树搜索
-4. [Cross-Environment Neural Reranking for Sample-Efficient Action Selection in Text-Based Agents](/202606/07/2606.02204v1-cross-environment-neural-reranking-for-sample-efficient-action-selection-in-text-based-agents)  
-   标签：评分：8.0/10、query:rerank-train
-   evidence：在多个文本环境中联合训练DeBERTa-v3重排序器用于动作选择
-5. [Don't Gamble, GAMBLe: An Analytical Framework for AI-Driven Research Systems](/202606/07/2606.02863v1-dont-gamble-gamble-an-analytical-framework-for-ai-driven-research-systems)  
-   标签：评分：8.0/10、query:ad
-   evidence：用于分析AI驱动研究系统（结合LLM进行算法发现）的框架
-6. [CauTion: Knowing When to Trust LLMs for Ensemble Causal Discovery](/202606/07/2606.03602v1-caution-knowing-when-to-trust-llms-for-ensemble-causal-discovery)  
-   标签：评分：8.0/10、query:ad
-   evidence：大语言模型用于因果发现任务
+   evidence：通过神经引导符号回归自动发现多尺度公式
 
 ### 速读区论文标签
-1. [Richer Representations for Neural Algorithmic Reasoning via Auxiliary Reconstruction](/202606/07/2606.00559v1-richer-representations-for-neural-algorithmic-reasoning-via-auxiliary-reconstruction)  
+1. [Are Large Language Models Suitable for Graph Computation? Progress and Prospects](/202606/08/2606.06865v1-are-large-language-models-suitable-for-graph-computation-progress-and-prospects)  
    标签：评分：7.0/10、query:ad
-   evidence：神经网络模拟算法步骤，与算法发现相关
-2. [Learning Admissible Heuristics via Cost Partitioning](/202606/07/2606.04597v1-learning-admissible-heuristics-via-cost-partitioning)  
-   标签：评分：7.0/10、query:ad
-   evidence：通过成本划分和图神经网络学习可容许启发式
-3. [Consistency evaluation of benchmarks used for causal discovery](/202606/07/2606.01789v1-consistency-evaluation-of-benchmarks-used-for-causal-discovery)  
+   evidence：关于大模型用于图计算的综述，涉及算法自动发现
+2. [Learning to Route LLMs from Implicit Cost-Performance Preferences via Meta-Learning](/202606/08/2606.06178v1-learning-to-route-llms-from-implicit-cost-performance-preferences-via-meta-learning)  
+   标签：评分：6.0/10、query:rerank-train
+   evidence：基于成本-性能排序的LLM路由元学习框架
+3. [RETROSPECT: RETROsynthesis via Sequential Prediction, and Chemically Transformed-ranking](/202606/08/2606.07181v1-retrospect-retrosynthesis-via-sequential-prediction-and-chemically-transformed-ranking)  
+   标签：评分：6.0/10、query:rerank-train
+   evidence：使用LambdaMART列表式重排序器对候选分子排序
+4. [BacteReason: A Reasoning Model for Antimicrobial Resistance Prediction](/202606/08/biorxiv-10-64898-2026-06-04-730229-v1-bactereason-a-reasoning-model-for-antimicrobial-resistance-prediction)  
    标签：评分：6.0/10、query:ad
-   evidence：使用大语言模型评估因果发现基准
-4. [GLM-Prior: a genomic language model for transferable sequence-derived priors in gene regulatory network inference](/202606/07/biorxiv-10-1101-2025-06-29-662198-v3-glm-prior-a-genomic-language-model-for-transferable-sequence-derived-priors-in-gene-regulatory-network-inference)  
-   标签：评分：6.0/10、query:ad
-   evidence：基因组语言模型用于预测基因调控网络先验知识
-5. [PromptBio-Bench: Benchmarking LLM-based Bioinformatics Agents for End-to-End Data Analysis](/202606/07/biorxiv-10-64898-2026-05-05-723092-v2-promptbio-bench-benchmarking-llm-based-bioinformatics-agents-for-end-to-end-data-analysis)  
-   标签：评分：6.0/10、query:ad
-   evidence：评估LLM代理在生物信息学数据分析中的表现，支持发现任务
+   evidence：使用大语言模型预测抗菌素耐药性并提供机制解释
 
 
 <div class="dpr-home-promo-card">
