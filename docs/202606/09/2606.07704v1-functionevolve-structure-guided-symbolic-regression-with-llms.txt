@@ -1,0 +1,1493 @@
+Title: FunctionEvolve: Structure-Guided Symbolic Regression with LLMs
+
+URL Source: https://arxiv.org/pdf/2606.07704v1
+
+Published Time: Tue, 09 Jun 2026 00:11:45 GMT
+
+Number of Pages: 35
+
+Markdown Content:
+# FunctionEvolve: Structure-Guided Symbolic Regression with LLMs 
+
+Zeyu Xia 1,2 Jun Zhu 2,3 Dong Yan 1∗
+
+> 1
+
+Bosch Center for Artificial Intelligence 
+
+> 2
+
+Department of Computer Science and Technology, Tsinghua University 
+
+> 3
+
+Tsinghua-Bosch Joint Center for ML, Tsinghua University 
+
+xia-zy25@mails.tsinghua.edu.cn dcszj@mail.tsinghua.edu.cn sproblvem@gmail.com 
+
+## Abstract 
+
+Symbolic regression aims to uncover explicit scientific laws from data. Recent methods use LLMs to guide mutation from background text, which is more directed than random genetic programming. However, exact symbolic recovery requires both semantic guidance and explicit structure, so that domain-informed search are carried out through valid symbolic representation. Current LLM-driven sys-tems remain structure-blind: they select among opaque candidates, lack explicit mechanisms for local mutation, and rely on brittle coefficient fitting that can under-value correct skeletons. We propose FunctionEvolve, an evolutionary framework using expression trees to organize the whole search: structural summaries pro-mote diverse parent selection, local tree edits preserve useful subexpressions, and structure-aware fitting decomposes, constrains, and simplifies coefficients for more reliable scoring. It uses only elementary function families, without additional domain-specific rules limiting generalization. On the 129-task synthetic subset of LLM-SRBench, FunctionEvolve with Claude Opus 4.6 recovers 107 exact forms, reaching 82.9% SA@50 , 4.5x above same-backbone baselines, and 55.8% SA@1 ,3.6x above the strongest previously published top-1 result. Ablations show that structure-visible search is central to reliable recovery, with LLM-guided refine-ments and structure-aware coefficient optimization serving as essential proposal and scoring mechanisms. We also audit the benchmark and show that collinearity in its materials-science subset creates identifiability issues. 
+
+## 1 Introduction 
+
+Scientific discovery increasingly requires methods that infer interpretable laws from experimental data [Kramer et al., 2023]. Black-box models can fit observations well, but they often obscure the mechanisms governing natural phenomena. Symbolic Regression (SR) addresses this gap by recovering explicit mathematical expressions from data [Langley, 1981], enabling interpretation, extrapolation, and knowledge transfer [Schmidt and Lipson, 2009]. SR searches a combinatorial space of formulas, and genetic programming (GP) remains a standard way to represent expressions as abstract syntax trees (ASTs) and evolve them through local operators [Koza, 1994]. However, SR is NP-hard [Virgolin and Pissis, 2022], and GP driven mainly by random variation and data-fit selection often lacks the scientific priors needed to navigate large hypothesis spaces efficiently. Recent LLM-driven methods therefore use background information typically describes the data scenario, including variable meanings and the scientific process being modeled 
+
+> ∗Corresponding author. Preprint.
+> arXiv:2606.07704v1 [cs.LG] 5 Jun 2026
+
+and model knowledge to guide equation discovery. However, new synthetic benchmarks show that semantic guidance alone still leaves a large gap in exact symbolic recovery [Shojaee et al., 2025]. This gap prompts a necessary re-examination of current SR methodologies. We identify three shared bottlenecks in traditional GP and its LLM-driven variants. First, the search often starts from generic seeds rather than useful structural priors. Second, parent selection is usually driven by fixed heuristics over opaque candidates, making it difficult to allocate search budget across genuinely different skeletons. Third, unreliable coefficient optimization can make structurally correct skeletons appear unpromising, causing them to be discarded prematurely. Explicit expression structure offers a direct way to address these bottlenecks, especially for mutation, where progress often comes from local edits rather than full rewrites. For example, if the current candidate is a1 sin( x) + a2x and the target is b1 sin( b2x + b3) + b4xb5 , the remaining progress mainly requires editing the sine argument and the power term while preserving the rest. This is precisely where structure matters. GP can modify subexpressions without rewriting the whole formula, but its edits are largely random and do not exploit task context. Prior LLM-driven systems are more directed, but their textual or code-level edits are not necessarily AST-local, so semantically plausible revisions can still overwrite useful parent structure. FunctionEvolve therefore makes AST structure explicit and operative: AST-rule edits provide systematic local add/delete operations, while LLM-guided proposals use the exposed tree structure to make context-dependent refinements that preserve useful parent substructures. Beyond mutation, the same explicit AST structure helps the Selector enforce structural diversity and gives the structure-aware coefficient optimizer the skeleton needed to separate linear from nonlinear parameters, snap structurally constrained exponents, and simplify algebraically equivalent forms, reducing coefficient-search difficulty. 
+
+Core insight: Explicit AST structure makes mutation follow SR’s local-editing nature and also benefits parent-diversity selection and coefficient fitting. Building on this insight, we develop FunctionEvolve as an equation-discovery framework organized around AST-visible search. Our contributions are as follows: • We present FunctionEvolve, a structure-guided LLM framework for equation discovery that uses explicit expression trees to coordinate selection, mutation, and coefficient optimization. • On the 129-task synthetic subset of LLM-SRBench, FunctionEvolve achieves 82.9% SA@50 
+
+and 55.8% SA@1 with Claude Opus 4.6 , corresponding to a 4.5x improvement over same-backbone baselines and a 3.6x top-1 improvement over strongest published PiT-PO. • Ablations show that structure-visible search, LLM-guided local refinements, and structure-aware coefficient optimization are all critical for reliable symbolic recovery. • We identify critical limitations in LLM-SRBench, including input-variable linear dependence and weak nonlinear factor variation that undermine structural identifiability. 
+
+## 2 Related Work 
+
+Symbolic regression has long been studied as a route to scientific discovery, from early empirical-law discovery systems [Langley, 1981] to later work recovering interpretable laws from experimental data [Schmidt and Lipson, 2009]. Modern SR spans symbolic neural networks, reinforcement learning, physics-inspired methods, and evolutionary systems [Martius and Lampert, 2016, Sahoo et al., 2018, Petersen et al., 2021, Udrescu and Tegmark, 2020, Cranmer, 2023]. Among them, GP-style methods remain strong baselines in comparisons [Cava et al., 2021]: they represent expressions as trees [Koza, 1994], enabling structured variation operators such as context-preserving, grammar-based, and strongly typed GP [D’haeseleer, 1994, Whigham, 1995, Montana, 1995]. Related work on prior-guided seeding, diversity, and coefficient fitting shows that symbolic recovery benefits from both expression-structure search and reliable numerical parameter identification [Lu et al., 2015, Mundhenk et al., 2021, Burlacu et al., 2023, Kommenda et al., 2020, dos Reis et al., 2024]. Recent work applies LLMs to SR by using model knowledge and task context to guide equation proposal, refinement, or selection. Representative systems include LLM-SR, LLM4Ed, DRSR, SR-Scientist, PiT-PO, and LaSR [Shojaee et al., 2024, Du et al., 2024, Wang et al., 2025, Xia et al., 2025, Wang et al., 2026, Grayeli et al., 2024]; evolutionary coding agents such as OpenEvolve, AlphaEvolve, and ShinkaEvolve also demonstrate LLM-guided program evolution [Sharma, 2025, 2Novikov et al., 2025, Lange et al., 2025]. These methods add semantic guidance beyond random GP, but often treat expressions as strings, programs, or opaque candidates rather than explicit expression trees shared across selection, mutation, and fitting. The rise of LLM-based SR also makes benchmark design more important. Literature-derived benchmarks such as AI-Feynman, SRBench, and EmpiricalBench are valuable but may overlap with LLM pretraining data [Udrescu and Tegmark, 2020, Cava et al., 2021, Cranmer, 2023]. LLM-SRBench reduces this risk with synthetic scientific tasks and shows that existing LLM-driven SR methods still struggle with exact symbolic recovery [Shojaee et al., 2025]; FunctionEvolve targets this gap with AST-visible LLM search and structure-aware coefficient fitting. 
+
+## 3 Method 
+
+3.1 Problem Formulation 
+
+We consider LLM-driven symbolic regression over a dataset D = {(xi, y i)}ni=1 together with a task-level context T , where xi ∈ Rd is the numerical input and yi ∈ R is the target. The context T
+
+is a natural-language description of the task that is shared across all n samples; depending on the benchmark, it may include the problem background and scientific scenario, the data source, and the names, physical meanings, and units (dimensions) of the variables. For dimension-only tasks such as AI-Feynman entries, T may provide only variable names and units. The goal is to recover a concise, generalizable expression ˜f with ˜f (xi) ≈ yi, using T to guide the search. 
+
+3.2 Overview 
+
+Our method formulates SR as one-shot initialization followed by iterative evolution. FunctionEvolve first uses the Generator to synthesize task-conditioned domain knowledge and seed expressions. It then uses the Selector to choose promising parents, the Mutator to expand them through AST-rule and LLM-guided mutations, and the structure-aware Optimizer to fit, simplify, and score valid offspring before reinsertion. Unlike prior LLM-driven methods, FunctionEvolve uses LLMs for seed generation, parent selection, and mutation, with each part anchored to explicit expression structure. The workflow is illustrated in Figure 1, and the complete algorithm is in Appendix C1. 
+
+Figure 1: FunctionEvolve initializes candidate expressions from task context and then iteratively selects, mutates, optimizes, and evaluates them over an evolving expression database. 3Figure 2: AST rule add/del and LLM-guided local mutation generate offspring from selected parents. 
+
+3.3 Generator 
+
+The Generator provides task-conditioned structural starting points through two roles: (1) it uses the available task context and LLM knowledge to synthesize domain formulas and structural heuristics; and (2) it initializes seed expressions from these patterns so the search does not begin from an unstructured pool. These outputs provide initial starting points and reusable contextual guidance for evolution, rather than encoded domain laws or fixed mutation rules. Details of the Generator procedure and prompt are provided in Appendix C2. 
+
+3.4 Selector 
+
+The Selector determines which expressions to expand next. Each iteration, the system extracts an evolution-tree summary and provides it to the Selector with the task context and previous selections. For each candidate node, this summary combines structural information (AST structure, parameter count, tree depth, and operator counts) with numerical information (training NMSE and fitted parameter values). Based on this information, the Selector returns a small set of parent nodes, allocating limited search budget to more promising directions. Details of the evolutionary tree and Selector are provided in Appendices C3 and C4, respectively. The Selector is not purely greedy: it favors low-error, simple candidates while using selection history to avoid repeatedly expanding similar branches. To prevent data leakage, the tree summary exposes only training error, never test or out-of-distribution error. 
+
+3.5 Mutator 
+
+The Mutator generates candidates by locally adjusting parent nodes selected by the Selector. For each selected parent expression f (x; c), it applies three complementary operations, as illustrated in Figure 2: (1) Rule addition , which preserves the parent and attaches fixed elementary functions (Table 1) through a small set of attachment operators detailed below; (2) Rule deletion , which prunes or unwraps AST substructures to test whether current formula parts are redundant; and (3) LLM-guided proposal , which uses parent structure, fitted information, rule-generated candidates, search history, and domain knowledge to suggest non-template, context-dependent refinements. Table 1: Elementary content library used by rule-addition. For multivariate tasks, single-variable templates instantiate for each xj , while pair families use ordered variable pairs (xi, x j ).Family Library content g Multivariate handling Linear c1xj + c2 –Trigonometric c1 sin( c2xj + c3) –Power c1xc2 
+
+> j
+
+c1(xi + c2)c3 xj
+
+Exponential c1 exp( c2xj ) –Logarithmic c1 log(1 + c2xj ) –Rational-fraction (c1xj + c2)/(c3xj + c4) (c1xi + c2)/(c3xj + c4)
+
+4Figure 3: Structure-aware optimizer pipeline: variable projection, DE/CMA-ES global exploration, L-BFGS local refinement, parameter snapping, and symbolic simplification. The deterministic library uses only generic elementary content and common algebraic attachment operators, without domain-specific rules. Rule addition combines this content with the parent through addition, multiplication, and division; unary wraps additionally apply exp( cf ), log(1 + cf ), sin( cf ),
+
+|cf |, and f c. Its breadth comes from operator families rather than benchmark- or domain-level priors, preserving low inductive bias while making compact products, ratios, and compositions reachable. After mutation, candidates are normalized and deduplicated by structural fingerprints before entering the expression database. This design combines reliable rule-based local search with flexible LLM-guided refinements, allowing the search to expand beyond fixed templates while avoiding saturation by repeated or invalid candidates. Details of the AST representation, rule-based and LLM-guided mutation, and normalization procedures are provided in Appendix C5. 
+
+3.6 Optimizer 
+
+The Optimizer fits coefficients for each fixed candidate skeleton and returns its score. Rather than treating coefficient fitting as black-box optimization, FunctionEvolve exploits expression structure throughout the pipeline (Figure 3). Coefficients at different structural positions carry algebraic priors: linear parameters can be solved by variable projection and OLS, remaining nonlinear parameters are searched with global and local optimizers, structurally constrained parameters can be snapped to stable integer or rational values, and redundant forms can be removed through coefficient merging and symbolic simplification before refitting. These priors reduce redundant dimensionality and make correct skeletons less likely to be discarded because of poor exploration or local optima. They are generic SR operations and therefore do not encode benchmark shortcuts. See Appendix C6 for details. 
+
+## 4 Experiments 
+
+4.1 Main Results 
+
+The main comparison in this subsection is conducted on the synthetic benchmark set of LLM-SRBench [Shojaee et al., 2025]. We choose this benchmark because its synthetic construction reduces the risk of contamination from memorized formulas in LLM pretraining, thereby providing a cleaner test bed for the primary symbolic-regression comparison. Symbolic regression is commonly evaluated using three complementary metrics: (1) Symbolic accuracy at k (SA@ k), whether at least one of the top-k candidates ranked by training NMSE matches the ground-truth symbolic structure, usually evaluated using an LLM-as-a-judge protocol; (2) Accuracy to tolerance Acc τ , the number of tasks whose top-1 candidate reaches maximum relative error over all evaluation points at most τ , where τ is typically set to 0.1 or 0.01; and (3) 
+
+Normalized mean squared error (NMSE) , a metric that measures aggregate numerical error. Since SA@ k is calculated based on LLMs, we further audit the reliability of its LLM-as-a-judge protocol. On 500 sampled verification cases, GPT-5.2 and Claude Opus 4.6 agree on 476 decisions; manual auditing over these 500 cases gives judge accuracies of 96.4% and 98.6%, respectively. In the actual experiments, each candidate is verified by both models: agreeing verdicts are accepted, while disagreements are manually adjudicated (See Appendix D6). Table 2 reports symbolic accuracy and numerical accuracy for each domain and for the full 129-task benchmark. We emphasize both SA@50 and SA@1 : SA@50 measures whether the search generates a correct symbolic form within its top-50 training-NMSE-ranked candidates, while SA@1 measures whether the method’s single selected expression already recovers the target structure. Numerical 5Table 2: Main results on the 129-task synthetic subset of LLM-SRBench. Entries report SA@50 
+
+(SA@1 ), Acc 0.1 task counts, and median test NMSE; table headers abbreviate these as SA, Acc, and NMSE. Parenthesized-only SA values are published top-1 results without reported SA@50 . Bold marks the best non-reference values, while the ground-truth row is a reference upper bound. * and ** 
+
+denote results cited from LLM-SRBench [Shojaee et al., 2025] and PiT-PO [Wang et al., 2026].                                                                                                                                                                                                                                                                                                 
+
+> Chemistry (36) Biology (24) Physics (44) MatSci (25) Total (129)
+> Model SA ↑Acc ↑NMSE ↓SA ↑Acc ↑NMSE ↓SA ↑Acc ↑NMSE ↓SA ↑Acc ↑NMSE ↓SA ↑Acc ↑NMSE ↓
+> Direct Prompting GPT-4o-mini *(0)50.0221 (0)10.4648 (2)40.0647 (0)00.0484 (2)10 –
+> Claude Opus 4.6 0(0)31.50e-2 1(1)32.43e-4 0(0)42.18e-3 1(0)82.86e-5 2(1)18 1.36e-3
+> PySR [Cranmer, 2023]
+> PySR *(0)15 –(0)6–(2)13 –(0)17 –(2)51 –
+> OpenEvolve [Sharma, 2025] Claude Opus 4.6 7(2)11 8.19e-7 8(1)29.37e-6 0(0)51.21e-4 9(2)91.07e-7 24 (5)27 4.30e-6
+> LaSR [Grayeli et al., 2024]
+> Llama-3.1-8B *(0)10 2.77e-4 (1)42.73e-4 (2)11 0.0018 (2)16 7.44e-5 (5)41 –
+> GPT-4o-mini *(1)14 9.11e-5 (2)51.53e-4 (4)14 9.94e-4 (7)18 9.23e-6 (14 )51 –
+> LLM-SR [Shojaee et al., 2024] GPT-4o-mini *(4)19 4.12e-6 (4)73.06e-6 (4)16 7.62e-5 (5)22 3.21e-9 (17 )64 –
+> Claude Opus 4.6 39(4)14 4.13e-7 8(5)62.15e-7 0(0)37.11e-5 7(2)17 2.90e-9 24 (11 )40 9.80e-7
+> PiT-PO [Wang et al., 2026] Llama-3.1-8B (RL) ** (5)28 4.13e-7 (7)17 9.37e-8 (5)18 6.57e-5 (3)23 1.18e-8 (20 )86 –
+> FunctionEvolve (Ours)
+> No LLM 7(3)32 1.76e-12 12 (8)16 6.66e-13 7(5)11 1.89e-5 3(0)19 2.83e-14 29 (16 )78 1.47e-10
+> Llama-3.1-8B 20 (5)32 7.52e-13 20 (9)20 3.85e-13 17 (6)18 4.59e-8 5(3)20 1.20e-14 62 (23 )90 1.17e-12
+> Qwen3.6-27B 27 (8)35 1.99e-13 21 (11 )23 2.08e-13 29 (16 )30 5.19e-13 9(3)21 1.44e-14 86 (38 )109 2.06e-13
+> DeepSeek-V4-Pro 32 (21 )34 2.18e-13 20 (14 )23 2.08e-13 33 (30 )33 5.15e-13 14 (6)21 1.20e-14 99 (71 )111 1.78e-13
+> GPT-5.2 medium 30 (13 )34 2.08e-13 20 (15 )23 3.80e-13 37 (36 )33 4.03e-13 16 (5)21 1.32e-14 103 (69 )111 2.08e-13
+> Claude Opus 4.6 31 (16 )35 1.85e-13 22 (16 )23 2.06e-13 39 (34 )33 2.44e-13 15 (6)22 1.44e-14 107 (72 )113 1.38e-13
+> Reference: GT 36 (36 )35 1.49e-13 24 (24 )23 1.43e-13 44 (44 )37 1.14e-13 25 (25 )25 1.87e-14 129 (129 )120 4.98e-14
+
+metrics are complementary: NMSE can be saturated by structurally incorrect surrogate expressions, and worst-point Acc τ can be brittle when small ytrue values amplify relative-error thresholds. The ground-truth row is therefore included only as a dataset reference ceiling, not as a competing method. 2
+
+FunctionEvolve greatly improves symbolic recovery under both SA@50 and SA@1 . The No LLM variant uses generic seed generation without semantic priors, training-NMSE-ranked selection, programmatic AST mutation, and the same structure-aware optimizer. It already recovers 29 SA@50 
+
+forms and 16 SA@1 forms, close to the strongest published PiT-PO top-1 result of 20. This shows that GP-style rule mutation combined with reliable structure-aware fitting is itself a strong symbolic-search baseline. Adding LLM-guided generation, selection, and mutation raises SA@50 to 107 with 
+
+Claude Opus 4.6 , while the strongest same-backbone rerun baselines, LLM-SR and OpenEvolve, each reach 24. At top-1, FunctionEvolve reaches 72 SA@1 , exceeding PiT-PO by 3.6x. Additional backbones show the same trend: DeepSeek-V4-Pro recovers 99 (71) tasks and is especially strong on chemistry, the mid-sized open-weight Qwen3.6-27B reaches 86 (38), and Llama-3.1-8B 
+
+reaches 62 (23), improving substantially over the No LLM setting in SA@50 but only slightly in 
+
+SA@1 . This is notable because PiT-PO also builds on the Llama-3.1-8B backbone but further applies reinforcement learning, whereas our Llama-3.1-8B run uses no RL and still surpasses PiT-PO. In 
+
+> 2
+
+An additional baseline, SR-Scientist [Xia et al., 2025], is compared separately in Appendix D5 rather than in this table: its headline Acc τ discards the worst 5% of evaluation points before taking the maximum, making it a relaxed variant aligned with our 95%Acc τ rather than our strict all-point Acc τ , and it reports symbolic accuracy only for a few representative methods, without an SA@ k analysis. 
+
+> 3
+
+The public LLM-SRBench code reports only top-1 symbolic accuracy. We additionally audit the top-50 training-NMSE-ranked candidates for our Claude Opus 4.6 rerun and report entries as SA@50 (SA@1 ). With this released implementation, our rerun is weaker at SA@1 than the originally reported gpt-4o-mini result, possibly because the authors used a different evaluation method; related reproducibility concerns are noted by other researchers at https://openreview.net/forum? id=0L4RWQV8Qa .
+
+6practice, Llama-3.1-8B also has weaker JSON-format following than newer models, so invalid structured outputs are replaced by the deterministic rule-based baseline in our implementation. When the LLM interface fails, the system falls back to the baseline. Therefore, the measured gains provide a conservative estimate of the benefit of LLM-guided search. The gains are broad across domains: 31/36 chemistry tasks, 22/24 biology tasks, 39/44 physics tasks, and 15/25 materials-science tasks under SA@50 , with corresponding SA@1 counts of 16/36, 16/24, 34/44, and 6/25. Worse performance on materials science is partly explained by benchmark identifiability issues discussed in Section 5. The gap between SA@50 and SA@1 shows that correct equations are often generated but not always ranked first by training NMSE. Our inspection suggests this ambiguity arises because some expressions are difficult to distinguish from high-order rational approximations or series expansions, especially over restricted data ranges. 
+
+Main result: The main gap for LLM-driven SR lies in symbolic rather than numerical: Func-tionEvolve closes much of this gap while preserving near-GT numerical precision. Numerically, FunctionEvolve with Claude Opus 4.6 reaches 113 tasks under Acc 0.1, close to the GT reference value of 120, and maintains median test NMSE at 1.38 × 10 −13 . The updated Llama-3.1-8B 
+
+run recovers 62 (23) symbolic forms and has a low median test NMSE of 1.17 × 10 −12 , while reaching 90 tasks under Acc 0.1 and 69/61 tasks under the stricter Acc 0.01 /Acc 0.001 thresholds. This gap should not be interpreted as contradicting the symbolic result: exact symbolic recovery is the primary goal of scientific SR, while worst-point Acc τ is a numerically brittle auxiliary metric on this benchmark. Because Acc τ divides by ytrue pointwise, very small ytrue values can amplify tiny numerical perturbations into threshold failures, so even GT equations may not satisfy the relative-error threshold; Appendix D5 discusses the alternative 95% Acc τ metric and stricter numerical thresholds. These gains are not due to larger LLM budgets: FunctionEvolve averages 66.86 LLM calls per task, versus 1000.27 for LLM-SR and 201.50 for OpenEvolve, with lower price-weighted token cost than LLM-SR and comparable cost to OpenEvolve (Appendix B).  
+
+> (a) Test NMSE trajectory and final relative-error scatter (b) OOD NMSE trajectory and final relative-error scatter
+
+Figure 4: Global NMSE trajectories and final relative errors. Curves show median log 10 (NMSE) ,and shaded bands show 25–75% and 10–90% ranges using bottom and left axes. Overlaid points use top and right axes: horizontal coordinate is log 10 (NMSE final ) and vertical coordinate is ∆ = log 10 (NMSE final /NMSE GT ). Blue circles indicate ∆ ≤ 0, and orange triangles indicate ∆ > 0.
+
+Figure 5: Ground-truth NMSE distributions on the test and OOD splits. OOD has a larger and more dispersed error baseline. To further inspect the numerical behavior behind the aggregate NMSE values, Figure 4 shows the test and OOD NMSE search trajectories for the strongest Claude Opus 4.6 setting, with overlaid scatter points comparing final NMSE against the ground-truth NMSE for each task. On the test split, the global-best median NMSE drops to the numer-ical floor within the first few iterations and then re-mains close to the ground-truth NMSE distribution, indicating that the optimizer often fits recovered skeletons to near ground-truth numerical precision. This is also reflected in the paired comparison: the final expression is no worse than the ground-truth expression on 82/129 tasks (63.6%). 7Out-of-distribution evaluation shows the same qualitative error reduction, but the paired comparison is weaker, with 50/129 tasks (38.8%) no worse than ground truth. This gap should be read against Figure 5: even the ground-truth expressions have larger and more dispersed NMSE on held-out OOD samples, with a median about two orders of magnitude higher than on the test split. Thus, this setting has a higher numerical error floor even for the exact laws, and the weaker paired comparison largely reflects the intrinsic difficulty and lower numerical stability of these samples, although task-specific extrapolation effects can still amplify expression-level differences. 
+
+4.2 Evaluation on AI-Feynman 
+
+Table 3: Reported exact-recovery results on AI-Feynman-style benchmarks. Protocols differ, so entries keep their original denominators.           
+
+> Method Evaluation set Recovery LaSR [Grayeli et al., 2024] 100 original 72/100 SR-LLM [Guo et al., 2025] 90 held-out 69/90 QDSR [Bruneton, 2025] 117-target subset 107/117 FunctionEvolve (Ours) 100+20 full set SA@1 120/120
+
+We also evaluate FunctionEvolve on the AI-Feynman benchmark family [Udrescu and Tegmark, 2020]. Because recent papers use slightly different protocols, Table 3 reports each result in its native denominator rather than forcing a sin-gle leaderboard: LaSR reports the 100 original Feynman equations, SR-LLM re-serves 10 of those equations as retrieval knowledge and tests on the remaining 90, and QDSR uses a 117-target Feynman-AI subset. Under the full 120-task setting, consisting of the 100 original equations plus 20 bonus equations, FunctionEvolve recovers all 120 tasks at top-1. Figure 6 provides a first-appearance diagnostic for symbolic matches. A match at round 0 means that an equivalent expression was already present in the LLM-proposed seed set, before evolutionary mutation. The AI-Feynman row is much more concentrated at round 0 than the synthetic LLM-SRBench rows, which is consistent with literature-derived equations being easier for the model to recall or directly propose from prior exposure. 
+
+Figure 6: First-appearance round of the first symbolically correct expression for clean runs. Round 0 denotes a correct expression already present in the LLM-proposed seed set, while no_match denotes runs without a symbolic match. The last row shows AI-Feynman results, while the others show LLM-SRBench results; concentration at round 0 evidences stronger AI-Feynman contamination. These results are complementary to the LLM-SRBench evaluation rather than a replacement for it. AI-Feynman is a standard physics benchmark, but its literature-derived equations may be present in LLM pretraining data; LLM-SRBench therefore remains our primary lower-contamination test bed. The AI-Feynman result mainly shows that the same structure-guided search also performs strongly on the classical physics benchmark, including the harder bonus equations. 
+
+4.3 Ablation Study 
+
+Table 4: Ablation study on 129 tasks. Entries report total SA@50 (SA@1 ). Domain-wise SA results are reported in Appendix D4.                  
+
+> Method GPT-5.2-medium Claude Opus 4.6
+> Full 103 (69 )107 (72 )w/o All 35 (6) 34 (10) w/o Generator 79 (49) 91 (58) w/o Selector 62 (44) 74 (46) w/o LLM Mutator 45 (27) 46 (31) w/o AST Mutator 70 (42) 84 (50) w/o Struct. Optimizer 46 (16) 53 (22)
+
+We further ablate the major components of Func-tionEvolve using the degenerated variants de-scribed in Appendix C2–C6. The w/o Genera-tor setting sets the extracted domain knowledge to empty and initializes the search from a fixed seed list. The w/o Selector setting removes the LLM parent-selection module and instead uses Boltz-mann sampling over fitness ranks. For mutation, we consider two complementary ablations: w/o LLM Mutator disables LLM-generated local structural refinements and keeps only the AST Mutator, while 8w/o AST Mutator disables rule-driven AST additions and deletions and keeps only LLM-generated ADD/SUBST edits. The w/o Structure-aware Optimizer setting replaces the structure-aware coef-ficient optimizer with L-BFGS. Finally, w/o All combines w/o Generator , w/o Selector , w/o AST Mutator , and w/o Structure-aware Optimizer . In both implementation and experimental behavior, this combined ablation is close to a parallel multi-offspring version of LLM-SR [Shojaee et al., 2024]. Although this parallel setting evaluates more candidate expressions per round, the local evaluations are independent and can be distributed across CPU workers, so wall-clock cost does not increase in proportion to the candidate count; detailed resource comparisons are provided in Appendix B. Table 4 reports total SA@50 (SA@1 ) for GPT-5.2-medium and Claude Opus 4.6 ; domain-wise breakdowns are provided in Appendix D4. Under Claude Opus 4.6 , the combined ablation reduces SA from 107 (72) to 34 (10) tasks. Among components, removing the LLM Mutator and the structure-aware optimizer causes the largest SA@50 drops, to 46 (31) and 53 (22), confirming that LLM-guided local refinement and reliable structure-aware coefficient fitting are both essential; removing the AST Mutator and Selector also degrades recovery, to 84 (50) and 74 (46), showing that the strongest performance comes from combining LLM reasoning with explicit symbolic structure and reliable coefficient scoring. We therefore first isolate the contribution of AST visibility, then examine whether candidate skeletons can be scored reliably by the structure-aware coefficient optimizer. 
+
+Ablation takeaway: FunctionEvolve succeeds by combining explicit AST structure, reliable structure-aware optimization, and frontier-model symbolic proposals. 
+
+4.4 Analysis of AST Structure 
+
+To isolate the role of AST structure more directly, we use a stricter w/o AST Structure variant under 
+
+Claude Opus 4.6 . This variant keeps the LLM Selector and LLM Mutator, but removes all AST-related information and operations: the Selector no longer observes AST-derived structural fields, the AST Mutator is disabled, and the LLM Mutator no longer receives the annotated AST or AST-specific mutation guidance. Table 5: Effect of AST structure under Claude Opus 4.6 . Entries report SA@50 (SA@1 ).                            
+
+> Variant Chemistry Biology Physics Materials Total (36) (24) (44) (25) (129) Full 31 (16 )22 (16 )39 (34 )15 (6)107 (72 )w/o AST Mutator 30 (16) 22 (11) 23 (20) 9 (3) 84 (50) w/o AST Structure 24 (14) 20 (15) 8 (7) 8 (4) 60 (40)
+
+As shown in Table 5, removing all AST structure reduces total SA@50 (SA@1 )from 107 (72) to 60 (40). This is substan-tially worse than only removing the AST Mutator, which still obtains 84 (50) when the LLM components can observe AST-derived structure. The gap indicates that AST structure is useful not only as a source of deterministic rule mutations, but also as an explicit representation that helps the LLM reason about expression complexity, reusable subtrees, and meaningful local edits. The degradation is especially severe on the Physics split, whose equations are more structurally complex in the benchmark. 
+
+4.5 Analysis of Structure-aware Coefficient Optimization 
+
+Figure 7: Optimizer benchmark on ground-truth skeletons and transformed variants. Success is defined as NMSE < 1e-10; numbers above bars report median runtime. 9The ablation in Section 4.3 points to coefficient optimization as a major failure mode: under Claude Opus 4.6 , replacing the structure-aware coefficient optimizer with L-BFGS-B reduces total SA@50 
+
+(SA@1 ) from 107 (72) to 53 (22). To separate optimizer failure from symbolic-search failure, we benchmark optimizers on ground-truth skeletons and controlled variants (Appendix C7). A run is counted as successful only when the fitted expression reaches NMSE < 1e-10 on the training data. As shown in Figure 7, the structure-aware coefficient optimizer consistently outperforms standalone optimizers across all four transformation groups while keeping median runtime modest. It solves 98.4% of original-expression cases, 91.5% of composite zero-term cases, 79.1% of power-augmentation cases, and 93.8% of rational zero-term cases. This result explains why the optimizer ablation in Table 4 is so large: lacking structural information, a generic optimizer must search a higher-dimensional and less constrained parameter space, making optimization less efficient and more susceptible to local optima. It can therefore underfit otherwise correct symbolic skeletons and create false negatives during fitness evaluation. Consistently, the No LLM row in Table 2 shows pure GP mutation with the structure-aware optimizer already approaches PiT-PO SOTA. 
+
+4.6 Analysis under Noisy Observations 
+
+Table 6: Robustness under noisy observations with Claude Opus 4.6 . Entries report counts over 129 tasks.               
+
+> Setting SA@50 (SA@1 )Acc 0.1Test NMSE Clean 107 (72 )113 1.38e-13 1% noise 54 (24) 39 1.32e-6 5% noise 40 (13) 23 3.05e-5
+
+We further evaluate FunctionEvolve on noisy ver-sions of LLM-SRBench using the same Claude Opus 4.6 setting. As shown in Table 6, exact symbolic re-covery is sensitive to observation noise: total SA@50 
+
+(SA@1 ) drops from 107 (72) in the clean setting to 54 (24) under 1% noise and 40 (13) under 5% noise. The numerical criterion also degrades sharply, with test Acc 0.1 decreasing from 113 tasks to 39 and 23 tasks, respectively. This behavior is expected because the search ranks candidates by noisy training fit while symbolic accuracy is judged against the clean ground-truth expression. Under noise, structurally different expressions can become numerically plausible explanations of the perturbed samples, so the evolutionary search may favor smooth or overfit alternatives that fit the observations but no longer match the exact law. These results suggest that noisy scientific equation discovery requires uncertainty-aware scoring and validation in addition to stronger symbolic search. 
+
+4.7 Complexity-aware Final Candidate Selection 
+
+The gap between SA@50 and SA@1 indicates that the search often generates a correct expression but does not rank it first by training NMSE. We therefore examine complexity-aware final-candidate selectors for the Claude Opus 4.6 full run, with the three selection rules summarized in Figure 8. After search terminates, these selectors are applied to the complete expression trajectory to choose the final candidates to report. They are distinct from the evolutionary Selector in Section 3: they do not choose parents, guide mutation, affect coefficient fitting, or otherwise change the search trajectory. Table 7: Final-candidate selection for the Claude Opus 4.6 full run on 129 clean LLM-SRBench tasks.                         
+
+> Ranking rule Shortlist Exact matches Train NMSE 172 Train NMSE 589 Train NMSE 10 95 Pareto 5102 Occam 5101 MDL 597 Pareto 10 102 Occam 10 104 MDL 10 101 Train NMSE 50 107 Train NMSE all 4113
+
+The final-candidate selectors use only training NMSE and ex-pression complexity, never test or OOD NMSE. Pareto performs non-dominated sorting over training NMSE and complexity and fills the reporting budget from successive Pareto layers. The Occam variant first restricts candidates to a near-best training-NMSE neighborhood and then favors simpler expressions using tree size, operator count, parameter count, and special-function count. The MDL variant uses a linear penalty on training loss and complexity features. As shown in Table 7, the five-candidate Pareto and Occam selections recover 102 and 101 exact forms, already above the 95 exact forms obtained by the top-10 training-NMSE ranking and close to the top-50 result of 107. The approximate SA@all value is 113, showing that a few additional exact forms appear deeper in the search tra-jectory. This suggests that many apparent top-1 failures are final-ranking failures caused by numerically strong but structurally less concise surrogate expressions. However, a gap remains to SA@all , indicating that complexity-aware ranking still cannot always identify the correct form within a very small reporting budget.   
+
+> 4Here, “all” denotes SA@all over roughly the top 1000 full-trajectory candidates ranked by training NMSE.
+
+10 Figure 8: Complexity-aware final-candidate selection rules. Pareto treats each candidate as a point in training-NMSE–complexity space and selects from successive non-dominated fronts; Occam first keeps candidates with near-best training fit and then prefers simpler expressions; MDL combines training loss and complexity into a single scalar score. Details are provided in Appendix D1. 
+
+## 5 Discussion 
+
+Figure 9: Residuals from the MatSci. Across train, test, and OOD samples, the maximum absolute residual is 4.43 × 10 −5.To diagnose weaker MatSci results in Section 4, we identify two severe dataset identifiability is-sues. First, all 25 tasks use strain ϵ and tem-perature T , but the samples collapse to one di-mension: across train, test, and OOD splits, 
+
+T ≈ 273+500 ϵ. Fitting T = a+bϵ for each task and split gives correlations within 2.7 × 10 −12 
+
+of one and a maximum absolute residual of 
+
+4.43 × 10 −5. This collinearity makes explicit temperature coupling unidentifiabl, so struc-turally different expressions can achieve iden-tical NMSE by replacing temperature-coupled terms with functions of ϵ alone. Figure 9 shows the residuals from this near-linear geometry. Second, Arrhenius-like factors vary too little to be reliably identified. Eight MatSci equa-tions contain exp( −c/T ) terms, but these fac-tors change by 0.11% –2.06% on train/test and 
+
+0.006% –0.108% on OOD. In MatSci5, exp( −5.9485 /T ) changes from 0.978446 to 0.989105 on train and from 0.989106 to 0.989672 on OOD. Hence ϵp exp( −c/T ) behaves like a rescaled pure-strain term Cϵ p, making the Arrhenius structure difficult to distinguish from a constant multiplier. In other dataset splits, the collinear issue is not dataset-wide as in MatSci, but individual tasks still exhibit strong pairwise dependence. Appendix D2 reports the 12 FunctionEvolve failure cases outside MatSci and shows that most still contain a variable pair with large R2. These dependencies can again weaken structural identifiability, because different symbolic mechanisms may become difficult to distinguish over the sampled trajectory even when the overall split is not globally degenerate. Although our audit highlights limitations in LLM-SRBench and need for more reliable datasets, it remains the latest synthetic SR benchmark and reduces memorization risk relative to literature-derived benchmarks like AIFeynman[Udrescu and Tegmark, 2020]; constructing a new benchmark is beyond the scope of this work. 
+
+## 6 Conclusion 
+
+We introduced FunctionEvolve, an LLM-driven SR framework combining semantic initialization, diversity-aware selection, local mutation by AST rule and LLM proposal, and structure-aware coeffi-cient optimization. On the 129-task synthetic subset of LLM-SRBench, FunctionEvolve recovers 107 exact symbolic forms with Claude Opus 4.6 , substantially improving symbolic accuracy while preserving near-GT numerical precision; on the complementary 120-task AI-Feynman evaluation, it recovers the correct symbolic form for all 120 tasks as its top-1 prediction. Our ablations explain 11 why: LLM-extracted domain priors provide semantic guidance that steers the search toward plausible expressions, explicit AST structure organizes symbolic exploration, and structure-aware optimization prevents promising skeletons from being discarded due to poorly fitted constants. Beyond these results, our audit identifies critical limitations in LLM-SRBench itself: the MatSci split has severe collinearity between T and ϵ, making key mechanisms unidentifiable and allowing structurally incorrect expressions to attain very low NMSE. Taken together, these findings suggest that progress in scientific SR requires joint attention to symbolic representation, coefficient fitting, and benchmark design. Open directions include dynamical systems without closed forms, larger candidate-variable sets, and benchmarks that are both reliable and realistic. 
+
+## References 
+
+Jean-Philippe Bruneton. Enhancing symbolic regression with quality-diversity and physics-inspired constraints, 2025. URL https://arxiv.org/abs/2503.19043 .Bogdan Burlacu, Kaifeng Yang, and Michael Affenzeller. Population diversity and inheritance in genetic programming for symbolic regression. Natural Computing , 23, 01 2023. doi: 10.1007/ s11047-022-09934-x. William La Cava, Patryk Orzechowski, Bogdan Burlacu, Fabrício Olivetti de França, Marco Virgolin, Ying Jin, Michael Kommenda, and Jason H. Moore. Contemporary symbolic regression methods and their relative performance, 2021. URL https://arxiv.org/abs/2107.14351 .Miles Cranmer. Interpretable machine learning for science with PySR and SymbolicRegression.jl, 2023. URL https://arxiv.org/abs/2305.01582 .Patrik D’haeseleer. Context preserving crossover in genetic programming. 1:256 – 261 vol.1, 07 1994. doi: 10.1109/ICEC.1994.350006. L. G. A dos Reis, V. L. P. S. Caminha, and T. J. P. Penna. Benchmarking symbolic regression constant optimization schemes, 2024. URL https://arxiv.org/abs/2412.02126 .Mengge Du, Yuntian Chen, Zhongzheng Wang, Longfeng Nie, and Dongxiao Zhang. LLM4Ed: Large language models for automatic equation discovery, 2024. URL https://arxiv.org/abs/ 2405.07761 .Arya Grayeli, Atharva Sehgal, Omar Costilla-Reyes, Miles Cranmer, and Swarat Chaudhuri. Symbolic regression with a learned concept library, 2024. URL https://arxiv.org/abs/2409.09359 .Zelin Guo, Siqi Wang, Yonglin Tian, Jing Yang, Hui Yu, Xiaoxiang Na, Levente Kovacs, Li Li, Petros A. Ioannou, and Fei-Yue Wang. SR-LLM: An incremental symbolic regression framework driven by LLM-based retrieval-augmented generation. Proceedings of the National Academy of Sciences , 122(52):e2516995122, 2025. doi: 10.1073/pnas.2516995122. Michael Kommenda, Bogdan Burlacu, Gabriel Kronberger, and Michael Affenzeller. Parameter identification for symbolic regression using nonlinear least squares. Genetic Programming and Evolvable Machines , 21, 09 2020. doi: 10.1007/s10710-019-09371-3. John R. Koza. Genetic programming as a means for programming computers by natural selection. 
+
+Statistics and Computing , 4(2):87–112, June 1994. ISSN 1573-1375. doi: 10.1007/BF00175355. URL https://doi.org/10.1007/BF00175355 .Stefan Kramer, Mattia Cerrato, Jannis Brugger, Sašo Džeroski, and Ross King. Automated scientific discovery: From equation discovery to autonomous discovery systems, 2023. URL https: //arxiv.org/abs/2305.02251 .Robert Tjarko Lange, Yuki Imajuku, and Edoardo Cetin. ShinkaEvolve: Towards open-ended and sample-efficient program evolution, 2025. URL https://arxiv.org/abs/2509.19349 .Pat Langley. Data-driven discovery of physical laws. Cognitive Science , 5(1):31–54, 1981. doi: https://doi.org/10.1111/j.1551-6708.1981.tb00869.x. URL https://onlinelibrary.wiley. com/doi/abs/10.1111/j.1551-6708.1981.tb00869.x .12 Qiang Lu, Jun Ren, and Zhiguang Wang. Using genetic programming with prior formula knowledge to solve symbolic regression problem. Computational Intelligence and Neuroscience , 2016:1–17, 12 2015. doi: 10.1155/2016/1021378. Georg Martius and Christoph H. Lampert. Extrapolation and learning equations, 2016. URL 
+
+https://arxiv.org/abs/1610.02995 .David J. Montana. Strongly typed genetic programming. Evolutionary Computation , 3(2):199–230, Summer 1995. ISSN 1063-6560. doi: 10.1162/evco.1995.3.2.199. URL http://vishnu.bbn. com/papers/stgp.pdf .T. Nathan Mundhenk, Mikel Landajuela, Ruben Glatt, Claudio P. Santiago, Daniel M. Faissol, and Brenden K. Petersen. Symbolic regression via neural-guided genetic programming population seeding, 2021. URL https://arxiv.org/abs/2111.00053 .Alexander Novikov, Ngân V ˜u, Marvin Eisenberger, Emilien Dupont, Po-Sen Huang, Adam Zsolt Wag-ner, Sergey Shirobokov, Borislav Kozlovskii, Francisco J. R. Ruiz, Abbas Mehrabian, M. Pawan Kumar, Abigail See, Swarat Chaudhuri, George Holland, Alex Davies, Sebastian Nowozin, Push-meet Kohli, and Matej Balog. AlphaEvolve: A coding agent for scientific and algorithmic discovery, 2025. URL https://arxiv.org/abs/2506.13131 .Brenden K. Petersen, Mikel Landajuela, T. Nathan Mundhenk, Claudio P. Santiago, Soo K. Kim, and Joanne T. Kim. Deep symbolic regression: Recovering mathematical expressions from data via risk-seeking policy gradients, 2021. URL https://arxiv.org/abs/1912.04871 .Subham S. Sahoo, Christoph H. Lampert, and Georg Martius. Learning equations for extrapolation and control, 2018. URL https://arxiv.org/abs/1806.07259 .Michael Schmidt and Hod Lipson. Distilling free-form natural laws from experimental data. Science ,324(5923):81–85, 2009. Asankhaya Sharma. OpenEvolve: an open-source evolutionary coding agent, 2025. URL https: //github.com/algorithmicsuperintelligence/openevolve .Parshin Shojaee, Kazem Meidani, Shashank Gupta, Amir Barati Farimani, and Chandan K Reddy. LLM-SR: Scientific equation discovery via programming with large language models. arXiv preprint arXiv:2404.18400 , 2024. Parshin Shojaee, Ngoc-Hieu Nguyen, Kazem Meidani, Amir Barati Farimani, Khoa D Doan, and Chandan K Reddy. LLM-SRBench: A new benchmark for scientific equation discovery with large language models, 2025. URL https://arxiv.org/abs/2504.10415 .Silviu-Marian Udrescu and Max Tegmark. AI Feynman: A physics-inspired method for symbolic regression. Science Advances , 6(16):eaay2631, 2020. doi: 10.1126/sciadv.aay2631. URL 
+
+https://www.science.org/doi/abs/10.1126/sciadv.aay2631 .Marco Virgolin and Solon P. Pissis. Symbolic regression is NP-hard, 2022. URL https://arxiv. org/abs/2207.01018 .Boxiao Wang, Kai Li, Tianyi Liu, Chen Li, Junzhe Wang, Yifan Zhang, and Jian Cheng. LLM-based scientific equation discovery via physics-informed token-regularized policy optimization, 2026. URL https://arxiv.org/abs/2602.10576 .Runxiang Wang, Boxiao Wang, Kai Li, Yifan Zhang, and Jian Cheng. DRSR: LLM-based scientific equation discovery with dual reasoning from data and experience, 2025. URL https://arxiv. org/abs/2506.04282 .P. A. Whigham. Grammatically-based genetic programming. In Justinian P. Rosca, editor, Proceed-ings of the Workshop on Genetic Programming: From Theory to Real-World Applications , pages 33–41, Tahoe City, California, USA, 9 July 1995. URL http://divcom.otago.ac.nz/sirc/ Peterw/Publications/ml95.zip .Shijie Xia, Yuhan Sun, and Pengfei Liu. SR-Scientist: Scientific equation discovery with agentic AI, 2025. URL https://arxiv.org/abs/2510.11661 .13 A Code and Data Availability 
+
+We provide an anonymized repository containing the FunctionEvolve implementation, experiment configuration files, prompt templates, scripts for running the main experiments and baselines, and raw result files used to produce the tables and figures in this paper. The repository also includes environment setup instructions, benchmark data access and preparation instructions, and command-line examples for reproducing the main LLM-SRBench experiments and ablations: https:// github.com/Phoinikas03/FunctionEvolve .The existing benchmark and baseline assets used in our experiments are credited in the main text and are publicly available from their official repositories. LLM-SRBench and its associ-ated LLM-SR benchmark code are available under the MIT license at https://github.com/ deep-symbolic-mathematics/llm-srbench ; OpenEvolve is available under the Apache-2.0 license at https://github.com/algorithmicsuperintelligence/openevolve . The AI-Feynman benchmark is available from the official download page: https://space.mit.edu/ home/tegmark/aifeynman.html .The main LLM-SRBench evaluation uses the 129-task synthetic subset, covering four scientific domains: biology/population growth, chemistry/reaction kinetics, physics/oscillation, and materials science. For the AI-Feynman evaluation in Section 4.2, we use the full benchmark family consisting of the 100 original Feynman equations and the 20 bonus equations, for a total of 120 tasks. Symbolic matches are judged against the benchmark target expressions over the benchmark-specified variable domains. Thus, domain-restricted identities are counted as matches when the candidate and target agree throughout the stated domain; equivalence outside that domain is not required. 
+
+## B Resource Usage 
+
+The main LLM-SRBench comparisons, ablations, and rerun baselines use the same 129-task synthetic subset. For the baseline reruns, we follow the public LLM-SR and OpenEvolve implementations and keep their released search and evaluator hyperparameters unchanged, rather than tuning them for FunctionEvolve. Concretely, FunctionEvolve runs for at most 30 evolution iterations per task, OpenEvolve runs for 200 iterations per task, and LLM-SR runs with a 1000-sample budget per task. 
+
+B1 LLM Usage LLM call accounting. Both the Claude Opus 4.6 and GPT-5.2-medium experiments are run through external LLM APIs. Unless otherwise stated, the accounting below uses the complete full-setting 
+
+Claude Opus 4.6 logs over the 129 LLM-SRBench tasks. In each FunctionEvolve evolution iteration, the Selector chooses 5 candidate expressions as parents, and the LLM Mutator proposes 20 new candidate expressions for each selected parent. Search terminates early once 50 mature expressions are found, where maturity is defined by training NMSE falling below the task-specific threshold. Retries are used only when parsing or validation fails. For the baselines, LLM-SR generates one new candidate expression per sample, and OpenEvolve generates one new child program per iteration. Table B1 reports the theoretical maximum number of LLM calls; actual usage can differ slightly because of early stopping, retry, or logging behavior. Figure 10 and Table B2 summarize the observed call counts. The observed call counts show that FunctionEvolve uses substantially fewer LLM requests than the baseline search loops. Although its theoretical per-task budget is 182 calls, early stopping reduces the average to 66.86 calls per task. Most of these calls are spent on the LLM Mutator, which averages 53.80 calls per task, while the Selector averages 11.06 calls and the Generator is fixed at 2 calls. In contrast, LLM-SR stays close to its 1000-iteration budget, and OpenEvolve stays close to its 200-iteration budget. Thus, FunctionEvolve reaches its main results with about 15x fewer LLM calls than LLM-SR and about 3x fewer calls than OpenEvolve on average. Table B1: Theoretical maximum per-task LLM-call budget for FunctionEvolve and the LLM-driven baselines. 14 Figure 10: Component-wise distributions of LLM call counts over 129 complete task logs from the full Claude Opus 4.6 FunctionEvolve experiment. Vertical lines mark the mean, 95th percentile, and maximum per-task call count for each main search component.                  
+
+> Method/component Trigger Maximum call budget per task
+> FunctionEvolve
+> Generator Domain-prior extraction and seed ini-tialization 2 calls Selector Once per evolution round ≤30 calls LLM Mutator Once per selected parent ≤30 ×5 = 150 calls LLM-SR One child hypothesis per iteration 1000 calls OpenEvolve One child hypothesis per iteration 200 calls
+
+Table B2: LLM call usage on the 129-task LLM-SRBench subset under Claude Opus 4.6 .                                          
+
+> Method/component Total calls Mean/task Std./task Median P95 Max
+> FunctionEvolve 8625 66.86 64.88 30 180 182 Generator 258 2.00 0.00 222Selector 1427 11.06 11.08 530 30 LLM Mutator 6940 53.80 53.80 23 148 150 LLM-SR 129035 1000.27 3.07 1001 1001 1001 OpenEvolve 25994 201.50 2.11 200 205 206
+
+LLM token accounting. We follow the same accounting protocol as the LLM call accounting. Table B3 reports the aggregate prompt, completion, and total token counts, and Figure 11 shows the per-task token distribution for the three FunctionEvolve LLM components, separating input and output tokens. The token accounting shows a different tradeoff from the call accounting. FunctionEvolve uses fewer LLM calls than both LLM-SR and OpenEvolve, but each call is longer because the Selector observes the evolving tree summary and the LLM Mutator receives rich structural context. As a result, FunctionEvolve uses 340.36M total tokens, compared with 262.16M for LLM-SR and 244.79M for OpenEvolve. Within FunctionEvolve, token usage is highly concentrated in the Selector: it accounts for 290.44M tokens, or 85.33% of the FunctionEvolve total, while the LLM Mutator accounts for 49.07M tokens and the Generator for only 0.85M. Figure 11 shows that per-task token usage varies mainly in the Selector and LLM Mutator, while the Generator remains nearly constant across tasks because it is used only for initialization. Since prompt tokens are much cheaper than completion tokens in typical LLM pricing, we also report a price-weighted cost proxy in Table B3, computed as prompt tokens /5 plus completion tokens. Under this weighting, FunctionEvolve costs 85.56M 15 Figure 11: Per-task token-usage distributions for the three main FunctionEvolve LLM components under Claude Opus 4.6 . Each row is a histogram over the 129 tasks; each bin is split into input-token and output-token contributions. Vertical lines mark the mean, 95th percentile, and maximum total tokens per task for the corresponding component. output-token equivalents, lower than LLM-SR’s 143.45M and comparable to OpenEvolve’s 68.13M despite using more total tokens. Table B3: Observed token usage on the 129-task LLM-SRBench subset under Claude Opus 4.6 .Token counts and price-weighted costs are reported in millions. The weighted-cost column assumes one prompt token costs one fifth of one completion token.                             
+
+> Method/component Prompt tokens Completion tokens Total tokens Weighted cost
+> FunctionEvolve 318.50 21.86 340.36 85.56 Generator 0.50 0.35 0.85 0.45 Selector 288.86 1.58 290.44 59.35 LLM Mutator 29.14 19.93 49.07 25.76 LLM-SR 148.40 113.77 262.16 143.45 OpenEvolve 220.83 23.96 244.79 68.13
+
+B2 CPU Usage 
+
+All local computation was performed on modern multicore CPU servers with heterogeneous config-urations, each providing at least 64 logical CPUs. The local CPU workload consists primarily of candidate validation, program or expression execution, coefficient optimization, and post-fit screening. The existing logs do not record process-level user/system CPU time or instantaneous utilization; therefore, we report observed wall-clock time, evaluator parallelism, candidate-evaluation counts, and timeout behavior rather than exact CPU-hours. This hardware lower bound is important for interpreting wall-clock cost. The original LLM-SR loop generates one offspring from one parent at each iteration, and OpenEvolve similarly evaluates one child program per iteration. FunctionEvolve instead selects multiple parents and expands them into a batch of candidate expressions. Although the full setting evaluates 126.09 offspring per round on average, these evaluations are independent and can be distributed across modern multicore CPUs; consequently, wall-clock time does not increase in proportion to the number of candidates, while one-offspring baselines leave much of this parallelism unused. 16 Table B4: CPU-evaluation protocol for FunctionEvolve and the LLM-driven baselines. Retry counts refer to local evaluator retries, not LLM API retries.                
+
+> Method Offspring per round Evaluator Timeout Retries FunctionEvolve 100 LLM proposals + rule muta-tions (mean: 126.09) Structure-aware coefficient optimizer 120 s 0LLM-SR 1 candidate per sample BFGS optimizer 30 s 0OpenEvolve 1 child program per iteration BFGS optimizer 90 s 3**OpenEvolve retries evaluation exceptions up to three times; evaluator timeouts are returned directly as timeout results.
+
+Figure 12: Distribution of CPU-evaluated offspring counts per FunctionEvolve round over 129 complete full-run task logs. Counts include candidates that remain after structural deduplication and parameter-count filtering and therefore enter coefficient optimization. Vertical lines mark the mean, 95th percentile, and maximum. Table B4 summarizes the local CPU-evaluation protocol. In FunctionEvolve, the 100 LLM-proposed offspring in each round come from 5 LLM Mutator calls over 5 selected parents, and deterministic rule mutations add further non-LLM offspring. The resulting batch-size distribution is shown in Figure 12. Using the most conservative 64-logical-CPU reference, the mean batch size corresponds to roughly 
+
+126 .09 /64 = 1 .97 candidate-equivalent parallel waves, making the local wall-clock evaluation load comparable to the one-offspring baseline steps up to scheduling and optimizer-runtime variation. 
+
+B3 GPU Usage 
+
+GPU resources were used only for local LLM inference, not for symbolic candidate execution, coefficient optimization, or post-fit screening. The locally served Llama-3.1-8B , Qwen3.6-27B ,and DeepSeek-V4-Pro inference endpoints were deployed on 16 NVIDIA H20-3e data-center AI accelerators with CUDA 13.1 and 144 GiB HBM per card. These GPU resources should therefore be interpreted as serving hardware for the local LLM back-bones, which were served with vLLM 0.20.0 for inference. The CPU accounting in Appendix B2 remains the relevant local compute description for expression evaluation and fitting, while externally hosted LLMs such as Claude Opus 4.6 are represented only through the call and token accounting in Appendix B1. 
+
+## C Additional Details of FunctionEvolve 
+
+C1 Algorithmic Procedure Operational subroutines RULE ADDITION is a deterministic parent-level expansion. For a selected parent p, it attaches the elementary content library in Table 1 through p + g, p · g, division templates, and unary wraps. There is no blanket preprocessing stage applied to all seeds or all offspring; each generated candidate corresponds to one explicit mutation step. DEGENERACY CHECK is a deterministic state-management routine that decides whether an evaluated candidate remains active. It returns δg ∈ { OK , SIMPLIFIED , OVERFIT , TIMEOUT }. It marks deep expressions with abnormal fitted coefficients ( |cj | > 10 3) as OVERFIT , applies constant-induced 17 FunctionEvolve                                                                                                  
+
+> Input LLM modules πG, π S, π M, dataset D={(xi, y i)}ni=1 with task-level context T
+> Output Ranked symbolic expressions with fitted constants and scores
+> # Initialization by Generator
+> K ← πG.KNOWLEDGE (T, D)
+> S0←πG.SEEDS (T, D,K)
+> E ← ∅ ,H ← ∅
+> for f∈ S 0do
+> f, Θ←NORMALIZE (f)
+> s, ˆc←OPTIMIZER (f, Θ,D)
+> E ← E ∪ { (f, Θ,ˆc, s, root) }
+> end for # Evolution over the expression tree while stopping criterion is not met do
+> Z ← TREE SUMMARY (E,H)
+> P ← πS.SELECT PARENTS (Z, T )
+> C ← ∅
+> for p∈ P do
+> A ← RULE ADDITION (p)∪RULE DELETION (p)
+> L ← πM.MUTATE (p, AST (p),A,K,Z)
+> C ← C ∪ { (g, p ) : g∈NORMALIZE DEDUP (A ∪ L )}
+> end for for (g, p )∈ C do
+> g, Θg←NORMALIZE (g)
+> if VALID (g, Θg,E)then
+> sg,ˆcg←OPTIMIZER (g, Θg,D)
+> δg,˜g, ˜Θg←DEGENERACY CHECK (g, Θg,ˆcg)
+> E ← E ∪ { (g, Θg,ˆcg, s g,parent = p, δ g)}
+> if δg=SIMPLIFIED then C ← C ∪ { (˜ g, g )}end if end if end for
+> H ← H ∪ P ;MARK MATURE (E)
+> end while return TOP EXPRESSIONS (E)
+
+simplifications such as zeroing small multiplicative terms, snapping near-rational exponents, simpli-fying exp(0) and log(1) , reducing simple trigonometric degeneracies, and merging nearly identical nonlinear terms. If the simplification removes all feature variables or creates infinity, the candidate is marked OVERFIT ; if it yields a different valid expression, the original evaluated candidate is marked 
+
+SIMPLIFIED and the simplified expression is reinserted as its descendant for normal normalization, deduplication, and optimization. Timeouts are conservatively treated as OK .These flags directly control the search tree. Nodes with δg̸ = OK are kept only as evaluated audit records and are excluded from the Selector’s tree summary, so they cannot become future parents. MARK MATURE marks an active evaluated node as mature once its training NMSE is below τtrain .Mature nodes may still be selected for a small annealing budget; after that budget is exhausted, they are removed from the Selector context. The run stops early after the configured number of mature nodes has been collected. T OP EXPRESSIONS returns mature nodes, supplemented if needed by non-mature evaluated nodes, ordered by training NMSE. Test and OOD NMSE are logged for post-hoc reporting only and are not exposed to the Selector or Mutator during search. 
+
+Full-run configuration Table C1 lists the command-line configuration used by run.sh full ;unspecified arguments use the defaults in main.py .
+
+C2 Generator Procedure The Generator is used during the one-shot initialization stage. It has two LLM-facing subroutines. First, generate_domain_knowledge reads the task context and available variables, infers either the scientific domain or, for dimension-only tasks such as AI-Feynman entries without natural-language background, a dimension-aware structural prior. It returns formula priors and heuristic structural cues. These LLM-proposed priors are combined with a fixed catalog of generic 18 Table C1: run.sh full configuration for the full FunctionEvolve setting.                          
+
+> Parameter Meaning Value
+> –optimizer Constant-fitting backend Structure –max-steps Maximum evolutionary iterations per task 30
+> –n-seeds Number of Generator seed expressions 20
+> –candidate-num Number of parents selected per iteration 5
+> –selector-context-size Maximum number of active nodes shown to the Selector 200
+> –max-mature-nodes Early-stop target number of training-NMSE mature nodes 50
+> –overfit-min-depth Minimum SymPy AST depth for large-coefficient overfit screening 10
+> –equation-workers Active equation-level workers in full mode 10
+> –n-eval-workers Local child-evaluation workers when no shared global worker pool is used 16 (default)
+> –timeout Per-task wall-clock timeout shared by normalization, evaluation, degeneracy check, and optimizer 120 s (default)
+> –refine-output Final parent-selection sweep for mature/-supplement nodes disabled in full ; enabled only by refine_full –data-dir LLM-SRBench data directory optional; defaults to dataset loader path unless provided
+
+scientific laws or dimension/variable-name templates, so the downstream search receives both broad priors and task-specific or metadata-specific priors. Second, initialize_seeds uses the task context, variables, and extracted knowledge to generate the initial expression pool. The seed prompt asks for diverse structures spanning both compact mono-mial/product/ratio/composition forms and multi-term sums, with roughly half generic elementary-function structures and half knowledge-informed structures. Each response must be a JSON array of SymPy-parseable expressions together with the parameter placeholders used in the expression. The implementation validates the JSON schema, parses each expression with SymPy, checks that free symbols come only from dataset variables or listed c0 , c1 , . . . constants, and requires the listed constants to match those actually used. If LLM generation yields too few valid seeds, a fixed fallback seed list supplements the pool. Table C2: Generator configuration used by the Claude Opus 4.6 full run. Component-specific overrides are read from opus-4-6.yaml .             
+
+> Parameter Meaning Value
+> n_seeds Number of initial seed expressions 20
+> generator.temperature Default Generator decoding temperature 1.0
+> domain_knowledge.temperature Domain-knowledge extraction temperature 0.7
+> seed_generation.temperature Seed-expression generation temperature 0.9
+> describe_batch.temperature Batch-description temperature 0.5
+> max_tokens Maximum response length for Generator subrou-tines 128000
+
+Degenerated Generator For ablations, FunctionEvolve can replace the LLM Generator with a deterministic MockGenerator . In this mode, no LLM calls are made: domain knowledge is empty and initial expressions are drawn from a fixed fallback list. This isolates the contribution of LLM-based initialization and domain-prior extraction from the rest of the search pipeline. 
+
+Prompting interface The Generator uses separate prompt interfaces for domain knowledge ex-traction and seed expression initialization. The prompt boxes below show the interfaces used by these subroutines in abbreviated form. The domain knowledge prompt returns a JSON object, 19 while the seed prompt returns a JSON array. In both cases, the implementation requests JSON-only output, optionally attaches a guided JSON schema when the backend supports it, extracts a JSON block if one is present, and validates the parsed result before it is inserted into the search state. The same seed-generation interface is used across LLM-SRBench and AI-Feynman; for AI-Feynman tasks without natural-language background, only the domain-knowledge stage switches to a dimension/variable/range-aware variant, and the seed prompt labels the knowledge-informed half as dimension/variable-informed formulas. Generator domain-knowledge system prompt 
+
+You are a cross-disciplinary mathematical modeling expert, proficient in classical formulas and mathematical models from physics, chemistry, biology, engineering, economics, and other fields. 
+
+> ,→
+> ,→
+
+Given a background description of a symbolic regression task (including variable names and their physical meanings), please: ,→
+
+1. Analyze the most likely scientific domain/sub-domain for this task 2. List classical formula structures related to these variables in that domain ,→
+
+## Output Format Return only a JSON object: {"domain": "<domain name>", "analysis": "<1-2 sentence domain analysis>", "formulas": [...], "heuristics": [...]} ,→
+
+- domain: The scientific domain this task belongs to. - analysis: Briefly explain why it belongs to this domain and the possible physical relationships between variables. ,→
+
+- formulas: List 5~15 common formula structural patterns in this domain. Use actual variable names when possible, arrange from simple to complex, include domain-specific function forms, and write each entry as "Name: formula form (applicable scenario)". 
+
+> ,→
+> ,→
+> ,→
+
+- heuristics: List 5~10 domain-specific formula-structure heuristic features describing what physical behavior corresponds to what mathematical structure. 
+
+> ,→
+> ,→
+
+Constant notation convention: constant parameters must appear in multiplicative form and must not be placed in the denominator. Use `c * var ` rather than `var / c `.
+
+> ,→
+> ,→
+
+Generator domain-knowledge user prompt 
+
+{context} Available variables: {variables} Please analyze the scientific domain of this task and list common formula structures related to these variables in that domain. ,→
+
+Generator seed system prompt 
+
+You are a symbolic-regression expert. Generate diverse candidate closed-form formulas for the dataset described below, to seed an evolutionary search. ,→
+
+## Structural Prior The ground-truth formula may be EITHER: - a single compact monomial / product / ratio / composition, such as 
+
+`c0*x1*x2/x3 ` or `c0*exp(-c1*x**2) `; OR ,→
+
+- a sum of several terms, such as `c0*x + c1*x**2 + c2 `.Your seed set MUST cover both archetypes. 
+
+20 ## Building Blocks power `x**c `, trigonometric `sin `/`cos `, exponential `exp `, logarithmic 
+
+`log(1+x) `, `sqrt `, and, where physically meaningful, `Abs(x) ` and 
+
+`Max(x, 0) `.
+
+> ,→
+> ,→
+
+## Using {knowledge_basis} {domain_knowledge} ## Constant Notation Convention Constant parameters should always appear in multiplicative form, never alone in a denominator: write `c0*x ` and `c0/(x + c1) `, not `x/c0 `.,→
+
+## Task Background {context} ## Available Variables {variables} Please generate {n_seeds} candidate formulas with different structures at once, and return only a JSON array: ,→
+
+[{"expression":"...","params":["c0","c1"]}, ...] 
+
+Generator seed user prompt 
+
+Based on the above task metadata, generate {n_seeds} candidate formulas with diverse structures. ,→
+
+## Requirements Formulas must cover both of the following categories, arranged from simple to complex: ,→
+
+A. Basic function structures (approximately half): Include BOTH compact single-term shapes (monomial/product/ratio/composition) AND multi-term sums. Ensure at least one variant of each basic type: 
+
+> ,→
+> ,→
+
+- Monomial / product: c0*x1*x2, c0*x1*x2/x3 - Power-law / composition: c0*x**c1, c0*exp(-c1*x**2), c0/sqrt(1 -x**2/c1**2) ,→
+
+- Linear: c0*x + c1 - Quadratic/polynomial: c0*x**2 + c1*x + c2 - Non-integer power law: c0*x**c1 - Exponential: c0*exp(c1*x) - Logarithmic: c0*log(1 + c1*x) - Rational: c0*x/(x + c1) - Trigonometric: c0*sin(c1*x) - Hyperbolic: c0*tanh(c1*x + c2) - Square root: c0*sqrt(x**2 + c1) - Simple combinations of the above basic types B. Knowledge-informed formulas (approximately half): Based on the task background and the domain-knowledge or dimension/variable-name structures listed above, generate formula forms most likely to match the data. 
+
+> ,→
+> ,→
+
+Note: All constants in formulas must be represented as c0, c1, c2..., and variables must use names from the available variables list. ,→
+
+C3 Evolutionary Tree Search 1
+
+FunctionEvolve maintains the search state as an evolutionary tree rather than as an unstructured 2
+
+pool of candidate expressions. Each node in the tree corresponds to a symbolic expression together 3
+
+with its associated search state, while edges record parent-child relations induced by mutation. This 4
+
+representation preserves structural lineage throughout the search and allows the system to summarize 5
+
+the current search frontier for downstream selection. 6
+
+21 Table C3: Main information maintained for each node in the evolutionary tree. The last column indicates whether the field itself, or a derived summary of it, is visible to the Selector. 
+
+Field Type Description Selector visibility 
+
+id string Identifier for this node. Yes 
+
+formula string Canonical symbolic expression string. Yes 
+
+parent_id string / None Identifier of the parent node in the evolutionary tree. Yes 
+
+train_nmse float / None Training NMSE after constant fitting. Yes 
+
+test_nmse float / None Test NMSE maintained for evaluation. No 
+
+ood_test_nmse float / None Out-of-distribution NMSE maintained for evaluation. No 
+
+is_evaluated bool Whether the node has been evaluated after constant fitting. No 
+
+tree_depth integer Depth of the parsed expression tree; exposed as depth . Yes 
+
+operator_counts dictionary Counts of operator types in the expression tree; ex-posed to the Selector only through the aggregated field 
+
+n_operators .Yes 
+
+ast_features structured fea-tures Additional AST-derived structural features used inter-nally. No 
+
+param_names list of strings Names of tunable scalar parameters; exposed only through the aggregated field n_params .Yes 
+
+fitted_params list of floats Optimized parameter values; exposed to the Selector as a formatted string when available. Yes 
+
+sympy_expr symbolic object Parsed symbolic expression used for internal manipula-tion and analysis. No 
+
+At a high level, the tree stores two types of information: the current set of candidate expressions 7
+
+and the parent-child relations among them. Each node further maintains its own evaluation statistics, 8
+
+structural information, and parameter-related information. Table C3 summarizes the main information 9
+
+maintained for each node, together with whether it is visible to the Selector. 10 
+
+C4 Selector 11 
+
+Procedure At each search iteration, the Selector receives a compact summary of the current search 12 
+
+tree, together with the task context and the record of previously chosen parents. Based on this 13 
+
+information, it identifies a small set of parent expressions for further expansion and provides a brief 14 
+
+rationale for each choice. These selected parents are then forwarded to the subsequent mutation stage. 15 
+
+In this way, the Selector determines how the available search budget is allocated across competing 16 
+
+search directions. 17 
+
+Table C4: Selector configuration used in our experiments. 
+
+Parameter Meaning Value 
+
+candidate_num Number of parents selected per iteration 5
+
+selector_context_size Maximum number of summarized active nodes visible to the Selector in run.sh full 
+
+200 
+
+temperature Sampling temperature for Claude Opus 4.6 Selec-tor decoding 0.3 
+
+max_tokens Maximum response length for Selector decoding 128000 
+
+> 18
+
+Visible node information Although each tree node stores a full internal state, the Selector does 19 
+
+not access this state directly. Instead, it operates on the subset of per-node information marked as 20 
+
+visible in Table C3, together with the aggregated statistic n_children . In practice, this summary 21 
+
+provides information about predictive quality, structural complexity, local parameterization, and 22 
+
+search history, without exposing the full internal node state. Importantly, the summary contains only 23 
+
+training error. Test error and out-of-distribution error are maintained internally for evaluation, but are 24 
+
+never revealed to the Selector. This design prevents evaluation-time information from leaking into 25 
+
+the parent-selection process. 26 
+
+Degenerated Selector For ablations, FunctionEvolve supports two degenerated Selector variants. 27 
+
+The first variant replaces the LLM Selector with a deterministic MockSelector . This fallback ranks 28 
+
+22 evaluated nodes by numerical fitness and samples parents using a rank-based Boltzmann distribution, 29 
+
+so no LLM call is made during parent selection. The second variant keeps the LLM-based parent-30 
+
+selection interface but removes AST-derived structural fields from the prompt, including parameter 31 
+
+count, tree depth, and operator count. This preserves LLM decision making while hiding explicit 32 
+
+AST structure, isolating the contribution of structural visibility in the Selector. 33 
+
+Prompting interface The exact prompt templates used by the Selector are shown below. The system 34 
+
+prompt defines the selection criteria and the required JSON-only output format, while the user prompt 35 
+
+template supplies the current tree summary and the historical selection records. The implementation 36 
+
+also attaches the same guided JSON schema when the backend supports it. The Selector uses the 37 
+
+same main template across datasets; AI-Feynman tasks append the dimension/variable/range task 38 
+
+background and a short instruction to prioritize formula quality, structural diversity, variable-name 39 
+
+cues, and dimensional metadata. For the ablation without AST-derived metadata, we use a variant 40 
+
+with the corresponding fields removed. 41 
+
+Selector system prompt 
+
+You are a strategic planning expert for symbolic regression search. You will see a summary table of all generated formulas in the current evolution tree, each record contains: ,→
+
+- id : Numeric unique identifier of the formula - formula : Formula in SymPy format - train_nmse : Training set NMSE = MSE/Var(Y) (None means not yet evaluated; lower is better, <1 is better than mean prediction) ,→
+
+- n_children : Number of offspring this node has produced - n_params : Number of tunable parameters - depth : AST tree depth (nesting level; higher means deeper function nesting) ,→
+
+- n_operators : Total number of operator nodes in AST tree (higher means longer expression) ,→
+
+- fitted_params : Fitted parameter values (scientific notation) Your task is to select **{candidate_num} parent nodes** for the next evolution iteration. ,→
+
+The system will automatically perform AST-based structural mutations (delete subtrees, add new terms, etc.) on each parent to generate multiple candidate offspring. 
+
+> ,→
+> ,→
+
+Please consider the following when selecting: 1. **Structural simplicity first**: Do not simply select the nodes with the lowest NMSE. Prefer structurally simple nodes (fewer n_params, shallower depth, fewer n_operators) that already have relatively low NMSE (e.g., ~1e-3 order) - simple good formulas are more likely to produce meaningful improvements through mutation, while low NMSE in complex formulas often comes from overfitting 
+
+> ,→
+> ,→
+> ,→
+> ,→
+> ,→
+
+2. **Algebraic structure diversity**: The selected {candidate_num} parents should cover different algebraic structures as much as possible (e.g., polynomial, power law, exponential, trigonometric, rational, etc.), avoiding highly similar formulas. Diverse starting points enable more comprehensive exploration of the search space 
+
+> ,→
+> ,→
+> ,→
+> ,→
+
+3. **NMSE performance**: When structures are similar, prefer nodes with lower NMSE that still have room for improvement ,→
+
+4. **Number of offspring (n_children)**: If a node already has many offspring (e.g., n_children >= 5), it means that direction has been sufficiently explored; prefer nodes with fewer offspring 
+
+> ,→
+> ,→
+
+5. **Historical selection records**: Refer to the historical parent selection records. If certain formula structures have been repeatedly selected as parents in recent rounds but NMSE has not significantly decreased, they should be temporarily shelved in favor of other directions; if certain structures have not been explored recently, encourage selecting them as parents to expand the search space 
+
+> ,→
+> ,→
+> ,→
+> ,→
+> ,→
+
+23 Return only a JSON array with exactly {candidate_num} objects. Use the numeric `id ` shown in the node summary as `parent_id `; do not copy the formula string into `parent_id `.
+
+> ,→
+> ,→
+
+Required JSON schema: {"type": "array", "minItems": {candidate_num}, "maxItems": {candidate_num}, "items": { "type": "object", "required": ["parent_id", "rationale"], "additionalProperties": false, "properties": { "parent_id": {"type": "integer"}, "rationale": {"type": "string"} }}}Example item format (shape only; your actual output must contain exactly {candidate_num} objects): ,→
+
+[{"parent_id": 12, "rationale": "<selection rationale 1>"}, {"parent_id": 7, "rationale": "<selection rationale 2>"} ]- rationale: short final reason for selecting this parent. 
+
+Selector user prompt 
+
+Current evolution tree node summary ({n_nodes} nodes total, sorted by train_nmse ascending): ,→
+
+{tree_summary} ## Historical Parent Selection Records {selection_history} Please comprehensively analyze the above nodes and historical selection records, select {candidate_num} structurally diverse and concise parents, and output a JSON array. 
+
+> ,→
+> ,→
+
+C5 Mutator 42 
+
+AST representation Each symbolic expression is parsed into a SymPy abstract syntax tree (AST), 43 
+
+where internal nodes correspond to operators such as Add , Mul , Pow , exp , log , and sin , and leaf 44 
+
+nodes correspond to variables or scalar parameters. For each expression f , we extract depth-aware 45 
+
+structural features of the form 46 
+
+F(f ) = {Op (Depth : k) | Op is the operator type of a node and k is its depth }.
+
+For example, the expression c0xc1 + c2 exp( c3x) contains features such as Add(Depth:0) ,47 
+
+Mul(Depth:1) , Pow(Depth:2) , and exp(Depth:2) .48 
+
+Rule-based mutations The AST-rule Mutator applies deterministic edits directly on the expression 49 
+
+tree. We use two classes of rule-based mutations. The first class performs deletion and simplification 50 
+
+operations, including removing one term from an Add node, removing one non-numeric factor from 51 
+
+a Mul node, unwrapping elementary functions such as exp( g) 7 → g, log( g) 7 → g, and sin( g) 7 → g,52 
+
+and reducing powers such as xn 7 → x. These operations are recursively applied to valid subtrees and 53 
+
+remove candidates that do not contain feature variables. 54 
+
+24 The second class performs broad template-based addition. Given a parent expression f , the Mutator 55 
+
+first defines an elementary content library g using the families in Table 1. It then enumerates f + g56 
+
+additive terms, f · g multiplicative factors, division templates, and unary wraps ϕ(cf ) or f c. In 57 
+
+implementation, division uses the numerically stable subset f / (1 + gs) with gs instantiated from 58 
+
+linear, power, exponential, and logarithmic content, so the edit remains local to the parent and 59 
+
+avoids bare learned constants in denominators. We intentionally keep this rule library generic and 60 
+
+domain-agnostic to reduce dataset-specific overfitting, leaving richer structural refinements to the 61 
+
+LLM-guided channel. For multivariate problems, the pair rational and power-law coupling families 62 
+
+are instantiated over up to six ordered variable permutations, while single-variable families are 63 
+
+instantiated over each feature variable. 64 
+
+Normalization and deduplication To reduce redundant candidates, we define a parameter-name-65 
+
+invariant structural fingerprint κ(f ). The fingerprint is constructed by recursively replacing all 66 
+
+scalar parameter symbols in the AST with a shared placeholder, sorting the children of commutative 67 
+
+operators such as Add and Mul , and serializing the resulting normalized tree. Expressions with the 68 
+
+same fingerprint are treated as structurally equivalent up to parameter renaming. 69 
+
+After mutation, candidates are further normalized before evaluation. The normalization procedure 70 
+
+applies algebraic simplifications, merges redundant scalar parameters, completes elementary-function 71 
+
+parameterizations when necessary, and renumbers parameters in order of appearance as c0, c 1, c 2, . . . .72 
+
+Examples include rewriting exp( A + c) as c′ exp( A), rewriting exp( c log g) as gc, simplifying 73 
+
+log(exp( g)) to g, and merging products or sums of scalar parameters into a single parameter. 74 
+
+LLM-guided mutations In addition to rule-based mutations, the LLM Mutator proposes non-75 
+
+template structural refinements for each parent expression. Its input includes the task context, the 76 
+
+parent formula, an annotated AST representation, fitted parameter values, summaries of already 77 
+
+generated AST-rule mutations, extracted domain knowledge, and top-ranked historical expressions 78 
+
+by training NMSE. This information allows the LLM to avoid duplicating existing programmatic 79 
+
+mutations while proposing non-template local refinements informed by task context and domain 80 
+
+knowledge. 81 
+
+The LLM Mutator uses two edit categories. ADD preserves the full parent and attaches out-of-82 
+
+library or domain-semantic material as a term, factor, or outer wrap. SUBST uses the annotated 83 
+
+AST to replace a structurally mismatched subtree, so the full parent need not be preserved. In our 84 
+
+implementation, the LLM proposes 20 candidates per parent with no fixed category quota; the prompt 85 
+
+asks it to choose the mix according to the parent structure and fitted behavior. 86 
+
+Table C5: Categories of LLM-guided mutations.              
+
+> Category Description ADD Preserve fand attach non-template or domain-semantic content as f+g,f·g,or ϕ(f).SUBST Replace a structurally wrong AST subtree with a different expression; the re-placed subtree is not preserved.
+
+Degeneracy and overfitting screening After constant fitting, each evaluated candidate is screened 87 
+
+before it can re-enter the active search frontier. The screening is intentionally coefficient-aware: it uses 88 
+
+the fitted constants rather than only the symbolic skeleton. Large-coefficient overfitting is checked 89 
+
+only for sufficiently deep expressions, because shallow expressions often require large physical scale 90 
+
+factors. Specifically, if the SymPy AST depth of the candidate is at least overfit_min_depth , any 91 
+
+fitted coefficient with magnitude above 10 3 marks the node as OVERFIT . Independently of depth, the 92 
+
+Mutator applies the simplification rules described after Algorithm 1, including small-coefficient term 93 
+
+collapse, rational snapping of exponent parameters, elementary identities such as exp(0) and log(1) ,94 
+
+sinusoidal degeneracies, and merging of like terms. 95 
+
+The result is not only diagnostic. A node flagged as OVERFIT is excluded from all future parent-96 
+
+selection prompts. A node flagged as SIMPLIFIED is also excluded in its original form, while the 97 
+
+simplified expression is treated as a new candidate and evaluated through the same optimizer and 98 
+
+screening path. Thus the flag δg restricts search by preventing degenerate high-scoring expressions 99 
+
+25 from consuming Selector and mutation budget, while still preserving useful simplified descendants 100 
+
+when the fitted constants reveal a simpler active formula. 101 
+
+Configuration Table C6 summarizes the Mutator configuration used in our symbolic-regression 102 
+
+experiments. The deterministic channel is always enabled in the full FunctionEvolve setting, and the 103 
+
+LLM channel is configured by the per-model YAML files in FunctionEvolve .104 
+
+Table C6: Mutator configuration used in our experiments. 
+
+Parameter Meaning Value 
+
+mutation_channels Candidate-generation channels in the full set-ting AST deletion, AST addition, LLM mutation 
+
+llm_candidates_per_parent Number of LLM proposals requested for each selected parent 20 
+
+mutator_seen_topk Number of historical best expressions shown to the LLM Mutator 100 
+
+auto_mutation_summary Maximum number of rule-generated mutation descriptions shown to the LLM 20 
+
+max_params Maximum number of scalar parameters allowed in an evaluated candidate 10 
+
+overfit_min_depth Minimum SymPy AST depth for degeneracy and overfitting screening 10 
+
+temperature Sampling temperature for Claude Opus 4.6 Mu-tator decoding 0.7 
+
+reasoning_effort Reasoning setting for GPT-5.2 Mutator decod-ing medium 
+
+max_tokens Maximum response length for Mutator decod-ing 128000 
+
+Prompting interface The prompt templates used by the LLM Mutator in the full FunctionEvolve 105 
+
+setting are shown below. The system prompt defines the ADD/SUBST edit categories, domain-106 
+
+knowledge constraints, constant-notation convention, output schema, and allowed variables. The 107 
+
+user prompt supplies the selected parent, its annotated AST, fitted parameter values, summaries 108 
+
+of deterministic rule-generated candidates, and the current historical best formulas. This Mutator 109 
+
+template is shared across LLM-SRBench and AI-Feynman; AI-Feynman changes the task background 110 
+
+and the knowledge-section heading to dimension/variable-informed structures, but does not use a 111 
+
+separate mutation prompt. The no-AST ablation uses the same JSON output contract but switches to 112 
+
+a no-AST system prompt and removes the annotated AST block and AST-local substitution guidance 113 
+
+from the user prompt. 114 
+
+LLM Mutator system prompt 
+
+You are a symbolic-regression expert. Propose **{target_num}** diverse structural **edits** to the parent formula so that each resulting candidate may fit the data better. Every edit takes the parent expression and transforms it into one new candidate expression. 
+
+> ,→
+> ,→
+> ,→
+
+## Structural Prior Do **NOT** assume the ground-truth formula is a sum of terms. It may be a compact monomial / product / ratio / composition, or a sum of several mechanistic terms. Let the parent 's current fit guide you: if the parent already captures the trend, prefer small local refinements; if the parent looks structurally wrong, prefer a rewrite. Do **not** blindly keep growing the formula additively. 
+
+> ,→
+> ,→
+> ,→
+> ,→
+> ,→
+
+## Two Kinds of Edit 
+
+26 The deterministic engine already covers simple template grafts (linear / power / exp / log / sin terms and factors, rational fractions, safe saturating divides, and single wraps) and all prunes / deletions / simplifications. See "Auto-Generated Candidates (do not repeat)" in the task. Your job is the part it cannot template: 
+
+> ,→
+> ,→
+> ,→
+> ,→
+
+- **ADDITION** (keep all of `f`; attach new material): `f + g `, `f * g `, or wrap `f` inside an outer function. Propose **out-of-library / domain-semantic** content, such as Arrhenius terms, Lorentz factors, cross-variable couplings, or nested compositions. The whole parent is preserved. 
+
+> ,→
+> ,→
+> ,→
+> ,→
+
+- **SUBSTITUTION** (discard a subtree, replace it): use the annotated AST to locate a structurally wrong subtree and replace it with a different structure ( `t -> s `, where `t` no longer appears). Use this when the parent 's shape is mismatched, not when you merely want to add a correction. 
+
+> ,→
+> ,→
+> ,→
+> ,→
+
+Do **not** propose pure simplifications / deletions -- the program handles those. Weight your {target_num} proposals toward whichever kind the parent 's fit and structure call for; there is no fixed quota. 
+
+> ,→
+> ,→
+
+Elementary building blocks: power `x**c `, trigonometric `sin `/`cos `,exponential `exp `, logarithmic `log(1+x) `, and `sqrt `.,→
+
+## Non-Elementary Function Usage In addition to the elementary functions above, the following non-elementary functions are very common in scientific modeling and may be used as appropriate in either edit category: 
+
+> ,→
+> ,→
+
+- **Abs(x)** (absolute value): suitable for modulus operations in physical systems, amplitude extraction of sign-alternating variables in oscillatory systems. E.g. Abs(sin(x)) extracts oscillation amplitude, Abs(x)**c constructs V-shaped power law, log(1 + Abs(x)) symmetrizes logarithmic growth. Prefer Abs when a variable can be positive or negative but only the magnitude matters physically. 
+
+> ,→
+> ,→
+> ,→
+> ,→
+> ,→
+
+- **Max(x, 0)** (positive part / ReLU): suitable for describing piecewise behavior such as threshold activation, one-sided response. E.g. Max(x -c, 0) means response only above threshold c, Max(f(x), 0) truncates the negative part. Suitable for systems with critical points / activation thresholds. 
+
+> ,→
+> ,→
+> ,→
+> ,→
+
+- Syntax: use `Abs(x) ` and `Max(x, 0) ` in SymPy. ## Using Domain Knowledge Design structures informed by the knowledge below. You may introduce a structure through either kind of edit: as an **ADDITION** (a new factor / term / wrap that preserves `f`) or as a **SUBSTITUTION** (rewrite a mismatched subtree). When an edit is motivated by this knowledge, state the basis in the `mutation ` field. 
+
+> ,→
+> ,→
+> ,→
+> ,→
+
+{domain_knowledge} ## Constant Notation Convention Constant parameters should always appear in **multiplicative form**, never alone in a denominator: ,→
+
+- Correct: `c0 * x `, `c0 * sin(c1 * x) `, `c0 / (x + c1) `
+
+- Incorrect: `x / c0 `, `sin(x / c0) ` -- a constant in the denominator is numerically unstable. To express a "scaled variable", write `c * var `,not `var / c `.
+
+> ,→
+> ,→
+
+## Parameter Naming Any **newly introduced** constant must use a **fresh** `cK ` that does not appear in the parent formula or its fitted parameters; keep the names of parent constants you retain. 
+
+> ,→
+> ,→
+
+## Task Background {context} 
+
+27 ## Output Format (strict compliance required) Return only a JSON array of exactly {target_num} items. Example item format: [{{"expression": "<SymPy-parseable formula>", "params": ["c0", "c1"], "mutation": "ADD: <what changed and why>"}}] ,→
+
+- expression: use c0, c1, c2... for constants to be optimized; variables must come from the available variable list. ,→
+
+- params: list all parameter placeholders; if no constants, use []. - mutation: **must** start with `ADD: ` or `SUBST: `, followed by a brief rationale. When the edit is knowledge-driven, name the formula / law / structure it references. 
+
+> ,→
+> ,→
+
+- All functions must use SymPy/Python syntax: exp(x), log(x), sqrt(x), sin(x), cos(x), Abs(x), Max(x, 0). ,→
+
+## Available Variables {variables} 
+
+LLM Mutator user prompt 
+
+## Parent Formula {parent_formula} ## AST Structure {labeled_ast} ## Fitted Parameters {parent_fitted_params} ## Auto-Generated Candidates (do not repeat) {auto_mutations_summary} ## Historical Best Formulas (top {topk}) {top_exprs} Following the system instructions, propose {target_num} edits of two kinds: **ADDITION** (out-of-library / domain-semantic terms, factors, or wraps that preserve the parent) and **SUBSTITUTION** (rewrite a structurally wrong subtree located via the AST). Do not repeat the auto-generated template candidates above, and do not propose pure simplifications. There is no fixed quota -- weight the mix toward what the parent 's AST and current fit suggest. 
+
+> ,→
+> ,→
+> ,→
+> ,→
+> ,→
+> ,→
+
+Degenerated Mutator For ablations, FunctionEvolve supports three degenerated Mutator variants. 115 
+
+The first variant disables the LLM mutation channel and keeps only programmatic AST-rule mutations, 116 
+
+namely rule deletion and template-based rule addition. The second variant disables the programmatic 117 
+
+rule channel and keeps only LLM-generated ADD/SUBST edits, while still providing the LLM 118 
+
+with the standard parent-level structural context. The third variant also uses only LLM-generated 119 
+
+ADD/SUBST edits, but further removes the annotated AST representation and replaces AST-local 120 
+
+mutation guidance with parent-formula subexpression guidance in the LLM prompt. The second and 121 
+
+third variants do not carry a hidden blanket preprocessing stage. This set of variants separates the 122 
+
+effects of deterministic AST-rule expansion, LLM-guided local structural refinement, and explicit 123 
+
+AST visibility in the mutation interface. 124 
+
+C6 Optimizer 125 
+
+For each candidate expression, the structure-aware coefficient optimizer fits scalar coefficients under 126 
+
+a fixed symbolic skeleton and returns the numerical score used by the evolutionary search. Since 127 
+
+inaccurate coefficient fitting can make a correct skeleton appear unpromising, this appendix details 128 
+
+28 how FunctionEvolve uses expression structure during coefficient fitting, following the same sequence 129 
+
+as the main text. 130 
+
+Expression analysis before optimization Before numerical search, the optimizer parses the 131 
+
+candidate into a symbolic expression and extracts parameter-specific constraints from the expression 132 
+
+structure. Parameters that appear as exponents over feature-dependent bases are treated carefully, 133 
+
+especially when the base can be negative, because arbitrary real exponents can leave the real domain. 134 
+
+In this case the implementation evaluates such powers through a real-valued safe-power wrapper 135 
+
+and snaps the exponent to the nearest multiple of 1/3 when needed. The optimizer also identifies 136 
+
+parameters that should be positive or searched over a smaller range, such as coefficients inside 137 
+
+logarithms, exponentials, trigonometric arguments, or power exponents. The default full-parameter 138 
+
+box is [−100 , 100] ; rational-sensitive exponents use [−10 , 10] , positive parameters use [10 −6, 100] ,139 
+
+small parameters use [−5, 5] , and parameters that are both positive and small use [10 −6, 5] . In 140 
+
+addition, data-dependent bounds are computed for parameters controlling exponential growth and 141 
+
+feature offsets. For terms of the form exp( cig(x)) , the coefficient bound is chosen so that the absolute 142 
+
+exponential argument is at most 10 over the training data. For offset parameters in exp( g(x − ci)) or 143 
+
+(x − ci)p, the search interval is the observed feature range enlarged by max(0 .2 range( x), 10) .144 
+
+Variable projection The main optimization path first attempts to separate linear and nonlinear 145 
+
+parameters. Many candidates can be written as 146 
+
+f (x; c) = f (x; cL, cN ) = ψ(x; cN ) + 
+
+> m
+
+X
+
+> j=1
+
+cL,j ϕj (x; cN ),
+
+where cL are linear coefficients and cN are nonlinear parameters. For any fixed cN , the optimal 147 
+
+cL is obtained by ordinary least squares, so the explicit search only needs to explore the nonlinear 148 
+
+subspace: 149 
+
+min 
+
+> cN
+
+min 
+
+> cL
+
+y − ψ(X; cN ) −
+
+> m
+
+X
+
+> j=1
+
+cL,j ϕj (X; cN )
+
+> 22
+
+.
+
+In practice, the optimizer differentiates the expression with respect to candidate parameters, selects a 150 
+
+maximal subset that is jointly affine, and constructs the OLS basis functions from the corresponding 151 
+
+partial derivatives after setting the linear parameters to zero. The remaining fixed part ψ is sub-152 
+
+tracted from the target before solving the linear coefficients analytically at each nonlinear parameter 153 
+
+assignment. 154 
+
+Structured pre-search for difficult nonlinear parameters Some nonlinear parameters are par-155 
+
+ticularly difficult for continuous optimization. For compound power structures such as (x + c1)c2 ,156 
+
+where the power exponent is itself a single parameter and the base contains another parameter, the 157 
+
+optimizer first enumerates 158 
+
+{1, 2, 1/2, 3, 1/3, −1, 3/2, 4, 5, −1/2, −2, −3}
+
+for the exponent and runs variable projection on the remaining parameters under each fixed value. 159 
+
+This pre-search is executed before the main variable-projection stage and can consume up to 70% 160 
+
+of the variable-projection time budget. Inside variable projection, any remaining power-exponent 161 
+
+parameters are handled by a second candidate grid, 162 
+
+{1/3, 1/2, 1, 3/2, 2, 3, 4, 5, −1/3, −1/2, −1, −2, −3},
+
+using a sequential greedy strategy when multiple exponents are present. For each fixed exponent 163 
+
+value, the remaining nonlinear parameters are searched by trust-region least squares with five random 164 
+
+restarts, and linear coefficients are still solved by OLS. For center or offset parameters appearing 165 
+
+in Gaussian-like, exponential-shift, or shifted-power forms, the optimizer detects (x − ci)-style 166 
+
+subexpressions and scans 100 equally spaced candidate centers between the observed minimum 167 
+
+and maximum of the corresponding feature. These structured pre-search steps provide strong initial 168 
+
+basins before the general nonlinear search begins. 169 
+
+29 Global search over nonlinear parameters After variable projection, the remaining objective over 170 
+
+cN is lower-dimensional but can still be highly non-convex. FunctionEvolve therefore searches 171 
+
+the nonlinear subspace with trust-region least squares, CMA-ES, and differential evolution, each 172 
+
+using an independent initialization drawn from the same constraint-aware sampler. The variable-173 
+
+projection path uses the first 45% of the optimizer timeout, with the remaining time in that window 174 
+
+divided approximately equally across these three continuous search stages after structured pre-search. 175 
+
+This design focuses global exploration on the parameters that determine the nonlinear shape of the 176 
+
+expression, while avoiding unnecessary search over linear coefficients that can be solved exactly by 177 
+
+OLS. 178 
+
+The fallback condition is explicit in the implementation. Let σ2 
+
+> y
+
+= Var( ytrain ), with a unit fallback 179 
+
+for nearly constant targets, and define the early-success threshold τ = 10 −10 σ2 
+
+> y
+
+. Variable projection is 180 
+
+treated as unavailable when no valid decomposition is produced, for example because the expression 181 
+
+has no jointly affine coefficient, no basis functions can be constructed, or OLS/basis/fixed-part 182 
+
+evaluation becomes non-finite. It is treated as insufficient when the best MSE found so far remains 183 
+
+above τ . In either case, the optimizer falls back to full-parameter numerical search until 90% of the 184 
+
+total timeout, allocating the remaining fallback budget equally to full-parameter trust-region least 185 
+
+squares, CMA-ES, and differential evolution. Thus “insufficient” is not a hidden symbolic criterion; 186 
+
+it is the same MSE threshold used for early termination of the optimizer. 187 
+
+Local refinement The best solutions obtained from the preceding stages are then refined with 188 
+
+gradient-based local optimization, implemented as L-BFGS-B over the same parameter bounds. 189 
+
+This polishing stage uses the final 10% of the total timeout. If parent parameters are available from 190 
+
+the evolutionary tree, the optimizer also performs an additional warm-started L-BFGS-B pass after 191 
+
+copying the overlapping parent parameter prefix into the current skeleton. 192 
+
+Snap and refit Finally, the optimizer performs optional snapping for exponent-like or rational-193 
+
+sensitive parameters. Parameters that must remain stable over negative bases are snapped to nearby 194 
+
+rational values whose reduced denominators are odd. Power exponents are then tested against the 195 
+
+same nearby integer/rational grid used above, restricted to candidates within distance 3 of the current 196 
+
+value. Crucially, snapping is followed by an L-BFGS-B refit with the snapped exponent fixed; the 197 
+
+snapped form is accepted only if the refit preserves or improves the numerical objective. This makes 198 
+
+the final expression more stable and interpretable without sacrificing the fitness estimate used by the 199 
+
+search. 200 
+
+C7 Optimizer Benchmark Variants 201 
+
+The optimizer benchmark in Section 4.5 is built from ground-truth LLM-SRBench skeletons so 202 
+
+that failure can be attributed to coefficient fitting rather than structural search. Numeric constants 203 
+
+are replaced by symbolic parameters, parameter couplings are decoupled when possible, and the 204 
+
+resulting exact skeleton forms the original-expression group. We then create controlled variants that 205 
+
+preserve the same target function under a known parameter assignment. The composite zero-term 206 
+
+variants add zero-amplitude nonlinear terms, either ca sin(log(1 + cbx) + cc) or ca exp( cb cos( ccx)) 207 
+
+with ca = 0 , testing whether an optimizer can ignore unnecessary nonlinear additive structure. The 208 
+
+power-augmentation variants introduce identity power transformations by replacing a feature with 209 
+
+xca or raising the whole expression to ca, with ca = 1 , testing difficult exponent-like parameters. The 210 
+
+rational zero-term variants add terms of the form (cax + cb)/(ccx + cd), or the analogous numerator 211 
+
+using a second feature, with ca = cb = 0 and cc = cd = 1 . These four groups are the categories 212 
+
+reported in Figure 7. 213 
+
+## D Additional Experimental Results 214 
+
+D1 Complexity-aware Final Selection Details 215 
+
+The complexity-aware selectors in Section 4.7 are applied only after the evolutionary search has 216 
+
+finished. They do not choose parents, generate mutations, fit coefficients, or alter the trajectory. For 217 
+
+each task, we collect the full candidate trajectory, preserve the training-NMSE ranking used by the 218 
+
+search, and compute simple structural features for each expression. The selectors then choose a fixed 219 
+
+30 reporting shortlist from this already generated pool. Test and OOD NMSE are never used by these 220 
+
+selectors. 221 
+
+Let candidate i have training error ei, original training-NMSE rank ri, and structural features: tree 222 
+
+size si, operator count oi, fitted-parameter count pi, and special-function count hi. We use a weighted 223 
+
+complexity score 224 
+
+qi = si + wooi + wppi + whhi,
+
+where the weights are fixed before evaluation. Pareto selection performs non-dominated sorting over 225 
+
+(log ei, q i): a candidate is dominated if another candidate has no larger value in both objectives and 226 
+
+a strictly smaller value in at least one. Candidates from the first front are selected first, ordered by 227 
+
+(log ei, q i, r i); if the shortlist is not full, the selected front is removed and the next front is added in 228 
+
+the same way. 229 
+
+Occam selection first restricts the pool to candidates with near-best training fit. Specifically, if e⋆ is 230 
+
+the best finite training NMSE, the near-best set contains candidates satisfying 231 
+
+log 10 (max( ei, 10 −300 )) − log 10 (max( e⋆, 10 −300 )) ≤ ∆.
+
+Within this near-best set, candidates are ranked by (qi, log ei, r i), so simpler expressions are preferred 232 
+
+only after the training error is already close to the best observed fit. If the near-best set is too small to 233 
+
+fill the shortlist, the rule falls back to the full pool with the same complexity-first ordering. 234 
+
+MDL selection uses a single scalar objective, 235 
+
+mi = log ei + αp i + βs i + βooi,
+
+and returns the candidates with the smallest mi, with the original rank ri used only as a deterministic 236 
+
+tie-breaker. This rule approximates a description-length tradeoff: the log training loss rewards fit, 237 
+
+while parameter, tree-size, and operator penalties discourage unnecessarily complex formulas. All 238 
+
+three selectors therefore test whether post-hoc complexity-aware reporting can recover exact symbolic 239 
+
+forms that were generated by the search but ranked below numerically strong surrogate expressions 240 
+
+by training NMSE alone. 241 
+
+D2 Non-MatSci Failure Correlation Audit 242 
+
+Table D1 reports the pairwise linear-dependence audit for the twelve FunctionEvolve failure cases 243 
+
+(tasks with SA@50 = 0 ) outside the MatSci subset. Unlike MatSci, these domains do not exhibit 244 
+
+a dataset-wide input collapse, but several individual failures still contain highly correlated variable 245 
+
+pairs. Four of these tasks—CRK0, CRK6, CRK22, and PO17—do eventually recover a symbolically 246 
+
+correct expression, but only among candidates ranked beyond the top-50 budget (at ranks 693, 229, 247 
+
+313, and 224, respectively); they therefore count as SA@50 failures here even though they are not 248 
+
+failures under the full-trajectory exact-match audit. 249 
+
+Table D1: Pairwise linear dependence in non-MatSci failures.                           
+
+> Case Variable pair R2
+> BPG4 t, P 0.723803 BPG20 t, P 0.674447 CRK0 t, A 0.208901 CRK6 t, A 0.951128 CRK22 t, A 0.517110 CRK28 t, A 0.999234 CRK29 t, A 0.732757 PO0 x, t 0.001431 PO16 x, t 0.004350 PO17 x, v 0.028476 PO23 x, v 0.964941 PO43 x, v 0.368555
+> 250
+
+D3 Baseline NMSE Summary 251 
+
+Table D2 reports the selected non-FunctionEvolve baselines from the same CSV. Here symbolic 252 
+
+accuracy is reported as SA@50 (SA@1 ), Train/Test/OOD NMSE are split-wise medians over 129 253 
+
+tasks, and Test Acc τ counts tasks with test maximum relative error at most τ .254 
+
+The corresponding per-task records are available in the GitHub raw data files described above. 255 
+
+31 Table D2: Baseline NMSE summary for methods run with Claude Opus 4.6 . Symbolic accuracy is reported as SA@50 (SA@1 ). NMSE entries are medians over 129 tasks, and accuracy entries are raw test-set task counts.                                          
+
+> Method SA@50 (@1 )↑Train NMSE ↓Test NMSE ↓OOD NMSE ↓Test Acc 0.1↑Test Acc 0.01 ↑Test Acc 0.001 ↑
+> Direct Prompting 2 (1) 1.24e-3 1.36e-3 7.62e-2 18 74OpenEvolve [Sharma, 2025] 24 (5) 4.50e-6 4.30e-6 6.52e-3 27 81LLM-SR [Shojaee et al., 2024] 24 (11) 2.62e-6 9.80e-7 4.45e-4 40 13 5
+
+Table D3: Extended ablation results on 129 LLM-SRBench tasks. Entries report SA@50 (SA@1 ). 
+
+Method Model Chemistry Biology Physics Materials Science Total (36) (24) (44) (25) (129) Full GPT-5.2-medium 30 (13 ) 20 (15 ) 37 (36 ) 16 (5) 103 (69 )w/o All GPT-5.2-medium 12 (4) 18 (1) 2 (1) 3 (0) 35 (6) w/o Generator GPT-5.2-medium 21 (9) 20 (13) 29 (24) 9 (3) 79 (49) w/o Selector GPT-5.2-medium 20 ( 13 ) 17 (12) 14 (12) 11 ( 7) 62 (44) w/o LLM Mutator GPT-5.2-medium 12 (7) 14 (11) 12 (8) 7 (1) 45 (27) w/o AST Mutator GPT-5.2-medium 27 (12) 18 ( 14 ) 14 (13) 11 (3) 70 (42) w/o Structure-aware Optimizer GPT-5.2-medium 18 (3) 14 (7) 12 (5) 2 (1) 46 (16) Full Claude Opus 4.6 31 (16 ) 22 (16 ) 39 (34 ) 15 (6) 107 (72 )w/o All Claude Opus 4.6 12 (4) 16 (5) 4 (1) 2 (0) 34 (10) w/o Generator Claude Opus 4.6 27 (12) 22 (14) 33 (29) 9 (3) 91 (58) w/o Selector Claude Opus 4.6 25 (13) 20 (11) 20 (18) 9 (4) 74 (46) w/o LLM Mutator Claude Opus 4.6 11 (8) 15 (11) 13 (10) 7 (2) 46 (31) w/o AST Mutator Claude Opus 4.6 30 ( 16 ) 22 (11) 23 (20) 9 (3) 84 (50) w/o AST Structure Claude Opus 4.6 24 (14) 20 (15) 8 (7) 8 (4) 60 (40) w/o Structure-aware Optimizer Claude Opus 4.6 17 (6) 17 (4) 16 (12) 3 (0) 53 (22) 
+
+D4 Complete Ablation Results 256 
+
+Table D3 reports the domain-wise symbolic-accuracy ablation results for both GPT-5.2-medium and 257 
+
+Claude Opus 4.6 . Each entry gives SA@50 (SA@1 ). Tables D4 and D5 complement this view with 258 
+
+aggregate NMSE and numerical-accuracy summaries for the same ablation settings. The two model 259 
+
+backbones show the same qualitative pattern: removing the LLM Mutator or replacing the structure-260 
+
+aware coefficient optimizer with L-BFGS produces the largest SA@50 drops, while removing the 261 
+
+Generator, Selector, or AST Mutator also consistently reduces symbolic recovery. 262 
+
+NMSE and numerical accuracy summaries The following tables are computed from the NMSE 263 
+
+result records and report all ablation settings used in our experiments. The records contain five 264 
+
+aggregate rows per run ( BPG_all , CRK_all , MatSci_all , PO_all , and Total_all ); these tables 265 
+
+use only the 129 individual benchmark tasks. In each table, Method names the same setting used in 266 
+
+the ablation study, SA is the number of exact symbolic matches, Train/Test/OOD NMSE report the 267 
+
+median normalized mean squared error on the corresponding split, and Test Acc τ reports the number 268 
+
+of tasks with test maximum relative error at most τ . To keep the appendix compact, we omit the full 269 
+
+per-task detail tables; detailed raw data are available at https://anonymous.4open.science/r/ 270 
+
+FunctionEvolve .271 
+
+GPT-5.2-medium Table D4 reports the GPT-5.2-medium backbone. The w/o Generator , w/o 272 
+
+Selector , w/o LLM Mutator , w/o AST Mutator , w/o Structure-aware Optimizer , and w/o All rows 273 
+
+follow the ablation definitions in Section 4.3: they respectively remove LLM-based initialization, 274 
+
+LLM-based parent selection, LLM mutation proposals, AST-rule mutations, the structure-aware 275 
+
+coefficient optimizer, and the combined Generator/Selector/AST-Mutator/Structure-aware-Optimizer 276 
+
+stack. 277 
+
+Table D4: Complete ablation NMSE summary for GPT-5.2-medium . NMSE entries are medians over 129 tasks, and accuracy entries are raw test-set task counts. 32 278                                                                   
+
+> Method SA ↑Train NMSE ↓Test NMSE ↓OOD NMSE ↓Test Acc 0.1↑Test Acc 0.01 ↑Test Acc 0.001 ↑
+> Full 103 1.82e-13 2.08e-13 2.21e-10 111 88 73
+> w/o All 35 4.20e-7 4.27e-7 3.98e-4 49 19 11 w/o Generator 79 2.88e-13 2.42e-13 2.38e-9 107 81 71
+> w/o Selector 62 3.77e-13 4.63e-13 3.72e-9 99 72 63 w/o LLM Mutator 45 1.24e-12 1.16e-12 1.13e-8 91 67 55 w/o AST Mutator 70 3.77e-13 3.47e-13 4.14e-9 99 74 66 w/o Structure-aware Optimizer 46 4.01e-8 4.33e-8 1.80e-5 69 42 22
+> 279
+
+The corresponding per-task records are available in the GitHub raw data files described above. 280 
+
+Claude Opus 4.6 Table D5 uses the same column definitions for the Claude Opus 4.6 backbone. In 281 
+
+addition to the main ablation rows, w/o AST in LLM Interfaces keeps the LLM channels but removes 282 
+
+AST-heavy information from their prompts, and Rule-only + Structure-aware Optimizer disables 283 
+
+the Generator, the LLM Selector, and the LLM Mutator while retaining the default structure-aware 284 
+
+coefficient optimizer. 285 
+
+Table D5: Complete ablation NMSE summary for Claude Opus 4.6 . NMSE entries are medians over 129 tasks, and accuracy entries are raw test-set task counts.                                                                                 
+
+> 286
+> Method SA ↑Train NMSE ↓Test NMSE ↓OOD NMSE ↓Test Acc 0.1↑Test Acc 0.01 ↑Test Acc 0.001 ↑
+> Full 107 1.34e-13 1.38e-13 1.78e-10 113 94 78
+> w/o All 34 2.31e-7 1.93e-7 2.15e-4 53 27 15 w/o Generator 91 2.43e-13 2.06e-13 4.23e-10 110 87 75 w/o Selector 74 4.14e-13 4.65e-13 4.71e-9 100 78 63 w/o LLM Mutator 46 1.04e-12 1.01e-12 1.09e-8 89 67 55 w/o AST Mutator 84 2.43e-13 2.06e-13 2.52e-9 108 83 71 w/o AST Structure 60 4.25e-13 5.09e-13 6.73e-9 96 71 59 w/o Structure-aware Optimizer 53 5.37e-9 8.19e-9 5.68e-6 66 43 27 Rule-only + Structure-aware Optimizer 29 1.42e-10 1.47e-10 3.65e-7 78 53 39
+> 287
+
+The corresponding per-task records are available in the GitHub raw data files described above. 288 
+
+D5 Numerical Accuracy at Stricter Tolerances 289 
+
+We distinguish two tolerance-based task-count metrics. Our Acc τ follows the convention used in 290 
+
+LLM-SRBench reporting and in the main text: a task is counted only when the top-1 prediction has 291 
+
+relative error at most τ at every evaluation point, equivalently when its maximum relative error is at 292 
+
+most τ . For a single test task, this indicator can be written as 293 
+
+Acc τ = 1
+
+
+
+max 
+
+> 1≤i≤Ntest
+
+ˆyi − yi
+
+yi
+
+≤ τ
+
+
+
+.
+
+A relaxed variant, denoted 95%Acc τ , counts a task when at least 95% of its evaluation points have 294 
+
+relative error at most τ .295 
+
+SR-Scientist [Xia et al., 2025] reports this relaxed 95%Acc τ metric for τ = 0 .01 and τ = 0 .001 ,296 
+
+which is not directly aligned with the reporting convention in LLM-SRBench-style papers or with 297 
+
+our main-text Acc τ numbers. Table D6 therefore reports test-set entries as Acc τ (95%Acc τ ): values 298 
+
+cited from SR-Scientist appear only in parentheses, while results from our executable runs report 299 
+
+strict all-point counts with the corresponding relaxed 95% counts in parentheses. Table D7 uses the 300 
+
+same convention for OOD results. 301 
+
+D6 Reliability Audit for LLM-as-a-Judge Symbolic Accuracy 302 
+
+Symbolic accuracy at k counts a task as successful if any of the top-k candidates is mathematically 303 
+
+equivalent to the ground-truth expression. In this equivalence check, ground-truth constants are fixed, 304 
+
+candidate constants are free, and physics-oscillator (PO) variables are allowed to take negative values, 305 
+
+so expressions such as v**c are not treated as equivalent to Abs(v)**c . To reduce dependence on 306 
+
+a single model judgment, each verification case is judged independently by GPT-5.2 and Claude 307 
+
+Opus 4.6 . If their valid verdicts disagree, or if either run returns verify_error , the case is manually 308 
+
+adjudicated. 309 
+
+We audit 500 verification cases sampled randomly. For Opus 4.6 , repeated rows caused by retries are 310 
+
+deduplicated by sample_id ; when available, the final non-verify_error result is used. Table D8 311 
+
+33 Table D6: Test-set numerical accuracy at stricter tolerances on the 129-task synthetic subset of LLM-SRBench. Entries report raw task counts as Acc τ (95%Acc τ ), with τ = 0 .01 or 0.001 ;parenthesized-only entries are the relaxed 95%Acc τ results cited from Xia et al. [2025]. Best all-point Acc τ values are shown in bold, while the ground-truth row is a reference row. Entries marked with * are converted from percentages reported in Xia et al. [2025] using the corresponding domain sizes, with counts rounded independently. 
+
+Chemistry (36) Biology (24) Physics (44) Materials Science (25) Total (129) 
+
+Model Acc 0.01 ↑ Acc 0.001 ↑ Acc 0.01 ↑ Acc 0.001 ↑ Acc 0.01 ↑ Acc 0.001 ↑ Acc 0.01 ↑ Acc 0.001 ↑ Acc 0.01 ↑ Acc 0.001 ↑
+
+Direct Prompting Claude Opus 4.6 0 (1) 0 (0) 2 (4) 1 (2) 2 (3) 2 (2) 3 (10) 1 (5) 7 (18) 4 (9) 
+
+OpenEvolve [Sharma, 2025] Claude Opus 4.6 5 (8) 0 (2) 1 (2) 0 (0) 0 (9) 0 (2) 2 (11) 1 (1) 8 (30) 1 (5) 
+
+LLM-SR [Shojaee et al., 2024] Claude Opus 4.6 5 (9) 1 (1) 1 (6) 1 (1) 0 (7) 0 (2) 7 (19) 3 (10) 13 (41) 5 (14) 
+
+SR-Scientist [Xia et al., 2025] Qwen3-Coder-480B-A35B-Instruct * (15) (2) (12) (6) (15) (6) (22) (17) (63) (32) GLM-4.5-Air * (16) (4) (10) (4) (16) (7) (20) (18) (62) (32) 
+
+GPT-OSS-120B * (29) (23) (16) (10) (18) (15) (19) (15) (82) (64) 
+
+GPT-OSS-20B * (18) (8) (8) (5) (13) (7) (16) (10) (55) (30) 
+
+Qwen3-Coder-30B-A3B-Instruct * (8) (2) (5) (2) (8) (4) (20) (13) (42) (21) 
+
+Qwen3-Coder-30B-A3B-Instruct + RL * (13) (3) (7) (3) (11) (5) (21) (16) (53) (27) 
+
+FunctionEvolve (Ours) GPT-5.2-medium 26 (33) 22 (32) 14 (23) 9 (23) 28 (36) 24 (32) 20 (25) 18 (24) 88 (117) 73 (111) 
+
+Claude Opus 4.6 27 (35) 23 (34) 15 (23) 9 (23) 31 (34) 27 (34) 21 (25) 19 (22) 94 (117) 78 (113) 
+
+Reference: GT equations 27 (35) 24 (35) 14 (23) 10 (23) 36 (39) 33 (39) 25 (25) 25 (25) 102 (122) 92 (122) 
+
+Table D7: OOD numerical accuracy at stricter tolerances on the 129-task synthetic subset of LLM-SRBench. Entries report raw task counts as Acc τ (95%Acc τ ), with τ = 0 .01 or 0.001 ; best all-point 
+
+Acc τ values are shown in bold. 
+
+Chemistry (36) Biology (24) Physics (44) Materials Science (25) Total (129) 
+
+Model Acc 0.01 ↑ Acc 0.001 ↑ Acc 0.01 ↑ Acc 0.001 ↑ Acc 0.01 ↑ Acc 0.001 ↑ Acc 0.01 ↑ Acc 0.001 ↑ Acc 0.01 ↑ Acc 0.001 ↑
+
+Direct Prompting Claude Opus 4.6 2 (2) 0 (1) 3 (4) 1 (2) 3 (3) 2 (2) 13 (13) 11 (11) 21 (22) 14 (16) 
+
+OpenEvolve [Sharma, 2025] Claude Opus 4.6 6 (7) 1 (1) 3 (3) 1 (2) 2 (9) 0 (2) 19 (21) 14 (14) 30 (40) 16 (19) 
+
+LLM-SR [Shojaee et al., 2024] Claude Opus 4.6 7 (8) 2 (2) 4 (6) 1 (2) 2 (7) 0 (2) 20 (20) 17 (17) 33 (41) 20 (23) 
+
+FunctionEvolve (Ours) GPT-5.2-medium 31 (34) 26 (31) 16 (23) 10 (20) 29 (35) 21 (30) 25 (25) 25 (25) 101 (117) 82 (106) 
+
+Claude Opus 4.6 32 (35) 29 (34) 16 (23) 10 (21) 32 (34) 24 (33) 25 (25) 25 (25) 105 (117) 88 (113) 
+
+summarizes agreement. The judges agree on 476 valid match /no_match decisions. There are 21 312 
+
+valid verdict disagreements and three cases involving verify_error , so only 24/500 cases require 313 
+
+manual intervention. Table D9 reports the resulting judge accuracies after manual adjudication, with 314 
+
+and without counting the single unscorable case in the denominator. 315 
+
+Table D8: Reliability audit of the LLM-as-a-judge protocol for symbolic accuracy. 
+
+Category Count Rate Total audited samples 500 100.0% Same valid verdict 476 95.2% Valid verdict disagreement 21 4.2% Cases involving verify_error 3 0.6% Manual intervention cases 24 4.8% 
+
+316 
+
+Table D9: Judge accuracy after manual adjudication. The single unscorable case had no extractable final candidate formulas. 34 Judge Correct / 499 Accuracy / 499 Correct / 500 Strict accuracy / 500 
+
+GPT-5.2 482 96.59% 482 96.40% 
+
+Claude Opus 4.6 493 98.80% 493 98.60% 
+
+> 317
+
+Table D10 lists the 24 cases requiring manual intervention. Among the 23 scorable cases in this set, 318 
+
+GPT-5.2 is correct on 6 and Opus 4.6 is correct on 17. The only unscorable case is sample_id=294 ,319 
+
+where both judges fail because the log contains no extractable final candidate formulas. 320 
+
+Table D10: Manual adjudication for cases where the two judges disagreed or at least one returned 
+
+verify_error .
+
+ID Case GPT-5.2 Opus 4.6 Final Main reason 002 BPG5 no_match match match Rational common-denominator rewriting makes a can-didate equivalent. 038 BPG1 no_match match match Candidate has both P exp( ct ) and a rational term that can match after rewriting. 044 BPG23 match no_match match Candidate can represent the polynomial plus 
+
+P exp( cP ) structure. 080 PO20 no_match match no_match PO domain requires Abs(v) ; v**c*x is not equivalent. 082 PO34 no_match match no_match Same PO-domain absolute-value issue. 112 CRK1 match no_match match Candidate can reduce to polynomial terms plus a phase-shifted log-trigonometric term. 145 MatSci1 match no_match no_match Required Arrhenius term exp( −c/T ) is absent. 169 CRK29 no_match match match Denominator form can represent the rational term and the linear/exponential terms. 173 MatSci14 no_match match match Candidate can represent the required linear-in-T and 
+
+ϵp cross terms. 231 CRK19 match no_match no_match Requires sin(log( A + 1)) ; candidates have no-phase cosine or wrong log arguments. 257 CRK22 no_match match match Common-denominator rewriting matches the ground truth. 294 MatSci12 verify_error verify_error unscorable No final formulas or code snippets were extractable from the log. 304 BPG3 no_match match match Candidate has the needed P 3, P 2, and P exp( cP )
+
+basis functions. 315 MatSci8 match no_match match Candidate can represent T ϵ p, T ϵ , ϵp, and ϵ.362 CRK3 no_match match match Candidate has A exp( ct ), A2, and a phase-shifted 
+
+sin(log( A + 1)) term. 363 MatSci2 verify_error no_match no_match Candidates lack the required combination of ϵ3,
+
+T exp( −ϵ), and exp( −ϵ).368 MatSci18 verify_error match match Candidate has ϵ2 + ϵ(T + c)2.371 PO12 no_match match no_match sqrt(v**c) is not a valid substitute for 
+
+Abs(v)**(1/3) on the PO domain. 374 CRK22 no_match match match Common-denominator rewriting matches the ground truth. 383 MatSci28 no_match match match Candidate contains the required T ϵ , T log( ϵ + 1) ,and ϵ2 terms. 386 PO22 no_match match match Candidate can express exp( −| x|) via 
+
+exp( c/ √x−2).391 BPG11 no_match match match Candidate can represent P , P 2, P 1/3, and 
+
+P exp( ct ).415 BPG16 no_match match match Candidate can reduce to P 3 + P 2 + P 1/3.439 BPG1 no_match match match Candidate can match with P exp( ct ) plus a reciprocal rational term. 
+
+This audit does not assume that LLM judges are infallible. Instead, it shows that single-judge errors 321 
+
+are measurable and rare under our prompt, and that the reported SA@ k values use a two-judge-plus-322 
+
+manual-adjudication protocol rather than unchecked single-model judgments. The main GPT-5.2 error 323 
+
+mode is rejecting valid rational-function equivalences that become clear after common-denominator 324 
+
+rewriting. The main Opus 4.6 error mode is over-relaxing domain constraints, especially treating 325 
+
+v**c as if it could stand for Abs(v)**c in PO tasks where negative velocities are allowed. 326 
+
+35
