@@ -1,0 +1,1704 @@
+Title: Mult-DPO: Multinomial Direct Preference Optimization for Recommender Systems
+
+URL Source: https://arxiv.org/pdf/2606.10078v1
+
+Published Time: Wed, 10 Jun 2026 00:09:56 GMT
+
+Number of Pages: 20
+
+Markdown Content:
+# Mult-DPO: Multinomial Direct Preference Optimization for Recommender Systems 
+
+Yaochen Zhu 1 Harald Steck 2 James McInerney 2 Aditya Sinha 2
+
+Yinhan He 1 Nathan Kallus 2,3 Jundong Li 11University of Virginia 2Netflix 3Cornell University 
+
+{uqp4qh, nee7ne, jundong}@virginia.edu {hsteck, jmcinerney, adityasinha, nkallus}@netflix.com 
+
+## Abstract 
+
+Direct preference optimization (DPO) is a simple and effective alignment strategy for large language models (LLMs) based on pairwise preferences. In recommender systems, however, user feedback is rarely pairwise. For a given context, e.g., a user, a session, or a conversation, we typically observe set-wise preferences with 
+
+multiple positive items, where every positive item should outrank every unobserved or explicitly negative item, with no prescribed order among the positives or the negatives themselves. A natural generalization is to use the Plackett–Luce (PL) reward model, which extends the Bradley–Terry reward model underlying vanilla DPO from pairwise preferences to full rankings of candidates. However, we show that adapting the PL model to set-wise preferences requires marginalizing over all positive orderings, where the resulting expression is combinatorial in complexity. To address this fundamental challenge, we propose Mult-DPO , a novel DPO objective with a tractable multinomial surrogate likelihood over set-wise preference events for the user-preference alignment of LLM-based recommender systems. The multinomial construction is not itself a ranking distribution, but it is defined on the same reward-induced weight space and admits a closed-form DPO-style objective, enabling direct alignment of LLMs with multiple candidates through a classification-style objective. In addition, we prove that the multinomial DPO loss is a tractable upper bound on the marginalized PL DPO loss when optimizing against the set-wise preference data. We further characterize the tightness of this bound in terms of the relative total weight of positives versus negatives, which provides insights into tightening the bound with richer or harder negatives. Finally, we extend Mult-DPO to the alignment of LLMs with multiple preference levels. Code is available at https://github.com/yaochenzhu/Mult_DPO .
+
+## 1 Introduction 
+
+Large language models (LLMs) have achieved remarkable success through large-scale pretraining. To further align these models with human preferences, reinforcement learning from human feedback (RLHF) [Christiano et al., 2017, Ouyang et al., 2022] emerged as a popular framework: It first trains a reward model from pairwise human preferences, and then optimizes the LLM policy via reinforcement learning (RL). Recently, direct preference optimization (DPO) [Rafailov et al., 2023] offers a simpler alternative by leveraging a closed-form connection between the optimal policy and the reward function in RLHF, eliminating the RL stage and reducing the alignment to a classification-style objective on preference data. Owing to its conceptual simplicity and strong empirical performance, DPO has been widely adopted in LLM alignment tasks such as summarization [Liu et al., 2023], code generation [Weyssow et al., 2026], and mathematical reasoning [Pang et al., 2024]. 
+
+> Preprint.
+> arXiv:2606.10078v1 [cs.IR] 8 Jun 2026
+
+As LLMs increasingly serve as the backbone of recommender systems (RSs) [Bao et al., 2023, Liao et al., 2024, He et al., 2023], it is natural to ask whether DPO can play the same role in aligning LLM-based RSs with user preferences. The answer, however, is complicated by a fundamental mismatch between the preference data structure assumed by vanilla DPO and that observed in recommendation tasks. Specifically, DPO assumes pairwise preferences between two candidates per context, which suits the setting of long responses for QA-style tasks where candidates are difficult to generate [Bai et al., 2022, Stiennon et al., 2020]. In contrast, user feedback in RSs is rarely pairwise. For a given context in RSs, e.g., an interaction history or a conversation between user and RS, we typically observe multiple positive items (e.g., items liked, clicked by the user) and negative items (e.g., items unobserved or explicitly rejected) [Rendle et al., 2009, Liang et al., 2018]. From the perspective of preference alignment, every positive should be preferred by the LLM over every negative, yet no order should be enforced among the positives or among the negatives themselves. Applying vanilla DPO to set-wise preferences therefore requires enumerating all positive-negative combinations, which is computationally expensive and discards the joint rank structure of the preference data. Recently, several works have adapted DPO to preference alignment of LLMs with multiple candidates, which can be categorized into two technical routes. One route is to generalize the Bradley-Terry (BT) [Bradley and Terry, 1952] reward model underlying vanilla DPO from pairwise preferences to its listwise counterpart, the Plackett-Luce (PL) model [Plackett, 1975, Luce, 1959], including methods such as PRO [Song et al., 2024], KPO [Cai et al., 2025], etc. However, when applied to set-wise preference, the PL likelihood must be marginalized over all positive orderings consistent with the observation (where the orderings of the negatives can be directly summed-out), which is combinatorially expensive. Another route sidesteps this intractability by restricting the supervision to one single positive per context paired with multiple negatives. For example, DMPO [Bai et al., 2024] contrasts the positive against the arithmetic mean of the negative log-ratios within the BT model, whereas S-DPO [Chen et al., 2024] shows that, under the single-positive restriction, the marginalized PL likelihood collapses to a closed-form softmax DPO loss that contrasts the positive jointly against all sampled negatives. Nevertheless, neither route faithfully retains the joint set-wise structure of the feedback, leaving alignment with multi-positive preferences a fundamentally unresolved challenge. To address the challenge, we propose Mult-DPO , a novel DPO-style objective for aligning LLM-based RSs with set-wise preferences. We first introduce a multinomial surrogate event model as a tractable lower-bound surrogate for the marginalized PL likelihood over set-wise preferences between the positive and negative candidate sets. Although this surrogate is not a ranking model, it is defined on the same reward-induced weights as BT and PL and yields a closed-form DPO-style objective through the standard RLHF policy-ratio reparameterization. Theoretically, we prove that minimizing the multinomial DPO loss optimizes a tractable upper bound on the otherwise intractable marginalized PL DPO loss. Furthermore, we characterize the tightness of this bound in closed form in terms of the relative total weights (i.e., exponentiated rewards) of positives versus negatives, and show that the bound becomes tighter when richer or harder negatives are selected. Finally, we extend Mult-DPO to alignment with multiple preference levels when fine-grained user preference data is available (e.g., explicit ratings) via a sequential multinomial (SMN) surrogate, and show that all theoretical properties of Mult-DPO from the two-set case carry over to this generalization. On both general recommendation and conversational recommendation benchmarks, we demonstrate that Mult-DPO and its multi-level extension consistently outperform various DPO-based baselines. 
+
+## 2 Preliminaries 
+
+2.1 Problem Formulation 
+
+In this paper, we aim to tackle the fundamental challenge of aligning LLM-based RSs with user preferences over multiple candidates. Specifically, let x denote the recommendation context, which may include a user profile, an interaction history, or a conversation, and let C denote the item catalog from which recommendations should be generated, where each item e is rendered as a token sequence 
+
+y(e) = ( y1, . . . , y me ). For each context x in the preference dataset D, we observe user preference over candidate items in the form of (x, Ep, Ed), where Ep = {e1, . . . , e k} and Ed = {ek+1 , . . . , e K }
+
+denote disjoint positive and negative item sets associated with x, respectively. Here, Ep contains items receiving positive feedback (e.g., liked or clicked), whereas Ed contains uninteracted or rejected items. We use E = Ep ∪ E d ⊂ C to denote the full candidate set, with k = |E p| and K − k = |E d|
+
+for the set-wise contrastive setting studied below. We note that the user preference tuple implies a 2set-wise ranking constraint that every positive item in Ep should outrank every negative item in Ed:
+
+Ωx := {e ≻ e′ | e ∈ E p, e ′ ∈ E d}, (1) but no order is implied among the positives or the negatives themselves. Let πθ (e | x) denote an LLM-based RS policy that assigns a generation probability to each candidate item e given the context 
+
+x. This paper aims to align πθ with the set-wise preference structure in Ωx that fully leverages the joint multi-positive and negative structure while remaining computationally efficient, such that the items in catalog C can be effectively ranked for recommendation at inference time. 
+
+2.2 Theoretical Analysis: RLHF, DPO and Marginalized Plackett-Luce Extension 
+
+In this section, we first review reinforcement learning from human feedback and direct preference optimization, and discuss the naive extension of DPO to set-wise preferences with a marginalized Plackett-Luce likelihood, which forms the foundation of Mult-DPO introduced in Section 3. 
+
+2.2.1 Reinforcement Learning from Human Feedback (RLHF). RLHF aligns an LLM-based policy πθ (e | x) with user preferences by optimizing it against a reward model derived from human preferences. Specifically, for each context-item pair (x, e ), we assume a latent reward r(x, e ) ∈ R
+
+indicating the utility of recommending item e under context x. We define the associated weight as 
+
+w(e | x) := exp( r(x, e )) > 0 for the convenience of linking r(x, e ) to probabilistic distributions. The Bradley-Terry Preference Model (BT) [Bradley and Terry, 1952] assumes that, given two candidate items ep and ed for context x with ep preferred over ed, the probability of observing such pair-wise preference can be formulated with the difference between their latent rewards as follows: 
+
+P (ep ≻ ed | x) = σ r(x, e p) − r(x, e d) = w(ep | x)
+
+w(ep | x) + w(ed | x) , (2) where σ(·) is the sigmoid function. The reward model is then estimated by minimizing the negative log-likelihood of the observed comparisons induced by Eq. (2). Given a fixed reference policy 
+
+πref (e | x) and learned reward model r(x, e ), the RLHF objective can be formulated as follows: 
+
+max  
+
+> π(·| x)
+
+Ee∼π(·| x)[r(x, e )] − β KL( π(· | x) ∥ πref (· | x)) , (3) where β > 0 is an important hyperparameter that controls the regularization strength. 
+
+2.2.2 Direct Preference Optimization (DPO). DPO [Rafailov et al., 2023] avoids explicit reward modeling by observing that the RLHF objective in Eq. (3) admits a closed-form solution as follows: 
+
+r(x, e ) = β log π∗(e | x)
+
+πref (e | x) + β log Z(x), (4) where Z(x) is an intractable partition function. Observing that the BT likelihood in Eq. (2) depends only on reward differences, Z(x) cancels out after substituting Eq. (4) . Replacing π∗ with a trainable policy πθ yields the DPO objective as follows: 
+
+LDPO (x, e p, e d) = − log σ
+
+
+
+β log πθ (ep | x)
+
+πref (ep | x) − β log πθ (ed | x)
+
+πref (ed | x)
+
+
+
+, (5) which reduces RLHF alignment to a classification-like objective on the preference data. 
+
+2.2.3 Marginalized Plackett-Luce DPO Objective for Set-wise Preference. Vanilla DPO can only align LLMs with two candidates due to the pairwise constraint of the BT preference model. A natural generalization of BT to multiple candidates is the Plackett-Luce (PL) model [Plackett, 1975, Luce, 1959]. As in BT, PL associates each item e ∈ E with a latent reward r(x, e ) (and weight w(e | x)). For a permutation τ of the candidate items in E, the PL likelihood can be formulated as follows: 
+
+pPL (τ | x, E; w) = 
+
+> |E|
+
+Y
+
+> t=1
+
+w(eτ (t) | x)
+
+P|E|  
+
+> j=t
+
+w(eτ (j) | x) , (6) which denotes a sequential selection process where the item at rank t is sampled with probability proportional to its weight among the remaining candidates. To use PL to model the set-wise preference event Ωx, however, since the positive and negative ordering are unknown, we must marginalize over 3all consistent ranks of E. Let Sk denote the permutations of the positive indices {1, . . . , k }, and define the cumulative weights of the positive set, negative set, and full candidate set under context x:
+
+A := X
+
+> e∈E p
+
+w(e | x), B := X
+
+> e∈E d
+
+w(e | x), W := A + B = X
+
+> e∈E
+
+w(e | x), (7) With these definitions, we show that by marginalizing the PL likelihood in Eq. (6) (see Appendix A), the likelihood of Ωx can be formulated as follows (which we dub the marginalized PL event model ): 
+
+pPL (Ω x | x, E; w) = X
+
+> ρ∈Sk
+> k
+
+Y
+
+> t=1
+
+w(eρ(t) | x)
+
+B + Pkj=t w(eρ(j) | x) , (8) where the marginalization over the negative permutations gracefully vanishes into the cumulative weights B. An equivalent inclusion-exclusion form derived from the exponential-race interpretation of PL reduces the number of terms from k! to 2k (see A.3), but it still remains exponential w.r.t. k.Therefore, directly optimizing Eq. (8) as a DPO-style objective is infeasible even if k is moderate. 
+
+## 3 Mult-DPO: Multinomial Direct Preference Optimization 
+
+3.1 Multinomial Surrogate Event Model 
+
+To obtain an effective and tractable surrogate for the exact marginalized PL event model for aligning LLMs with set-wise preferences, we propose an alternative event model defined on the same weight space, i.e., w(e | x), ∀e ∈ E , which we name the multinomial (MN) surrogate . The surrogate first normalizes the weights into a categorical distribution over candidates: 
+
+p(e | x) := w(e | x)
+
+W , e ∈ E . (9) The surrogate likelihood then defines the observed set-wise event Ωx as the probability, under k
+
+independent item draws from p(· | x), that each positive item in Ep appears exactly once while no negative item is sampled . Since the k positives can appear in any draw order, there are k! equivalent sequences that correspond to this event. Therefore, the MN surrogate likelihood of the set-wise preference event can be formulated as follows: 
+
+pMN (Ω x | x, E; w) = k! Y
+
+> e∈E p
+
+w(e | x)
+
+W , (10) which can be computed in O(k) complexity. Unlike PL, the MN construction is not a distribution over permutations: it is an IID event likelihood and assigns probability mass to duplicate draw sequences outside the valid ranking space. We use it as a tractable surrogate for the observed positive set, and the lower-bound result justifies it as a conservative surrogate for the exact marginalized PL likelihood: 
+
+Theorem 1. For any disjoint sets Ep and Ed with |E p| ≥ 1, and any positive weights {w(e | x)}e∈E ,
+
+pPL (Ω x | x, E; w) ≥ pMN (Ω x | x, E; w). (11) In addition, we prove that the ratio between the PL likelihood and the MN surrogate likelihood is bounded, which will later imply a loss-gap bound between marginalized PL-DPO and Mult-DPO. 
+
+Theorem 2. For any disjoint sets Ep and Ed with |E p| ≥ 1 and |E d| ≥ 1, and any positive weights 
+
+{w(e | x)}e∈E , the ratio between the marginalized PL likelihood and the multinomial surrogate likelihood is bounded by the following relations 
+
+1 ≤ pPL (Ω x | x, E; w)
+
+pMN (Ω x | x, E; w) ≤
+
+
+
+1 + AB
+
+k−1
+
+. (12) The proof of Theorems 1 and 2 is in A.5 and A.6. We note that the bound in Eq. (12) is exact when 
+
+k = 1 , in which case the MN surrogate likelihood reduces to the categorical likelihood in S-DPO [Chen et al., 2024], which generalizes DPO to alignment with one positive over multiple negatives. 43.2 Mult-DPO Objective for LLM Alignment with Set-wise Preference 
+
+Building on the MN surrogate, we further show that it is compatible with the same RLHF reward-policy reparameterization that underlies DPO, yielding a classification-like alignment objective on (now set-wise) preference data. Recall that, under RLHF, the reward can be expressed in terms of the optimal policy and the reference policy as r(x, e ) = β log π∗(e|x)  
+
+> πref (e|x)
+
++ β log Z(x) (see Eq. (4) ), and the item weight is defined as w(e | x) := exp( r(x, e )) . Combining these two relations and replacing the optimal policy π∗ with a trainable policy πθ yields the policy-induced weights as follows: 
+
+wπθ (e | x) ∝
+
+ πθ (e | x)
+
+πref (e | x)
+
+β
+
+, (13) where the omitted proportionality constant Zπθ (x)β is shared across candidates and cancels in both the PL and MN surrogate likelihoods. Substituting the policy-induced weights wπθ (e | x) into Eq. (10) and taking the negative log-likelihood leads to the proposed Mult-DPO objective as follows: 
+
+LMult -DPO (x, Ep, Ed) := − log pMN (Ω x | x, E; wπθ )= −β X
+
+> e∈E p
+
+log πθ (e | x)
+
+πref (e | x) + k log X
+
+> e∈E
+
+ πθ (e | x)
+
+πref (e | x)
+
+β
+
++ C. (14) where C is a constant depending only on k and can be omitted during optimization. 
+
+3.3 Relation between Marginalized PL and Multinomial DPO Objective 
+
+To further characterize the relation between the PL-DPO and the tractable Mult-DPO objectives, we define the policy-induced cumulative weights of the positives and negatives analogous to Eq. (7) as: 
+
+Aπθ := X
+
+> e∈E p
+
+wπθ (e | x), Bπθ := X
+
+> e∈E d
+
+wπθ (e | x), (15) where both A and B now depend on policy πθ . Substituting the policy-induced weights from Eq. (13) into Eq. (8) and taking the negative log-likelihood gives the ideal but intractable PL-DPO loss: 
+
+LPL -DPO (x, Ep, Ed) := − log pPL (Ω x | x, E; wπθ ), (16) Theorems 1 and 2 immediately imply the following corollary between LPL -DPO and LMN -DPO .
+
+Corollary 1. For every context x and every training instance (x, Ep, Ed),
+
+LPL -DPO (x, Ep, Ed) ≤ L Mult -DPO (x, Ep, Ed), (17) 
+
+and 
+
+0 ≤ L Mult -DPO (x, Ep, Ed) − L PL -DPO (x, Ep, Ed) ≤ (k − 1) log 
+
+
+
+1 + Aπθ
+
+Bπθ
+
+
+
+. (18) The proof follows from Theorem 2 by substituting the policy-induced weights and taking negative logarithms. The corollary shows that the Mult-DPO loss is a tractable upper bound on the exact but otherwise intractable marginalized PL-DPO loss. In addition, it reveals that, for a fixed k-positive set and current policy, increasing the non-negligible policy-induced weight πθ for the negatives Bπθ
+
+sharpens the worst-case gap, suggesting that the MN surrogate becomes a better approximation of the intractable marginalized PL-DPO loss when richer or harder negatives are selected as candidates. 
+
+3.4 Extension of Mult-DPO to Multi-Level Preference 
+
+The preceding sections assume binary preferences from users, which cover the most common RS setting, including recommendation with implicit feedback [Rendle et al., 2009]. In practice, however, user feedback can be more fine-grained. For example, users may provide different ratings for the items. Such feedback naturally induces a multi-level preference structure , where items are partitioned into multiple preference groups. To capture this richer preference structure, we extend Mult-DPO from binary set-wise preferences to multi-level set-wise preferences, denoted Mult 2-DPO .53.4.1 Problem Formulation of Multi-Level Preference. Suppose that, for a recommendation-relevant context x, the candidate set E is partitioned into G ≥ 2 disjoint preference groups as: 
+
+E =
+
+> G
+
+[
+
+> g=1
+
+E(g), |E (g)| = kg ,
+
+> G
+
+X
+
+> g=1
+
+kg = K, (19) where the group index denotes the preference level, i.e., items in E(g) should outrank items in E(h) if 
+
+g < h , with no order among items within each group. We denote the multi-level preference event as: 
+
+Ωgrp  
+
+> x
+
+:= 
+
+n
+
+e ≻ e′ e ∈ E (g), e ′ ∈ E (h), 1 ≤ g < h ≤ G
+
+o
+
+. (20) For each boundary g = 1 , . . . , G − 1, we further define the group-g-specific preference event 
+
+Ω(g) 
+
+> x
+
+:= {e ≻ e′ | e ∈ E (g), e ′ ∈ SGh=g+1 E(h)}. This event has the same form as the two-set preference event Ωx in Eq. (1) if we view E(g) as Ep and SGh=g+1 E(h) as Ed. By definition, we have 
+
+Ωgrp  
+
+> x
+
+= TG−1 
+
+> g=1
+
+Ω(g) 
+
+> x
+
+. For each boundary g = 1 , . . . , G − 1 and any positive weights, we define 
+
+Ag := X
+
+> e∈E (g)
+
+w(e | x), B g := 
+
+> G
+
+X
+
+> h=g+1
+
+X
+
+> e∈E (h)
+
+w(e | x), W g := Ag +Bg =
+
+> G
+
+X
+
+> h=g
+
+X
+
+> e∈E (h)
+
+w(e | x), (21) where Ag is the total weight of group g and Bg is the total weight of all lower-preference groups. 
+
+3.4.2 Marginalized PL Reward Model for Multi-Level Preference. By the sequential selection property of PL, once items from the higher-preference groups {E (1) , . . . , E(g−1) } have been placed, the events Ω(g) 
+
+> x
+
+become conditionally independent across g, which yields the following recursive factorization of the marginalized PL likelihood for the multi-level preference data: 
+
+pPL (Ω grp  
+
+> x
+
+| x, E; w) = 
+
+> G−1
+
+Y
+
+> g=1
+
+pPL 
+
+Ω(g) 
+
+> x
+
+x, 
+
+> G
+
+[
+
+> h=g
+
+E(h); w
+
+ , (22) where each factor is a set-wise marginalized PL likelihood of the same form studied in Section 3.1. 
+
+3.4.3 Sequential Multinomial (SMN) Surrogate Model and SMN-DPO. This factorization in Eq. (22) naturally extends the multinomial lower bound group by group. Applying the two-set MN surrogate to each group-specific event yields the sequential multinomial (SMN) surrogate 
+
+pSMN (Ω grp  
+
+> x
+
+| x, E; w) := 
+
+> G−1
+
+Y
+
+> g=1
+
+kg ! Y
+
+> e∈E (g)
+
+w(e | x)
+
+Wg
+
+ , (23) By applying Theorem 1 at each factor, Eq. (23) provides a tractable lower bound on the exact PL likelihood in Eq. (22) . Substituting the policy-induced weight wπθ (e | x) from Eq. (13) into Eq. (23) and taking the negative log-likelihood leads to the multi-group Mult-DPO ( Mult 2-DPO ) objective 
+
+LMult 2-DPO := − log pSMN (Ω grp  
+
+> x
+
+| x, E; wπθ )=
+
+> G−1
+
+X
+
+> g=1
+
+−β X
+
+> e∈E (g)
+
+log πθ (e | x)
+
+πref (e | x) + kg log 
+
+> G
+
+X
+
+> h=g
+
+X
+
+> e∈E (h)
+
+ πθ (e | x)
+
+πref (e | x)
+
+β
+
+ + C′, (24) where C′ = − PG−1 
+
+> g=1
+
+log kg ! is a constant independent of θ and can be omitted during optimization. When G = 2 , Eq. (24) reduces to the binary Mult-DPO objective in Eq. (14) . The same boundary-wise reduction also gives a multi-level analogue of Corollary 1. If we define the PL-DPO loss 
+
+Lgrp PL -DPO := − log pPL (Ω grp  
+
+> x
+
+| x, E; wπθ ), (25) and let Aπθ ,g and Bπθ ,g denote the group masses in Eq. (21) after substituting wπθ for w, we have: 
+
+Corollary 2 (Multi-level loss-gap bound) . For every context x and every multi-level preference instance with nonempty ordered groups, we have 
+
+0 ≤ L Mult 2−DPO − L grp PL -DPO ≤
+
+> G−1
+
+X
+
+> g=1
+
+(kg − 1) log 
+
+
+
+1 + Aπθ ,g 
+
+Bπθ ,g 
+
+
+
+. (26) 610 −3 10 −2 10 −1          
+
+> β
+> 0.0
+> 0.1
+> 0.2
+> 0.3
+> 0.4
+> 0.5
+> 0.6
+> NDCG
+> Goodreads
+> 10 −3 10 −2 10 −1
+> β
+> 0.3
+> 0.4
+> 0.5
+> 0.6
+> 0.7 ML-10M
+> 10 −3 10 −2 10 −1
+> β
+> 0.4
+> 0.5
+> 0.6
+> 0.7
+> 0.8 Reddit
+> Qwen2.5-0.5B Qwen2.5-3B NDCG@5 NDCG@20
+
+Figure 1: Validation NDCG@ 5 (solid) and NDCG@ 20 (dashed) versus the regularization strength β.
+
+3.5 Complexity Analysis 
+
+Although Mult-DPO aligns LLM-based RSs with user preferences over more candidates per training step than its single-positive counterparts (e.g., vanilla DPO and S-DPO), the per-step time complexity remains comparable thanks to the shared prompt prefix that allows KV-cache reuse of the prompt across all candidates. Concretely, let Nx denote the number of prompt tokens and Ni the average number of tokens per item. With KV-cache reuse, the per-step self-attention cost of every DPO-style method takes the form O(N 2 
+
+> x
+
++ cN xNi + cN 2 
+
+> i
+
+). Here, c is the number of candidates scored per step: 
+
+c = 2 for vanilla DPO, c = 1 + ( K − k) for S-DPO, and c = K for Mult-DPO, where k and K
+
+are the numbers of positives and full candidates, respectively. Therefore, when K ≪ Nx, which is typical in the RS settings as the prompt usually contains user context, user/item features, interaction history, or conversation, the prompt-level self-attention term N 2 
+
+> x
+
+dominates; in our experiments, we indeed find that Mult-DPO exhibits similar wall-clock times to vanilla DPO and S-DPO. 
+
+## 4 Empirical Study 
+
+In this section, we evaluate Mult-DPO and its extension to multi-level preference alignment, i.e., Mult 2-DPO, on both general and conversational recommendation tasks, aiming to answer the fol-lowing three research questions: (RQ1) how does Mult-DPO perform compared to other supervised finetuning (SFT)-based baselines or DPO-style baselines for aligning LLM-based RSs under set-wise feedback; (RQ2) how well does the MN DPO loss of Mult-DPO match the theoretical upper bound on the marginalized PL DPO loss from Corollary 1; and (RQ3) does Mult 2-DPO yield further performance gains over Mult-DPO when explicit multi-level preferences are available? 
+
+4.1 Datasets and Experimental Setup 
+
+For general recommendation tasks, we use the MovieLens-10M [Harper and Konstan, 2015] and 
+
+Goodreads [Wan and McAuley, 2018] datasets. For MovieLens-10M , where explicit user-item ratings are available, we first treat items rated 5 as positives and randomly sampled unrated items as negatives, and then treat different ratings as different preference levels in Section 4.5 to evaluate Mult 2-DPO. For conversational recommendation, we adapt the Reddit-V2 [He et al., 2023, Zhu et al., 2026] dataset, where we combine recommendations from different Reddit users on the same conversation as multiple ground truths. For validation, we use sampled negatives with 200 candidates in total for efficient model selection, and the test results are reported against the full catalog. We report NDCG@ K for K ∈ { 5, 15 , 20 }. Full implementation details are provided in Appendix C.1. 
+
+4.2 Training Dynamics and Hyperparameter Analysis 
+
+We first study the effects of the regularization strength β in Eq. (3) on the validation sets, summarized in Figure 1. Due to space limitations and constraint of computational budgets, we present the results with the Qwen-2.5-0.5B-Instruct [Qwen et al., 2024] and Qwen-2.5-3B-Instruct 
+
+backbones, while we use the insight to select β to run Mult-DPO on the Goodreads dataset with 
+
+{0.5B, 1.5B, 3B, 7B} backbones in C.3 to show its generalization ability w.r.t. model scale. We observe that too small a β lets πθ drift too far from a strong πref , while too large a β over-regularizes 7Table 1: Comparison between Mult-DPO and DPO-style baselines on the test sets of Goodreads ,
+
+MovieLens-10M , and Reddit-V2 . Evaluation is conducted with the entire catalog as the candidates. Most results are significant as standard error is between 0.0020-0.0035 for N@5, N@15 and N@20.                                                                                                                                                                
+
+> Method Goodreads MovieLens-10M Reddit-V2
+> N@5 N@15 N@20 N@5 N@15 N@20 N@5 N@15 N@20
+> Qwen2.5-0.5B-Instruct (zero-shot) 0.0085 0.0090 0.0090 0.0136 0.0156 0.0156 0.0175 0.0207 0.0216
+> SFT-based methods
+> + BigRec [Bao et al., 2023] 0.0776 0.1069 0.1177 0.0657 0.0884 0.0962 0.1043 0.1056 0.1083 + D 3[Bao et al., 2024] 0.0818 0.1122 0.1210 0.0612 0.0881 0.0948 0.1015 0.1037 0.1064
+> DPO-based methods
+> + Vanilla DPO [Rafailov et al., 2023] 0.0389 0.0558 0.0622 0.0426 0.0710 0.0834 0.0816 0.0819 0.0838 + DMPO [Bai et al., 2024] 0.0586 0.0805 0.0845 0.0461 0.0701 0.0758 0.0875 0.0893 0.0912 + S-DPO [Chen et al., 2024] 0.0762 0.1105 0.1192 0.0592 0.0920 0.1049 0.0931 0.0938 0.0985 + LiPO (BT) [Liu et al., 2025] 0.0862 0.1198 0.1294 0.0622 0.0980 0.1100 0.0963 0.1020 0.1060 + Mult-DPO (ours) 0.0947 0.1292 0.1406 0.0650 0.1001 0.1103 0.1097 0.1101 0.1154
+> Qwen2.5-3B-Instruct (zero-shot) 0.0149 0.0184 0.0184 0.0232 0.0340 0.0359 0.0633 0.0617 0.0641
+> SFT-based methods
+> + BigRec [Bao et al., 2023] 0.1109 0.1527 0.1682 0.0747 0.1069 0.1180 0.1228 0.1247 0.1364 + D 3[Bao et al., 2024] 0.1254 0.1531 0.1678 0.0710 0.1038 0.1159 0.1195 0.1214 0.1332
+> DPO-based methods
+> + Vanilla DPO [Rafailov et al., 2023] 0.0870 0.1120 0.1202 0.0559 0.0806 0.0903 0.0915 0.0960 0.0998 + DMPO [Bai et al., 2024] 0.0932 0.1200 0.1359 0.0562 0.0875 0.0938 0.0981 0.1009 0.1032 + S-DPO [Chen et al., 2024] 0.1181 0.1586 0.1693 0.0631 0.0989 0.1122 0.1043 0.1132 0.1219 + LiPO (BT) [Liu et al., 2025] 0.1252 0.1611 0.1731 0.0672 0.1046 0.1185 0.1147 0.1234 0.1329 + Mult-DPO (ours) 0.1288 0.1678 0.1785 0.0751 0.1155 0.1300 0.1369 0.1431 0.1503
+
+and erodes the alignment signal. The optimal β is consistently smaller on MovieLens-10M and 
+
+Goodreads than on Reddit-V2 . This may be because the reference backbone provides a stronger initialization for conversational recommendation, where the dialogue context can be exploited via language understanding [He et al., 2023], than for general recommendation, where collaborative-filtering signals that are unavailable to pretrained LLMs play a crucial role [Zhu et al., 2025]. 
+
+4.3 Comparison with Baselines 
+
+We then evaluate Mult-DPO against representative baselines on the test set, where the best β for each DPO-style method is selected on the validation set as specified in Section 4.2. All DPO-style baselines share the same reference backbone and training protocol as Mult-DPO for fair comparison. 
+
+Baselines. We compare Mult-DPO against two categories of LLM-based recommenders: SFT-only baselines (BigRec [Bao et al., 2023] and D3 [Bao et al., 2024]) that fine-tune the LLM on context–item demonstrations, and DPO-style alignment baselines (vanilla DPO [Rafailov et al., 2023], DMPO [Bai et al., 2024], S-DPO [Chen et al., 2024], and LiPO (BT) [Liu et al., 2025]). LiPO is a family of learning-to-rank algorithms; the most relevant variant, LiPO (BT), sums the pairwise Bradley–Terry losses over all positive–negative pairs in a single step. Full details are provided in Appendix C.2. For D3 on conversational recommendation, we follow Zhu et al. [2024] to extract collaborative-filtering signals and train an EASE [Steck, 2019] model as the text-free assistant. 
+
+Results. From Table 1 we can find that DMPO extends vanilla DPO with multiple negatives for one positive item, but the arithmetic mean it takes for the negatives inside the BT sigmoid is an ad-hoc construction without a coherent ranking-likelihood interpretation. S-DPO replaces this mean with the softmax derived as the closed-form k = 1 case of the marginalized PL likelihood (a special case of Theorem 2), providing a principled treatment of multiple negatives that respects the underlying preference model. LiPO (BT) further admits multi-positive supervision by summing up pairwise losses, yet it still factorizes the set-wise event into independent BT pairs and discards the constraint that the positives jointly dominate the negative set. In contrast, Mult-DPO fundamentally removes this spurious independence: we note that under the multinomial surrogate every positive is contrasted against the same cumulative negative weight B, which preserves the joint set-wise structure and is provably an upper bound on the marginalized PL-DPO loss (Corollary 1). The margin over LiPO (BT) is most pronounced on Reddit-V2 , where multi-positive ground truths are densest, and widens 80 200 400 600 800 1000   
+
+> training step
+> 3
+> 4
+> 5
+> 6
+> 7
+> 8
+> loss
+> Mult-DPO 0.5B
+> PL-DPO 0.5B
+> Mult-DPO 3B
+> PL-DPO 3B
+> NDCG@5 NDCG@15 NDCG@20
+> 0.00
+> 0.05
+> 0.10
+> 0.15
+> 0.20
+> NDCG
+> 0.5B Mult-DPO
+> 0.5B Mult-DPO+SP
+> 3B Mult-DPO
+> 3B Mult-DPO+SP
+
+Figure 2: Left : Mult-DPO loss and exact marginalized PL-DPO loss; Right : NDCG on the 
+
+Goodreads dataset of Mult-DPO with SPRec-style epoch-level dynamic hard negatives. with backbone scale, suggesting that the joint signal pays off most when the policy has the capacity to exploit it. Mult-DPO also surpasses BigRec and D3 from the same SFT initialization, indicating that set-wise alignment supplies supervision that demonstration matching cannot recover. Beyond accuracy, we note that compared with the strongest baseline LiPO (BT), in Mult-DPO, the sharing B
+
+across positives reduces the loss-aggregation cost from O(( K − k) · k) to O(K).
+
+4.4 On Upper Bound of MN-DPO to Marginalized PL-DPO and Its Tightness 
+
+For RQ2 , we first restrict the training set to samples with at most three positives, for which the exact marginalized PL-DPO loss can be computed. As shown in Fig. 2 (left), on this filtered subset, the training dynamics of Mult-DPO and the exact marginalized PL-DPO verify the upper-bound relation in Corollary 1. However, this restriction removes most training instances, making the resulting test-set evaluation uninformative. To further examine whether harder negatives tighten the bound and thereby improve alignment with multi-positive supervision, we consider dynamic negative sampling. Since the hardness of a negative item is policy-dependent and changes throughout training, we adapt SPRec [Gao et al., 2025] and resample negatives at the epoch level. Concretely, at the beginning of each epoch, negatives are drawn from a temperature-scaled categorical distribution induced by the current policy weights with temperature set to 0.1. Fig. 2 (right) reports the test performance, where we find that introducing harder negatives can indeed improve the alignment ability of Mult-DPO. 
+
+4.5 Extension to Multi-Level Preference on the MovieLens Dataset NDCG@5 NDCG@15 NDCG@20 
+
+> 0.000
+> 0.025
+> 0.050
+> 0.075
+> 0.100
+> 0.125
+> 0.150
+> 0.175
+> 0.200
+> NDCG
+> 0.5B Mult-DPO
+> 0.5B Mult 2-DPO
+> 3B Mult-DPO
+> 3B Mult 2-DPO
+
+Figure 3: Comparison of Mult-DPO and Mult 2-DPO NDCG on MovieLens-10M dataset. To answer RQ3 , on MovieLens-10M , we parti-tion items by their ratings into G = 4 ordered preference groups, with rating = 5 (i.e., the pos-itive set in the two-set case) as the group with the highest preference, and with randomly sampled unrated items appended after the high-rated groups (rating > 3) to keep the candidate set comparable to the binary setting of Section 4.3. Mult 2-DPO aggregates the per-boundary multinomial losses across the three group boundaries via Eq. (24) , and is compared against the binary Mult-DPO base-line that merges the four groups into one positive-negative split. Figure 3 shows that Mult 2-DPO outperforms the binary counterpart at every cutoff, with a ∼ 12% gain in NDCG at the 0.5B backbone ( 0.0732 vs. 0.0650 at NDCG@5). In addition, the improvement can be generalized to the 3B backbone. This further confirms that Mult 2-DPO provides a stronger alignment signal by preserving the richer preference structure of explicit ratings. 
+
+## 5 Conclusion 
+
+In this paper, we presented Mult-DPO , a new DPO-style framework for aligning LLM-based RSs with preferences over multiple candidates. The key contribution is a multinomial surrogate event likelihood 9that yields a tractable closed-form DPO-style loss that is a provable upper bound on the otherwise intractable marginalized Plackett-Luce loss. We also characterize the tightness of this bound in terms of the number of positives and the cumulative policy-induced weights of the selected negatives. Empirically, Mult-DPO and its multi-level extension, i.e., Mult 2-DPO, consistently outperform various DPO-based baselines on both general and conversational recommendation benchmarks, suggesting that explicitly modeling the joint set-wise structure of user feedback is both effective and efficient for preference-based alignment in LLM-based recommendation tasks. 
+
+## References 
+
+Mohammad Gheshlaghi Azar, Zhaohan Daniel Guo, Bilal Piot, Remi Munos, Mark Rowland, Michal Valko, and Daniele Calandriello. A general theoretical paradigm to understand learning from human preferences. In AISTATS , pages 4447–4455. PMLR, 2024. Yuntao Bai, Andy Jones, Kamal Ndousse, Amanda Askell, Anna Chen, Nova DasSarma, Dawn Drain, Stanislav Fort, Deep Ganguli, Tom Henighan, et al. Training a helpful and harmless assistant with reinforcement learning from human feedback. arXiv preprint arXiv:2204.05862 , 2022. Zhuoxi Bai, Ning Wu, Fengyu Cai, Xinyi Zhu, and Yun Xiong. Aligning large language model with direct multi-preference optimization for recommendation. In CIKM , pages 76–86, 2024. Keqin Bao, Jizhi Zhang, Yang Zhang, Wenjie Wang, Fuli Feng, and Xiangnan He. TALLRec: An effective and efficient tuning framework to align large language model with recommendation. In 
+
+RecSys , 2023. Keqin Bao, Jizhi Zhang, Yang Zhang, Xinyue Huo, Chong Chen, and Fuli Feng. Decoding matters: Addressing amplification bias and homogeneity issue for LLM-based recommendation. In EMNLP ,2024. Keqin Bao, Jizhi Zhang, Wenjie Wang, Yang Zhang, Zhengyi Yang, Yanchen Luo, Chong Chen, Fuli Feng, and Qi Tian. A bi-step grounding paradigm for large language models in recommendation systems. ACM Transactions on Recommender Systems , 3(4):1–27, 2025. Ralph Allan Bradley and Milton E Terry. Rank analysis of incomplete block designs: I. the method of paired comparisons. Biometrika , 39(3/4):324–345, 1952. Shihao Cai, Chongming Gao, Yang Zhang, Wentao Shi, Jizhi Zhang, Keqin Bao, Qifan Wang, and Fuli Feng. K-order ranking preference optimization for large language models. In Findings of ACL , pages 4844–4859, 2025. Yuxin Chen, Junfei Tan, An Zhang, Zhengyi Yang, Leheng Sheng, Enzhi Zhang, Xiang Wang, and Tat-Seng Chua. On softmax direct preference optimization for recommendation. In NeurIPS ,volume 37, pages 27463–27489, 2024. Paul F Christiano, Jan Leike, Tom Brown, Miljan Martic, Shane Legg, and Dario Amodei. Deep reinforcement learning from human preferences. In NeurIPS , volume 30, 2017. Kawin Ethayarajh, Winnie Xu, Niklas Muennighoff, Dan Jurafsky, and Douwe Kiela. KTO: Model alignment as prospect theoretic optimization. arXiv preprint arXiv:2402.01306 , 2024. Chongming Gao, Ruijun Chen, Shuai Yuan, Kexin Huang, Yuanqing Yu, and Xiangnan He. SPRec: Self-play to debias LLM-based recommendation. In WWW , pages 5075–5084, 2025. Shijie Geng, Shuchang Liu, Zuohui Fu, Yingqiang Ge, and Yongfeng Zhang. Recommendation as language processing (RLP): A unified pretrain, personalized prompt & predict paradigm (P5). In 
+
+RecSys , pages 299–315, 2022. F Maxwell Harper and Joseph A Konstan. The MovieLens datasets: History and context. ACM Transactions on Interactive Intelligent Systems , 5(4):1–19, 2015. Zhankui He, Zhouhang Xie, Rahul Jha, Harald Steck, Dawen Liang, Yesu Feng, Bodhisattwa Prasad Majumder, Nathan Kallus, and Julian McAuley. Large language models as zero-shot conversational recommenders. In CIKM , pages 720–730, 2023. 10 Yupeng Hou, Junjie Zhang, Zihan Lin, Hongyu Lu, Ruobing Xie, Julian McAuley, and Wayne Xin Zhao. Large language models are zero-shot rankers for recommender systems. In ECIR , 2024. Dawen Liang, Rahul G Krishnan, Matthew D Hoffman, and Tony Jebara. Variational autoencoders for collaborative filtering. In WWW , pages 689–698, 2018. Jiayi Liao, Sihang Li, Zhengyi Yang, Jiancan Wu, Yancheng Yuan, Xiang Wang, and Xiangnan He. LLaRA: Large language-recommendation assistant. In SIGIR , 2024. Jiacheng Lin, Tian Wang, and Kun Qian. Rec-R1: Bridging generative large language models and user-centric recommendation systems via reinforcement learning. Transactions on Machine Learning Research , 2025. Jianghao Lin, Xinyi Dai, Yunjia Xi, Weiwen Liu, Bo Chen, Xiangyang Li, Chenxu Zhu, Huifeng Guo, Yong Yu, Ruiming Tang, et al. How can recommender systems benefit from large language models: A survey. ACM Transactions on Information Systems , 2023. Tianqi Liu, Yao Zhao, Rishabh Joshi, Misha Khalman, Mohammad Saleh, Peter J Liu, and Jialu Liu. Statistical rejection sampling improves preference optimization. In ICLR , 2023. Tianqi Liu, Zhen Qin, Junru Wu, Jiaming Shen, Misha Khalman, Rishabh Joshi, Yao Zhao, Moham-mad Saleh, Simon Baumgartner, Jialu Liu, et al. LiPO: Listwise preference optimization through learning-to-rank. In NAACL , pages 2404–2420, 2025. Ilya Loshchilov and Frank Hutter. Decoupled weight decay regularization. In ICLR , 2019. R Duncan Luce. Individual Choice Behavior . Wiley, 1959. Yu Meng, Mengzhou Xia, and Danqi Chen. SimPO: Simple preference optimization with a reference-free reward. In NeurIPS , volume 37, pages 124198–124235, 2024. Long Ouyang, Jeffrey Wu, Xu Jiang, Diogo Almeida, Carroll Wainwright, Pamela Mishkin, Chong Zhang, Sandhini Agarwal, Katarina Slama, Alex Ray, et al. Training language models to follow instructions with human feedback. In NeurIPS , volume 35, pages 27730–27744, 2022. Richard Y Pang, Weizhe Yuan, Kyunghyun Cho, He He, Sainbayar Sukhbaatar, and Jason Weston. Iterative reasoning preference optimization. In NeurIPS , volume 37, pages 116617–116637, 2024. Robin L Plackett. The analysis of permutations. Journal of the Royal Statistical Society Series C , 24 (2):193–202, 1975. Qwen, An Yang, Baosong Yang, Beichen Zhang, Binyuan Hui, Bo Zheng, Bowen Yu, Chengyuan Li, Dayiheng Liu, Fei Huang, Haoran Wei, Huan Lin, Jian Yang, Jianhong Tu, Jianwei Zhang, Jianxin Yang, Jiaxi Yang, Jingren Zhou, Junyang Lin, Kai Dang, Keming Lu, Keqin Bao, Kexin Yang, Le Yu, Mei Li, Mingfeng Xue, Pei Zhang, Qin Zhu, Rui Men, Runji Lin, Tianhao Lin, Tianyi Tang, Tingyu Xia, Xingzhang Ren, Xuancheng Ren, Yang Fan, Yang Su, Yichang Zhang, Yu Wan, Yuqiong Liu, Zeyu Cui, Zhenru Zhang, and Zihan Qiu. Qwen2.5 technical report. arXiv preprint arXiv:2412.15115 , 2024. Rafael Rafailov, Archit Sharma, Eric Mitchell, Christopher D Manning, Stefano Ermon, and Chelsea Finn. Direct preference optimization: Your language model is secretly a reward model. In NeurIPS ,volume 36, pages 53728–53741, 2023. Samyam Rajbhandari, Jeff Rasley, Olatunji Ruwase, and Yuxiong He. ZeRO: Memory optimizations toward training trillion parameter models. In SC , 2020. Steffen Rendle, Christoph Freudenthaler, Zeno Gantner, and Lars Schmidt-Thieme. BPR: Bayesian personalized ranking from implicit feedback. In UAI , pages 452–461, 2009. Zhihong Shao, Peiyi Wang, Qihao Zhu, Runxin Xu, Junxiao Song, Xiao Bi, Haowei Zhang, Mingchuan Zhang, YK Li, et al. DeepSeekMath: Pushing the limits of mathematical reasoning in open language models. arXiv preprint arXiv:2402.03300 , 2024. 11 Feifan Song, Bowen Yu, Minghao Li, Haiyang Yu, Fei Huang, Yongbin Li, and Houfeng Wang. Preference ranking optimization for human alignment. In AAAI , volume 38, pages 18990–18998, 2024. Harald Steck. Embarrassingly shallow autoencoders for sparse data. In WWW , pages 3251–3257, 2019. Nisan Stiennon, Long Ouyang, Jeffrey Wu, Daniel Ziegler, Ryan Lowe, Chelsea Voss, Alec Radford, Dario Amodei, and Paul F Christiano. Learning to summarize with human feedback. NeurIPS , 33: 3008–3021, 2020. Mengting Wan and Julian McAuley. Item recommendation on monotonic behavior chains. In RecSys ,2018. Martin Weyssow, Aton Kamanda, Xin Zhou, and Houari Sahraoui. CodeUltraFeedback: An LLM-as-a-judge dataset for aligning large language models to coding preferences. ACM Transactions on Software Engineering and Methodology , 35(3):1–36, 2026. Likang Wu, Zhi Zheng, Zhaopeng Qiu, Hao Wang, Hongchao Gu, Tingjia Shen, Chuan Qin, Chen Zhu, Hengshu Zhu, Qi Liu, et al. A survey on large language models for recommendation. World Wide Web , 27(5):60, 2024. Junjie Zhang, Ruobing Xie, Yupeng Hou, Xin Zhao, Leyu Lin, and Ji-Rong Wen. Recommendation as instruction following: A large language model empowered recommendation approach. ACM Transactions on Information Systems , 43(5):1–37, 2025. Yaochen Zhu, Liang Wu, Qi Guo, Liangjie Hong, and Jundong Li. Collaborative large language model for recommender systems. In WWW , pages 3162–3172, 2024. Yaochen Zhu, Chao Wan, Harald Steck, Dawen Liang, Yesu Feng, Nathan Kallus, and Jundong Li. Collaborative retrieval for large language model-based conversational recommender systems. In 
+
+WWW , pages 3323–3334, 2025. Yaochen Zhu, Harald Steck, Dawen Liang, Yinhan He, Vito Ostuni, Jundong Li, and Nathan Kallus. Rank-GRPO: Training LLM-based conversational recommender systems with reinforcement learning. In ICLR , 2026. 12 Appendix A Proofs 
+
+In this section, we provide the proofs and derivations for Section 3 in the main paper, including the (i) marginalized Plackett-Luce likelihood, (ii) its inclusion-exclusion form, (iii) the multinomial surrogate likelihood, (iv) the lower-bound relation between MN surrogate and PL likelihoods, (v) the tightness analysis, and (vi) the extension of Mult-DPO to multi-level preference alignment of LLMs. 
+
+A.1 Full-Rank Plackett-Luce Model and Its Recursions. 
+
+Recall that in the main paper, we use E to denote the candidate set associated with a recommendation-related context x. Let K := |E| and let τ be a permutation of {1, . . . , K } representing a full ranking of the items in E. We write eτ (t) for the item placed at rank t under τ . For any t ∈ { 1, . . . , K },define the prefix ranking of length t and the suffix ranking of the remaining items as 
+
+τ1: t := ( τ (1) , τ (2) , . . . , τ (t)) , τt+1: K := ( τ (t + 1) , τ (t + 2) , . . . , τ (K)) .
+
+The suffix candidate set after selecting the first t ranked items is defined as 
+
+Et+1 := E \ { eτ (1) , . . . , e τ (t)}.
+
+The Plackett-Luce (PL) [Plackett, 1975, Luce, 1959] model assigns the likelihood to a full ranking τ :
+
+pPL (τ | x, E; w) = 
+
+> K
+
+Y
+
+> j=1
+
+w(eτ (j))
+
+PKl=j w(eτ (l)) (27a) 
+
+= w(eτ (1) )
+
+P 
+
+> e∈E
+
+w(e) ·
+
+> K
+
+Y
+
+> j=2
+
+w(eτ (j))
+
+PKl=j w(eτ (l))= w(eτ (1) )
+
+P 
+
+> e∈E
+
+w(e) · pPL (τ2: K | x, E2; w) (27b) 
+
+=
+
+> k
+
+Y
+
+> t=1
+
+w(eτ (t))
+
+P 
+
+> e∈E t
+
+w(e)
+
+!
+
+·
+
+> K
+
+Y
+
+> j=k+1
+
+w(eτ (j))
+
+PKl=j w(eτ (l))=
+
+> k
+
+Y
+
+> t=1
+
+w(eτ (t))
+
+P 
+
+> e∈E t
+
+w(e)
+
+!
+
+· pPL (τk+1: K | x, Ek+1 ; w) , (27c) where Eqs. (27b) and (27c) are the one-step and k-step recursions, respectively. 
+
+Lemma 1 (PL normalization on a finite candidate set) . Let E = {e1, . . . , e K } be a finite candidate set and let SK denote the set of all permutations of {1, . . . , K }. Then the PL likelihood in Eq. (27a) 
+
+defines a valid distribution over full rankings: 
+
+X 
+
+> τ∈SK
+
+pPL (τ | x, E; w) = 1 . (28) 
+
+Proof. When K = 1 , Eq. (28) trivially holds. For arbitrary K, we have 
+
+X 
+
+> τ∈SK
+
+pPL (τ | x, E; w) = 
+
+> K
+
+X
+
+> i=1
+
+X
+
+> ρ∈Perm( E\{ ei})
+
+pPL 
+
+ [ei, ρ ] | x, E; w (29a) 
+
+=
+
+> K
+
+X
+
+> i=1
+
+X
+
+> ρ∈Perm( E\{ ei})
+
+w(ei)
+
+PKi=1 w(ei) · pPL 
+
+ ρ | x, E \ { ei}; w (29b) 
+
+=
+
+> K
+
+X
+
+> i=1
+
+w(ei)
+
+PKi=1 w(ei)
+
+ X
+
+> ρ∈Perm( E\{ ei})
+
+pPL 
+
+ ρ | x, E \ { ei}; w
+
+=
+
+> K
+
+X
+
+> i=1
+
+w(ei)
+
+PKi=1 w(ei) = 1 , (29c) 13 where the last step follows by induction on K.
+
+A.2 Proof of the Marginalized PL Likelihood in Eq. (8) .
+
+Recall that the positives are Ep = {e1, . . . , e k} and the negatives are Ed = {ek+1 , . . . , e K }. Let Sk
+
+denote the set of permutations of {1, . . . , k } for the positive items. Then 
+
+pPL (Ω x | x, E; w) = X
+
+> ρ∈Sk
+
+X
+
+> τk+1: K
+
+pPL ([ ρ, τ k+1: K ] | x, E; w) (30a) 
+
+= X
+
+> ρ∈Sk
+
+X
+
+> τk+1: K
+> k
+
+Y
+
+> t=1
+
+w(eρ(t))
+
+P 
+
+> e∈E\{ eρ(1) ,...,e ρ(t−1) }
+
+w(e)
+
+!
+
+pPL 
+
+ τk+1: K | x, Ed; w
+
+(30b) 
+
+= X
+
+> ρ∈Sk
+> k
+
+Y
+
+> t=1
+
+w(eρ(t))
+
+P 
+
+> e∈E\{ eρ(1) ,...,e ρ(t−1) }
+
+w(e)
+
+! X
+
+> τk+1: K
+
+pPL 
+
+ τk+1: K | x, Ed; w
+
+= X
+
+> ρ∈Sk
+> k
+
+Y
+
+> t=1
+
+w(eρ(t))
+
+P 
+
+> e∈E\{ eρ(1) ,...,e ρ(t−1) }
+
+w(e) (30c) 
+
+= X
+
+> ρ∈Sk
+> k
+
+Y
+
+> t=1
+
+w(eρ(t))
+
+B + Pkj=t w(eρ(j)) . (30d) In the last step, the remaining candidate set at rank t consists of the unselected positives 
+
+{eρ(t), . . . , e ρ(k)} and all negatives Ed, so the denominator decomposes into B + Pkj=t w(eρ(j)).Note that the marginalization over the latent rankings of the negatives vanishes from step (30b) to step (30c) because the PL likelihood over the suffix ranking of Ed sums to one by Lemma 1. 
+
+A.3 Proof of the Inclusion-Exclusion Form for the Marginalized PL Likelihood. Lemma 2 (Exponential-race representation) . Let {Te}e∈E be independent random variables with 
+
+Te ∼ Exp( w(e)) . Ranking items by increasing Te induces the PL distribution in Eq. (27) .Proof. This is a standard characterization of the Plackett-Luce model. The minimum exponential clock is selected first with probability proportional to its rate, and the memoryless property gives the same rule recursively for the remaining items. 14 Using Lemma 2, we have 
+
+pPL (Ω x | x, E; w) = Pr 
+
+
+
+max  
+
+> e∈E p
+
+Te < min 
+
+> e∈E d
+
+Te
+
+
+
+(31a) 
+
+= Pr( Te < U ∀e ∈ E p) , U := min 
+
+> e∈E d
+
+Te
+
+=
+
+Z ∞
+
+> 0
+
+Pr( Te < u ∀e ∈ E p) fU (u) du (31b) 
+
+=
+
+Z ∞
+
+> 0
+
+Be −Bu Y
+
+> e∈E p
+
+Pr( Te < u ) du (31c) 
+
+=
+
+Z ∞
+
+> 0
+
+Be −Bu Y
+
+> e∈E p
+
+ 1 − e−w(e)u du (31d) 
+
+=
+
+Z ∞
+
+> 0
+
+Be −Bu X
+
+> S⊆E p
+
+(−1) |S| Y
+
+> e∈S
+
+e−w(e)u du (31e) 
+
+= X
+
+> S⊆E p
+
+(−1) |S|
+
+Z ∞
+
+> 0
+
+B exp −u
+
+
+
+B + X
+
+> e∈S
+
+w(e)
+
+!
+
+du 
+
+= X
+
+> S⊆E p
+
+(−1) |S| BB + P 
+
+> e∈S
+
+w(e) . (31f) This proves the inclusion-exclusion form for the marginalized PL likelihood, which reduces the number of terms in naive marginalization (i.e., Eq. (8)) from k! to 2k. However, it still remains intractable for moderate k, motivating the multinomial surrogate developed in Mult-DPO. 
+
+A.4 Derivation of the Multinomial Surrogate Likelihood in Eq. (10) .
+
+We formally derive the multinomial surrogate likelihood. Recall from Section 3.1 that the categorical distribution over E is defined as p(e | x) = w(e | x)/W . The MN surrogate assigns to Ωx the probability of the count event induced by k i.i.d. draws from p(· | x) in which each positive item in 
+
+Ep is sampled exactly once and no negative item in Ed is sampled. Letting c(e) denote the count of item e across the k draws, this event can be formulated as 
+
+c(e) = 1 ∀e ∈ E p, c(e) = 0 ∀e ∈ E d.
+
+Substituting these counts into the multinomial probability mass function then yields 
+
+pMN (Ω x | x, E; w) = k!
+
+Q 
+
+> e∈E
+
+c(e)! 
+
+Y
+
+> e∈E
+
+p(e | x)c(e) (32a) 
+
+= k! Y
+
+> e∈E p
+
+p(e | x) (32b) 
+
+= k! Y
+
+> e∈E p
+
+w(e | x)
+
+W . (32c) 
+
+A.5 Proof of Theorem 1. 
+
+We now prove the main theorem of the paper, i.e., the multinomial surrogate likelihood is a pointwise lower bound on the intractable marginalized PL likelihood. Recall from Eq. (8) that 
+
+pPL (Ω x | x, E; w) = X
+
+> ρ∈Sk
+> k
+
+Y
+
+> t=1
+
+w(eρ(t) | x)
+
+B + Pkj=t w(eρ(j) | x) .
+
+15 Since the per-rank denominator satisfies B + Pkj=t w(eρ(j) | x) ≤ B + P 
+
+> e∈E p
+
+w(e | x) = W , we obtain the following chain of pointwise inequalities for any ρ ∈ Sk and any t ∈ { 1, . . . , k }:
+
+1
+
+B + Pkj=t w(eρ(j) | x) ≥ 1
+
+W
+
+=⇒ w(eρ(t) | x)
+
+B + Pkj=t w(eρ(j) | x) ≥ w(eρ(t) | x)
+
+W
+
+=⇒
+
+> k
+
+Y
+
+> t=1
+
+w(eρ(t) | x)
+
+B + Pkj=t w(eρ(j) | x) ≥
+
+> k
+
+Y
+
+> t=1
+
+w(eρ(t) | x)
+
+W .
+
+Summing over ρ ∈ Sk gives 
+
+pPL (Ω x | x, E; w) ≥ X
+
+> ρ∈Sk
+> k
+
+Y
+
+> t=1
+
+w(eρ(t) | x)
+
+W = k! Y
+
+> e∈E p
+
+w(e | x)
+
+W = pMN (Ω x | x, E; w).
+
+A.6 Proof of Theorem 2. 
+
+We then characterize the tightness of the lower bound, i.e., the ratio between the marginalized PL likelihood and the multinomial surrogate likelihood is sandwiched between 1 and (1 + A/B )k−1.Specifically, we first fix an arbitrary ρ ∈ Sk and define the prefix sums of positive weights 
+
+Ht−1(ρ) := 
+
+> t−1
+
+X
+
+> j=1
+
+w(eρ(j) | x), t = 2 , . . . , k. 
+
+For the PL model, the denominator at rank t is 
+
+Dt(ρ) = B +
+
+> k
+
+X
+
+> j=t
+
+w(eρ(j) | x) = W − Ht−1(ρ).
+
+Therefore, the ratio between the per-ρ PL term and the corresponding MN term satisfies 
+
+Qkt=1 
+
+> w(eρ(t)|x)
+> Dt(ρ)
+
+Qkt=1 
+
+> w(eρ(t)|x)
+> W
+
+=
+
+> k
+
+Y
+
+> t=2
+
+WW − Ht−1(ρ) (33a) 
+
+=
+
+> k
+
+Y
+
+> t=2
+
+11 − Ht−1(ρ)
+
+> W
+
+(33b) 
+
+≤
+
+> k
+
+Y
+
+> t=2
+
+11 − AW
+
+=
+
+ WW − A
+
+k−1
+
+=
+
+
+
+1 + AB
+
+k−1
+
+. (33c) Since this bound holds uniformly over all ρ ∈ Sk, summing over ρ yields 
+
+1 ≤ pPL (Ω x | x, E; w)
+
+pMN (Ω x | x, E; w) ≤
+
+
+
+1 + AB
+
+k−1
+
+.
+
+A.7 Derivation for the DPO-style Extension. 
+
+In this part, we connect weights in both the MN surrogate and the marginalized PL event model with the LLM-based RS policy πθ through the analytical solution of the RLHF objective, i.e., 
+
+wπθ (e | x), so that both bounds hold for the corresponding DPO-style losses. Let πref (e | x) be a reference policy and πθ (e | x) a learned policy. The RLHF solution gives weights proportional to (πθ (e | x)/π ref (e | x)) β , with a context-dependent factor Z(x)β shared by all candidates. Since 16 both PL and MN likelihoods are invariant to multiplying all weights in the same candidate set by a common positive constant, we fix the representative 
+
+rπθ (e | x) := β log πθ (e | x)
+
+πref (e | x) , wπθ (e | x) := exp( rπθ (e | x)) = 
+
+ πθ (e | x)
+
+πref (e | x)
+
+β
+
+.
+
+If we define pPL (Ω x | x, E; wπθ ) and pMN (Ω x | x, E; wπθ ) by replacing w(e | x) with wπθ (e | x) in Eqs. (8) and (10), the lower bound and the tightness bound hold pointwise with A, B replaced by 
+
+Aπθ := X
+
+> e∈E p
+
+wπθ (e | x), Bπθ := X
+
+> e∈E d
+
+wπθ (e | x).
+
+Equivalently, taking negative logarithms reverses the likelihood inequality: the Mult-DPO loss 
+
+LMult -DPO (πθ ) := − log pMN (Ω x | x, E; wπθ ) upper bounds the marginalized PL-DPO loss 
+
+LPL -DPO (πθ ) := − log pPL (Ω x | x, E; wπθ ).
+
+A.8 Proof of the Multi-Level PL Factorization in Eq. (22) .
+
+We further extend the theoretical analysis to the multi-level preference alignment setting discussed in Section 3.4, where user preference takes the form of the multi-level preference event Ωgrp  
+
+> x
+
+defined in Eq. (20) . We show that Ωgrp  
+
+> x
+
+factorizes recursively across the boundaries between consecutive groups, reducing the multi-level case to a product of set-wise preference instances each handled by Theorem 1 and Theorem 2. By definition, the full multi-level preference event satisfies 
+
+Ωgrp  
+
+> x
+
+=
+
+> G−1
+
+\
+
+> g=1
+
+Ω(g) 
+
+> x
+
+.
+
+By the sequential selection property of PL, once items from the higher-preference groups 
+
+E(1) , . . . , E(g−1) have been placed, the relative ordering among the remaining groups depends only on the remaining candidate set SGh=g E(h), so the events Ω(g) 
+
+> x
+
+become conditionally independent across g. Therefore, the likelihood factorizes recursively as 
+
+pPL (Ω grp  
+
+> x
+
+| x, E; w) = pPL Ω(1)  
+
+> x
+
+| x, 
+
+> G
+
+[
+
+> h=1
+
+E(h); w
+
+!
+
+· pPL Ωgrp  
+
+> x
+
+restricted to 
+
+> G
+
+[
+
+> h=2
+
+E(h)
+
+!
+
+= pPL Ω(1)  
+
+> x
+
+| x, 
+
+> G
+
+[
+
+> h=1
+
+E(h); w
+
+!
+
+· pPL Ω(2)  
+
+> x
+
+| x, 
+
+> G
+
+[
+
+> h=2
+
+E(h); w
+
+!
+
+· . . . 
+
+=
+
+> G−1
+
+Y
+
+> g=1
+
+pPL 
+
+Ω(g) 
+
+> x
+
+| x, 
+
+> G
+
+[
+
+> h=g
+
+E(h); w
+
+ , (34) which proves Eq. (22) . For each fixed group g, the group-g-specific preference event Ω(g) 
+
+> x
+
+is exactly a set-wise preference event of the same form as Eq. (1) , with E(g) playing the role of Ep and 
+
+SGh=g+1 E(h) playing the role of Ed. Let 
+
+Ag := X
+
+> e∈E (g)
+
+w(e | x), Bg := 
+
+> G
+
+X
+
+> h=g+1
+
+X
+
+> e∈E (h)
+
+w(e | x), Wg := Ag + Bg
+
+denote the current-group, lower-group, and total remaining weights, respectively. Therefore, reusing the binary results yields 
+
+pPL 
+
+Ω(g) 
+
+> x
+
+| x, 
+
+> G
+
+[
+
+> h=g
+
+E(h); w
+
+ = X
+
+> ρ∈Skg
+> kg
+
+Y
+
+> t=1
+
+w(e(g) 
+
+> ρ(t)
+
+| x)
+
+Bg + Pkg 
+
+> j=t
+
+w(e(g) 
+
+> ρ(j)
+
+| x) , (35) and equivalently 
+
+pPL 
+
+Ω(g) 
+
+> x
+
+| x, 
+
+> G
+
+[
+
+> h=g
+
+E(h); w
+
+ = X
+
+> S⊆E (g)
+
+(−1) |S| Bg
+
+Bg + P 
+
+> e∈S
+
+w(e | x) . (36) 17 A.9 Proof of the Sequential Multinomial Lower Bound and Tightness. 
+
+We finally prove that the DPO loss derived from the sequential multinomial (SMN) surrogate, i.e., the Mult 2-DPO loss in Eq. (24) , is an upper bound on the DPO loss derived from the marginalized PL reward model in Eq. (22) in the multi-level setting. From Eq. (22) we have 
+
+pPL (Ω grp  
+
+> x
+
+| x, E; w) = 
+
+> G−1
+
+Y
+
+> g=1
+
+pPL 
+
+Ω(g) 
+
+> x
+
+| x, 
+
+> G
+
+[
+
+> h=g
+
+E(h); w
+
+ . (37) For each group g, applying Theorem 1 to the group-g-specific preference event Ω(g) 
+
+> x
+
+on the remaining candidate set SGh=g E(h) yields 
+
+pPL 
+
+Ω(g) 
+
+> x
+
+| x, 
+
+> G
+
+[
+
+> h=g
+
+E(h); w
+
+ ≥ kg ! Y
+
+> e∈E (g)
+
+w(e | x)
+
+Wg
+
+. (38) Here Wg is the total remaining weight from group g onward. Multiplying Eq. (38) over g =1, . . . , G − 1 and using Eq. (37) gives 
+
+pPL (Ω grp  
+
+> x
+
+| x, E; w) ≥
+
+> G−1
+
+Y
+
+> g=1
+
+kg ! Y
+
+> e∈E (g)
+
+w(e | x)
+
+Wg
+
+ = pSMN (Ω grp  
+
+> x
+
+| x, E; w),
+
+which establishes the SMN lower bound on the multi-level PL likelihood. The tightness bound follows by applying Theorem 2 to each factor in Eq. (37) . For every g =1, . . . , G − 1,
+
+1 ≤
+
+pPL 
+
+
+
+Ω(g) 
+
+> x
+
+| x, SGh=g E(h); w
+
+
+
+kg ! Q
+
+> e∈E (g)
+> w(e|x)
+> Wg
+
+≤
+
+
+
+1 + Ag
+
+Bg
+
+kg −1
+
+.
+
+Multiplying these inequalities across groups gives 
+
+1 ≤ pPL (Ω grp  
+
+> x
+
+| x, E; w)
+
+pSMN (Ω grp  
+
+> x
+
+| x, E; w) ≤
+
+> G−1
+
+Y
+
+> g=1
+
+
+
+1 + Ag
+
+Bg
+
+kg −1
+
+.
+
+Substituting the policy-induced weight wπθ (e | x) and taking negative logarithms flips the likelihood inequality, yielding the Mult 2-DPO loss in Eq. (24) as a tractable upper bound on the otherwise intractable multi-level marginalized PL-DPO loss and proving Corollary 2. Here, we note that when 
+
+G = 2 , the bound reduces exactly to the binary Mult-DPO upper bound established in Section 3.2. 
+
+## B Related Work 
+
+B.1 LLM-based Recommender Systems 
+
+Recently, LLM-based recommender systems (RSs) have attracted growing attention, where LLMs’ knowledge and reasoning ability can be leveraged to generate high-quality recommendations [Lin et al., 2023, Wu et al., 2024]. Early works show that zero-shot LLMs can already serve as effective RSs by ranking candidate items provided in the prompt [Hou et al., 2024, He et al., 2023]. Post-training approaches further adapt pretrained LLMs to recommendation tasks, encompassing both supervised fine-tuning (SFT) and preference-based alignment. SFT-based methods fine-tune the LLM on prompt-completion pairs of context and item-recommendation demonstrations, with exemplar methods such as TallRec [Bao et al., 2023], BIGRec [Bao et al., 2025], P5 [Geng et al., 2022], InstructRec [Zhang et al., 2025], and LLaRA [Liao et al., 2024]. To further align LLM-based recommenders with user preferences beyond SFT, more recent works employ preference-based alignment. RL-free DPO-based methods include S-DPO [Chen et al., 2024], DMPO [Bai et al., 2024], and SPRec [Gao et al., 2025] (see Section B.2 for details). A parallel line built on reinforcement learning (RL), particularly group relative policy optimization (GRPO) [Shao et al., 2024], generates a list of recommendations via RL: Rec-R1 [Lin et al., 2025] and Rank-GRPO [Zhu et al., 2026] sample diverse recommendation trajectories from the LLM and update the policy with corresponding reward signals. However, the quadratic cost of autoregressive item generation limits these methods to generating only a small number of items per query. In contrast, our Mult-DPO natively supports multi-positive supervision and scales to full ranking over the entire catalog. 18 B.2 Direct Preference Optimization and Its Role in RS 
+
+Aligning LLMs with user preferences is a critical challenge. Reinforcement learning from human feedback (RLHF) [Christiano et al., 2017, Ouyang et al., 2022] first trains a reward model from pairwise preference data and then optimizes the LLM policy against this reward via RL. Direct preference optimization (DPO) [Rafailov et al., 2023] and its variants (including SimPO [Meng et al., 2024], IPO [Azar et al., 2024], and KTO [Ethayarajh et al., 2024]) exploit a closed-form connection between the optimal policy and the reward function in RLHF and reduce alignment to maximum likelihood estimation. Adapting DPO to RSs, however, introduces additional challenges due to the multi-item nature of user feedback. Prior work has explored two main strategies. The first generalizes the Bradley-Terry (BT) model underlying vanilla DPO to its listwise counterpart, the Plackett-Luce (PL) model, with methods such as PRO [Song et al., 2024] and KPO [Cai et al., 2025] fitting PL likelihoods to fully ordered candidate lists. The second restricts supervision to a single positive paired with multiple negatives: S-DPO [Chen et al., 2024] adopts a softmax-style loss corresponding to the single-positive special case of the marginalized PL likelihood, DMPO [Bai et al., 2024] contrasts the positive against the arithmetic mean of negative log-ratios via an ad-hoc BT sigmoid, and SPRec [Gao et al., 2025] introduces self-play with model-generated negatives. Nevertheless, neither strategy faithfully captures the joint multi-positive/multi-negative structure of user preference in RSs. 
+
+## C Additional Experiments and Details 
+
+C.1 Implementation Details 
+
+We run all experiments on the 0.5B-1.5B backbones with 2 NVIDIA H100 GPUs, and on the 3B -7Bbackbones with 2 NVIDIA B200 GPUs. Since the maximum sequence length and per-instance candidate count vary across the three datasets, we adopt different parallelism strategies, ranging from pure data parallelism to ZeRO-2 [Rajbhandari et al., 2020], while keeping the parallelism strategy identical across baselines for fair comparison. All methods are optimized with AdamW [Loshchilov and Hutter, 2019] at a learning rate of 1e −6. Across both training and inference, we always reuse the KV cache of the prompt across the candidate items associated with the same context, which we find substantially reduces the total compute as detailed in the complexity analysis in Section 3.5. 
+
+C.2 Baselines 
+
+The baselines that we include in the main paper are summarized as follows: • BIGRec [Bao et al., 2025] is an instruction-tuning framework for LLM-based recommendation that prompts the LLM to generate candidate items from a user’s interaction history and then grounds the generated outputs to exact items in the catalog, providing a strong SFT-only baseline. • D3 [Bao et al., 2024] improves alignment at decoding time through a debiasing-diversifying decoding strategy that mitigates amplification bias and homogeneity in LLM-based recommendation outputs, without modifying the underlying training procedure. • Vanilla DPO [Rafailov et al., 2023] is the original DPO objective formulated under the Bradley-Terry (BT) model, where each training instance contains one positive and one negative item. • DMPO [Bai et al., 2024] adapts DPO to recommendation by contrasting one positive item against the arithmetic mean of the negative log-ratios within the Bradley-Terry preference model, enabling preference-based alignment with multiple sampled negatives per context. • S-DPO [Chen et al., 2024] extends vanilla DPO from a single negative to multiple negatives by optimizing a softmax-based preference objective over one preferred item and several dispreferred items, which corresponds to the single-positive special case of Mult-DPO under Theorem 2. • LiPO (BT) [Liu et al., 2025] casts listwise preference optimization as learning-to-rank over a candidate list. LiPO is a family of such objectives; we adopt its Bradley-Terry variant, LiPO (BT), which sums the pairwise BT losses over all positive-negative pairs at each step. 
+
+C.3 Evaluation of Mult-DPO with More Backbone Models 
+
+19 NDCG@5 NDCG@15 NDCG@20 
+
+> 0.000
+> 0.025
+> 0.050
+> 0.075
+> 0.100
+> 0.125
+> 0.150
+> 0.175
+> 0.200
+> NDCG
+> 0.5B
+> 1.5B
+> 3B
+> 7B
+
+Figure 4: Mult-DPO test NDCG on Goodreads 
+
+across four Qwen2.5 backbones at β=0 .005 eval-uated on the full item catalog. To complement the experimental results with 0.5B and 3B backbone models in the main text, we ad-ditionally train Mult-DPO on Goodreads with the Qwen2.5-1.5B and Qwen2.5-7B backbones, and report test NDCG@ {5, 15 , 20 } in Fig. 4. Rather than re-running the expensive β sweep at every backbone scale, we reuse the optimal β=0 .005 
+
+identified from the 0.5B and 3B validation sweeps in Section 4.2 and apply it to the 1.5B and 7B back-bone models. Empirically, we find that NDCG climbs steeply from 0.5B to 1.5B backbone model and gradually flattens between 1.5B, 3B, and 7B, with each successive doubling in scale yielding a smaller absolute gain. This pattern indicates that Mult-DPO already extracts most of the available set-wise signal at moderate scale, while the contin-ued improvement at 7B confirms that the benefit of set-wise alignment can be potentially generalized to large backbone regimes. 
+
+## D Limitations 
+
+We note that the multinomial (MN) construction developed in Mult-DPO is a surrogate event likelihood rather than a normalized ranking distribution. It provides one tractable surrogate for the intractable marginalized Plackett-Luce (PL) likelihood that simultaneously admits a closed-form DPO-style optimization, but it may not be the only or the tightest such surrogate. Because the resulting objective uses a uniform target over positives at the same preference level, it is best matched to settings where such positives can be treated as exchangeable; when positives have substantially different relevance, rating-aware groups or weighted variants may be preferable. Alternative methods could be derived from different angles, e.g., expectation-maximization that introduces latent assignment variables over the unobserved candidate orderings, or a variational lower bound with a flexible variational distribution over the positive permutations. Each alternative offers a different trade-off between tractability and tightness, and a systematic exploration of these directions for new DPO-style alignment with multi-candidate preferences is an interesting direction for future study. 
+
+## E Broad Impact 
+
+Although this paper focuses on recommendation, Mult-DPO is applicable to broader tasks in which set-wise preference data arise, i.e., a set of preferred and dispreferred responses with no reliable internal order, including information retrieval and search ranking with multiple relevant documents, open-domain question answering with multiple acceptable answers, and code generation with several correct programs. As with any preference-based alignment method, the trained policy inherits the preference distribution of its training data, so we recommend pairing Mult-DPO with responsible-deployment practices, such as bias audits and human review, before consumer-facing applications. 20
