@@ -6,56 +6,46 @@
 </div>
 
 ## 每次日报
-- 最新运行日期：2026-06-10
-- 运行时间：2026-06-10 22:10:16 UTC
+- 最新运行日期：2026-06-11
+- 运行时间：2026-06-11 22:06:21 UTC
 - 运行状态：成功
-- 本次总论文数：12
-- 精读区：6
-- 速读区：6
+- 本次总论文数：8
+- 精读区：5
+- 速读区：3
 
 ### 今日简报（AI）
-今日推荐12篇论文，精读6篇速读6篇。重点关注《GPT-Micro》加速热力学一致本构模型发现，以及《DSIRM》《Mult-DPO》在电商相关性和推荐排序上的新方法。建议关注符号回归与生成式模型在科学计算中的结合应用。
-- 详情：[/202606/10/README](/202606/10/README)
+1) 今日精选8篇论文，重点精读多轮对话检索与数学推理两大方向。  
+2) 最值得关注：稀疏检索+列表重排序提升多轮RAG效果（9.0分），以及语言模型与神经符号系统结合完成数学推理的综述（8.0分）。  
+3) 建议优先阅读这两篇，把握检索增强与AI推理的最新进展，后续可实践多轮对话中的稀疏检索策略。
+- 详情：[/202606/11/README](/202606/11/README)
 
 ### 精读区论文标签
-1. [GPT-Micro: A large language paradigm for accelerated, inexpensive, and thermodynamics-consistent discovery of constitutive models in manufacturing](/202606/10/2606.08238v1-gpt-micro-a-large-language-paradigm-for-accelerated-inexpensive-and-thermodynamics-consistent-discovery-of-constitutive-models-in-manufacturing)  
-   标签：评分：9.0/10、query:ad
-   evidence：使用大语言模型加速发现本构模型
-2. [A constrained symbolic regression approach for Lyapunov function discovery](/202606/10/2606.10045v1-a-constrained-symbolic-regression-approach-for-lyapunov-function-discovery)  
-   标签：评分：9.0/10、query:ad
-   evidence：约束符号回归用于李雅普诺夫函数发现
-3. [NOVA: Symbolic Regression Discovery of Interpretable Car-Following and Lane-Change Models with Driver Heterogeneity](/202606/10/2606.10583v1-nova-symbolic-regression-discovery-of-interpretable-car-following-and-lane-change-models-with-driver-heterogeneity)  
-   标签：评分：9.0/10、query:sr
-   evidence：符号回归自动发现可解释模型的框架
-4. [Towards Diverse Scientific Hypothesis Search with Large Language Models](/202606/10/2606.10587v1-towards-diverse-scientific-hypothesis-search-with-large-language-models)  
-   标签：评分：9.0/10、query:ad
-   evidence：基于大语言模型的科学假设多样性搜索
-5. [EditSR: Enhancing Neural Symbolic Regression via Edit-based Rectification](/202606/10/2606.07915v1-editsr-enhancing-neural-symbolic-regression-via-edit-based-rectification)  
+1. [uva-irlab-conv at SemEval-2026 Task 8: Multi-Turn RAG with Learned Sparse Retrieval and Listwise Reranking](/202606/11/2606.11945v1-uva-irlab-conv-at-semeval-2026-task-8-multi-turn-rag-with-learned-sparse-retrieval-and-listwise-reranking)  
+   标签：评分：9.0/10、query:rerank-train
+   evidence：在多轮RAG流水线中使用列表级重排序
+2. [Artificial Intelligence for Mathematical Reasoning: An Integrated Survey of Language Models, Neuro-symbolic Systems, and Verified Discovery](/202606/11/2606.08728v1-artificial-intelligence-for-mathematical-reasoning-an-integrated-survey-of-language-models-neuro-symbolic-systems-and-verified-discovery)  
    标签：评分：8.0/10、query:ad
-   evidence：通过编辑修正增强神经符号回归
-6. [miniReranker: Efficient Multimodal Reranking through Visual Cache Reuse and Interaction Sparsity](/202606/10/2606.10759v1-minireranker-efficient-multimodal-reranking-through-visual-cache-reuse-and-interaction-sparsity)  
+   evidence：关于数学推理中语言模型、神经符号系统和验证发现的综述
+3. [Representation Curriculum: Stagewise Training for Robust Ranking and Allocation](/202606/11/2606.09891v1-representation-curriculum-stagewise-training-for-robust-ranking-and-allocation)  
    标签：评分：8.0/10、query:rerank-train
-   evidence：提出基于多模态大模型的高效点式重排序器，直接涉及重排序器训练方法
+   evidence：逐步训练用于稳健排序和分配
+4. [CompRank: Efficient LLM Reranking via Token-Level Compression and Decoding-Free Scoring](/202606/11/2606.11700v1-comprank-efficient-llm-reranking-via-token-level-compression-and-decoding-free-scoring)  
+   标签：评分：8.0/10、query:rerank-train
+   evidence：高效的LLM重排序框架，包含token压缩和训练目标
+5. [ATLAS: Active Theory Learning for Automated Science](/202606/11/2606.12386v1-atlas-active-theory-learning-for-automated-science)  
+   标签：评分：8.0/10、query:ad
+   evidence：ATLAS使用稀疏神经网络自动发现行为模型
 
 ### 速读区论文标签
-1. [DSIRM: Learning Query-Bridged Discrete Semantic Identifiers for E-commerce Relevance Modeling](/202606/10/2606.04374v1-dsirm-learning-query-bridged-discrete-semantic-identifiers-for-e-commerce-relevance-modeling)  
-   标签：评分：7.0/10、query:rerank-train
-   evidence：离散语义标识符用于排序模型训练
-2. [Mult-DPO: Multinomial Direct Preference Optimization for Recommender Systems](/202606/10/2606.10078v1-mult-dpo-multinomial-direct-preference-optimization-for-recommender-systems)  
-   标签：评分：7.0/10、query:rerank-train
-   evidence：面向排序的多项偏好优化方法
-3. [EviRank: Evidence-Based Confidence Estimation for LLM-Based Ranking](/202606/10/2606.04727v1-evirank-evidence-based-confidence-estimation-for-llm-based-ranking)  
-   标签：评分：6.0/10、query:rerank-train
-   evidence：提出基于证据的LLM排名置信度估计
-4. [Beyond Vector Similarity: A Structural Analysis of Graph-Augmented Retrieval for Industrial Knowledge Graphs](/202606/10/2606.06003v1-beyond-vector-similarity-a-structural-analysis-of-graph-augmented-retrieval-for-industrial-knowledge-graphs)  
+1. [APOSM: Pairwise preference learning improves generative small-molecule design](/202606/11/biorxiv-10-64898-2026-06-06-730554-v1-aposm-pairwise-preference-learning-improves-generative-small-molecule-design)  
+   标签：评分：7.0/10、query:ad
+   evidence：用于分子发现的启发式主动学习方法
+2. [Hyperparameter Learning for Latent Factorization of Tensors for Representation Learning to Large-scale Dynamic Weighted Directed Network](/202606/11/2606.09880v1-hyperparameter-learning-for-latent-factorization-of-tensors-for-representation-learning-to-large-scale-dynamic-weighted-directed-network)  
    标签：评分：6.0/10、query:ad
-   evidence：结合LLM和启发式检索的知识图谱查询规划器
-5. [QueryWeaver: Reliable Multi-Tool Query Execution Planning via LLM-Based Graph Generation](/202606/10/2606.08300v1-queryweaver-reliable-multi-tool-query-execution-planning-via-llm-based-graph-generation)  
+   evidence：采用差分进化启发式方法优化超参数以进行知识提取
+3. [TreeSeeker: Tree-Structured Trial, Error, and Return in Deep Search](/202606/11/2606.11662v1-treeseeker-tree-structured-trial-error-and-return-in-deep-search)  
    标签：评分：6.0/10、query:ad
-   evidence：基于大模型的启发式搜索用于多工具查询执行
-6. [SLiMNet: a deep learning model to detect short linear motifs using protein large language model representations and paired inputs](/202606/10/biorxiv-10-64898-2026-05-04-722713-v3-slimnet-a-deep-learning-model-to-detect-short-linear-motifs-using-protein-large-language-model-representations-and-paired-inputs)  
-   标签：评分：6.0/10、query:ad
-   evidence：使用蛋白质大模型进行基序发现
+   evidence：面向深度搜索的树形试错搜索框架
 
 
 <div class="dpr-home-promo-card">

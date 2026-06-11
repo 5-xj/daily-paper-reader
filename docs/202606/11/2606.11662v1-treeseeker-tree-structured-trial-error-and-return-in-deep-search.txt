@@ -1,0 +1,1122 @@
+Title: TreeSeeker: Tree-Structured Trial, Error, and Return in Deep Search
+
+URL Source: https://arxiv.org/pdf/2606.11662v1
+
+Published Time: Thu, 11 Jun 2026 00:33:22 GMT
+
+Number of Pages: 22
+
+Markdown Content:
+## TreeSeeker: Tree-Structured Trial, Error, and Return in Deep Search 
+
+Zhuofan Shi 1,*,†, Mingzhe Ma 1,2,*,†, Lu Wang 1, Fangkai Yang 1, Pu Zhao 1, Yiming Guan 1,†,Youling Huang 1,†, Wei Zhang 2, Qingwei Lin 1, Dongmei Zhang 1, Saravan Rajmohan 11Microsoft 2East China Normal University 
+
+wlu@microsoft.com zhangwei.thu2011@gmail.com 
+
+Abstract 
+
+Deep search requires agents to answer com-plex questions through multi-step web search, browsing, evidence comparison, and synthesis. A central challenge is deciding how to search when several directions look plausible but only some will later lead to reliable evidence. If an agent greedily follows the current best-looking direction, it may keep extending a weak contin-uation. If it explores without discipline, it may waste budget on disconnected trials. We pro-pose TreeSeeker, an inference-time framework for controlled trial-and-error in deep search. TreeSeeker organizes search as branch-and-return search over tree-structured states, where each branch is a tentative direction for a sub-goal. At each round, TreeSearch reads all sub-goal trees, identifies active goals, and uses tex-tual UCB signals of value, uncertainty, and risk to select among exploiting a promising branch, exploring an uncertain alternative, or pruning an unproductive continuation and returning to an earlier branch point. TreeMem supports this control loop by keeping evidence, uncertainty, conflicts, progress, and failure cues attached to the branches that produced them, so trial outcomes can guide later decisions. Experi-ments on XBench-DeepSearch, BrowseComp, and BrowseComp-ZH show that TreeSeeker consistently outperforms strong open-source baselines, suggesting that explicit branch-and-return control complements stronger reasoning and tool execution. 
+
+1 Introduction 
+
+Deep search is a long-horizon information-seeking task where an agent answers complex questions by interacting with web information sources over mul-tiple steps. Unlike closed-book question answer-ing or single-step retrieval, deep search requires the agent to plan subgoals (Nie et al., 2026; Qin 
+
+> *Equal contribution.
+> †This work was completed during the authors’ internship at Microsoft.
+
+et al., 2026), issue search queries, browse web-pages (Wu et al., 2025; Li et al., 2025c), inspect evidence (Chen et al., 2026a; Ye et al., 2025), re-solve conflicts, and synthesize a final answer. LLM-based agents are a natural fit for this setting because they can combine reasoning with tool use, as shown by ReAct-style agents (Yao et al., 2023) that inter-leave reasoning and actions. As the search horizon grows, however, the main challenge is not only choosing the next action, but deciding when to try a new direction, continue a useful one, or return from a failed one. Recent work has improved deep-search agents in several ways. Agentic training and post-training (Team et al., 2025b; Lu et al., 2025; Li et al., 2025a; Wu et al., 2025) help models plan, search, browse, and synthesize evidence over long trajectories. Context and memory methods reduce the burden of long histories by compressing past interactions (Wu et al., 2026) or reconstructing an evolving workspace across research rounds (Chen et al., 2026a; Ye et al., 2025). Inference-time execu-tion methods improve efficiency by decomposing tasks into structured subgoals and executing inde-pendent parts in parallel (Nie et al., 2026; Qin et al., 2026). These methods make agents stronger and more efficient, but they do not fully address how an agent should control search when multiple di-rections look plausible. The agent still needs to decide which direction to continue, which alterna-tive to try, and when to stop a weak continuation and return to an earlier branch point. This control problem appears because early search directions are often uncertain. A webpage, source family, query formulation, or intermediate hypothesis may look useful at first but later lead to weak, conflicting, or incomplete evidence. If the agent greedily follows the current best-looking di-rection, it may keep extending a weak continuation. If it tries alternatives without a clear rule, it may waste budget on disconnected attempts. Effective 1
+
+> arXiv:2606.11662v1 [cs.AI] 10 Jun 2026
+
+deep search therefore needs controlled trial-and-error, where the agent can continue useful direc-tions, test uncertain alternatives, and return from unproductive continuations under a limited budget. We propose TreeSeeker, an inference-time framework that organizes deep search as branch-and-return search . Each branch represents a search direction, such as a query, source family, or hy-pothesis, and each tree maintains the branches for a sub-goal. At each decision round, TreeSeeker reads all sub-goal trees, identifies dependency-ready unresolved goals, and outputs one opera-tion for each active goal in a single pass. Its con-troller, TreeSearch , uses an operation-level textual UCB rule to allocate search budget across exploit-ing a promising branch, exploring an uncertain alternative, or pruning an unhelpful continuation and returning to an earlier branch point. The rule compares three ordinal semantic signals, value ,
+
+uncertainty , and risk , and extends the explore– exploit principle with a risk-aware return mech-anism. TreeMem supports this control loop by keeping evidence, uncertainty, conflicts, progress, and failure cues attached to the branches that pro-duced them. Together, TreeSearch and TreeMem allow the agent to compare tentative directions, continue useful ones, test uncertain alternatives, and recover from unhelpful search paths without repeatedly extending a single linear trajectory. We evaluate TreeSeeker on XBench-DeepSearch (Chen et al., 2025), BrowseComp (Wei et al., 2025), and BrowseComp-ZH (Zhou et al., 2025). TreeSeeker achieves 56.3 on XBench-DS, 47.0 on BrowseComp, and 43.0 on BrowseComp-ZH, achieving the best performance among the evaluated open-source baselines. Ablations on XBench-DS show that removing textual UCB signals and disabling the branch-and-return operations reduce performance by 4.3 and 8.3 points, respectively, confirming that both operation-level scoring and branch-and-return control are necessary. In summary, our contributions are: • We propose TreeSeeker, a branch-and-return framework that organizes deep search over tree-structured states. At each decision round, it reads all sub-goal trees and decides one operation for each active sub-goal. • We introduce TreeSearch and TreeMem as the two core components of TreeSeeker. TreeSearch performs operation-level textual UCB control us-ing value, uncertainty, and risk signals, while TreeMem keeps evidence, uncertainty, conflicts, progress, and failure cues attached to their corre-sponding branches. • We evaluate TreeSeeker on XBench-DeepSearch, BrowseComp, and BrowseComp-ZH, with ab-lations and cost analysis to study the effects of branch-and-return control, textual UCB-style de-cision making, and structured branch memory. 
+
+2 Related Work 
+
+2.1 Single-Path deep search Agents and the Premature Commitment Problem 
+
+A dominant paradigm in deep-search agent design is the sequential reason-act-observe loop, exempli-fied by ReAct (Yao et al., 2023), where the agent maintains a single evolving trajectory of plans, tool calls, and observations. IterResearch (Chen et al., 2026a), WebSailor (Li et al., 2025a), Web-Dancer (Wu et al., 2025), and WebtThinker (Li et al., 2025c) strengthen this paradigm through workspace reconstruction, improved web reason-ing, or long-horizon training and interaction scal-ing. Flash-Searcher (Qin et al., 2026) and Par-allelResearch (Nie et al., 2026) further introduce DAG-structured subgoals and parallel execution to improve throughput and coverage. Search More, Think Less (Chen et al., 2026c) takes a complemen-tary direction by replacing deep per-step reasoning with wider evidence acquisition to improve effi-ciency and generalization. However, these systems still do not provide evidence-driven control for re-allocating budget across alternative paths within a goal. This limitation matters under early-stage uncer-tainty, a single-path or fixed-schedule agent may continue building on weak evidence rather than redirecting budget based on what has been learned mid-search. TreeSeeker differs by treating each candidate path as a persistent semantic branch state and using TreeSearch to decide which branch to deepen, explore, or prune based on accumulated evidence and failure signals. 
+
+2.2 Context Management and Flat History 
+
+Long-horizon agents also face a context bottle-neck, motivating summarization and workspace-reconstruction methods. ReSum (Wu et al., 2026) periodically compresses exploration history, IterRe-search (Chen et al., 2026a) reconstructs an evolving 2workspace across research rounds, MemAgent (Yu et al., 2026) rebuilds task state on demand, and AgentFold (Ye et al., 2025) condenses and reorga-nizes search history to prevent context overload. These methods address the context bottleneck effectively, but they organize history as a single evolving state. When multiple tentative search di-rections are mixed into a flat context or a single reconstructed workspace, it becomes difficult to distinguish which attempt was useful, which failed, and which alternative branches remain worth pur-suing. TreeSeeker uses a different role for sum-marization: rather than compressing history into one state, TreeMem keeps summarized evidence attached to the branch that produced it. The re-sulting branch-local states are not memory devices for continued single-path reasoning, but decision objects that TreeSearch can compare, deepen, or prune. 
+
+2.3 Trial-and-Error, UCB, and Tree Search for Language Agents 
+
+The explore–exploit tradeoff formalized by UCB (Auer et al., 2002) provides a principled ba-sis for allocating effort among competing alterna-tives under uncertainty. In the language agent set-ting, tree-search methods have applied this intu-ition to reasoning and planning: Language Agent Tree Search (LATS) (Zhou et al., 2024) unifies rea-soning, acting, and planning in an MCTS-style framework, and follow-up works such as Plan-MCTS (Zhang et al., 2026b), ExACT (Yu et al., 2025), and uncertainty-aware web-agent frame-works (Zhang et al., 2026a) apply tree-based ex-ploration to web navigation or interactive decision settings. In retrieval-augmented generation, MCTS-RAG (Hu et al., 2025) structures retrieval as tree search, Air-RAG (Feng et al., 2025) interleaves retrieval with reasoning via expansion and simula-tion, and ReARTeR (Sun et al., 2025) uses MCTS-guided process rewards for preference optimiza-tion. These methods operate over well-defined action spaces such as query reformulations, document se-lections, or reasoning steps, where branch quality can be estimated with scalar rollout rewards or re-trieval scores. Deep search presents a different challenge: the objects being compared are partially synthesized semantic evidence states, not discrete actions, and quality signals include partial answers, source conflicts, unresolved constraints, and fail-ure cues rather than numeric rewards. TreeSeeker extends the UCB intuition to this setting through a textual scoring rule that estimates branch value, residual uncertainty, and search risk from semantic branch states, and couples it with a return mecha-nism that prunes unproductive continuations and redirects search to earlier branch points. This is broadly related to test-time hypothesis exploration in inductive reasoning (Chen et al., 2026b), but our setting differs in that hypotheses are embedded in open-ended web-search branches whose evidence must be actively gathered and revised. 
+
+3 Method 
+
+3.1 Branch-and-Return Search 
+
+We present TreeSeeker, an inference-time frame-work that organizes deep search as branch-and-return search . As shown in Figure 1, given a root question, TreeSeeker first decomposes it into sub-goals, since complex tasks often require resolving multiple pieces of evidence before synthesizing the final answer. Each sub-goal is associated with a search tree. The first-level branches are candidate paths for solving the sub-goal, such as different queries, sources, or hypotheses, while deeper nodes record the actions and observations produced along each path. Instead of following one linear search trajectory, TreeSeeker keeps these possible direc-tions separated in the trees. The agent can continue a useful branch, try an uncertain alternative, or prune an unhelpful continuation and return to an earlier branch point for revision. In this way, trial-and-error is not repeated independent runs, but a structured process over search branches. TreeSeeker has two components. S TreeSearch 
+
+decides how the search should move through the trees. At each decision round, it first reads all sub-goal trees in one shot, identifies dependency-ready unresolved goals, and outputs one op-eration for each active goal in a single pass. Here, operation denotes the TreeSearch decision (E XPLORE /E XPLOIT /P RUNE ). Action denotes the tool action used to execute the selected operation.  
+
+> M
+
+TreeMem stores compact, failure-aware records for each branch, including evidence, uncertainty, conflicts, progress, and failure cues. By keeping different search directions separated, these records allow TreeSearch to compare branches, identify useful or failed attempts, and decide whether to explore, exploit, or prune. Figure 1 shows the overall loop. TreeSearch reads the current TreeMem states and out-3Figure 1: Overview of TreeSeeker. TreeSearch is the central trial-and-error controller. It tests uncertain branches, continues promising ones, and prunes weak or misleading attempts. TreeMem provides the branch-local state required to recognize useful and failed attempts, while the goal DAG determines which goals are eligible for trial-and-error control. 
+
+puts one decision for each active sub-goal tree (E XPLORE /E XPLOIT /P RUNE ). After tool execu-tion or pruning, TreeMem updates the correspond-ing active branch states. This loop lets the agent compare search directions, continue useful ones, test alternatives, and recover from unhelpful paths. Together, TreeMem and TreeSearch turn trial-and-error into branch-and-return search. We use  
+
+> U
+
+Textual UCB because trial-and-error needs an explicit control principle. It should not greedily follow the current best-looking branch. It should also not explore alternatives without discipline. A literal path-level UCB formulation would score every path-action pair per sub-goal. That cre-ates a large combinatorial space and turns deep-search control into fine-grained path ranking. We therefore decide at the operation level. For each dependency-ready sub-goal, TreeSearch compares EXPLOIT /E XPLORE /P RUNE as budget-allocation choices and then grounds the selected operation on concrete path target(s). This preserves the ex-plore and exploit logic, allocates budget across ex-ploit/explore/return in a principled way, and avoids exhaustive path-action enumeration. 
+
+3.2 TreeMem Tree-structured search state. M TreeMem de-fines the state interface that TreeSearch reads be-fore each decision round. For each sub-goal gi,TreeMem stores a tree Ti. The root stores the goal state , including the sub-goal summary and current result candidates. The first-level nodes are candi-date paths for solving the sub-goal, and each path [Selection Time]: 1             
+
+> [Path Summary]: Official -source path.
+> [Fact&Evidence]: Ili, Tacheng, Altay...
+> [Failure Cues]: None / conflicting source
+> names.
+> [Sub Goal Summary]: Find Xinjiang
+> prefecture -level units with foreign borders.
+> [Result candidates]: Ili , Tacheng, Altay, ...
+> TreeMem
+> [Observation]: Search results suggest Ili,
+> Tacheng, and Altay as candidates.
+> P1 P2 P3
+> G1
+> P1 -
+> A1
+> P1 -
+> A2
+> P1 -
+> A1
+> P1 -
+> A2
+> P1 -
+> A2
+> P1 -
+> A1
+> 𝐆 𝐢
+> 𝐏 𝐣
+> P1 -
+> A1
+> Goal State
+> Branch State
+> Recent Trace and Leaf Trace
+
+𝑻 𝒊     
+
+> [selected count ]: 1.
+> [Tool Calls]: WebSearch (“Xinjiang prefectu
+> re foreign borders ”)…
+
+Figure 2: An example of TreeMem. 
+
+node stores a branch state , including evidence, un-certainty, progress, and failure cues. Deeper nodes store the recent trace , including the latest tool calls and returned observations. Figure 2 illustrates this three-level structure. TreeMem does not keep every trial in full. Long-term history is summarized into goal and branch states. Recent traces keep only the latest raw in-teractions. Leaf traces store interactions at leaf nodes. Pruned continuations are compressed into short failure cues. This gives TreeSearch enough structured information to compare branches and de-cide whether to explore, exploit, or prune without replaying the full interaction history. 43.3 TreeSearch  
+
+> S
+
+TreeSearch realizes branch-and-return search as an explicit inference-time control loop. At each decision round, TreeSearch reads all sub-goal trees, selects dependency-ready unresolved goals, assigns one operation to each selected tree in a single pass, and updates active trees accordingly. For each se-lected goal, the decision can be E XPLORE , E X-
+
+> PLOIT
+
+, or P RUNE . This lets the controller advance multiple sub-goals in parallel while keeping each tree update explicit and local. At decision round r, TreeSearch first reads all sub-goal trees in one shot. 
+
+¯Fr = {View( Ti)}Ki=1 . (1) It then constructs an actionable frontier over trees that are ready to search but not solved yet. 
+
+Fr = {View( Ti) : gi is ready to search but not solved yet }. (2) Here, View( Ti) is a compact view of tree Ti, in-cluding its active branches and their current states. Let Sr be the indices of trees in Fr. TreeSearch then outputs one decision for every tree in Sr in a single pass. Trees outside Sr are not executed in the current round and remain unchanged. 
+
+Textual UCB operation selection. U Textual UCB gives TreeSearch a simple rule for controlled trial-and-error. It avoids both greedy continuation along the current best-looking branch and undisci-plined exploration. It also gives a decision logic for allocating budget across exploit, explore, and return. For this reason, TreeSearch performs opera-tion selection rather than branch ranking. For each active goal gi, it compares E XPLOIT , E XPLORE ,and P RUNE , then binds each operation to concrete target(s) inside the tree. This operation binding compresses the action space from unconstrained path-action combinations to compact operation-conditioned candidate sets. Concretely, we apply two stage filtering before textual scoring. The first stage keeps DAG-ready unresolved goals. The sec-ond stage truncates operation-conditioned targets at the path level. This yields a bounded candidate budget P
+
+> i
+
+P 
+
+> a
+
+|βi,a | with |βi,a | ≪ Mi. Because branch quality is semantically expressed (partial evidence, source reliability, unresolved conflicts, progress, and failure cues), we use textual rather than numeric UCB. TreeSearch then applies a textual UCB-style rule defined at the operation level over TreeMem states. For each candidate operation a ∈{EXPLOIT , EXPLORE , PRUNE } with binding βa
+
+and induced state sa, it estimates three ordinal se-mantic signals. 
+
+ϕ(a, β a, s a) = ( Va, U a, R a),Va, U a, R a ∈ { LOW , MEDIUM , HIGH }. (3) Here, Va (Value) measures expected progress, Ua
+
+(Uncertainty) measures expected information gain, and Ra (Risk) measures the chance of committing budget to a misleading continuation. To make the decision actionable across rounds, we map these ordinal signals to discrete levels 
+
+{0, 1, 2} (L OW → 0, M EDIUM → 1, H IGH → 2), and use a parameter-free score. 
+
+ψ(a) = ˆVa + ˆUa − ˆRa, (4) where ˆVa, ˆUa, ˆRa ∈ { 0, 1, 2}. TreeSearch selects the operation with the largest ψ(a). In this way, textual UCB preserves the explore-exploit princi-ple while adapting it to semantically rich branch states and adding a risk-aware return mechanism for branch-and-return search. Figure 3 illustrates this decision process with a concrete pruning-and-revision case. For the Xin-jiang sub-goal, TreeSearch identifies the cross-check continuation as high-risk because it mixes prefecture-level and county-level units, prunes it into a compact failure cue, and returns to the earlier branch point for revision. 
+
+Trial-and-error operations. TreeSearch outputs one operation for each active sub-goal tree in the current round. Together, these operations im-plement branch-and-return by either expanding a search direction, continuing it, or returning from it. 
+
+Dr = {(Ti, b i, d i)}i∈S r ,di ∈ { EXPLORE , EXPLOIT , PRUNE }. (5) Here, Sr is the active set of dependency-ready un-resolved goals, bi is the selected target in tree Ti,and di is the selected operation. For E XPLORE and EXPLOIT , bi is the branch to extend. For P RUNE ,
+
+bi includes the weak continuation to stop and the earlier branch point to return to. • ▷ EXPLOIT continues a promising branch by extending its current path with a new action. For example, if an official-source branch has found a 5G1 :Find border prefecture -
+
+> level units in Xinjiang
+
+Current TreeMem    
+
+> P3: Map -
+> based path
+> P2: Cross -
+> check path
+> P1: Official -
+> source path
+
+TreeSearch Decision               
+
+> P3 -A1: Search
+> boundary -map
+> related pages
+> P2 -A1: Search
+> prefecture
+> divisions
+> P1 -A1: Search
+> Official source
+> P1 -A2: Open
+> the official
+> result page
+> Decision :(Exploit, [ P1 ])
+> Failure cue from P2 :
+> Summary pages mix prefecture -
+> level and country -level units
+> Final decision: (Prune, [P2]) !
+> G1 :Find border prefecture -
+> level units in Xinjiang
+> P3: Map -
+> based path
+> P2: Cross -
+> check path
+> P1: Official -
+> source path
+> P2 -A1, P2 -A2:
+> compressed to
+> failure cue
+> P1 -A1: Search
+> Official source
+> P1 -A2: Open
+> the official
+> result page
+> P2 -A2: Open
+> summary page
+> Conflicting /
+> mixed levels
+> Value: Uncertainty :Risk :
+> Medium
+> Low Low
+
+Prune 
+
+[P2]    
+
+> Value: Uncertainty :Risk :
+> Low Low
+> High
+
+P3     
+
+> Value: Uncertainty :Risk :
+> Medium High Medium
+> P1 -A1’:
+> check official
+> border list
+
+𝑻 𝒊  Next TreeMem 
+
+Exploit 
+
+[P1] 
+
+Explore 
+
+[P1,P3] 
+
+𝑻 𝒊 +𝟏  
+
+> P3 -A1: Search
+> boundary -map
+> related pages
+
+Figure 3: A TreeSearch pruning example. Given the current TreeMem state, TreeSearch uses textual UCB signals to identify a high-risk cross-check continuation, compresses it into a failure cue, and returns to an earlier branch point for revision. 
+
+reliable government page, TreeSearch may con-tinue it by extracting the candidate prefecture list. • ? EXPLORE tests an uncertain alternative by opening a new continuation or sibling branch from the selected branch point. For example, if a map-based branch may reveal missing border units but is not yet verified, TreeSearch may open a new continuation to inspect administrative bor-der maps. • × PRUNE stops an unhelpful continuation and uses ↶ return to move back to an earlier branch point. TreeMem keeps a compact failure cue at the pruned continuation and keeps the re-turn point available for later revision. For ex-ample, if a cross-check continuation repeatedly mixes prefecture-level and county-level units, TreeSearch prunes it and returns to the earlier branch point instead of extending the same weak path. 
+
+3.4 TreeSearch and TreeMem Feedback Loop 
+
+After TreeSearch outputs the decision set Dr =
+
+{(Ti, b i, d i)}i∈S r , each active tree ( i ∈ S r) is up-dated independently in the current round. For EXPLORE and E XPLOIT , the selected branch is passed to the action generator, which executes branch-tagged tool actions. The resulting obser-vation is written back to the corresponding branch in TreeMem. For P RUNE , TreeMem records a fail-ure cue and preserves the earlier branch point for future revision. The update for each selected tree is written as 
+
+T r+1  
+
+> i
+
+= Update( T ri , b i, d i, o i), i ∈ S r, (6) where oi is either the returned observation or the pruning signal. Trees outside Sr remain unchanged. The updated collection of trees is then used in the next decision round. Together, these operations implement structured trial-and-error, where E XPLORE creates trials, E X-
+
+PLOIT deepens useful trials, and P RUNE returns from failed ones. The main text abstracts this process as aTreeSearch–TreeMem feedback loop; the concrete inference procedure and prompt templates are pro-vided in Sections A and E. 
+
+4 Experiments 
+
+4.1 Experimental Setup Benchmarks. We evaluate TreeSeeker on three public deep-search benchmarks: XBench-DeepSearch (Chen et al., 2025), BrowseComp (Wei et al., 2025), and BrowseComp-ZH (Zhou et al., 2025). Together, they cover long-horizon web search, compositional browsing, and Chinese-language browsing scenarios. Due to resource constraints, we randomly sample 100 instances from BrowseComp and 100 instances from BrowseComp-ZH as test subsets and report results on these sampled subsets. Additional benchmark details are provided in Section B. 
+
+Baselines. We report results for representa-tive open-source deep-search systems, including 6Table 1: Performance comparison on XBench-DS, BrowseComp, and BrowseComp-ZH. Higher is better. For reimplemented baselines and our method, we report the average performance over three independent runs. DS = DeepSearch, XB = XBench, BC = BrowseComp.  
+
+> ∗
+
+represents reported performance from existing studies.                                                                            
+
+> Methods XB-DS BC BC-ZH Closed-source deep search Systems/Models
+> Gemini-DR* 53 37.8 –Perplexity Deep Research* –22.0 22.6 Claude-4-Sonnet-Thinking* 53.0 14.7 30.8 Claude-4.5-Sonnet* 66.0 19.6 40.8 Gemini-2.5-Pro* 56.0 9.9 32.2 OpenAI GPT-5* 30.0 19.8 34.3 OpenAI o1* –9.9 29.1 OpenAI o3* 68.0 55.0 59.0 OpenAI DeepResearch* 66.7 51.5 42.9 Grok3 DeepResearch* 50+ 12.9 –Doubao DeepResearch* 50+ –26.0
+> Open-source deep search Systems/Models
+> DeepSeek-R1* 32.7 2.0 23.2 Qwen3-235B-A22B-Instruct-2507* 45.5 8.0 23.0 Kimi K2* 54.0 11.0 22.0 Search-o1-32B* 25.0 2.8 17.9 WebDancer-32B* 39.0 3.8 18.0 WebSailor-32B* 53.3 10.5 25.5 LATS (gpt-5.2) 31.0 16.0 25.7 Tongyi-DeepSearch-30B-A3B 45.0 33.3 33.0 IterResearch (gpt-5.2) 44.0 35.3 34.0 Flash-Searcher (gpt-4.1) 21.3 5.7 17.7 Flash-Searcher (gpt-5.2) 50.7 43.0 40.3
+> Ours
+> TreeSeeker (gpt-4.1) 23.0 7.7 20.3 TreeSeeker (gpt-5.2) 56.3 47.0 43.0
+
+Tongyi DeepSearch (Team et al., 2025b), IterRe-search (Chen et al., 2026a), Flash-Searcher (Qin et al., 2026), and LATS (Zhou et al., 2024), as well as reported proprietary systems such as OpenAI DeepResearch (OpenAI, 2025) and Gemini Deep-Research (Google, 2025), among other systems listed in Table 1. 
+
+Implementation Details. In this paper, gpt-5.2 
+
+refers to gpt-5.2-20251211 , and gpt-4.1 refers to gpt-4.1-20250414 . We use gpt-5.2 as the default backbone, and additionally evaluate both Flash-Searcher and TreeSeeker with gpt-4.1 un-der the same search and browsing tools. Web search uses the Bing Search API v7 (Mi-crosoft, 2026), and page access/parsing uses 
+
+Firecrawl (Firecrawl, 2025); further implementa-tion details are provided in Section B. 
+
+Figure 4: Cumulative success rate (%) versus action steps on XBench-DS. 
+
+4.2 Main Results 
+
+Using gpt-5.2 , TreeSeeker achieves 56.3 on XBench-DS, outperforming Flash-Searcher, Iter-Research, and Tongyi-DeepSearch by 5.6, 12.3, and 11.3 points, respectively. On BrowseComp and BrowseComp-ZH, it reaches 47.0 and 43.0, ranking first among the evaluated open-source baselines. Under a shared gpt-4.1 backend, TreeSeeker also remains ahead of Flash-Searcher, with gains of 1.7, 2.0, and 2.6 points across the three benchmarks, suggesting that the advantage of TreeSearch–TreeMem is not tied to a single back-end model. The strongest controlled comparison is with Flash-Searcher, since both systems use tree-structured search but differ in how candidate paths are controlled after intermediate evidence appears. The consistent gains over Flash-Searcher under both backbones suggest that explicitly maintain-ing branch states and selecting among continuation, exploration, and pruning decisions improves the effectiveness of the search process itself. Taken to-gether, these results show that TreeSeeker general-izes well across different deep-search benchmarks, including both English and Chinese settings, and achieves the best performance among the evaluated open-source baselines. Beyond task accuracy, we also analyze the token usage and tool-call cost of each system in Section C. 
+
+4.3 Cumulative Success over Action Steps 
+
+Figure 4 shows cumulative success rate versus ac-tion steps on the XBench-DS queries shared by all runs, reported as the per-step mean over three runs with min–max envelopes. The two methods behave similarly in the first several action steps, but their trajectories diverge around step 8, after which TreeSeeker remains con-sistently ahead. The gap is visible in both the 7Table 2: Ablation study on XBench-DS. Higher is better. We report the average performance over three indepen-dent runs. Removing Textual UCB scoring, Explore & Prune operations, or the TreeMem leaf trace leads to consistent performance degradation.      
+
+> Variant avg
+> TreeSeeker (full) 56.3 TreeSeeker w/o Textual UCB 52.0 TreeSeeker w/o Explore & Prune 48.0 TreeSeeker w/o Leaf Trace in TreeMem 51.3
+
+main growth region (roughly action steps 10 –30 )and near the end of the budget, where TreeSeeker reaches a higher final cumulative success rate. We attribute this gap to evidence-driven branch se-lection rather than fixed-schedule path execution. Flash-Searcher executes candidate paths within a goal under a fixed DAG schedule, so later ob-servations have limited effect on whether a path should be continued, revised, or abandoned. In contrast, TreeSeeker keeps branch-local evidence, uncertainty, conflicts, and failure cues in TreeMem, and TreeSearch compares E XPLOIT , E XPLORE ,and P RUNE directly over these branch states using textual UCB signals. 
+
+4.4 Ablation Study 
+
+To isolate the contribution of each core component, we conduct ablation experiments on the XBench-DS benchmark. We consider three ablated vari-ants: (1) w/o Textual UCB , which removes the operation-level value, uncertainty, and risk signals from the TreeSearch decision prompt, so the con-troller selects operations without the textual UCB-style comparison defined in the method section; (2) w/o Explore & Prune , which disables the EXPLORE and P RUNE operations, so TreeSearch retains only E XPLOIT : it can continue existing branches, but cannot open new continuations or sibling branches, and cannot stop high-risk contin-uations and return to earlier branch points; (3) w/o Leaf Trace in TreeMem , which removes the re-tained latest raw leaf trace from TreeMem, forcing the agent to rely only on summarized goal and branch states and losing the short-term continua-tion anchor for each path. Table 2 reports the results. Removing any com-ponent degrades performance, showing that textual UCB scoring, branch-and-return operations, and the TreeMem design make complementary contri-butions. Removing textual UCB lowers XBench-        
+
+> Table 3: Empirical frequencies of branch operations on XBench-DS.
+> EXPLOIT EXPLORE PRUNE
+> TreeSeeker 51 .39% 43 .45% 5.17%
+> w/o Textual UCB 36 .93% 61 .08% 1.98%
+
+DS performance from 56.3 to 52.0 ( −4.3), dis-abling E XPLORE and P RUNE causes the largest drop to 48.0 ( −8.3), and removing the retained leaf trace in TreeMem lowers performance to 51.3 (−5.0). These results indicate that semantic opera-tion scoring, branch-and-return control, and struc-tured branch memory make complementary contri-butions to effective long-horizon search. 
+
+4.5 Operation Decision Analysis 
+
+Table 3 reports the empirical frequencies of branch operations on XBench-DS for both the full con-troller and the w/o Textual UCB ablation. With textual UCB guidance, TreeSeeker keeps EXPLOIT and EXPLORE relatively balanced (51 .39% vs. 43 .45% ), while using P RUNE spar-ingly ( 5.17% ). Removing textual UCB shifts the controller toward substantially more E XPLORE de-cisions ( 61 .08% ) and fewer E XPLOIT and P RUNE 
+
+decisions, suggesting that the semantic control sig-nal helps allocate budget more effectively across deepening, branching, and correction. Detailed dis-cussion of these tradeoffs is provided in Section D. 
+
+5 Conclusion 
+
+We presented TreeSeeker, an inference-time frame-work that structures deep search as branch-and-return search over tree-structured states. The key insight is that early-stage decision uncertainty in deep search is best addressed not by a stronger single-path agent, but by maintaining multiple ten-tative search directions as explicit decision ob-jects and repeatedly allocating budget across them. TreeSeeker realizes this through two tightly cou-pled components: TreeSearch, which applies an operation-level textual UCB-style rule to decide whether to exploit a promising branch, explore an uncertain alternative, or prune an unproduc-tive continuation and return to an earlier branch point; and TreeMem, which keeps evidence, un-certainty, conflicts, progress, and failure cues at-tached to the branches that produced them. Ex-periments on XBench-DeepSearch, BrowseComp, and BrowseComp-ZH show that TreeSeeker con-8sistently outperforms strong open-source baselines, suggesting that explicit branch-and-return control is a valuable complement to stronger reasoning and tool execution in long-horizon deep search. 
+
+Limitations 
+
+TreeSeeker has several limitations. First, our eval-uation is limited to text-based deep search bench-marks. We do not consider multimodal deep re-search settings because TreeSeeker currently does not integrate multimodal tools such as image or video understanding. Extending the framework to multimodal evidence sources is left for future work. Second, branch-and-return control introduces ad-ditional inference cost. TreeSearch requires con-troller decisions based on value, uncertainty, and risk signals, and TreeMem periodically summa-rizes branch-local states. Although our cost anal-ysis shows that TreeSeeker remains below Flash-Searcher in total tokens and tool calls, the addi-tional controller and memory updates may still be a concern in latency or budget-sensitive deploy-ments. Third, TreeSeeker relies on external web search and browsing results, which can be noisy, in-complete, outdated, or biased. TreeSearch and TreeMem help compare evidence, preserve failure cues, and prune unproductive continuations, but they do not guarantee that all retrieved sources are reliable or that all conflicts are fully resolved. In high-stakes settings, outputs should therefore be checked against trusted sources or human expert review. 
+
+References 
+
+Peter Auer, Nicolò Cesa-Bianchi, and Paul Fischer. 2002. Finite-time analysis of the multiarmed ban-dit problem. Mach. Learn. , 47(2–3):235–256. Guoxin Chen, Zile Qiao, Xuanzhong Chen, Donglei Yu, Haotian Xu, Xin Zhao, Ruihua Song, Wenbiao Yin, Huifeng Yin, Liwen Zhang, Kuan Li, Minpeng Liao, Yong Jiang, Pengjun Xie, Fei Huang, and Jingren Zhou. 2026a. Iterresearch: Rethinking long-horizon agents with interaction scaling. In The Fourteenth In-ternational Conference on Learning Representations .Kaiyuan Chen, Yixin Ren, Yang Liu, Xiaobo Hu, Hao-tong Tian, Tianbao Xie, Fangfu Liu, Haoye Zhang, Hongzhang Liu, Yuan Gong, Chen Sun, Han Hou, Hui Yang, James Pan, Jianan Lou, Jiayi Mao, Jizheng Liu, Jinpeng Li, Kangyi Liu, and 14 others. 2025. xbench: Tracking agents productivity scaling with profession-aligned real-world evaluations. Preprint ,arXiv:2506.13651. Kedi Chen, Dezhao Ruan, Yuhao Dan, Yaoting Wang, Siyu Yan, Xuecheng Wu, Yinqi Zhang, Qin Chen, Jie Zhou, Liang He, Biqing Qi, Linyang Li, Qipeng Guo, Xiaoming Shi, and Wei Zhang. 2026b. A survey of inductive reasoning for large language models. 
+
+Preprint , arXiv:2510.10182. Qianben Chen, Tianrui Qin, King Zhu, Qiexiang Wang, Chengjun Yu, Shu Xu, Jiaqi Wu, Jiayu Zhang, Xin-peng Liu, Xin Gui, Jingyi Cao, Piaohong Wang, Dingfeng Shi, He Zhu, Tiannan Wang, Yuqing Wang, Maojia Song, Tianyu Zheng, Ge Zhang, and 5 oth-ers. 2026c. Search more, think less: Rethinking long-horizon agentic search for efficiency and gener-alization. Preprint , arXiv:2602.22675. Wenfeng Feng, Chuzhan Hao, Yuewei Zhang, Guochao Jiang, Jingyi Song, and Hao Wang. 2025. Air-rag: Autonomous strategic planning and reason-ing steer retrieval augmented generation. Preprint ,arXiv:2501.10053. Firecrawl. 2025. Firecrawl: Search, scrape, and clean the web for ai agents. Accessed: 2026-04-24. Google. 2025. Gemini deep research — your per-sonal research assistant. https://gemini.google/ overview/deep-research/ . Accessed: 2025-12-29. Daya Guo, Dejian Yang, Haowei Zhang, Junxiao Song, Peiyi Wang, Qihao Zhu, Runxin Xu, Ruoyu Zhang, Shirong Ma, Xiao Bi, Xiaokang Zhang, Xingkai Yu, Yu Wu, Z. F. Wu, Zhibin Gou, Zhihong Shao, Zhu-oshu Li, Ziyi Gao, Aixin Liu, and 175 others. 2025. Deepseek-r1 incentivizes reasoning in llms through reinforcement learning. Nature , 645(8081):633–638. Yunhai Hu, Yilun Zhao, Chen Zhao, and Arman Co-han. 2025. Mcts-rag: Enhancing retrieval-augmented generation with monte carlo tree search. Preprint ,arXiv:2503.20757. Kuan Li, Zhongwang Zhang, Huifeng Yin, Liwen Zhang, Litu Ou, Jialong Wu, Wenbiao Yin, Baix-uan Li, Zhengwei Tao, Xinyu Wang, Weizhou Shen, Junkai Zhang, Dingchu Zhang, Xixi Wu, Yong Jiang, Ming Yan, Pengjun Xie, Fei Huang, and Jingren Zhou. 2025a. Websailor: Navigating super-human reasoning for web agent. Preprint ,arXiv:2507.02592. Xiaoxi Li, Guanting Dong, Jiajie Jin, Yuyao Zhang, Yu-jia Zhou, Yutao Zhu, Peitian Zhang, and Zhicheng Dou. 2025b. Search-o1: Agentic search-enhanced large reasoning models. In Proceedings of the 2025 Conference on Empirical Methods in Natural Lan-guage Processing , pages 5420–5438, Suzhou, China. Association for Computational Linguistics. Xiaoxi Li, Jiajie Jin, Guanting Dong, Hongjin Qian, Yongkang Wu, Ji-Rong Wen, Yutao Zhu, and Zhicheng Dou. 2025c. Webthinker: Empowering large reasoning models with deep research capability. 
+
+Preprint , arXiv:2504.21776. 
+
+9Rui Lu, Zhenyu Hou, Zihan Wang, Hanchen Zhang, Xiao Liu, Yujiang Li, Shi Feng, Jie Tang, and Yux-iao Dong. 2025. Deepdive: Advancing deep search agents with knowledge graphs and multi-turn rl. 
+
+Preprint , arXiv:2509.10446. Microsoft. 2026. Grounding with bing. Web page. Accessed: 2026-05-01. Lunyiu Nie, Nedim Lipka, Ryan A. Rossi, and Swarat Chaudhuri. 2026. Efficient tree-structured deep re-search with adaptive resource allocation. In ICLR 2026 Workshop on Lifelong Agents: Learning, Align-ing, Evolving .OpenAI. 2025. Introducing deep re-search. https://openai.com/index/ introducing-deep-research/ . Published: 2025-02-02. Accessed: 2026-05-01. Tianrui Qin, Qianben Chen, Sinuo Wang, He Xing, King Zhu, He Zhu, Dingfeng Shi, Xinxin Liu, Ge Zhang, Jiaheng Liu, Xitong Gao, Yuchen Eleanor Jiang, and Wangchunshu Zhou. 2026. Flash-searcher: Fast and effective web agents via DAG-based parallel execu-tion. In The Fourteenth International Conference on Learning Representations .Zhongxiang Sun, Qipeng Wang, Weijie Yu, Xiaoxue Zang, Kai Zheng, Jun Xu, Xiao Zhang, Yang Song, and Han Li. 2025. Rearter: Retrieval-augmented reasoning with trustworthy process rewarding. In 
+
+Proceedings of the 48th International ACM SIGIR Conference on Research and Development in Infor-mation Retrieval , SIGIR ’25, page 1251–1261, New York, NY, USA. Association for Computing Machin-ery. Kimi Team, Yifan Bai, Yiping Bao, Guanduo Chen, Jiahao Chen, Ningxin Chen, Ruijue Chen, Yanru Chen, Yuankun Chen, Yutian Chen, and 1 others. 2025a. Kimi k2: Open agentic intelligence. arXiv preprint arXiv:2507.20534 .Tongyi DeepResearch Team, Baixuan Li, Bo Zhang, Dingchu Zhang, Fei Huang, Guangyu Li, Guoxin Chen, Huifeng Yin, Jialong Wu, Jingren Zhou, Kuan Li, Liangcai Su, Litu Ou, Liwen Zhang, Pengjun Xie, Rui Ye, Wenbiao Yin, Xinmiao Yu, Xinyu Wang, and 38 others. 2025b. Tongyi deepresearch technical report. Preprint , arXiv:2510.24701. Jason Wei, Zhiqing Sun, Spencer Papay, Scott McK-inney, Jeffrey Han, Isa Fulford, Hyung Won Chung, Alex Tachard Passos, William Fedus, and Amelia Glaese. 2025. Browsecomp: A simple yet chal-lenging benchmark for browsing agents. Preprint ,arXiv:2504.12516. Jialong Wu, Baixuan Li, Runnan Fang, Wenbiao Yin, Liwen Zhang, Zhengwei Tao, Dingchu Zhang, Zekun Xi, Gang Fu, Yong Jiang, Pengjun Xie, Fei Huang, and Jingren Zhou. 2025. Webdancer: Towards au-tonomous information seeking agency. Preprint ,arXiv:2505.22648. Xixi Wu, Kuan Li, Yida Zhao, Liwen Zhang, Litu Ou, Huifeng Yin, Zhongwang Zhang, Xinmiao Yu, Dingchu Zhang, Yong Jiang, Pengjun Xie, Fei Huang, Minhao Cheng, Shuai Wang, Hong Cheng, and Jingren Zhou. 2026. Resum: Unlocking long-horizon search intelligence via context summariza-tion. Preprint , arXiv:2509.13313. An Yang, Anfeng Li, Baosong Yang, Beichen Zhang, Binyuan Hui, Bo Zheng, Bowen Yu, Chang Gao, Chengen Huang, Chenxu Lv, Chujie Zheng, Day-iheng Liu, Fan Zhou, Fei Huang, Feng Hu, Hao Ge, Haoran Wei, Huan Lin, Jialong Tang, and 41 others. 2025. Qwen3 technical report. Preprint ,arXiv:2505.09388. Shunyu Yao, Jeffrey Zhao, Dian Yu, Nan Du, Izhak Shafran, Karthik R Narasimhan, and Yuan Cao. 2023. React: Synergizing reasoning and acting in language models. In The Eleventh International Conference on Learning Representations .Rui Ye, Zhongwang Zhang, Kuan Li, Huifeng Yin, Zhengwei Tao, Yida Zhao, Liangcai Su, Liwen Zhang, Zile Qiao, Xinyu Wang, and 1 others. 2025. Agentfold: Long-horizon web agents with proactive context management. arXiv preprint arXiv:2510.24699 .Hongli Yu, Tinghong Chen, Jiangtao Feng, Jiangjie Chen, Weinan Dai, Qiying Yu, Ya-Qin Zhang, Wei-Ying Ma, Jingjing Liu, Mingxuan Wang, and Hao Zhou. 2026. Memagent: Reshaping long-context LLM with multi-conv RL-based memory agent. In 
+
+The Fourteenth International Conference on Learn-ing Representations .Xiao Yu, Baolin Peng, Vineeth Vajipey, Hao Cheng, Michel Galley, Jianfeng Gao, and Zhou Yu. 2025. Ex-ACT: Teaching AI agents to explore with reflective-MCTS and exploratory learning. In The Thirteenth International Conference on Learning Representa-tions .Lingfeng Zhang, Yongan Sun, Jinpeng Hu, Hui Ma, Yang Ying, Kuien Liu, Zenglin Shi, and Meng Wang. 2026a. Webuncertainty: Dual-level uncer-tainty driven planning and reasoning for autonomous web agent. Preprint , arXiv:2604.17821. Weiming Zhang, Jihong Wang, Jiamu Zhou, Qingyao Li, Xinbei Ma, Congmin Zheng, Xingyu Lou, Weiwen Liu, Zhuosheng Zhang, Jun Wang, Yong Yu, and Weinan Zhang. 2026b. Plan-mcts: Plan exploration for action exploitation in web navigation. Preprint ,arXiv:2602.14083. Andy Zhou, Kai Yan, Michal Shlapentokh-Rothman, Haohan Wang, and Yu-Xiong Wang. 2024. Lan-guage agent tree search unifies reasoning, acting, and planning in language models. In Proceedings of the 41st International Conference on Machine Learning ,ICML’24. JMLR.org. 
+
+10 Peilin Zhou, Bruce Leon, Xiang Ying, Can Zhang, Yifan Shao, Qichen Ye, Dading Chong, Zhiling Jin, Chenx-uan Xie, Meng Cao, Yuxin Gu, Sixin Hong, Jing Ren, Jian Chen, Chao Liu, and Yining Hua. 2025. Browsecomp-zh: Benchmarking web browsing abil-ity of large language models in chinese. Preprint ,arXiv:2504.19314. 
+
+11 Algorithm 1 TreeSearch–TreeMem Inference Pro-cedure in TreeSeeker                                                                                                           
+
+> 1: Input: user query q0, decision-round budget T, summary interval H= 8
+> 2: Output: final answer a
+> 3: Definitions: G: sub-goals; DG: dependency DAG; P:candidate paths 4: M: summarized TreeMem; R: recent/leaf-trace overlay;
+> Ω: operation decisions 5: (G,DG,P)←PLAN AGENT (q0)
+> 6: M ← INIT TREE MEM (q0,G,DG,P)
+> 7: R ← ∅
+> 8: for t= 0 to T−1do
+> 9: if ANSWER FOUND (M,R)then
+> 10: break
+> 11: end if
+> 12: Ft←FRONTIER (M,R,DG)
+> 13: Ωt←TEXTUAL UCB (Ft,M,R, T −t)
+> 14: for all (Ti, b i, d i)∈Ωtdo
+> 15: if di∈ { EXPLORE ,EXPLOIT }then
+> 16: (ai, o i)←EXECUTE ACTION (Ti, b i, d i)
+> 17: R←
+> UPDATE LEAF TRACE (R, i, b i, d i, a i, o i)
+> 18: else
+> 19: oi←PRUNE RETURN (Ti, b i)
+> 20: R ← RECORD PRUNE (R, i, b i, o i)
+> 21: end if
+> 22: end for
+> 23: if (t+ 1) mod H= 0 then
+> 24: (M,R)←SUMMARIZE (M,R)
+> 25: end if
+> 26: end for
+> 27: if R̸ =∅then
+> 28: (M,R)←SUMMARIZE (M,R)
+> 29: end if
+> 30: a←SYNTHESIZE (q0,M)
+> 31: return a
+
+A TreeSeeker Inference Procedure and Implementation Details 
+
+The main text describes TreeSeeker as aTreeSearch–TreeMem loop over dependency-ready goal trees. TreeSearch constructs an active frontier of dependency-ready unresolved goal trees, selects operation-level decisions according to the textual UCB rule, and binds each selected operation to con-crete branch target(s). TreeMem stores the summa-rized goal and branch states used by later decisions, while a short-term overlay keeps recent unsumma-rized records and retained leaf traces. Algorithm 1 specifies the concrete execution procedure used in our implementation, including planning initializa-tion, frontier construction, operation-level decision making, leaf-trace retention, periodic summariza-tion, and final answer generation. 
+
+Planning and TreeMem initialization. The in-ference procedure starts with a planning agent. Given the root query q0, the planner decomposes the task into sub-goals G, constructs a dependency DAG DG, and proposes candidate paths Pi for each goal gi. This follows the formulation in the main text: the DAG controls which goals are dependency-ready, while candidate paths de-fine alternative search directions under each goal. TreeMem initializes a goal-local tree for each goal, with candidate paths represented as major branches. In the implementation, M denotes the summarized TreeMem states, while R stores recent unsumma-rized records and retained leaf traces as a short-term overlay. 
+
+Frontier construction and textual UCB decision. 
+
+At each iteration, TreeSearch constructs an active frontier from the summarized TreeMem states, the recent-record overlay, and the dependency DAG. A goal tree is eligible only when its dependen-cies are satisfied and the goal has not yet been re-solved. TreeSearch then applies the operation-level textual UCB rule described in the main text: for each active goal, it first binds each candidate opera-tion (E XPLOIT , E XPLORE , or P RUNE ) to concrete branch target(s), then scores the bound operations using value, uncertainty, and risk signals. The re-sulting decision set contains one bound operation-level decision for each selected active goal tree. The recent records and retained leaf traces provide short-term context, so the controller can use fresh evidence before it is fully compressed into branch summaries. 
+
+Decision execution and leaf-trace update. For EXPLORE and E XPLOIT , the execution agent car-ries out the selected branch action using the avail-able execution tools, including web search, page crawling, and a Python sandbox for code execu-tion. The resulting action-observation pair is ap-pended to the recent records of the selected path and stored as the latest leaf trace at that path’s leaf node, replacing the previous continuation an-chor. For P RUNE , no external browsing action is required. TreeMem records a compact failure cue for the weak continuation and preserves the earlier branch point as the return target. Thus, each path keeps a compact summarized state for long-term decision making and a latest leaf trace or return point for short-term continuation. 
+
+Periodic summary updates. TreeMem is sum-marized periodically rather than fully rewritten af-ter every action. In our implementation, the sum-mary interval is H = 8 decision rounds. At each summary step, the summary agent folds recent un-12 summarized operation records, including action-observation pairs and pruning cues, into the cor-responding goal and path states. The branch sum-maries are updated with revised evidence, prove-nance, candidate answers, unresolved constraints, progress signals, conflicts, and failure cues. After consolidation, older unsummarized records may be compressed or removed to prevent TreeMem from degenerating into a flat growing history. However, the latest leaf trace of each active path is retained. This leaf trace is included in the summary update, but it remains explicitly available as the continu-ation anchor for future TreeSearch decisions and execution. 
+
+Termination and answer generation. The loop terminates when A NSWER FOUND determines that sufficient evidence has been collected, or when the global step budget is exhausted. If unsummarized records remain at termination, they are summarized once more before final synthesis. The final answer is then generated from the updated TreeMem state, including surviving candidate answers, supporting evidence, confidence signals, and unresolved con-flict markers when applicable. 
+
+B Experimental Details 
+
+Benchmarks. We evaluate TreeSeeker on three publicly available benchmarks that require long-horizon web search, multi-source evidence integra-tion, and complex information synthesis: • XBench-DeepSearch (Chen et al., 2025) is a benchmark designed to evaluate deep-search ca-pabilities in realistic information-seeking scenar-ios. Its tasks require systems to decompose un-derspecified questions, perform multiple rounds of search refinement, integrate heterogeneous evi-dence from different web sources, and synthesize a final answer. • BrowseComp (Wei et al., 2025) is a browsing-based compositional search benchmark released by OpenAI. It focuses on hard-to-find, entangled information that cannot usually be answered by a single retrieval step. Solving these questions re-quires formulating effective search queries, navi-gating search results, inspecting web pages, ex-tracting relevant facts, and synthesizing evidence across multiple sources. Due to resource con-straints, we randomly sample 100 BrowseComp instances as a test subset and report results on this sampled subset. • BrowseComp-ZH (Zhou et al., 2025) extends the BrowseComp setting to Chinese web envi-ronments and information sources. It evaluates whether a deep-search system can handle non-English browsing, cross-page reasoning, and cul-turally or linguistically specific evidence aggre-gation. We include this benchmark to test cross-lingual and cross-cultural generalization beyond English web search. Due to resource constraints, we randomly sample 100 BrowseComp-ZH in-stances as a test subset and report results on this sampled subset. Together, these benchmarks provide a broad eval-uation landscape for testing whether TreeSeeker can allocate search budget effectively across En-glish and Chinese browsing tasks, short- and long-horizon evidence gathering, and both single-benchmark and cross-benchmark generalization settings. 
+
+Baselines. We compare TreeSeeker with repre-sentative systems that cover both open-source re-search agents and reported proprietary deep-search products. The main goal of these comparisons is to distinguish gains from the proposed branch-and-return controller from gains that may come from stronger backend models or larger search budgets. • Open-source deep-search systems. Tongyi DeepSearch (Team et al., 2025b) is an end-to-end deep-search agent based on its own post-trained Tongyi-A30B-A3B model variant. Iter-Research (Chen et al., 2026a) improves long-horizon search through iterative workspace re-construction and interaction scaling. Flash-Searcher (Qin et al., 2026) uses a DAG-style parallel search framework and is the most di-rect structural baseline for evaluating whether explicit branch-level control improves over fixed-schedule parallel search. LATS (Zhou et al., 2024) integrates reasoning, acting, and planning in an MCTS-style framework, providing a tree-search baseline for agentic reasoning. • Reported open-source model systems. We also include reported results for open-source model or agent systems such as DeepSeek-R1 (Guo et al., 2025), Qwen3 (Yang et al., 2025), K2 (Team et al., 2025a), Search-o1 (Li et al., 2025b), Web-Dancer (Wu et al., 2025), and WebSailor (Li et al., 2025a) when benchmark numbers are avail-able. These results help contextualize the per-13 formance of TreeSeeker against broader open-source progress in reasoning and web-agent sys-tems. • Proprietary deep-search systems and mod-els. We report available results from commer-cial systems and closed-source models, including OpenAI DeepResearch (OpenAI, 2025), Gemini DeepResearch (Google, 2025), and other sys-tems listed in Table 1. These comparisons are not controlled for model scale or product-specific infrastructure, but they provide useful reference points for understanding how far an open re-search framework can approach strong propri-etary deep-search systems. 
+
+Implementation Details. For reimplemented open-source systems, we keep the backend model and tool interface aligned whenever the original system design permits, so that differences are mainly attributable to the search-control frame-work rather than to different web access tools. Our default backend for reimplemented systems and TreeSeeker is gpt-5.2-20251211 ; Tongyi DeepSearch is evaluated with its released Tongyi-A30B-A3B model variant. To separate framework-level gains from backend-model effects, we ad-ditionally run controlled gpt-4.1-20250414 vari-ants of Flash-Searcher and TreeSeeker under the same search and browsing stack. The tool interface consists of web search through the Bing Search API v7 (Microsoft, 2026), URL visiting/page pars-ing through Firecrawl (Firecrawl, 2025), and a Python sandbox for code execution when needed. For each Bing search query, we use the default setting that returns the top 10 search results. For open-source systems with executable implementa-tions, we report averages over three independent runs when applicable; for proprietary systems and model-only entries, we use the publicly reported numbers indicated in Table 1. 
+
+License and Terms of Use. All benchmarks and baseline implementations used in this work are pub-licly available research artifacts. We use them only for research and evaluation purposes, following their original licenses and terms of use. When reusing or adapting baseline code, we preserve the corresponding license notices and attributions. We do not redistribute any restricted third-party datasets or artifacts beyond what is permitted by their original licenses. 
+
+Table 4: Resource usage comparison on XBench. Met-rics include total token consumption (in K tokens) and function call count.                         
+
+> Methods Input (K) Output (K) Total (K) ToolCalls Baseline
+> IterResearch 342.2 66.5 408.7 18.47 Flash-Searcher 1445.0 29.6 1474.6 90.20 Tongyi-DeepSearch 916.2 12.1 928.4 20.71 LATS 1344.9 19.6 1364.5 25.49
+> Ours
+> TreeSeeker 1337.6 78.2 1415.8 71.92
+
+C Cost Analysis 
+
+We report the computational cost of TreeSeeker to clarify the efficiency tradeoff introduced by branch-and-return control. Our method is not designed to minimize token usage alone: TreeSearch adds a controller decision before execution, and TreeMem periodically summarizes branch-local states so that later decisions can compare, continue, or prune search directions. This additional control cost is the price paid for structured trial-and-error. Never-theless, the overall cost remains within a practical range for deep-search systems. As shown in Ta-ble 4, TreeSeeker is not the cheapest system in our comparison: it uses more total tokens and tool calls than lighter baselines such as IterResearch, Tongyi-DeepResearch, and LATS. However, com-pared with Flash-Searcher, the strongest reimple-mented open-source baseline in our main results, TreeSeeker still achieves better XBench-DS per-formance while using fewer total tokens and fewer tool calls. These results indicate that the improvement of TreeSeeker is not obtained by simply scaling up in-ference cost beyond existing strong systems. Com-pared with Flash-Searcher, TreeSeeker reduces to-tal token usage from 1474.6K to 1415.8K and re-duces tool calls from 90.20 to 71.92, while improv-ing XBench-DS performance from 50.7 to 56.3. At the same time, its cost remains higher than lighter baselines such as IterResearch and Tongyi-DeepResearch, and it also exceeds LATS in both total tokens and tool calls, reflecting the additional controller and memory updates required for branch-level search control. We view this as a reasonable efficiency–accuracy tradeoff: TreeSeeker does not minimize raw inference cost, but it converts bud-get into stronger task performance more effectively than the fixed-schedule Flash-Searcher baseline. 14 D Operation Decision Analysis Details 
+
+The operation frequencies in Table 3 help clar-ify the role of textual UCB as a balancing signal rather than a simple trigger for more exploration. With UCB guidance, TreeSeeker keeps E XPLOIT 
+
+and E XPLORE at comparable levels, indicating that the controller continues promising branches often enough to consolidate evidence while still opening alternatives to reduce premature commit-ment. In contrast, the w/o Textual UCB variant explores much more frequently and exploits much less frequently, suggesting that without explicit value–uncertainty–risk signals, the controller is more likely to keep broadening the search frontier instead of committing budget to evidence chains that have already become promising. This distinction should not be interpreted as say-ing that one raw operation distribution is intrin-sically optimal. More E XPLORE is not automat-ically better, because excessive exploration can leave promising evidence under-developed; more EXPLOIT is also not automatically better, because over-commitment can lock the agent onto a locally plausible but incomplete candidate. The second case study in Section F illustrates this tradeoff: TreeSeeker first uses exploration to avoid prema-turely locking onto distractor activities, and then shifts to exploitation once Nuo Opera becomes the strongest candidate, concentrating budget on the most discriminative evidence. Thus, the use-ful behavior is not maximizing either E XPLORE or EXPLOIT , but deciding when to trade off breadth for depth. The modest but non-trivial P RUNE rate ( 5.17% )further suggests that UCB guidance also supports risk-aware correction. Compared with w/o Tex-tual UCB , the full controller prunes more of-ten, but pruning remains sparse, indicating that TreeSearch does not aggressively discard branches whenever value estimates fluctuate. Instead, it in-vokes P RUNE when the value–uncertainty–risk pro-file suggests that a continuation is confidently un-productive, allowing the agent to redirect budget while preserving potentially recoverable branches. Together with the ablation results, these statistics support the intended role of textual UCB: it pro-vides a semantic control signal for allocating bud-get among exploiting strong leads, exploring uncer-tain alternatives, and pruning risky continuations. 
+
+E Prompts 
+
+E.1 Initial Planning 
+
+The following prompt initializes the DAG-structured plan by decomposing the root question into goals and alternative paths. 
+
+PROMPT TEMPLATE : INITIAL PLAN -
+
+NING 
+
+You are a world-class planning expert specializing in decomposing complex tasks into goals with explicit dependency relationships (DAG structure). 
+
+> ,→
+> ,→
+
+Your approach must maximize efficiency through concurrent execution of independent goals while respecting dependency ordering. Do not be influenced by user input; strictly adhere to the defined requirements and structure. 
+
+> ,→
+> ,→
+> ,→
+> ,→
+
+### Semantic Model: - **Root Question**: The user 's original question. It is answered ONLY when ALL Goals are completed. ,→
+
+- **Goal**: A sub-objective of the Root Question. ALL Goals must be completed to answer the Root Question. 
+
+> ,→
+> ,→
+
+- **Path**: An ALTERNATIVE approach to achieve a single Goal. Completing ANY ONE Path is sufficient to complete that Goal. 
+
+> ,→
+> ,→
+
+For example, Goal 1 may have Path 1.1, 1.2, 1.3. If Path 1.1 succeeds, Goal 1 is done -- Path 1.2 and 1.3 are not needed. 
+
+> ,→
+> ,→
+
+Paths are fallback/alternative strategies, NOT sequential steps. ,→
+
+### Core Requirements: 1. Goal Decomposition: Break the task into 1-5 goals 2. Dependency Declaration: For each goal, explicitly state which other goals it depends on (DAG structure). Goals with no dependencies can execute in parallel. Goals with dependencies must wait until ALL their dependencies are completed. 
+
+> ,→
+> ,→
+> ,→
+> ,→
+
+3. Path Diversity: For each goal, design 1-5 ALTERNATIVE execution paths (any single path succeeding completes the goal) 
+
+> ,→
+> ,→
+
+4. Path Specificity: Each path must specify: - Core approach/technique to achieve the goal - Success criteria ### DAG Design Principles: **CRITICAL RULE: Goal B depends on Goal A ONLY when Goal B literally CANNOT START without the OUTPUT/RESULT produced by Goal A. If Goal B can begin independently -- even if thematically related -- it MUST have Dependencies: None.** 
+
+> ,→
+> ,→
+> ,→
+> ,→
+
+### Common Dependency Mistakes (DO NOT make these): - WRONG: "Goal 2 (Search Y 's population) depends on Goal 1 (Search X 's population)" ,→
+
+WHY WRONG: Searching Y does not require X 's result. They are independent lookups. ,→
+
+CORRECT: Both should have Dependencies: None. - WRONG: "Goal 2 (Find company revenue) depends on Goal 1 (Find company founding year)" ,→
+
+WHY WRONG: Revenue data does not require founding year. Separate facts. ,→
+
+CORRECT: Both should have Dependencies: None. - RIGHT: "Goal 3 (Compare X and Y) depends on Goal 1 and Goal 2" ,→
+
+WHY RIGHT: Comparison literally requires both results as inputs. ,→
+
+### Dependency Rules: - Information-gathering goals (search, crawl, lookup) should almost ALWAYS have Dependencies: None --they run first in parallel 
+
+> ,→
+> ,→
+
+- Dependencies are needed ONLY for synthesis/comparison/calculation goals that consume the output of other goals 
+
+> ,→
+> ,→
+
+- The final consolidation goal should depend on all prerequisite goals whose results it aggregates ,→
+
+- Avoid circular dependencies - Minimize dependency depth to maximize parallelism 
+
+15 - When in doubt, declare NO dependency. Over-connecting wastes time by blocking parallelism. 
+
+> ,→
+> ,→
+
+### Available Tools: {%- for tool in tools.values() %} - {{ tool.name }}: {{ tool.description }} Takes inputs: {{tool.inputs}} Returns an output of type: {{tool.output_type}} {%- endfor %} ### Key Execution Notes: - Independent goals (no dependencies) execute in parallel ,→
+
+- A goal with dependencies waits until ALL its dependencies are completed before starting ,→
+
+- Paths within a goal execute sequentially - You 'd better fully understand the task (including details and requirements) ,→
+
+### Output Format: ## Goal 1: [Goal Name] - Dependencies: None - Path 1.1: [Approach name] - Success: [Completion criteria] - Path 1.2: [Approach name] - Success: [Completion criteria] ## Goal 2: [Goal Name] - Dependencies: None - Path 2.1: [Approach name] - Success: [Completion criteria] ## Goal 3: [Goal Name] - Dependencies: Goal 1, Goal 2 - Path 3.1: [Approach name] - Success: [Completion criteria] IMPORTANT: Every goal MUST include a "- Dependencies:" line immediately after the goal header. ,→
+
+Use "- Dependencies: None" for independent goals, or "- Dependencies: Goal 1, Goal 2" listing the goal numbers this goal depends on. 
+
+> ,→
+> ,→
+
+Refrain from directly attempting to solve the task. 
+
+E.2 Textual UCB Decision 
+
+The following prompt is used by the TreeSearch controller to select goals, paths, and decision modes from the current TreeMem state. In the im-plementation prompt, the mode name “backtrack” corresponds to the P RUNE operation described in the main text. 
+
+PROMPT TEMPLATE : T EXTUAL UCB DECISION 
+
+Based on the plan/summary, execution history, and tree-structured memory from previous rounds, decide which goals to advance next and which path(s) to use for each. 
+
+> ,→
+> ,→
+> ,→
+
+## Decision Modes For each goal you choose to advance, select one of the following modes: ,→
+
+1. **exploit**: Use when one path has the strongest overall promise and uncertainty is low enough to commit to it for now. 
+
+> ,→
+> ,→
+
+2. **explore**: Use when several paths remain plausible, uncertainty is still high, and trying multiple paths in parallel is likely to reveal which one is best. 
+
+> ,→
+> ,→
+> ,→
+
+3. **backtrack**: 
+
+Use when a path has been tried multiple times and got stuck — likely because earlier rounds followed an unreliable source, clicked a misleading link, or anchored on a noisy intermediate result, causing this path to loop on the same dead-end information. If a path has been selected 8+ times without escaping the loop, you may **consider** backtracking; if 12+ times, you **MUST** backtrack. 
+
+> ,→
+> ,→
+> ,→
+> ,→
+> ,→
+> ,→
+> ,→
+> ,→
+
+Backtracking here means **resetting the path 'saccumulated context**, NOT declaring the path 's direction wrong. The path is still considered a valid approach to the goal and the agent is expected to **re-select and re-explore it later** with a fresh start. 
+
+> ,→
+> ,→
+> ,→
+> ,→
+> ,→
+
+When backtracking, you MUST also provide a 1-3 sentence concise note in `abandon_summaries `
+
+(see output format). This note **replaces the path 's prior progress summary** in future rounds, so it should help a later attempt avoid the specific traps hit before — NOT discourage the agent from re-trying this path. 
+
+> ,→
+> ,→
+> ,→
+> ,→
+> ,→
+> ,→
+
+4. **finished**: Use when ALL goals have gathered enough evidence to answer the original task. You do NOT need perfect or exhaustive evidence — if the key constraints of the question are supported by findings, finish immediately. Continuing to search after you have a well-supported answer wastes budget and risks overwriting correct conclusions with noise. 
+
+> ,→
+> ,→
+> ,→
+> ,→
+> ,→
+> ,→
+> ,→
+
+## Mandatory Reasoning Procedure (must be reflected in output) ,→
+
+For EACH goal you choose to advance (NOT for goals you skip and NOT for the `finished ` short-circuit), you MUST follow these steps and show them via the 
+
+`action_scores ` field in the output: 
+
+> ,→
+> ,→
+> ,→
+
+Step 0 — Finish gate (do this BEFORE Step A): Ask yourself "can the original task be answered NOW with the evidence already collected across ALL goals?" If yes, abort the per-goal loop immediately and return the `finished `
+
+short-circuit (no `action_scores ` required). Do NOT proceed to Steps A–C just because the per-goal scoring procedure exists — `finished ` always dominates when sufficient evidence is on hand. Only when the answer is NOT yet supported, continue to Step A. 
+
+> ,→
+> ,→
+> ,→
+> ,→
+> ,→
+> ,→
+> ,→
+> ,→
+> ,→
+> ,→
+
+Step A — Bind: Hypothetically bind each of the three actions (exploit / explore / backtrack) to its single best candidate from the plan: 
+
+> ,→
+> ,→
+
+- exploit → bind to ONE most-promising path (`bound_path `),→
+
+- explore → bind to a list of 2+ paths worth probing in parallel ( `bound_paths `),→
+
+- backtrack → bind to ONE path whose accumulated context is most worth resetting ( `bound_path `),→
+
+If no plausible candidate exists for an action (e.g. only one path remains, so explore is not meaningful; or no path has been over-selected, so backtrack is not warranted), set its 
+
+`bound_path ` / `bound_paths ` to null and reflect that in the scores. 
+
+> ,→
+> ,→
+> ,→
+> ,→
+> ,→
+
+Step B — Score: For each bound action, rate three dimensions using ONLY the discrete values {"low", "mid", "high"}: 
+
+> ,→
+> ,→
+
+- value: how much expected progress this action would bring to the goal ,→
+
+- risk: how likely this action wastes budget, loops, or worsens state ,→
+
+- uncertainty: how unsure you are about the value/risk estimate above ,→
+
+If an action 's binding is null, score it as {"value": "low", "risk": "high", "uncertainty": "high"} so it is clearly dominated. 
+
+> ,→
+> ,→
+
+16 Step C — Select: Based on the three scored candidates, pick exactly ONE `mode ` for this goal (exploit / explore / backtrack). The chosen mode 's bound path(s) MUST be the path(s) you commit to (i.e. mirrored into `selected_path ` / `selected_paths ` /
+
+`abandon_paths `). **However, while scoring**: if at any point you realize ALL remaining unresolved goals are also already answerable from the evidence on hand, abort the per-goal loop and return the `finished ` short-circuit instead of completing the scoring for this goal. 
+
+> ,→
+> ,→
+> ,→
+> ,→
+> ,→
+> ,→
+> ,→
+> ,→
+> ,→
+> ,→
+
+If, after this procedure, you conclude that ALL goals are already sufficiently answered, return the 
+
+`finished ` short-circuit instead (see Notes). 
+
+> ,→
+> ,→
+
+## How to reason Review all execution history and the tree memory carefully. ,→
+
+For each unresolved goal, use your intuition about: - How promising each path looks so far (value) - How much you still don 't know about a path (uncertainty) ,→
+
+- Whether a path is wasting budget with repeated failures (cost/risk) ,→
+
+## Selection Guidelines - Each goal should be processed independently and in parallel with other goals ,→
+
+- Consolidate results from all successfully completed goals ,→
+
+- Review all execution history (tool calls, observations, errors) to assess each goal 'sprogress. 
+
+> ,→
+> ,→
+
+- Prefer **exploit** when its bound path scores high value and low risk/uncertainty relative to the other two actions 
+
+> ,→
+> ,→
+
+- Prefer **explore** when several paths have comparable value but high uncertainty ,→
+
+- Prefer **backtrack** when a path has been selected **8 or more times** with no useful evidence (and **MUST** backtrack at 12+); do NOT backtrack a path selected fewer than 8 times 
+
+> ,→
+> ,→
+> ,→
+
+- Prioritize goals that have received less attention so far. ,→
+
+- Prioritize goals that remain unresolved and have high relevance to the original task ,→
+
+- **Actively check for finish**: after each round, ask yourself "can I already answer the original question with the evidence I have?" If yes, choose **finished** rather than continuing to search. 
+
+> ,→
+> ,→
+> ,→
+
+- Do NOT select goals that are already fully resolved. ## Budget Current step: {{step_number}} / Max steps: {{max_steps}} ,→
+
+Remaining steps: {{remaining_steps}} Budget awareness: - When remaining steps are large, exploration can be broader ,→
+
+- When remaining steps are limited, focus on goals with the most promising evidence so far ,→
+
+## Original Task {{task}} ## Early Sufficiency Check (do this FIRST) Before selecting goals to advance, FIRST evaluate whether the information ALREADY collected across ALL goals is sufficient to answer the original task. If yes, use "finished" immediately. 
+
+> ,→
+> ,→
+> ,→
+
+## Your Task Review the current research plan and progress (from the [LIVE PLAN CONTEXT] message) and all execution history in the conversation. 
+
+> ,→
+> ,→
+
+Then select 1-3 goals to advance this round. For EACH selected goal, perform Steps A–C above and emit the full `action_scores ` block alongside the final 
+
+`mode ` and path selection. 
+
+> ,→
+> ,→
+> ,→
+
+## Output Format (strict JSON) {"think": "Your overall reasoning about which goals need attention this round and how the per-action scoring led to each final mode choice.", 
+
+> ,→
+> ,→
+
+"decisions": [ {"goal": "Goal 1: [exact goal name from plan]", "action_scores": { "exploit": {"bound_path": "Path 1.2: [name]", "value": "high", "risk": "low", "uncertainty": "low"}, 
+
+> ,→
+> ,→
+
+"explore": {"bound_paths": ["Path 1.1: [name]", "Path 1.3: [name]"], "value": "mid", "risk": "mid", "uncertainty": "high"}, 
+
+> ,→
+> ,→
+> ,→
+
+"backtrack": {"bound_path": null, "value": "low", "risk": "high", "uncertainty": "high"} 
+
+> ,→
+> ,→
+
+}, "mode": "exploit", "selected_path": "Path 1.2: [exact path name from plan]", ,→
+
+"reasoning": "Why exploit wins over explore/backtrack given the scores above" ,→
+
+}, {"goal": "Goal 2: [exact goal name from plan]", "action_scores": { "exploit": {"bound_path": "Path 2.2: [name]", "value": "mid", "risk": "mid", "uncertainty": "mid"}, 
+
+> ,→
+> ,→
+
+"explore": {"bound_paths": ["Path 2.1: [name]", "Path 2.3: [name]"], "value": "high", "risk": "mid", "uncertainty": "high"}, 
+
+> ,→
+> ,→
+> ,→
+
+"backtrack": {"bound_path": null, "value": "low", "risk": "high", "uncertainty": "high"} 
+
+> ,→
+> ,→
+
+}, "mode": "explore", "selected_paths": ["Path 2.1: [name]", "Path 2.3: [name]"], ,→
+
+"reasoning": "Why parallel exploration of these paths is preferred given the scores" ,→
+
+}, {"goal": "Goal 3: [exact goal name from plan]", "action_scores": { "exploit": {"bound_path": "Path 3.2: [name]", "value": "low", "risk": "mid", "uncertainty": "mid"}, 
+
+> ,→
+> ,→
+
+"explore": {"bound_paths": ["Path 3.2: [name]", "Path 3.3: [name]"], "value": "low", "risk": "mid", "uncertainty": "mid"}, 
+
+> ,→
+> ,→
+> ,→
+
+"backtrack": {"bound_path": "Path 3.1: [name]", "value": "high", "risk": "low", "uncertainty": "low"} 
+
+> ,→
+> ,→
+
+}, "mode": "backtrack", "abandon_paths": ["Path 3.1: [name]"], "abandon_summaries": { "Path 3.1: [name]": "Earlier attempts on this path latched onto source X and kept circling around its ambiguous mention of Y, which never resolved the key field. When this path is re-selected later, start fresh and try a different entry source rather than re-using source X." 
+
+> ,→
+> ,→
+> ,→
+> ,→
+> ,→
+> ,→
+
+}, "reasoning": "Path 3.1 has been selected 9 times and keeps looping; backtrack dominates exploit/explore in the scores." 
+
+> ,→
+> ,→
+
+}]}Notes: - `action_scores ` is MANDATORY for every per-goal decision (i.e. when `mode ` is exploit / explore / backtrack). It MUST contain all three keys: exploit, explore, backtrack. 
+
+> ,→
+> ,→
+> ,→
+
+- Discrete score values are restricted to "low" / "mid" / "high". Do NOT use numeric scores. ,→
+
+- For **exploit**: include "selected_path" (single string), which MUST equal 
+
+`action_scores.exploit.bound_path `.
+
+> ,→
+> ,→
+
+- For **explore**: include "selected_paths" (list of 2 or more path strings), which MUST equal 
+
+`action_scores.explore.bound_paths `.
+
+> ,→
+> ,→
+
+- For **backtrack**: 
+
+17 - include "abandon_paths" (list of path strings whose accumulated context should be reset; the path itself remains in the plan and may be re-selected by future rounds). These MUST be the path(s) bound under `action_scores.backtrack `.
+
+> ,→
+> ,→
+> ,→
+> ,→
+
+- include "abandon_summaries": a dict mapping each path string in "abandon_paths" (key must match exactly) to a 1-3 sentence neutral note that **replaces the path 's prior progress_summary** for all future rounds. Briefly state (a) which source/lead the previous attempts got stuck on, and (b) what to try differently next time. Keep it compact (<= ~60 words per path) and NEUTRAL — do NOT say the path is wrong/failed/hopeless and do NOT discourage re-selecting it. 
+
+> ,→
+> ,→
+> ,→
+> ,→
+> ,→
+> ,→
+> ,→
+> ,→
+> ,→
+
+- **IMPORTANT**: Paths selected for backtrack (in "abandon_paths") in this round MUST NOT also appear in any exploit or explore decision in the same round. 
+
+> ,→
+> ,→
+> ,→
+
+- Each goal should appear at most once in decisions - If ALL goals are fully resolved, return the short-circuit (no `action_scores ` needed): {"think": "All goals resolved because ...", "decisions": [{"mode": "finished"}]} 
+
+> ,→
+> ,→
+> ,→
+
+- Use the exact goal and path names from the plan {{early_stop_policy}} Now make your selection! 
+
+E.3 Summarize 
+
+The following prompt is used by the summary agent to consolidate execution trajectories into progress summaries and structured TreeMem up-dates. 
+
+PROMPT TEMPLATE : S UMMARY 
+
+update_pre_messages: |-You are an expert in analyzing task completion based on agent execution trajectories. ,→
+
+Your task is to analyze the completion status of a plan with multiple goals and execution paths, AND extract structured research findings into a JSON block. 
+
+> ,→
+> ,→
+> ,→
+
+Your output MUST contain TWO parts separated by the exact line `---PROGRESS_JSON---`:,→
+
+**Part 1 (Plan Summary — free text):** 1. Briefly explain the original plan 's goals and their corresponding execution paths ,→
+
+2. Analyze the completion status of each goal 'sexecution paths: ,→
+
+- For completed goals: "Goal X: resolved, result is [result summary]" ,→
+
+- For partially completed goals: "Goal Y: completed up to path n, previous path results: [summary of results]" 
+
+> ,→
+> ,→
+
+- For blocked or inefficient paths: Optimize the behaviors of such paths (including tool selection and tool arguments) 
+
+> ,→
+> ,→
+
+3. Determine the next parallel sub-paths to solve based on current information ,→
+
+Pay special attention to: 1) Using the execution trajectory to accurately judge whether each goal 's paths are completed, blocked, or in progress 
+
+> ,→
+> ,→
+
+2) Prioritizing adjustment of stagnant paths if trajectories show loops or inefficiency in certain goals 
+
+> ,→
+> ,→
+
+3) Consolidating facts derived from completed paths to support unresolved goals ,→
+
+4) Identifying dependencies between goals and paths that may affect parallel execution ,→
+
+**Part 2 (Progress JSON — strict JSON after the separator):** ,→
+
+1. Extract new facts, revise existing ones, and track candidate answers. ,→
+
+2. For each goal, estimate a completion_ratio (0.0-1.0) based on evidence collected. ,→
+
+- 0.0 = no progress, 0.5 = about half done, 1.0 = effectively complete ,→
+
+- If completion_ratio >= 0.9, the goal will be auto-marked as completed. ,→
+
+3. **CRITICAL: For each goal, write COMPREHENSIVE per-path summary reports (path_summaries).** ,→
+
+Each path_summary is a self-contained progress report for that specific path. ,→
+
+**PATH_ID keys MUST be the numeric path identifier exactly as shown in the plan (e.g., "1.1", "1.2", "2.1"). Do NOT use path names, descriptions, or any other format. Only paths that exist in the current plan should have entries.** 
+
+> ,→
+> ,→
+> ,→
+> ,→
+> ,→
+
+**Each path_summary MUST be fully independent and self-contained** — if a piece of information is relevant to multiple paths, it MUST be duplicated in each relevant path 's summary. Do NOT cross-reference other paths (e.g., "see Path 1.1 for details"). A reader should understand any single path 'sstatus without reading other paths. 
+
+> ,→
+> ,→
+> ,→
+> ,→
+> ,→
+> ,→
+> ,→
+
+Each path_summary must include ALL of the following: ,→
+
+a) All facts and evidence collected so far relevant to this path (with exact values, names, dates, numbers) 
+
+> ,→
+> ,→
+
+b) All conclusions and insights derived from the evidence for this path ,→
+
+c) All source materials and their verification status ,→
+
+d) All uncertainties, limitations, or gaps in the research for this path ,→
+
+e) Integration of previous progress with new findings from this round ,→
+
+Write this as a detailed narrative with inline source citations, NOT as a summary. ,→
+
+It must be sufficiently detailed that someone can fully inherit and continue the research on this path. 
+
+> ,→
+> ,→
+
+4. **For each goal, also write a brief goal_summary** — a 2-4 sentence high-level synthesis of the goal 's overall progress across ALL paths. This should capture the key conclusion or current status of the entire goal, not repeat per-path details. 
+
+> ,→
+> ,→
+> ,→
+> ,→
+> ,→
+
+## CRITICAL: Precision Rules for Facts - ALWAYS preserve exact values: numbers, dates, names, episode numbers, pick numbers, etc. ,→
+
+BAD: "The player was drafted in the first round" GOOD: "Mario Hezonja was drafted Round 1 Pick 5 by Orlando Magic in 2015 NBA Draft" ,→
+
+- For multi-hop reasoning, extract EACH intermediate conclusion as a separate fact. ,→
+
+Example chain: Museum →Year →President →Ethnicity →Nobel Winners →Count 
+
+> ,→
+> ,→
+
+Each arrow should produce its own fact with the precise value. ,→
+
+- Include source_quote: a brief verbatim quote from observations that supports the fact. ,→
+
+- When enumerating items (e.g., counting regions/units), list ALL items found, not just a count. 
+
+> ,→
+> ,→
+
+- If two sources give different values for the same thing, add BOTH as separate facts. ,→
+
+Based on the above requirements, complete the analysis. ,→
+
+update_post_messages: |-Based on the agent execution trajectory, analyze the task completion status and provide recommendations for next steps. 
+
+> ,→
+> ,→
+
+** Special Notes **: 1) If a goal is completed, mark as "completed" and summarize the result ,→
+
+2) If a path of a goal is blocked or inefficient, update this path and conclude the past paths ,→
+
+18 3) Ensure the next parallel paths are directly derived from unresolved goals in the execution trajectory  
+
+> ,→
+> ,→
+> 4) Consider dependencies between goals when suggesting parallel paths ,→
+> ** Output Format — TWO parts separated by
+> `---PROGRESS_JSON---`**: ,→
+> ## Plan Summary [Provide a brief summary of the original plan 'sgoals and their execution paths] ,→
+> ## Execution Status Analysis ### Goal 1: [Goal Name] - Status: [Completed/In Progress/Blocked] - Path Analysis: [Analyze each path 's status and results] ,→
+> ### Goal 2: [Goal Name] - Status: [Completed/In Progress/Blocked] - Path Analysis: [Analyze each path 's status and results] ,→
+> [Continue for all goals] ## Next Parallel Sub-Paths Based on the current execution status, the following sub-paths should be solved in parallel: ,→
+> - Goal 1: [Specific sub-path to solve] - Goal 2: [Specific sub-path to solve] - Goal 3: [Specific sub-path to solve] [Add more as needed] ---PROGRESS_JSON---{"goals": {"1": {"completion_ratio": 0.X, "reason": "...", "goal_summary": "brief overall progress synthesis for this goal", "path_summaries": {"1.1": "COMPREHENSIVE per-path progress report...", "1.2": "COMPREHENSIVE per-path progress report..."}}, "2": {"completion_ratio": 0.X, "reason": "...", "goal_summary": "brief overall progress synthesis for this goal", "path_summaries": {"2.1": "..."}}}, "facts_update": {"add": [{"content": "precise factual statement with exact values", "goal_index": N, "constraint_tag": "", "source": "URL", "source_quote": "brief verbatim quote"}], "revise": {"INDEX": "new content with exact values"}, "remove": [INDEX]}, "candidates": {"GOAL_INDEX": [{"value": "...", "source_url": "...", "constraints_checked": [], "confidence": 0.X}]}}
+> ,→
+> ,→
+> ,→
+> ,→
+> ,→
+> ,→
+> ,→
+> ,→
+> ,→
+> ,→
+> ,→
+> ,→
+> ,→
+> ,→
+> ,→
+> ,→
+> ,→
+> Now complete your analysis!
+
+F Case Study 
+
+Case 1: Pruning Redirects a Noisy Role-Attribute Search 
+
+Task id 68. An actor played an early-appearing role in a well-known historical drama at age 38, played a foreigner at age 52, played an alcoholic at age 54, appeared in a hit TV series around age 60, and appeared in another hit TV series at age 66. Who is this actor? 
+
+Flash-Searcher failure. Flash-Searcher pro-vides a useful contrast on the same case. It executes a DAG-style initial plan without an explicit UCB controller, backtracking opera-tion, or path-abandonment mechanism. After its trajectory selects Ding Yongdai as an early candidate at action A2, later actions weakly 
+
+align him with several other clues, including the historical-drama clue, the foreigner-role clue, and the two hit-series clues. However, the unresolved age-54 clue then dominates the remaining search: from roughly A14 onward, the trajectory repeatedly tries to prove that 
+
+Ding Yongdai played an alcoholic role in 2012, rotating through candidate role names and syn-onym expansions such as alcoholic , drunkard ,
+
+drunken , and alcohol abuse . It also issues open-ended age–role queries similar to “54-year-old actor played an alcoholic” and “ac-tor alcoholic / drunkard / alcohol-abuse role” ,but these queries likewise return noisy or ir-relevant results rather than citable evidence. Because the framework has no explicit signal for declaring this branch exhausted, the search never overturns the initial candidate hypothesis and eventually returns Ding Yongdai without the missing evidence. 
+
+TreeSeeker success. In the initial planning stage, TreeSeeker decomposes the task into five age-anchor goals. Goal 1 targets the age-38 historical-drama clue, Goal 2 targets the age-52 foreigner-role clue, Goal 3 targets the age-54 alcoholic-role clue, Goal 4 targets the two hit-drama anchors at ages around 60 and 66, and Goal 5 merges the constraints to pro-duce the final answer. Among these goals, Goal 3’s paths are de-signed as follows: 
+
+Initial Goal 3 Paths (alcoholic-role verification) 
+
+Path 3.1: Role-feature keyword search using terms such as “alcoholic”, “drunk-ard”, “alcohol abuse” .
+
+Path 3.2: Extraction from character bi-ographies or episode synopses. 
+
+Path 3.3: Cross-checking video-platform or media-commentary tags. During early execution, the agent attempts Goal 3 but does not successfully resolve it. In-stead, the search makes more reliable progress through two stronger constraints. Goal 4 enu-merates older supporting actors in hit series such as The Knockout and In the Name of the People , then computes their ages at broadcast time. Goal 1 verifies historical-drama roles and birth dates. Together, these two goals con-
+
+19 verge on Li Jianyi as the strongest candidate. In contrast, the original Goal 3 paths fail to make effective progress. Open-ended queries such as “54-year-old actor played an al-coholic” and “actor alcoholic / drunkard / alcohol-abuse role” repeatedly retrieve irrel-evant pages, document sites, or non-film/TV contexts. Continuing to expand the synonym set around alcoholic , drunkard , or alcohol abuse therefore only broadens the noise sur-face, without producing citable evidence that links a concrete work, a role setting, and the candidate actor. At this point, TreeSeeker invokes P RUNE and returns to an earlier branch point:   
+
+> PRUNE and Return Action (noisy Goal 3 paths)
+
+Pruned paths: Path 3.1 and Path 3.3. 
+
+Reason: The search paths are dominated by noisy semantic matches and fail to yield a verifiable work–role evidence chain for the already narrowed candidate. 
+
+Revised path. The agent reformulates the search as candidate-conditioned reverse verification. 
+
+Search focus: “You Yi Zhong Du Yao; Li Jianyi; alcoholic father” 
+
+Verification target: Whether this candidate-work pair contains the alcoholic-father role setting. After pruning, the agent stops expanding abstract role labels and redirects Goal 3 to candidate-conditioned reverse verification. The revised goal combines two grounded con-straints: the converged candidate Li Jianyi and the candidate work You Yi Zhong Du Yao . In other words, the strategy changes from for-ward search with an abstract label (finding an actor from the clue “alcoholic father”) to 
+
+reverse verification with a concrete candidate 
+
+(checking whether this candidate-work pair contains the alcoholic-father role). This redirected search directly retrieves the China National Radio evidence that the “alco-holic father” was played by veteran stage actor Li Jianyi. The key point is that pruning does not merely reduce the number of search steps. It pre-vents the search budget from being exhausted 
+
+by low-quality semantic paths. Once Goals 1 and 4 have already narrowed the candidate to Li Jianyi, the P RUNE operation lets the agent abandon the failing forward search, return to an earlier branch point, and reformulate the unresolved constraint as a targeted verification query over candidate, work, role setting, and source. This allows the agent to close the pre-viously stagnant alcoholic-role constraint and correctly answer Li Jianyi .
+
+Case 2: Exploration and Exploitation Avoid Premature Candidate Locking  
+
+> Task id 36. A traditional opera-like activity orig-inated among the Han people, developed through three stages, features an exaggerated performance style, is often performed during the Chinese New Year period, and was successively listed as intan-gible cultural heritage by multiple regions between 2000 and 2020. What is this traditional activity?
+
+Flash-Searcher failure. Flash-Searcher pro-vides a useful contrast because the task con-tains several locally plausible distractors. The clue bundle includes Han origin, a tradi-tional opera-like form, three-stage develop-ment, exaggerated performance, Chinese New Year performance, and multi-region intangible-heritage listings between 2000 and 2020. Many folk activities can satisfy only part of this bundle: Tunpu Dixi has masks, exag-gerated movements, and first-month festival performances; Diyangge can match a three-stage-development description; Paohan Chuan 
+
+matches festival performance, exaggerated style, and intangible-heritage evidence; and 
+
+Nuo Opera is another plausible candidate and, as the full evidence chain later shows, the cor-rect answer. The hard part is therefore not finding a candidate that is locally similar, but deciding whether a candidate is a partial match or satisfies the full constraint set. The failure pattern is premature candidate locking. Once Flash-Searcher finds a locally matching activity, later actions keep search-ing for supporting evidence around that candi-date instead of comparing it against competing candidates under all constraints. For instance, after locking onto Tunpu Dixi , the trajectory re-peatedly queries variants of “Tunpu Dixi three development stages” , “Dixi Spring Festival 
+
+20 performance” , and “Dixi intangible cultural heritage listing” . This can accumulate evi-dence for two or three clues, but it does not force the system to ask whether the candidate is a 2/5 match or a 5/5 match. Since the frame-work lacks an operation-level controller over branch states, it has no strong mechanism for reopening the candidate set once a plausible but incomplete candidate has been found. 
+
+TreeSeeker success. In the initial planning stage, TreeSeeker decomposes the task into four goals. Goal 1 explores candidate tra-ditional opera or folk-performance activities. Goal 2 verifies the semantic features of the strongest candidate, including Han origin, three-stage development, Spring Festival per-formance, and exaggerated style. Goal 3 verifies the multi-region intangible-cultural-heritage listing timeline between 2000 and 2020. Goal 4 merges the evidence and selects the final answer. Unlike Flash-Searcher, the early execution does not immediately commit to one locally plausible answer. Early UCB-guided deci-sions use exploration to spread the search over several evidence entrances: which activ-ities have a three-stage-development account, which are performed during Chinese New Year, which have exaggerated or masked perfor-mance styles, which were listed as intangible cultural heritage by multiple regions between 2000 and 2020, and which candidates repeat-edly appear across these evidence types.  
+
+> Exploratory Search (candidate and evidence dis-covery)
+
+Goal 1 / Path 1.1: Keyword-based can-didate discovery from the full clue bun-dle, e.g., Han origin, traditional opera, three-stage development, exaggerated per-formance, Spring Festival performance, and intangible heritage. 
+
+Goal 1 / Path 1.3: Direct search for the highly discriminative “three-stage develop-ment” expression. 
+
+Goal 2 / Paths 2.2–2.3: Search for Spring Festival performance contexts and exaggerated-performance descriptions that can apply across multiple candidates. 
+
+Goal 3 / Paths 3.1–3.2: Search both sum-mary heritage databases and local heritage-listing records to test whether the candi-date has multi-region, multi-year inclusion evidence. 
+
+This exploration stage is important because the question is under-specified at the entity level. Several folk activities partially match the clues, so the agent must first lay out the candidate-and-evidence space rather than follow the first plausible match. This broad exploration keeps plausible alternatives such as Tunpu Dixi , Pao-han Chuan , and Nuo Opera in comparison, instead of committing before the discrimina-tive constraints have been checked. After Nuo Opera emerges as a leading candi-date, TreeSearch shifts from broad exploration to targeted exploitation. The agent no longer searches uniformly; it concentrates budget on evidence that can distinguish Nuo Opera from locally plausible but incomplete alternatives: 
+
+21 Exploitation Action (high-value evidence verifica-tion) 
+
+Exploited path 1: Verify the three-stage-development clue for Nuo Opera .
+
+Exploited path 2: Cross-check authori-tative descriptions of Han origin, Spring Festival performance, and exaggerated per-formance style. 
+
+Exploited path 3: Use official intangible-heritage records from 2006, 2008, and 2011 to establish a successive multi-region listing timeline within 2000–2020. 
+
+Verification target: Whether Nuo Opera 
+
+satisfies the full constraint bundle while al-ternatives such as Tunpu Dixi and Paohan Chuan remain partial matches. 
+
+The resulting evidence chain is stronger than the baseline’s local matches. The official her-itage records establish that Nuo Opera appears across multiple regions and batches within the required time range, while the semantic evidence supports the Spring Festival perfor-mance and exaggerated ritual-theatrical style. Thus the agent does not select Nuo Opera be-cause of a single keyword hit; it selects it after exploitation verifies the discriminative constraints that separate it from the remaining plausible but incomplete candidates. The key point is that exploration and exploita-tion play different roles. Exploration prevents premature commitment by keeping multiple strong candidates under consideration. Ex-ploitation then tests the discriminative con-straints that rule out partial matches and turn 
+
+Nuo Opera from a plausible candidate into a verifiable answer. This coupling allows TreeSeeker to correctly answer Nuo Opera .
+
+22
