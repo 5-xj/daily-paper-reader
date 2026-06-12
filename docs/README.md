@@ -6,46 +6,47 @@
 </div>
 
 ## 每次日报
-- 最新运行日期：2026-06-11
-- 运行时间：2026-06-11 22:06:21 UTC
+- 最新运行日期：2026-06-12
+- 运行时间：2026-06-12 22:10:56 UTC
 - 运行状态：成功
-- 本次总论文数：8
-- 精读区：5
-- 速读区：3
+- 本次总论文数：9
+- 精读区：1
+- 速读区：8
 
 ### 今日简报（AI）
-1) 今日精选8篇论文，重点精读多轮对话检索与数学推理两大方向。  
-2) 最值得关注：稀疏检索+列表重排序提升多轮RAG效果（9.0分），以及语言模型与神经符号系统结合完成数学推理的综述（8.0分）。  
-3) 建议优先阅读这两篇，把握检索增强与AI推理的最新进展，后续可实践多轮对话中的稀疏检索策略。
-- 详情：[/202606/11/README](/202606/11/README)
+今日共分析9篇论文，精读1篇《Beyond Additivity》突破传统因果发现假设，速读覆盖知识图谱补全、数学推理及科学想法生成方向。最值得关注精读论文提出的含隐变量非线性因果模型扩展，以及Q-GNN的类型感知查询机制。建议优先精读该因果发现研究，并速览Graph2Idea查看科研选题新思路。
+- 详情：[/202606/12/README](/202606/12/README)
 
 ### 精读区论文标签
-1. [uva-irlab-conv at SemEval-2026 Task 8: Multi-Turn RAG with Learned Sparse Retrieval and Listwise Reranking](/202606/11/2606.11945v1-uva-irlab-conv-at-semeval-2026-task-8-multi-turn-rag-with-learned-sparse-retrieval-and-listwise-reranking)  
-   标签：评分：9.0/10、query:rerank-train
-   evidence：在多轮RAG流水线中使用列表级重排序
-2. [Artificial Intelligence for Mathematical Reasoning: An Integrated Survey of Language Models, Neuro-symbolic Systems, and Verified Discovery](/202606/11/2606.08728v1-artificial-intelligence-for-mathematical-reasoning-an-integrated-survey-of-language-models-neuro-symbolic-systems-and-verified-discovery)  
-   标签：评分：8.0/10、query:ad
-   evidence：关于数学推理中语言模型、神经符号系统和验证发现的综述
-3. [Representation Curriculum: Stagewise Training for Robust Ranking and Allocation](/202606/11/2606.09891v1-representation-curriculum-stagewise-training-for-robust-ranking-and-allocation)  
-   标签：评分：8.0/10、query:rerank-train
-   evidence：逐步训练用于稳健排序和分配
-4. [CompRank: Efficient LLM Reranking via Token-Level Compression and Decoding-Free Scoring](/202606/11/2606.11700v1-comprank-efficient-llm-reranking-via-token-level-compression-and-decoding-free-scoring)  
-   标签：评分：8.0/10、query:rerank-train
-   evidence：高效的LLM重排序框架，包含token压缩和训练目标
-5. [ATLAS: Active Theory Learning for Automated Science](/202606/11/2606.12386v1-atlas-active-theory-learning-for-automated-science)  
-   标签：评分：8.0/10、query:ad
-   evidence：ATLAS使用稀疏神经网络自动发现行为模型
+1. [Beyond Additivity: Causal Discovery in Location-Scale Noise Models with Hidden Variables](/202606/12/2606.08196v1-beyond-additivity-causal-discovery-in-location-scale-noise-models-with-hidden-variables)  
+   标签：评分：9.0/10、query:ad
+   evidence：从观测数据中自动发现因果关系的算法
 
 ### 速读区论文标签
-1. [APOSM: Pairwise preference learning improves generative small-molecule design](/202606/11/biorxiv-10-64898-2026-06-06-730554-v1-aposm-pairwise-preference-learning-improves-generative-small-molecule-design)  
+1. [Q-GNN: Query-Conditioned Graph Neural Networks with Type Awareness for Knowledge Graph Completion](/202606/12/2606.05639v1-q-gnn-query-conditioned-graph-neural-networks-with-type-awareness-for-knowledge-graph-completion)  
    标签：评分：7.0/10、query:ad
-   evidence：用于分子发现的启发式主动学习方法
-2. [Hyperparameter Learning for Latent Factorization of Tensors for Representation Learning to Large-scale Dynamic Weighted Directed Network](/202606/11/2606.09880v1-hyperparameter-learning-for-latent-factorization-of-tensors-for-representation-learning-to-large-scale-dynamic-weighted-directed-network)  
+   evidence：通过图神经网络补全自动发现知识
+2. [Artificial Intelligence for Mathematical Reasoning: An Integrated Survey of Language Models, Neuro-symbolic Systems, and Verified Discovery](/202606/12/2606.08728v1-artificial-intelligence-for-mathematical-reasoning-an-integrated-survey-of-language-models-neuro-symbolic-systems-and-verified-discovery)  
+   标签：评分：7.0/10、query:ad
+   evidence：综述涵盖基于大模型的发现和验证性发现工作流
+3. [Graph2Idea:Retrieval-Augmented Scientific Idea Generation with Graph-Structured Contexts](/202606/12/2606.09105v3-graph2idearetrieval-augmented-scientific-idea-generation-with-graph-structured-contexts)  
+   标签：评分：7.0/10、query:ad
+   evidence：基于大语言模型检索增强的科学想法生成
+4. [Efficient and Robust Online Learning to Rank in Decentralized Systems](/202606/12/2606.12246v1-efficient-and-robust-online-learning-to-rank-in-decentralized-systems)  
+   标签：评分：7.0/10、query:rerank-train
+   evidence：去中心化在线学习排名框架，包含鲁棒训练方法
+5. [Stack: In-Context Learning of Single-Cell Biology](/202606/12/biorxiv-10-64898-2026-01-09-698608-v2-stack-in-context-learning-of-single-cell-biology)  
+   标签：评分：7.0/10、query:ad
+   evidence：利用上下文学习的单细胞基础模型，实现零样本生物学发现；直接使用类大模型架构进行科学发现任务。
+6. [IA-RAG: Interval-Algebra-Driven Temporal Reasoning for Dynamic Knowledge Retrieval](/202606/12/2606.06044v1-ia-rag-interval-algebra-driven-temporal-reasoning-for-dynamic-knowledge-retrieval)  
    标签：评分：6.0/10、query:ad
-   evidence：采用差分进化启发式方法优化超参数以进行知识提取
-3. [TreeSeeker: Tree-Structured Trial, Error, and Return in Deep Search](/202606/11/2606.11662v1-treeseeker-tree-structured-trial-error-and-return-in-deep-search)  
+   evidence：利用大语言模型进行时间知识检索
+7. [TLRD: Teaching LLMs to Reason over Tabular Data with Tri-Level Rationale Distillation](/202606/12/2606.08295v1-tlrd-teaching-llms-to-reason-over-tabular-data-with-tri-level-rationale-distillation)  
    标签：评分：6.0/10、query:ad
-   evidence：面向深度搜索的树形试错搜索框架
+   evidence：利用大模型进行表格数据推理，支持知识发现
+8. [ProtGPT3: an Open-source family of Promptable and Aligned Protein Language Models](/202606/12/biorxiv-10-64898-2026-06-04-730041-v1-protgpt3-an-open-source-family-of-promptable-and-aligned-protein-language-models)  
+   标签：评分：6.0/10、query:ad
+   evidence：蛋白质语言模型系列，支持可控生成，助力序列发现
 
 
 <div class="dpr-home-promo-card">
