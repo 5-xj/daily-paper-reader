@@ -6,47 +6,30 @@
 </div>
 
 ## 每次日报
-- 最新运行日期：2026-06-12
-- 运行时间：2026-06-12 22:10:56 UTC
+- 最新运行日期：2026-06-13
+- 运行时间：2026-06-13 21:26:51 UTC
 - 运行状态：成功
-- 本次总论文数：9
-- 精读区：1
-- 速读区：8
+- 本次总论文数：3
+- 精读区：3
+- 速读区：0
 
 ### 今日简报（AI）
-今日共分析9篇论文，精读1篇《Beyond Additivity》突破传统因果发现假设，速读覆盖知识图谱补全、数学推理及科学想法生成方向。最值得关注精读论文提出的含隐变量非线性因果模型扩展，以及Q-GNN的类型感知查询机制。建议优先精读该因果发现研究，并速览Graph2Idea查看科研选题新思路。
-- 详情：[/202606/12/README](/202606/12/README)
+今日共精读2篇论文，覆盖复杂系统建模与数学推理两大前沿方向。重点推荐《神经引导的Lambda演算》中多尺度深度公式发现方法，以及《大规模语言模型与神经符号系统》的数学推理综述。建议普通读者先阅读第二篇，快速了解AI数学推理的集成框架与实用工具。
+- 详情：[/202606/13/README](/202606/13/README)
 
 ### 精读区论文标签
-1. [Beyond Additivity: Causal Discovery in Location-Scale Noise Models with Hidden Variables](/202606/12/2606.08196v1-beyond-additivity-causal-discovery-in-location-scale-noise-models-with-hidden-variables)  
-   标签：评分：9.0/10、query:ad
-   evidence：从观测数据中自动发现因果关系的算法
+1. [Discovering Multiscale Deep Formulas in Complex Systems via Neural-Guided Lambda Calculus](/202606/13/2606.07426v1-discovering-multiscale-deep-formulas-in-complex-systems-via-neural-guided-lambda-calculus)  
+   标签：评分：9.0/10、query:sr
+   evidence：通过lambda演算符号回归自动发现多尺度公式
+2. [Artificial Intelligence for Mathematical Reasoning: An Integrated Survey of Language Models, Neuro-symbolic Systems, and Verified Discovery](/202606/13/2606.08728v1-artificial-intelligence-for-mathematical-reasoning-an-integrated-survey-of-language-models-neuro-symbolic-systems-and-verified-discovery)  
+   标签：评分：8.0/10、query:ad
+   evidence：关于使用语言模型和神经符号系统自动发现数学公式的综述
+3. [CAREPath: Semantic Context-Aware Reasoning Paths with Mechanism-Augmented Embeddings for Drug Repurposing](/202606/13/biorxiv-10-64898-2026-06-09-731247-v1-carepath-semantic-context-aware-reasoning-paths-with-mechanism-augmented-embeddings-for-drug-repurposing)  
+   标签：评分：8.0/10、query:ad
+   evidence：大语言模型与启发式搜索用于生物医学知识发现
 
 ### 速读区论文标签
-1. [Q-GNN: Query-Conditioned Graph Neural Networks with Type Awareness for Knowledge Graph Completion](/202606/12/2606.05639v1-q-gnn-query-conditioned-graph-neural-networks-with-type-awareness-for-knowledge-graph-completion)  
-   标签：评分：7.0/10、query:ad
-   evidence：通过图神经网络补全自动发现知识
-2. [Artificial Intelligence for Mathematical Reasoning: An Integrated Survey of Language Models, Neuro-symbolic Systems, and Verified Discovery](/202606/12/2606.08728v1-artificial-intelligence-for-mathematical-reasoning-an-integrated-survey-of-language-models-neuro-symbolic-systems-and-verified-discovery)  
-   标签：评分：7.0/10、query:ad
-   evidence：综述涵盖基于大模型的发现和验证性发现工作流
-3. [Graph2Idea:Retrieval-Augmented Scientific Idea Generation with Graph-Structured Contexts](/202606/12/2606.09105v3-graph2idearetrieval-augmented-scientific-idea-generation-with-graph-structured-contexts)  
-   标签：评分：7.0/10、query:ad
-   evidence：基于大语言模型检索增强的科学想法生成
-4. [Efficient and Robust Online Learning to Rank in Decentralized Systems](/202606/12/2606.12246v1-efficient-and-robust-online-learning-to-rank-in-decentralized-systems)  
-   标签：评分：7.0/10、query:rerank-train
-   evidence：去中心化在线学习排名框架，包含鲁棒训练方法
-5. [Stack: In-Context Learning of Single-Cell Biology](/202606/12/biorxiv-10-64898-2026-01-09-698608-v2-stack-in-context-learning-of-single-cell-biology)  
-   标签：评分：7.0/10、query:ad
-   evidence：利用上下文学习的单细胞基础模型，实现零样本生物学发现；直接使用类大模型架构进行科学发现任务。
-6. [IA-RAG: Interval-Algebra-Driven Temporal Reasoning for Dynamic Knowledge Retrieval](/202606/12/2606.06044v1-ia-rag-interval-algebra-driven-temporal-reasoning-for-dynamic-knowledge-retrieval)  
-   标签：评分：6.0/10、query:ad
-   evidence：利用大语言模型进行时间知识检索
-7. [TLRD: Teaching LLMs to Reason over Tabular Data with Tri-Level Rationale Distillation](/202606/12/2606.08295v1-tlrd-teaching-llms-to-reason-over-tabular-data-with-tri-level-rationale-distillation)  
-   标签：评分：6.0/10、query:ad
-   evidence：利用大模型进行表格数据推理，支持知识发现
-8. [ProtGPT3: an Open-source family of Promptable and Aligned Protein Language Models](/202606/12/biorxiv-10-64898-2026-06-04-730041-v1-protgpt3-an-open-source-family-of-promptable-and-aligned-protein-language-models)  
-   标签：评分：6.0/10、query:ad
-   evidence：蛋白质语言模型系列，支持可控生成，助力序列发现
+- 本次无速读推荐。
 
 
 <div class="dpr-home-promo-card">
