@@ -6,30 +6,32 @@
 </div>
 
 ## 每次日报
-- 最新运行日期：2026-06-13
-- 运行时间：2026-06-13 21:26:51 UTC
+- 最新运行日期：2026-06-14
+- 运行时间：2026-06-14 21:04:18 UTC
 - 运行状态：成功
-- 本次总论文数：3
+- 本次总论文数：4
 - 精读区：3
-- 速读区：0
+- 速读区：1
 
 ### 今日简报（AI）
-今日共精读2篇论文，覆盖复杂系统建模与数学推理两大前沿方向。重点推荐《神经引导的Lambda演算》中多尺度深度公式发现方法，以及《大规模语言模型与神经符号系统》的数学推理综述。建议普通读者先阅读第二篇，快速了解AI数学推理的集成框架与实用工具。
-- 详情：[/202606/13/README](/202606/13/README)
+今日日报共收录4篇论文，精读3篇、速读1篇。最值得关注的是两篇8.0分精读论文：《PRISMR》针对多模态排序中的解析崩溃提出参数化表示内化方案，《Leveraging Audio-LLMs》则聚焦语音到语音训练数据的筛选过滤。建议普通读者重点关注PRISMR的参数化内化机制，以及音频LLM数据过滤在工程中的落地应用。
+- 详情：[/202606/14/README](/202606/14/README)
 
 ### 精读区论文标签
-1. [Discovering Multiscale Deep Formulas in Complex Systems via Neural-Guided Lambda Calculus](/202606/13/2606.07426v1-discovering-multiscale-deep-formulas-in-complex-systems-via-neural-guided-lambda-calculus)  
-   标签：评分：9.0/10、query:sr
-   evidence：通过lambda演算符号回归自动发现多尺度公式
-2. [Artificial Intelligence for Mathematical Reasoning: An Integrated Survey of Language Models, Neuro-symbolic Systems, and Verified Discovery](/202606/13/2606.08728v1-artificial-intelligence-for-mathematical-reasoning-an-integrated-survey-of-language-models-neuro-symbolic-systems-and-verified-discovery)  
+1. [PRISMR: Overcoming Parse Collapse in Multimodal Listwise Ranking via Parameterized Representation Internalization](/202606/14/2606.12942v1-prismr-overcoming-parse-collapse-in-multimodal-listwise-ranking-via-parameterized-representation-internalization)  
+   标签：评分：8.0/10、query:rerank-train
+   evidence：解决多模态列表排序中的解析崩溃问题，是列表式重排序器训练的关键挑战
+2. [Leveraging Audio-LLMs to Filter Speech-to-Speech Training Data](/202606/14/2606.13507v1-leveraging-audio-llms-to-filter-speech-to-speech-training-data)  
+   标签：评分：8.0/10、query:rerank-train
+   evidence：两阶段Rank-to-Distill策略训练音频LLM作为数据筛选排序器
+3. [Agents-K1: Towards Agent-native Knowledge Orchestration](/202606/14/2606.13669v1-agents-k1-towards-agent-native-knowledge-orchestration)  
    标签：评分：8.0/10、query:ad
-   evidence：关于使用语言模型和神经符号系统自动发现数学公式的综述
-3. [CAREPath: Semantic Context-Aware Reasoning Paths with Mechanism-Augmented Embeddings for Drug Repurposing](/202606/13/biorxiv-10-64898-2026-06-09-731247-v1-carepath-semantic-context-aware-reasoning-paths-with-mechanism-augmented-embeddings-for-drug-repurposing)  
-   标签：评分：8.0/10、query:ad
-   evidence：大语言模型与启发式搜索用于生物医学知识发现
+   evidence：使用大模型从科学论文中构建知识图谱，实现自动化知识发现与编排
 
 ### 速读区论文标签
-- 本次无速读推荐。
+1. [DynaCF: Mitigating Shortcut Learning in Reward Models via Dynamic Counterfactual Sensitivity](/202606/14/2606.09043v1-dynacf-mitigating-shortcut-learning-in-reward-models-via-dynamic-counterfactual-sensitivity)  
+   标签：评分：7.0/10、query:rerank-train
+   evidence：动态重加权框架缓解奖励模型训练中的捷径学习，可应用于重排序器损失函数设计
 
 
 <div class="dpr-home-promo-card">
