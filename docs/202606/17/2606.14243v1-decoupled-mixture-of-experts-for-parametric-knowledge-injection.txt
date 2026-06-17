@@ -1,0 +1,559 @@
+Title: Decoupled Mixture-of-Experts for Parametric Knowledge Injection
+
+URL Source: https://arxiv.org/pdf/2606.14243v1
+
+Published Time: Mon, 15 Jun 2026 00:45:02 GMT
+
+Number of Pages: 16
+
+Markdown Content:
+# Decoupled Mixture-of-Experts for Parametric Knowledge Injection 
+
+Baoqing Yue 1,* , Weihang Su 1,* , Qingyao Ai 1, Yichen Tang 1, Changyue Wang 1,
+
+Jiacheng Kang 1, Jingtao Zhan 1, Yiqun Liu 11Department of Computer Science and Technology, Tsinghua University 
+
+> *
+
+Equal contribution. 
+
+Abstract 
+
+Knowledge injection aims to equip large lan-guage models (LLMs) with external, domain-specific, or time-sensitive knowledge. Existing approaches typically face a trade-off between flexibility and integration: retrieval-augmented generation keeps knowledge outside the model but only provides prompt-level augmentation, whereas post-training based methods encode new knowledge into shared parameters but may introduce catastrophic forgetting, knowl-edge conflict, and costly updates. In this pa-per, we propose Decoupled Mixture-of-Experts (DMoE), a modular architecture for paramet-ric knowledge injection that decouples both experts and the router from the base model. DMoE converts external knowledge corpora into independently updatable expert modules and uses a lightweight uncertainty-aware router to activate relevant experts only when the base model lacks sufficient knowledge during gen-eration. To support efficient auto-regressive inference, DMoE attaches experts only to the final-layer feed-forward network, preserving KV-cache reuse while enabling parameter-level knowledge augmentation. Experiments on knowledge-intensive benchmarks show that DMoE consistently improves answer quality over retrieval and adapter-based baselines. 
+
+1 Introduction 
+
+Large Language Models (LLMs) have demon-strated strong generalization capabilities across a wide range of tasks (Brown et al., 2020; Chowdh-ery et al., 2023). However, their parametric knowl-edge is inevitably static after pre-training. As a result, LLMs often fail on domain-specific or time-sensitive queries, producing hallucinated or out-dated responses at inference time (Song et al., 2025; Xu et al., 2024). This limitation has motivated growing interest in knowledge injection, which DMoE RAG  Post-Training   
+
+> LLM LLM LLM
+
+Figure 1: Comparison of knowledge injection paradigms. RAG injects knowledge as external context, while post-training modifies shared model parameters and may introduce conflict or forgetting. DMoE decou-ples knowledge modules from the base model, enabling modular and efficient parametric integration. 
+
+aims to equip LLMs with external knowledge dur-ing inference or through post-training methods (Ovadia et al., 2023; Lauscher et al., 2020; Ai et al., 2025). As illustrated in Figure 1, existing knowledge injection methods can be broadly grouped into retrieval-based and post-training-based paradigms. Retrieval-Augmented Generation (RAG) keeps knowledge outside the model and dynamically augments the input with retrieved documents (Borgeaud et al., 2022; Lewis et al., 2020). This design makes knowledge easy to update, since the retrieval corpus can be modified without changing model parameters. However, the injected knowl-edge remains at the prompt level: it is only exposed to the model as additional context, rather than be-ing integrated into the model’s parameter space. Consequently, RAG provides flexible but relatively shallow knowledge augmentation, and its inference efficiency can be limited by repeated retrieval and long-context processing. In contrast, post-training-based methods, includ-ing Supervised Fine-Tuning (SFT) (Wang et al., 2022; Mishra et al., 2021) and parameter-efficient variants such as LoRA (Hu et al., 2022), en-1
+
+> arXiv:2606.14243v1 [cs.CL] 12 Jun 2026
+
+code new knowledge directly into model param-eters. Although this enables deeper parameter-level integration, the injected knowledge is still written into a shared parameter space that already stores diverse pretrained knowledge. When knowl-edge is continuously updated or expanded, such shared updates may interfere with existing capa-bilities, introduce knowledge conflict, or require repeated re-training as the external corpus changes. Thus, while post-training-based approaches inte-grate knowledge more deeply than RAG, they often sacrifice modularity, update efficiency, and knowl-edge isolation. This trade-off reveals a deeper architectural bot-tleneck. Most existing LLMs organize knowl-edge either as external prompt context or as en-tangled dense parameters. Neither form provides an explicit mechanism for isolating heterogeneous knowledge, routing to relevant knowledge modules, or incrementally expanding the model without per-turbing unrelated knowledge. A desirable knowl-edge injection architecture should therefore satisfy three requirements: it should integrate knowledge at the parameter level, keep injected knowledge modular and independently updatable, and preserve efficient auto-regressive inference. To this end, we propose Decoupled Mixture-of-Experts (DMoE) , a modular architecture for parametric knowledge injection. Inspired by the Mixture-of-Experts (MoE) principle of conditional computation and expert specialization (Jacobs et al., 1991; Shazeer et al., 2017; Fedus et al., 2022), DMoE differs from conventional MoE architec-tures in that both the experts and the router are decoupled from the base model. Given an exter-nal knowledge corpus, DMoE partitions the corpus into knowledge units and constructs lightweight expert modules while keeping the base model un-changed. These experts are stored outside the dense backbone and can be added, removed, or updated independently. During inference, a lightweight uncertainty-aware router estimates whether the cur-rent query requires external expert support and ac-tivates relevant experts only when necessary. A key design goal of DMoE is to support ef-ficient autoregressive generation. Naively attach-ing dynamically selected experts to multiple trans-former layers can make cache reuse difficult when the active expert set changes after the prefix has been processed, since the cached key-value states would no longer correspond to the hidden states produced under the newly activated experts. DMoE avoids this issue by attaching experts after the at-tention computation of the final transformer layer, specifically to the final-layer feed-forward network. Because expert activation does not modify the rep-resentations from which earlier-layer key-value caches are computed, DMoE can reuse cached at-tention states during autoregressive generation. As a result, DMoE enables parameter-level knowledge augmentation while substantially reducing infer-ence overhead compared with dynamic retrieval or multi-layer expert injection strategies. We evaluate DMoE on a suite of knowledge-intensive benchmarks, focusing on both answer quality and inference efficiency. Experimental re-sults show that DMoE consistently improves over dense-model baselines and remains competitive with retrieval- and adapter-based knowledge injec-tion methods. At the same time, DMoE substan-tially reduces inference overhead by preserving KV-cache reuse. Further ablation studies validate the main architectural choices: decoupled experts are better suited for knowledge injection than con-ventional coupled MoE variants, uncertainty-aware routing remains robust across triggering thresh-olds, and final-layer FFN attachment yields the best effectiveness–efficiency trade-off. In summary, our contributions are as follows: • We propose DMoE, which decouples knowl-edge experts and the router from the base model, enabling modular and independently updatable knowledge injection. • DMoE uses uncertainty-aware routing to selec-tively activate relevant experts and attaches them to the final-layer feed-forward network, preserv-ing KV-cache reuse during generation. • Experimental results show that DMoE improves answer quality over dense baselines while achiev-ing competitive performance with substantially lower inference overhead. 
+
+2 Related Work 
+
+2.1 Retrieval-Augmented Generation 
+
+Retrieval-Augmented Generation (RAG) injects ex-ternal knowledge into LLMs by retrieving relevant information from external repositories and condi-tioning generation on the retrieved context (Lewis et al., 2020; Dong et al., 2025; Tu et al., 2025; Su et al., 2025b,f). By keeping knowledge outside model parameters, RAG provides a flexible mecha-nism for improving factual grounding, mitigating 2hallucinations (Wang et al., 2026; Su et al., 2025d, 2024e; Wang et al., 2025b), supporting knowl-edge updates (Wang et al., 2025c,a), and adapting LLMs to specialized domains without full model retraining (Su et al., 2024b, 2025g,a, 2026a). Most RAG systems follow a retrieval-then-read pipeline, where a search module retrieves documents from a large-scale corpus (Robertson et al., 2009; Su et al., 2024a; Fang et al., 2024) and the generator uses them as additional input context. Recent ex-tensions further explore dynamic RAG (Jiang et al., 2023; Su et al., 2024d,c), graph-based RAG (Edge et al., 2024), parametric RAG (Su et al., 2025e,c, 2026a,c), and agentic RAG (Jin et al., 2025; Su et al., 2026b). Despite these advances, RAG pri-marily injects knowledge at the prompt level: the retrieved evidence is exposed to the model as exter-nal context rather than integrated into its parameter space. As a result, RAG remains highly updateable but provides relatively shallow knowledge incorpo-ration, and its inference efficiency can be limited by repeated retrieval and long-context processing. 
+
+2.2 Post-training Based Knowledge Injection 
+
+Post-training methods inject knowledge by fur-ther optimizing model parameters using data from external sources. Supervised Fine-Tuning (SFT) (Mishra et al., 2021; Ouyang et al., 2022; Taori et al., 2023) commonly trains the model on synthetic or human-annotated instruction–response pairs, enabling deeper parameter-level incorpora-tion of new knowledge than context-only augmen-tation. However, directly updating the base model’s shared parameters may interfere with previously acquired knowledge, leading to catastrophic for-getting and knowledge conflict (Goodfellow et al., 2013; Kemker et al., 2018). To reduce training cost and limit parameter interference, parameter-efficient fine-tuning (PEFT) methods (Houlsby et al., 2019; Han et al., 2024), such as LoRA (Hu et al., 2022), prompt tuning (Lester et al., 2021), and prefix tuning (Li and Liang, 2021), freeze most base parameters and train only a small set of ad-ditional parameters. Although PEFT substantially improves update efficiency, standard PEFT meth-ods are typically trained as task- or domain-level adapters and do not by themselves provide fine-grained knowledge isolation, expert-level routing, or independent updates for individual knowledge units. DMoE builds on the efficiency of lightweight parameter modules while organizing them as de-coupled, retrievable experts for modular knowledge injection. 
+
+2.3 Previous Explorations in Decoupling MoE 
+
+Several works have attempted to decouple com-ponents of MoE to improve efficiency or training stability. Read-ME (Cai et al., 2024) introduces a pre-gating router partially decoupled from the MoE backbone to enable expert-aware batching and caching. EvoMoE (Nie et al., 2021) decou-ples expert training from sparse gating through a progressive dense-to-sparse evolution scheme. Sta-bleMoE (Dai et al., 2022) distills and then freezes a router decoupled from the backbone to stabilize routing. DeMo (Wang et al., 2025d) designs a feature-level decoupled MoE for multi-modal ob-ject re-identification, focusing on modality-specific feature weighting. Unlike previous works that de-couple either the router or the training phases, our approach fully decouples both experts and router from the base model, isolating each unit of knowl-edge and enabling a scalable routing mechanism. 
+
+3 Methodology 
+
+3.1 Preliminaries and Task Formulation 
+
+We first characterize the effect of knowledge injec-tion through its impact on the model’s predictive uncertainty, following prior uncertainty-aware re-trieval and routing methods (Jiang et al., 2023; Su et al., 2024d). At each decoding step t, the model produces a softmax distribution pt over the vocabu-lary. We define the token uncertainty (TU) at step t
+
+as the entropy of this distribution: 
+
+TU t = − X
+
+> v
+
+pt(v) log pt(v). (1) During auto-regressive generation, the model does not have access to the correct next token and thus cannot directly assess whether its prediction is ac-curate or whether additional knowledge is required. TU therefore serves as a practical inference-time signal that reflects how uncertain the model is about its next-token distribution: a larger TU indicates that the model lacks sufficient internal knowledge for the current input and is more likely to benefit from external knowledge injection. Formally, let K = {K 1, K2, . . . , KN } denote a set of external knowledge units, each representing a semantically coherent piece of information (e.g., a fact, a document, or a reasoning pattern). The objective of knowledge injection is to construct an augmented model θ′ by incorporating a subset 3Input   
+
+> Embedding
+> Attention
+> Add & Norm
+> FFN
+> Add & Norm
+> Hidden States
+> Output
+> Router
+> Expert Expert
+> x
+> x
+> +
+> Expert
+> MoE
+> FFN
+> Add & Norm
+> Hidden States
+> TU > threshold?
+> No
+> Expert Expert
+> Expert
+> Expert
+> Expert Expert
+> Expert
+> Expert
+> Expert
+> x N
+> DMoE
+> FFN
+> FFN
+> FFN
+> Exp
+> Exp
+> Exp
+> Exp
+> Exp
+> Exp
+> Unload Old Experts
+> Load New Experts
+> Merge Experts
+> Router Yes
+> Retrieve
+
+Figure 2: Comparison of architectures between the dense model, traditional Mixture-of-Experts (MoE), and the proposed Decoupled Mixture-of-Experts (DMoE). In the MoE architecture, the feed-forward layers of a dense model are replaced with a coupled router-expert network. In contrast, DMoE decouples both the router and experts from the base model. During inference, DMoE retrieves and updates relevant experts when knowledge injection is required, enabling adaptive and non-destructive knowledge integration. 
+
+of knowledge K∗ ⊆ K , so as to reduce TU on knowledge-relevant samples Dknow :
+
+θ′ = A(θ, K∗), (2) 
+
+K∗ = arg min  
+
+> S⊆K
+
+Ex∼D know [TU( x; A(θ, S))] , (3) where A(·) denotes a knowledge augmentation mechanism. Existing approaches differ in how they realize this objective. In RAG settings, the model parameters remain unchanged, and external knowledge K∗ is injected through the input context, resulting in a shallow form of knowledge injection. In contrast, parameter-level knowledge injection methods such as post-training modify θ directly to encode K∗, enabling the model to internalize new knowledge. 
+
+3.2 Model Architecture 
+
+As illustrated in Figure 2, DMoE architecture con-sists of three main components: a frozen base model , a router , and a large set of experts . Un-like conventional MoE architectures that replace the feed-forward network (FFN) layers of a dense model with a jointly trained gating network and multiple experts, DMoE decouples both router and experts from the base model. 
+
+3.2.1 Experts Expert architecture. In DMoE, each expert rep-resents a semantic unit of knowledge, which is practically realized via lightweight adapters (e.g., LoRA (Hu et al., 2022) or other PEFT variants) attached to the FFN layers, which are known to store factual and semantic knowledge (Geva et al., 2021b; Nanda et al., 2023; Yu and Ananiadou, 2024). To maintain practical KV-cache reuse dur-ing decoding, we attach experts only to the final-layer FFN (Figure 3); a detailed analysis of this design choice is provided in Section 5.3.1. 
+
+Expert construction. For each knowledge unit 
+
+Ki, we construct an expert by training a lightweight parameter update ∆θi on data derived from that unit. Following PRAG (Su et al., 2025e), we first augment each document into instruction-style training instances and then optimize a PEFT mod-ule while keeping the base model frozen. This produces a collection of knowledge-specific ex-perts {∆θi}Ni=1 , where each expert is associated with both a parameter update and a text surrogate used for routing. In this work, we use this con-struction pipeline as a transparent instantiation of DMoE, while our main focus is on how indepen-dently trained experts are organized, routed, and integrated during inference. 
+
+3.2.2 Router Triggering. Routing is activated only when the current model exhibits insufficient knowledge of the input. Since our goal is to reduce TU, there is no need to involve additional experts when the 4Input      
+
+> Output
+> Exp1 Exp2
+> L1 L2 L last
+> Attention
+> FFN
+> Attention
+> FFN
+> Attention
+> FFN Figure 3: Illustration of expert placement in DMoE.
+> Experts are attached only to the FFN of the final Trans-former layer so that the hidden states feeding earlier attention blocks remain unchanged. Placing experts at intermediate layers would modify representations consumed by subsequent attention modules, preventing efficient reuse of KV-cache during decoding.
+
+model is already confident. At each decoding step 
+
+t, we trigger routing only when TU is above a given threshold: Trigger t = ITU t > τ , (4) where τ is a given threshold. When Trigger t = 1 ,the router deactivates outdated experts and acti-vates relevant experts; otherwise, decoding pro-ceeds with the current model. 
+
+Routing. To make knowledge injection both ef-fective and scalable, the router should (i) select experts that most likely reduce token uncertainty (TU) under the current context, while (ii) remain-ing fully decoupled from the base model so that experts can be added/removed/updated without re-training any neural router. We therefore adopt a 
+
+BM25-based lexical router implemented via an ex-ternal inverted index. Each expert Ei is trained on a knowledge unit Ki
+
+and is associated with a text surrogate Di (the docu-ment plus its augmentations used in expert training; see Section 4.1.3). At decoding step t, we form a routing query qt from the task input and the current generation context, and retrieve experts whose as-sociated texts best match qt under BM25: When a high-TU position triggers routing, qt is constructed from the generated prefix up to, but excluding, that position, so the retrieved experts are conditioned on exactly the context already represented in the KV cache. 
+
+Esel = Top -ki∈[N ] BM25( qt, Di). (5) This design is training-free, incrementally updat-able (adding an expert only inserts Di into the in-dex), and avoids introducing an additional neural encoder that would partially re-couple routing with model parameters. Finally, we activate the selected experts by composing them with the frozen base model only as effective parameters for the current decoding state: 
+
+θeff  
+
+> t
+
+= θ + X
+
+> Ei∈Esel
+
+∆θi. (6) Here, θ denotes the unchanged base-model param-eters, while θeff  
+
+> t
+
+denotes the temporary parameter composition used for decoding under the currently active experts. Generation resumes from the trig-gering token, and this active expert set is kept until the next triggering event, avoiding redundant expert swaps at every decoding step. 
+
+4 Experimental Setup 
+
+4.1 Benchmarks and Metrics 
+
+We conduct comprehensive evaluations on a diverse suite of knowledge-intensive benchmarks, each rep-resenting a distinct aspect of the knowledge injec-tion problem. HotpotQA (Yang et al., 2018) fo-cuses on multi-hop reasoning, where the model must integrate evidence from multiple documents to answer complex questions that require reason-ing across facts. ComplexWebQuestions (Talmor and Berant, 2018) extends this setting to an open-domain environment, challenging the model to per-form compositional reasoning and inject relevant knowledge from large-scale web content. Quasar-T (Dhingra et al., 2017) further evaluates open-domain retrieval and reasoning by requiring models to locate and synthesize factual knowledge from a large corpus to answer trivia-style questions. Strat-egyQA (Geva et al., 2021a) assesses implicit multi-hop reasoning, where the required knowledge is not explicitly stated in the question and must be inferred or retrieved based on world knowledge. For evaluation, we primarily assess the effective-ness of knowledge injection methods in the main results. Effectiveness is measured using EM and F1 (ACC for StrategyQA), which reflect how well a model integrates and utilizes injected knowledge. We analyze efficiency separately in Section 5.2 us-ing the average inference time and average GPU memory consumption per sample. 
+
+4.2 Baselines 
+
+We compare DMoE against representative base-lines spanning the major paradigms of knowl-edge injection: Basic-RAG, FLARE, PRAG, and 5Table 1: Main results on four knowledge-intensive benchmarks. We report EM/F1 or ACC across datasets and base models. Best values are in bold.                                                                                   
+
+> METHOD CWQ HOTPOT QA QUASAR -T STRATEGY QA EM F1 EM F1 EM F1 ACC BASE MODEL : L LAMA 3.2-1B
+> BASIC -RAG 0.1633 0.2384 0.1700 0.2463 0.2800 0.3513 0.4333 FLARE 0.2400 0.3154 0.0733 0.1303 0.1867 0.2190 0.5367 PRAG 0.2500 0.3284 0.0733 0.1427 0.2200 0.2514 0.5600 SFT-L ORA 0.2167 0.3092 0.0767 0.1325 0.2133 0.2481 0.5533 DM OE (O URS )0.2467 0.3479 0.1800 0.2553 0.3133 0.3658 0.5667 BASE MODEL : Q WEN 2.5-1.5B
+> BASIC -RAG 0.1233 0.1888 0.1567 0.2446 0.1833 0.2549 0.3667 FLARE 0.1200 0.1806 0.1000 0.1717 0.1733 0.2242 0.2500 PRAG 0.2167 0.3050 0.1033 0.1583 0.1733 0.2312 0.5833 SFT-L ORA 0.1967 0.3092 0.1033 0.1595 0.1767 0.2292 0.5733 DM OE (O URS )0.2167 0.3285 0.1533 0.2375 0.2333 0.2795 0.6133
+
+SFT-LoRA, all built on Llama-3.2-1B-Instruct and 
+
+Qwen2.5-1.5B-Instruct . For an equitable compar-ison, all retrieval-based methods share the same retrieval corpus of 27,613 passage-level documents, the same retriever (Elasticsearch BM25), retrieval budget ( k = 3 ), and greedy decoding; retrieval queries are truncated to 128 tokens, and the corpus is not additionally chunked because each item is al-ready a short single-topic passage of approximately 100 words. Basic-RAG performs one-shot retrieval and appends the retrieved passages to the prompt, FLARE retrieves during decoding and therefore cannot reuse the KV-cache, PRAG combines re-trieved passages with a corresponding parametric adapter using the same augmentation-and-adapter recipe as our expert construction pipeline, and SFT-LoRA trains a single LoRA adapter on supervision merged across the full corpus. 
+
+4.3 Implementation Details 
+
+Before training experts, each base model undergoes a one-epoch held-out format-stabilization warmup. Concretely, warmup uses the same task and sys-tem instructions as the main evaluation, but only evaluation-disjoint instances, and is intended to sta-bilize output formatting consistency rather than in-ject factual or benchmark-specific knowledge. This stage is retained to match the PRAG recipe and maintain a controlled comparison; its impact is analyzed in Section A.1. The external knowledge corpus used to construct experts is drawn from the Wikipedia corpus used in DPR (Karpukhin et al., 2020). This pool is used by all retrieval-based baselines and by DMoE, so comparisons are controlled under the same acces-sible knowledge source. Importantly, corpus con-struction and expert training do not use answer strings, gold supporting-document annotations, or any manually labeled rationales. Each document is augmented only from its own passage text by: (1) a single paraphrased rewrite that preserves its factual content, and (2) three question-answer pairs gen-erated from the document. These augmentations enrich the supervision signals for expert training and help each expert better capture the underlying knowledge unit. For each knowledge unit, we train a dedicated expert implemented as a LoRA adapter with rank 4, scaling factor α = 16 , and learning rate 1 × 10 −5. Experts are trained for one epoch and inserted only into the final-layer feed-forward network to ensure full compatibility with KV-cache reuse during autoregressive decoding. During infer-ence, we set triggering threshold to 2.0, use greedy decoding and activate the top-k experts ( k = 3 by default). We use BM25 to construct expert and context representations. All efficiency measure-ments (inference time and GPU memory usage) are conducted on a single NVIDIA A100 80GB GPU. 
+
+5 Experimental Results 
+
+5.1 Overall Results 
+
+Table 1 summarizes overall effectiveness across all baselines. We set test corpus size to 300 for all benchmarks. Table 1 shows a general advantage for DMoE. Across the 14 reported effectiveness met-rics, DMoE obtains the best or tied-best score on 11 metrics, including the strongest F1 on CWQ for both base models, both Quasar-T metrics for both base models, and StrategyQA ACC for both base 6Table 2: Efficiency analysis. We report all available average inference latency and GPU memory measure-ments per sample. Lower is better, and best values within each base-model block are in bold. 
+
+METHOD TIME (S) GPU (GB) 
+
+BASIC -RAG 1.8900 2.5400 
+
+FLARE 9.2643 13.9718 PRAG 1.3600 4.8300 SFT-L ORA 1.6700 4.8200 DM OE (O URS ) 2.6656 7.2352 
+
+models. This pattern suggests that DMoE is usually the strongest method in the reported comparison. The exceptions are concentrated rather than scat-tered. On CWQ, PRAG slightly exceeds DMoE in EM for Llama3.2-1B and ties it for Qwen2.5-1.5B, although DMoE has the higher CWQ F1 in both cases. On HotpotQA with Qwen2.5-1.5B, Basic-RAG is marginally better than DMoE on both EM and F1, while DMoE is best on both HotpotQA metrics with Llama3.2-1B. Thus, Table 1 supports a measured conclusion: DMoE is broadly com-petitive and most often best among the evaluated methods, but the results do not establish dominance on every dataset, base model, or metric. 
+
+5.2 Efficiency Analysis 
+
+As shown in Table 2, static baselines such as Basic-RAG, PRAG, and SFT-LoRA can incur lower per-sample cost because they do not modify retrieval or routing decisions during decoding. Among meth-ods that adapt generation online, however, DMoE is roughly 3× faster than FLARE while also us-ing substantially less memory. The core reason is KV-cache reuse. FLARE-style dynamic RAG interleaves generation with retrieval and prompt rewriting, which grows the context over time and in-validates cache reuse; consequently, attention over an expanding prefix is repeatedly recomputed, in-flating both latency and memory. In contrast, DMoE keeps the prompt state stable and performs adaptation by conditionally activat-ing lightweight final-layer experts. Since experts are confined to the last FFN layer, the KV-cache remains fully valid throughout decoding, largely avoiding the context-growth penalty and redun-dant attention computation. This cache-safe design translates into consistent time and memory advan-tages in practice: DMoE reduces GPU memory us-age by roughly 1.6×–1.9× compared to FLARE. Figure 4 further confirms the centrality of KV CWQ HotpotQA Quasar-T StrategyQA               
+
+> 0
+> 2
+> 4
+> 6
+> Time (s)
+> LLaMA-3.2-1B Inference Time
+> CWQ HotpotQA Quasar-T StrategyQA
+> 0
+> 5
+> 10
+> 15
+> 20
+> Time (s)
+> Qwen2.5-1.5B Inference Time
+> CWQ HotpotQA Quasar-T StrategyQA
+> 0
+> 5
+> 10
+> 15
+> 20
+> GPU Memory (GB)  LLaMA-3.2-1B GPU Memory
+> CWQ HotpotQA Quasar-T StrategyQA
+> 0
+> 5
+> 10
+> 15
+> 20
+> GPU Memory (GB)  Qwen2.5-1.5B GPU Memory
+> Reuse KV-cache No KV-cache reuse
+
+Figure 4: KV-cache reuse substantially improves au-toregressive inference efficiency. We report the infer-ence latency (top) and GPU memory footprint (bottom) for two base models (Llama-3.2-1B and Qwen2.5-1.5B) across four benchmarks, comparing Reuse KV-cache 
+
+vs. No KV-cache reuse . KV-cache reuse consistently reduces both time and memory across all datasets. 
+
+caching: across all benchmarks and both base mod-els, enabling KV caching yields a 1.3×–5.1× la-tency speedup and a 1.2×–2.5× reduction in GPU memory usage, motivating cache-compatible ex-pert placement. 
+
+5.3 Ablation Study 
+
+To better understand the contribution of individ-ual architectural components in DMoE, the main paper focuses on two architectural questions: (1) where experts should be placed to preserve KV-cache compatibility, and (2) whether DMoE’s gains can be explained by simply using a conventional MoE backbone. Additional ablations, including warmup, sensitivity to router top-k, TU-triggered routing analyses, LoRA hyperparameter sensitivity, and retriever choice, are reported in Appendix A. 
+
+5.3.1 Impact of Expert Layer Placement 
+
+A practical requirement for DMoE is that expert activation must preserve KV-cache reuse during auto-regressive decoding. In a standard transformer decoder, each layer ℓ computes 
+
+hℓ+1 = Fℓ(hℓ), (7) where hℓ is the hidden state, and the keys and val-ues for layer ℓ’s attention are linear projections of 
+
+hℓ. Introducing an expert at any intermediate layer 
+
+k modifies the hidden state to 
+
+˜hk+1 = hk+1 + ∆( hk), (8) 7Table 4: DMoE vs. a coupled MoE backbone. We compare DMoE against a finetuned MoE model (OLMoE-1B-7B) under SFT-LoRA. DMoE achieves higher effectiveness (EM/F1/ACC) while using markedly lower inference time and GPU memory. Higher is better for EM/F1/ACC; lower is better for Time/GPU. Best values are in bold.                                          
+
+> METHOD CWQ HOTPOT QA QUASAR -T STRATEGY QA EFFICIENCY
+> EM F1 EM F1 EM F1 ACC TIME (S)GPU (GB)
+> DM OE (L LAMA 3.2-1B) 0.2467 0.3479 0.1800 0.2553 0.3133 0.3658 0.5667 2.6656 7.2352
+> DM OE (Q WEN 2.5-1.5B) 0.2167 0.3285 0.1533 0.2375 0.2333 0.2795 0.6133 3.9138 8.3415 MOE (SFT-L ORA, OLM OE-1B-7B) 0.1500 0.2638 0.1033 0.1790 0.2100 0.2579 0.5900 20.0217 26.0843
+
+Table 3: Performance (EM) when reusing KV-cache while introducing experts into different portions of FFN layers. Here, x% denotes inserting experts into the final x% of FFN layers, while O NLY -LAST inserts ex-perts only into the final-layer FFN. Only-last preserves KV-cache compatibility and achieves the best overall accuracy across datasets.                                             
+
+> SETTING CWQ HOTPOT QA QUASAR -T STRATEGY QA LLAMA 3.2-1B
+> 25% 0.2167 0.1600 0.2967 0.5200 50% 0.2433 0.1567 0.3067 0.5333 75% 0.2100 0.1767 0.3100 0.5233 100% 0.2133 0.1633 0.3000 0.5533 ONLY -LAST 0.2467 0.1800 0.3133 0.5667 QWEN 2.5-1.5B
+> 25% 0.2033 0.1367 0.2200 0.5633 50% 0.1767 0.1500 0.2400 0.5467 75% 0.1800 0.1333 0.2233 0.5400 100% 0.1800 0.1333 0.2200 0.5400 ONLY -LAST 0.2167 0.1533 0.2333 0.6133
+
+which propagates forward to all subsequent layers 
+
+j > k . Because the KV-cache stores Kcached  
+
+> j
+
+=
+
+WK hj and V cached  
+
+> j
+
+= WV hj computed from the unmodified trajectory, any modification ˜hj̸ = hj
+
+requires recomputing 
+
+Knew  
+
+> j
+
+= WK ˜hj , V new  
+
+> j
+
+= WV ˜hj , (9) breaking KV-cache compatibility and causing sub-stantial latency overhead. This constraint is avoided only when experts are applied at the final FFN layer . In a decoder-only model with L layers, the output of the last FFN (hL+1 ) is projected directly to logits and does not feed into any further attention computation. Thus, placing experts exclusively at k = L guarantees 
+
+∀j ≤ L, ˜hj = hj , (10) ensuring that all cached keys and values remain valid. Table 3 empirically confirms this analysis. When experts are inserted into earlier or multiple layers, performance drops sharply due to KV-cache mismatch. In contrast, attaching experts only to the last FFN layer is generally competitive and often best. These findings demonstrate a key property of DMoE: minimal-intrusive expert placement at the final layer preserves fast decoding while still enabling effective knowledge injection. Together with adaptive triggering, this design provides an effective and efficient mechanism for integrating new knowledge during inference. 
+
+5.3.2 DMoE vs. Conventional MoE Backbones 
+
+To clarify whether our gains are simply an artifact of adopting an MoE-style backbone, we include a coupled MoE model as a structural control. Specif-ically, we evaluate allenai/OLMoE-1B-7B-0125-Instruct and adapt it with the same SFT-LoRA recipe used in our dense baselines. We choose it because its activated parameter scale is compa-rable to DMoE, i.e., both systems perform sparse conditional computation with a similar amount of per-token active capacity. This design makes the comparison informative: it helps factor out the confounding effect of increasing total parameters, and tests whether the improvements come from DMoE’s architectural decoupling rather than pa-rameter count. Table 4 shows that DMoE consis-tently outperforms the coupled MoE backbone on effectiveness while being substantially more effi-cient. On CWQ, HotpotQA, and Quasar-T, both DMoE variants achieve higher EM/F1 than OL-MoE under SFT-LoRA, and DMoE also matches or exceeds OLMoE on StrategyQA accuracy. More importantly, the system costs differ dramatically: DMoE reduces average inference time from 20.0 s (OLMoE) to 2.7–3.9 s, and cuts GPU memory from 26.1 GB to 7.2–8.3 GB. These results support our main design rationale for knowledge injection. A conventional MoE backbone offers conditional computation, but its experts are heavy and must remain resident during inference, and its router/expert parameters are cou-pled to the base model, which makes knowledge 8updates harder to localize and incurs high runtime footprint. In contrast, DMoE treats experts as exter-nal, lightweight knowledge modules and invokes them only when needed, while keeping the base model intact. Therefore, DMoE’s gains cannot be attributed to merely increasing model capacity; they arise from a decoupled, cache-safe modular-ization that yields a strictly better effectiveness-efficiency trade-off than simply switching to a stan-dard MoE architecture. 
+
+6 Conclusion 
+
+We presented DMoE, a decoupled mixture-of-experts architecture for modular parametric knowl-edge injection. Unlike conventional retrieval or post-training based methods, DMoE keeps both knowledge experts and the router external to the frozen base model, allowing knowledge units to be added, removed, or updated independently. Dur-ing inference, DMoE uses uncertainty-aware rout-ing to selectively activate relevant experts and at-taches them only to the final-layer feed-forward network, preserving KV-cache reuse during autore-gressive generation. Experiments on knowledge-intensive benchmarks show that DMoE consis-tently improves over dense baselines and achieves competitive performance against retrieval- and adapter-based methods, while substantially reduc-ing the overhead of dynamic knowledge augmenta-tion. These results suggest that decoupled, cache-compatible expert modularization is a promising direction for scalable and updateable knowledge injection in LLMs. 
+
+References 
+
+Qingyao Ai, Yichen Tang, Changyue Wang, Jianming Long, Weihang Su, and Yiqun Liu. 2025. Memory-bench: A benchmark for memory and continual learn-ing in llm systems. arXiv preprint arXiv:2510.17281 .Sebastian Borgeaud, Arthur Mensch, Jordan Hoff-mann, Trevor Cai, Eliza Rutherford, Katie Milli-can, George Bm Van Den Driessche, Jean-Baptiste Lespiau, Bogdan Damoc, Aidan Clark, and 1 others. 2022. Improving language models by retrieving from trillions of tokens. In International conference on machine learning , pages 2206–2240. PMLR. Tom Brown, Benjamin Mann, Nick Ryder, Melanie Subbiah, Jared D Kaplan, Prafulla Dhariwal, Arvind Neelakantan, Pranav Shyam, Girish Sastry, Amanda Askell, and 1 others. 2020. Language models are few-shot learners. Advances in neural information processing systems , 33:1877–1901. Ruisi Cai, Yeonju Ro, Geon-Woo Kim, Peihao Wang, Babak Ehteshami Bejnordi, Aditya Akella, and Zhangyang Wang. 2024. Read-me: Refactorizing llms as router-decoupled mixture of experts with sys-tem co-design. arXiv preprint arXiv:2410.19123 .Aakanksha Chowdhery, Sharan Narang, Jacob Devlin, Maarten Bosma, Gaurav Mishra, Adam Roberts, Paul Barham, Hyung Won Chung, Charles Sutton, Sebas-tian Gehrmann, and 1 others. 2023. Palm: Scaling language modeling with pathways. Journal of Ma-chine Learning Research , 24(240):1–113. Damai Dai, Li Dong, Shuming Ma, Bo Zheng, Zhifang Sui, Baobao Chang, and Furu Wei. 2022. Stablemoe: Stable routing strategy for mixture of experts. arXiv preprint arXiv:2204.08396 .Bhuwan Dhingra, Kathryn Mazaitis, and William W Cohen. 2017. Quasar: Datasets for question an-swering by search and reading. arXiv preprint arXiv:1707.03904 .Qian Dong, Qingyao Ai, Hongning Wang, Yiding Liu, Haitao Li, Weihang Su, Yiqun Liu, Tat-Seng Chua, and Shaoping Ma. 2025. Decoupling knowledge and context: An efficient and effective retrieval aug-mented generation framework via cross attention. In 
+
+Proceedings of the ACM on Web Conference 2025 ,pages 4386–4395. Darren Edge, Ha Trinh, Newman Cheng, Joshua Bradley, Alex Chao, Apurva Mody, Steven Truitt, and Jonathan Larson. 2024. From local to global: A graph rag approach to query-focused summarization. 
+
+arXiv preprint arXiv:2404.16130 .Yan Fang, Jingtao Zhan, Qingyao Ai, Jiaxin Mao, Wei-hang Su, Jia Chen, and Yiqun Liu. 2024. Scaling laws for dense retrieval. In Proceedings of the 47th International ACM SIGIR Conference on Research and Development in Information Retrieval , pages 1339–1349. William Fedus, Barret Zoph, and Noam Shazeer. 2022. Switch transformers: Scaling to trillion parameter models with simple and efficient sparsity. Journal of Machine Learning Research , 23(120):1–39. Mor Geva, Daniel Khashabi, Elad Segal, Tushar Khot, Dan Roth, and Jonathan Berant. 2021a. Did aristotle use a laptop? a question answering benchmark with implicit reasoning strategies. Transactions of the Association for Computational Linguistics , 9:346– 361. Mor Geva, Roei Schuster, Jonathan Berant, and Omer Levy. 2021b. Transformer feed-forward layers are key-value memories. In Proceedings of the 2021 Conference on Empirical Methods in Natural Lan-guage Processing , pages 5484–5495. Ian J Goodfellow, Mehdi Mirza, Da Xiao, Aaron Courville, and Yoshua Bengio. 2013. An em-pirical investigation of catastrophic forgetting in gradient-based neural networks. arXiv preprint arXiv:1312.6211 .
+
+9Zeyu Han, Chao Gao, Jinyang Liu, Jeff Zhang, and Sai Qian Zhang. 2024. Parameter-efficient fine-tuning for large models: A comprehensive survey. 
+
+arXiv preprint arXiv:2403.14608 .Neil Houlsby, Andrei Giurgiu, Stanislaw Jastrzebski, Bruna Morrone, Quentin De Laroussilhe, Andrea Gesmundo, Mona Attariyan, and Sylvain Gelly. 2019. Parameter-efficient transfer learning for nlp. In In-ternational conference on machine learning , pages 2790–2799. PMLR. Edward J Hu, Yelong Shen, Phillip Wallis, Zeyuan Allen-Zhu, Yuanzhi Li, Shean Wang, Lu Wang, Weizhu Chen, and 1 others. 2022. Lora: Low-rank adaptation of large language models. ICLR , 1(2):3. Robert A Jacobs, Michael I Jordan, Steven J Nowlan, and Geoffrey E Hinton. 1991. Adaptive mixtures of local experts. Neural computation , 3(1):79–87. Zhengbao Jiang, Frank F Xu, Luyu Gao, Zhiqing Sun, Qian Liu, Jane Dwivedi-Yu, Yiming Yang, Jamie Callan, and Graham Neubig. 2023. Active retrieval augmented generation. In Proceedings of the 2023 Conference on Empirical Methods in Natural Lan-guage Processing , pages 7969–7992. Bowen Jin, Hansi Zeng, Zhenrui Yue, Jinsung Yoon, Sercan Arik, Dong Wang, Hamed Zamani, and Jiawei Han. 2025. Search-r1: Training llms to reason and leverage search engines with reinforcement learning. 
+
+arXiv preprint arXiv:2503.09516 .Vladimir Karpukhin, Barlas Oguz, Sewon Min, Patrick SH Lewis, Ledell Wu, Sergey Edunov, Danqi Chen, and Wen-tau Yih. 2020. Dense passage re-trieval for open-domain question answering. In 
+
+EMNLP (1) , pages 6769–6781. Ronald Kemker, Marc McClure, Angelina Abitino, Tyler Hayes, and Christopher Kanan. 2018. Mea-suring catastrophic forgetting in neural networks. In 
+
+Proceedings of the AAAI conference on artificial in-telligence , volume 32. Anne Lauscher, Olga Majewska, Leonardo FR Ribeiro, Iryna Gurevych, Nikolai Rozanov, and Goran Glavaš. 2020. Common sense or world knowl-edge? investigating adapter-based knowledge in-jection into pretrained transformers. arXiv preprint arXiv:2005.11787 .Brian Lester, Rami Al-Rfou, and Noah Constant. 2021. The power of scale for parameter-efficient prompt tuning. arXiv preprint arXiv:2104.08691 .Patrick Lewis, Ethan Perez, Aleksandra Piktus, Fabio Petroni, Vladimir Karpukhin, Naman Goyal, Hein-rich Küttler, Mike Lewis, Wen-tau Yih, Tim Rock-täschel, and 1 others. 2020. Retrieval-augmented gen-eration for knowledge-intensive nlp tasks. Advances in neural information processing systems , 33:9459– 9474. Xiang Lisa Li and Percy Liang. 2021. Prefix-tuning: Optimizing continuous prompts for generation. arXiv preprint arXiv:2101.00190 .Swaroop Mishra, Daniel Khashabi, Chitta Baral, and Hannaneh Hajishirzi. 2021. Cross-task generaliza-tion via natural language crowdsourcing instructions. 
+
+arXiv preprint arXiv:2104.08773 .Neel Nanda, Senthooran Rajamanoharan, Janos Kramar, and Rohin Shah. 2023. Fact finding: Attempting to reverse-engineer factual recall on the neuron level. In Alignment Forum , page 6. Xiaonan Nie, Xupeng Miao, Shijie Cao, Lingxiao Ma, Qibin Liu, Jilong Xue, Youshan Miao, Yi Liu, Zhi Yang, and Bin Cui. 2021. Evomoe: An evolutional mixture-of-experts training framework via dense-to-sparse gate. arXiv preprint arXiv:2112.14397 .Long Ouyang, Jeffrey Wu, Xu Jiang, Diogo Almeida, Carroll Wainwright, Pamela Mishkin, Chong Zhang, Sandhini Agarwal, Katarina Slama, Alex Ray, and 1 others. 2022. Training language models to follow in-structions with human feedback. Advances in neural information processing systems , 35:27730–27744. Oded Ovadia, Menachem Brief, Moshik Mishaeli, and Oren Elisha. 2023. Fine-tuning or retrieval? com-paring knowledge injection in llms. arXiv preprint arXiv:2312.05934 .Stephen Robertson, Hugo Zaragoza, and 1 others. 2009. The probabilistic relevance framework: Bm25 and beyond. Foundations and Trends® in Information Retrieval , 3(4):333–389. Noam Shazeer, Azalia Mirhoseini, Krzysztof Maziarz, Andy Davis, Quoc Le, Geoffrey Hinton, and Jeff Dean. 2017. Outrageously large neural networks: The sparsely-gated mixture-of-experts layer. arXiv preprint arXiv:1701.06538 .Zirui Song, Bin Yan, Yuhan Liu, Miao Fang, Mingzhe Li, Rui Yan, and Xiuying Chen. 2025. Inject-ing domain-specific knowledge into large language models: a comprehensive survey. arXiv preprint arXiv:2502.10708 .Weihang Su, Qingyao Ai, Xiangsheng Li, Jia Chen, Yiqun Liu, Xiaolong Wu, and Shengluan Hou. 2024a. Wikiformer: Pre-training with structured information of wikipedia for ad-hoc retrieval. In Proceedings of the AAAI Conference on Artificial Intelligence ,volume 38, pages 19026–19034. Weihang Su, Qingyao Ai, Yueyue Wu, Anzhe Xie, Changyue Wang, Yixiao Ma, Haitao Li, Zhijing Wu, Yiqun Liu, and Min Zhang. 2025a. Pre-training for legal case retrieval based on inter-case distinctions. 
+
+ACM Transactions on Information Systems , 43(5):1– 27. Weihang Su, Qingyao Ai, Jingtao Zhan, Qian Dong, and Yiqun Liu. 2025b. Dynamic and parametric retrieval-augmented generation. In Proceedings of the 48th 
+
+10 International ACM SIGIR Conference on Research and Development in Information Retrieval , pages 4118–4121. Weihang Su, Xuanyi Chen, Yueyue Wu, Qingyao Ai, and Yiqun Liu. 2026a. Enhancing judgment docu-ment generation via agentic legal information collec-tion and rubric-guided optimization. arXiv preprint arXiv:2605.02011 .Weihang Su, Qian Dong, Qingyao Ai, and Yiqun Liu. 2025c. Sigir-ap 2025 tutorial proposal: Dynamic and parametric retrieval-augmented generation. In 3rd International ACM SIGIR Conference on Information Retrieval in the Asia Pacific .Weihang Su, Yiran Hu, Anzhe Xie, Qingyao Ai, Quezi Bing, Ning Zheng, Yun Liu, Weixing Shen, and Yiqun Liu. 2024b. STARD: A Chinese statute re-trieval dataset derived from real-life queries by non-professionals. In Findings of the Association for Computational Linguistics: EMNLP 2024 , pages 10658–10671, Miami, Florida, USA. Association for Computational Linguistics. Weihang Su, Jianming Long, Qingyao Ai, Yichen Tang, Changyue Wang, Yiteng Tu, and Yiqun Liu. 2026b. Skill retrieval augmentation for agentic ai. arXiv preprint arXiv:2604.24594 .Weihang Su, Jianming Long, Changyue Wang, Shiyu Lin, Jingyan Xu, Ziyi Ye, Qingyao Ai, and Yiqun Liu. 2025d. Towards unification of hallucination detec-tion and fact verification for large language models. 
+
+arXiv preprint arXiv:2512.02772 .Weihang Su, Yichen Tang, Qingyao Ai, Changyue Wang, Zhijing Wu, and Yiqun Liu. 2024c. Miti-gating entity-level hallucination in large language models. In Proceedings of the 2024 Annual Inter-national ACM SIGIR Conference on Research and Development in Information Retrieval in the Asia Pacific Region , pages 23–31. Weihang Su, Yichen Tang, Qingyao Ai, Zhijing Wu, and Yiqun Liu. 2024d. Dragin: dynamic retrieval augmented generation based on the information needs of large language models. arXiv preprint arXiv:2403.10081 .Weihang Su, Yichen Tang, Qingyao Ai, Junxi Yan, Changyue Wang, Hongning Wang, Ziyi Ye, Yujia Zhou, and Yiqun Liu. 2025e. Parametric retrieval augmented generation. In Proceedings of the 48th International ACM SIGIR Conference on Research and Development in Information Retrieval , pages 1240–1250. Weihang Su, Changyue Wang, Qingyao Ai, Yiran Hu, Zhijing Wu, Yujia Zhou, and Yiqun Liu. 2024e. Un-supervised real-time hallucination detection based on the internal states of large language models. In 
+
+Findings of the Association for Computational Lin-guistics: ACL 2024 , pages 14379–14391. Weihang Su, Anzhe Xie, Qingyao Ai, Jianming Long, Xuanyi Chen, Jiaxin Mao, Ziyi Ye, and Yiqun Liu. 2025f. Surge: A benchmark and evaluation frame-work for scientific survey generation. arXiv preprint arXiv:2508.15658 .Weihang Su, Baoqing Yue, Qingyao Ai, Yiran Hu, Ji-aqi Li, Changyue Wang, Kaiyuan Zhang, Yueyue Wu, and Yiqun Liu. 2025g. Judge: Benchmarking judgment document generation for chinese legal sys-tem. In Proceedings of the 48th International ACM SIGIR Conference on Research and Development in Information Retrieval (SIGIR ’25), July 13–18, 2025, Padua, Italy .Weihang Su, Hanwen Zhang, Qingyao Ai, and Yiqun Liu. 2026c. Decoupling knowledge and task subspaces for composable parametric re-trieval augmented generation. arXiv preprint arXiv:2604.26768 .Alon Talmor and Jonathan Berant. 2018. The web as a knowledge-base for answering complex questions. 
+
+arXiv preprint arXiv:1803.06643 .Rohan Taori, Ishaan Gulrajani, Tianyi Zhang, Yann Dubois, Xuechen Li, Carlos Guestrin, Percy Liang, and Tatsunori B Hashimoto. 2023. Alpaca: Astrong, replicable instruction-following model. Stan-ford Center for Research on Foundation Models. https://crfm. stanford. edu/2023/03/13/alpaca. html ,3(6):7. Yiteng Tu, Weihang Su, Yujia Zhou, Yiqun Liu, and Qingyao Ai. 2025. Robust fine-tuning for retrieval augmented generation against retrieval defects. In 
+
+Proceedings of the 48th International ACM SIGIR Conference on Research and Development in Infor-mation Retrieval , pages 1272–1282. Changyue Wang, Weihang Su, Qingyao Ai, and Yiqun Liu. 2026. Joint evaluation of answer and reason-ing consistency for hallucination detection in large reasoning models. In Proceedings of the AAAI Con-ference on Artificial Intelligence , volume 40, pages 33377–33385. Changyue Wang, Weihang Su, Qingyao Ai, Yichen Tang, and Yiqun Liu. 2025a. Knowledge editing through chain-of-thought. In Proceedings of the 2025 Conference on Empirical Methods in Natural Lan-guage Processing , pages 10684–10704. Changyue Wang, Weihang Su, Qingyao Ai, Yujia Zhou, and Yiqun Liu. 2025b. Decoupling reasoning and knowledge injection for in-context knowledge edit-ing. In Findings of the Association for Computa-tional Linguistics: ACL 2025 , pages 24543–24562. Changyue Wang, Weihang Su, Qingyao Ai, Yujia Zhou, and Yiqun Liu. 2025c. Decoupling reasoning and knowledge injection for in-context knowledge edit-ing. In Findings of the Association for Computa-tional Linguistics: ACL 2025 , pages 24543–24562. 
+
+11 Yizhong Wang, Swaroop Mishra, Pegah Alipoor-molabashi, Yeganeh Kordi, Amirreza Mirzaei, Anjana Arunkumar, Arjun Ashok, Arut Selvan Dhanasekaran, Atharva Naik, David Stap, and 1 oth-ers. 2022. Super-naturalinstructions: Generalization via declarative instructions on 1600+ nlp tasks. arXiv preprint arXiv:2204.07705 .Yuhao Wang, Yang Liu, Aihua Zheng, and Pingping Zhang. 2025d. Decoupled feature-based mixture of experts for multi-modal object re-identification. In 
+
+Proceedings of the AAAI Conference on Artificial Intelligence , volume 39, pages 8141–8149. Ziwei Xu, Sanjay Jain, and Mohan Kankanhalli. 2024. Hallucination is inevitable: An innate lim-itation of large language models. arXiv preprint arXiv:2401.11817 .Zhilin Yang, Peng Qi, Saizheng Zhang, Yoshua Bengio, William Cohen, Ruslan Salakhutdinov, and Christo-pher D Manning. 2018. Hotpotqa: A dataset for diverse, explainable multi-hop question answering. In Proceedings of the 2018 conference on empiri-cal methods in natural language processing , pages 2369–2380. Zeping Yu and Sophia Ananiadou. 2024. Neuron-level knowledge attribution in large language models. In 
+
+Proceedings of the 2024 Conference on Empirical Methods in Natural Language Processing , pages 3267–3280. Jeffrey Zhou, Tianjian Lu, Swaroop Mishra, Sid-dhartha Brahma, Sujoy Basu, Yi Luan, Denny Zhou, and Le Hou. 2023. Instruction-following evalu-ation for large language models. arXiv preprint arXiv:2311.07911 .
+
+12 10 0 10 1
+
+> Top-K
+> 0.20
+> 0.25
+> 0.30
+> 0.35
+> 0.40
+> 0.45
+> 0.50
+> 0.55
+> EM Score  CWQ
+> HP
+> QUASAR
+> STRATEGY
+
+Figure 5: Impact of the number of activated experts. 
+
+Varying top-k across the tested range yields nearly un-changed downstream performance on all four bench-marks, indicating that DMoE is robust to this routing hyperparameter. 
+
+A Additional Ablation Studies 
+
+A.1 Warmup: Definition and Impact 
+
+Since the focus of this work is the DMoE architec-ture itself, we do not include dedicated instruction-following benchmarks such as IFEval (Zhou et al., 2023) to directly measure the effect of warmup on instruction following. Instead, we assess its im-pact indirectly through downstream performance on four QA benchmarks. Warmup yields modest gains of about +1 .0 EM on CWQ, +0 .3 EM on HotpotQA, and +1 .3 EM on Quasar-T, but slightly lowers StrategyQA by about 1.0 ACC. This mixed pattern suggests that warmup does not provide a uniform performance benefit and does not indicate a broad degradation in instruction following. The main setting retains warmup to match the PRAG recipe and maintain a controlled comparison. 
+
+A.2 Router: Impact of Top-k Experts 
+
+Figure 5 studies sensitivity to the number of acti-vated experts while keeping the remaining setup fixed. The curves remain nearly flat across CWQ, HotpotQA, Quasar-T, and StrategyQA, showing that DMoE is highly robust to the choice of top-k.This behavior suggests that the router identifies a sufficiently relevant expert set even with a small activation budget, while increasing the number of activated experts brings only marginal changes in downstream quality. Therefore, the default choice 
+
+k = 3 provides a simple and stable operating point without requiring careful tuning. 
+
+A.3 Router: TU-Triggered Routing Analysis 
+
+This section analyzes token uncertainty (TU) as the trigger signal used by the router. We focus on three questions: whether TU is aligned with down-stream performance, how the trigger and router 
+
+Table 5: DMoE accuracy across token-uncertainty bins. We group 300 evaluation examples into five en-tropy bins using the base model’s token uncertainty (TU) before expert activation and report DMoE performance within each bin. Higher TU consistently corresponds to lower EM/F1, supporting TU as a useful—though imperfect—proxy for when the model lacks sufficient prior knowledge.                   
+
+> BIN ENTROPY RANGE EM F1
+> 1 ( LOW )[0.593, 0.863] 0.4167 0.5593 2[0.863, 1.015] 0.2833 0.4213 3[1.017, 1.185] 0.2333 0.3186 4[1.188, 1.365] 0.1667 0.2320 5 ( HIGH )[1.366, 2.824] 0.1333 0.2085
+
+Table 6: Component ablation of trigger and router choices. We disentangle when to activate experts from which experts to select. The full TU-triggered BM25 router performs best, showing that DMoE’s gains are not explained by indiscriminate expert activation.                  
+
+> SETTING EM F1
+> A. F ULL DM OE (TU + BM25) 0.1800 0.2553
+> B. R ANDOM TRIGGER + BM25 0.1667 0.2464 C. TU + RANDOM ROUTER 0.1767 0.2406 D. A LWAYS TRIGGER + BM25 0.1200 0.1665 E. TU + ORACLE -STYLE EXPERT ROUTER 0.1767 0.2532
+
+components contribute separately, and how sensi-tive DMoE is to the triggering threshold. 
+
+A.3.1 TU and Downstream Performance 
+
+Table 5 sorts 300 evaluation examples by the base model’s token uncertainty before expert activation. Low-entropy bins correspond to cases where the base model is already relatively confident, whereas high-entropy bins correspond to cases where the model has more limited prior knowledge. The degradation is monotonic: EM drops from 0.4167 in the lowest-entropy bin to 0.1333 in the highest-entropy bin, and F1 drops from 0.5593 to 0.2085. This trend indicates that TU is aligned with knowl-edge difficulty and is therefore a reasonable signal for deciding when to trigger expert assistance. 
+
+A.3.2 Component Ablation: Trigger and Router 
+
+Table 6 further disentangles the triggering decision from expert selection. The full setting, which com-bines TU-based triggering with the BM25 router, achieves the best EM and F1. Replacing TU with a random trigger hurts performance, keeping TU but replacing BM25 with a random router also de-13 grades F1, and always triggering experts collapses substantially. These results show that the gains are not driven by indiscriminate expert activation: both deciding when to activate experts and select-ing which experts to activate matter. Finally, the oracle-style expert router is only comparable to BM25, suggesting that BM25 is already a strong practical router in this parametric-expert pipeline rather than the dominant bottleneck. 
+
+A.3.3 Impact of Triggering Thresholds 
+
+Figure 6 studies the effect of the TU triggering threshold. Increasing the threshold makes ex-pert activation more selective, which reduces rout-ing frequency and improves inference speed. At the same time, downstream metrics remain rela-tively stable across the tested range, indicating that DMoE does not require a narrowly tuned threshold to maintain performance. This behavior suggests that the TU criterion captures a useful region where expert activation is most needed, while allowing practitioners to adjust the threshold to trade off effectiveness and efficiency. 
+
+A.4 Router: Impact of Retriever Choice 
+
+Table 7 studies whether replacing the default BM25 lexical router with SGPT dense retrieval improves expert selection. SGPT yields higher accuracy on StrategyQA and slightly higher F1 on HotpotQA, but it underperforms BM25 on CWQ and Quasar-T. The efficiency profile is also mixed: SGPT is mod-estly faster in these runs, but consistently consumes about 0.6 GB more GPU memory because dense retrieval introduces additional neural embedding computation and storage. Since SGPT does not provide a stable effectiveness gain and increases memory usage, we use BM25 as the default router in the main experiments. 
+
+A.5 Experts: Impact of LoRA Rank and Scaling Factor 
+
+Table 8 evaluates the sensitivity of DMoE experts to LoRA rank r and scaling factor α. The default configuration (4 , 16) achieves the best result on HotpotQA, CWQ, and Quasar-T, while StrategyQA slightly favors (8 , 32) . Overall, increasing rank or scaling factor does not produce a consistent im-provement, suggesting that the expert adapters do not require large capacity to capture the targeted knowledge units used in our setting. We therefore use (4 , 16) as the default configuration because it provides the strongest overall trade-off between effectiveness and parameter efficiency. 
+
+B Scalability and Cost Analysis 
+
+B.1 Expert Count and Storage Footprint 
+
+In DMoE, the number of experts is not a fixed archi-tectural hyperparameter as in standard MoE models. It is determined by how external knowledge is par-titioned into knowledge units. In our experiments, we instantiate one expert for each passage-level knowledge unit, resulting in 27,613 corpus-aligned experts for the Llama-3.2-1B expert bank. This de-sign makes the expert bank naturally aligned with the retrieval corpus, but it is not the only possible granularity: in deployments with stronger storage constraints, multiple passages can be grouped into a document-level or cluster-level expert; conversely, finer units can be used when routing precision is more important. Each expert is lightweight. With the default LoRA configuration, one expert contains 122,880 trainable parameters, corresponding to approxi-mately 481 KiB on disk. The full 27,613-expert bank occupies about 13.08 GiB of disk storage. Im-portantly, this bank size does not translate into GPU memory pressure during inference. DMoE keeps the expert bank on disk and loads only the top-k
+
+selected experts at triggered decoding steps; all in-active experts remain outside GPU memory. There-fore, increasing the expert bank mainly affects disk footprint and index management, while per-step GPU memory depends on the small number of ac-tive experts rather than the total number of stored experts. 
+
+B.2 Training and Update Cost 
+
+DMoE also differs from SFT-LoRA in how updates are performed. SFT-LoRA trains a single adapter on a merged corpus-scale dataset, so adding or mod-ifying knowledge typically requires re-merging the training data and retraining or continuing training a shared adapter. In contrast, DMoE trains one small LoRA expert per knowledge unit independently. Existing expert checkpoints are skipped automati-cally, so when the corpus grows, only experts for newly added knowledge units need to be trained. In our current implementation, training one new passage-level expert takes about 10 seconds on a single NVIDIA A100 GPU. Training is embarrass-ingly parallel because experts are independent: the 27,613-expert bank corresponds to roughly 76.7 A100 GPU-hours under this per-expert timing, and 14 1.0 1.5 2.0 2.5 3.0 3.5 4.0 4.5                      
+
+> Threshold
+> 0.200
+> 0.225
+> 0.250
+> 0.275
+> 0.300
+> 0.325
+> Metric Value
+> CWQ
+> EM
+> F1
+> Time
+> 1.0 1.5 2.0 2.5 3.0 3.5 4.0 4.5
+> Threshold
+> 0.125
+> 0.150
+> 0.175
+> 0.200
+> 0.225
+> 0.250
+> HotpotQA
+> EM
+> F1
+> Time
+> 1.0 1.5 2.0 2.5 3.0 3.5 4.0 4.5
+> Threshold
+> 0.250
+> 0.275
+> 0.300
+> 0.325
+> 0.350
+> Quasar-T
+> EM
+> F1
+> Time
+> 1.0 1.5 2.0 2.5 3.0 3.5 4.0 4.5
+> Threshold
+> 0.52
+> 0.53
+> 0.54
+> 0.55
+> 0.56
+> StrategyQA
+> ACC (=EM=F1)
+> Time
+> 1.0
+> 1.5
+> 2.0
+> 2.5
+> 3.0
+> 3.5
+> 4.0
+> 1.0
+> 1.5
+> 2.0
+> 2.5
+> 3.0
+> 3.5
+> 1
+> 2
+> 3
+> 4
+> 1
+> 2
+> 3
+> 4
+> 5
+> Average Inference Time (s)
+
+Figure 6: Impact of triggering thresholds on effectiveness and inference speed. We vary the TU threshold for expert activation. Larger thresholds reduce triggering frequency and improve inference speed, while downstream performance remains comparatively stable across a broad threshold range. Table 7: Impact of retriever choice for routing. We compare the BM25 router used in the main experiments with SGPT-based dense retrieval. SGPT improves StrategyQA but does not consistently improve the other benchmarks, while using more GPU memory. 
+
+DATASET ROUTER EM F1 AVG . T IME (S) AVG . GPU (GB) 
+
+HOTPOT QA BM25 0.1800 0.2553 5.65 3.05 
+
+HOTPOT QA SGPT 0.1800 0.2603 5.28 3.65 STRATEGY QA BM25 0.5667 0.5667 8.51 2.62 
+
+STRATEGY QA SGPT 0.6067 0.6067 7.52 3.22 CWQ BM25 0.2467 0.3479 5.57 2.75 
+
+CWQ SGPT 0.2267 0.3328 4.95 3.36 QUASAR -T BM25 0.3133 0.3658 6.18 2.91 
+
+QUASAR -T SGPT 0.2933 0.3458 5.97 3.51 
+
+Table 8: Impact of LoRA rank and scaling factor. We vary the expert LoRA configuration (r, α ) while keeping the remaining setup fixed. Higher rank or larger scaling does not yield consistent gains across benchmarks. 
+
+DATASET (4,16) (8,16) (8,32) (16,32) 
+
+HOTPOT QA (EM) 0.1800 0.1700 0.1767 0.1733 CWQ (EM) 0.2467 0.2400 0.2300 0.2433 QUASAR -T (EM) 0.3133 0.2933 0.2933 0.2900 STRATEGY QA (A CC .) 0.5667 0.5767 0.5800 0.5767 
+
+wall-clock time can be reduced by distributing ex-perts across multiple GPUs. Updating obsolete knowledge is similarly local. One can delete the corresponding adapter directory and remove the document from the BM25 index, without retrain-ing the backbone or unrelated experts. 
+
+B.3 Scalability Trade-off 
+
+The main scalability trade-off is therefore not the number of active parameters at inference time, but the granularity of the expert bank. A larger bank provides more fine-grained routing targets but in-creases disk usage and index size; a smaller bank reduces storage and management overhead but may merge heterogeneous knowledge into the same ex-pert. This trade-off is controllable because knowl-
+
+Table 9: Expert-bank scaling ablation. We reduce the expert bank to different fractions of the full corpus-aligned bank and report downstream performance. The full bank is not uniformly best, indicating that DMoE is not brittle to the exact expert count. 
+
+DATASET FULL 1/2 1/5 1/10 1/100 
+
+HOTPOT QA 0.1800 0.1800 0.1800 0.1833 0.1767 STRATEGY QA 0.5667 0.5800 0.5833 0.5700 0.5767 CWQ 0.2467 0.2367 0.2433 0.2300 0.2300 QUASAR -T 0.3133 0.3133 0.3033 0.3067 0.3100 
+
+edge units can be defined at different granularities before expert construction. We consider two related but distinct dimensions of expert capacity. First, the capacity of each indi-vidual expert is controlled by the LoRA rank and scaling factor; as shown in Appendix A.5, this ef-fect is non-monotonic, and the default (r = 4 , α =16) setting is competitive or best on three of the four datasets. Second, the total expert-bank size is controlled by how many knowledge units are represented as separate experts. Table 9 reports the latter ablation. The results show reasonably stable performance across substantial reductions in bank size. Hot-potQA slightly improves at 1/10 of the bank, Strat-15 egyQA is best at 1/5, while CWQ and Quasar-T favor the full bank or tie with it. This pattern indi-cates that DMoE does not require a narrowly tuned expert count to remain functional. 
+
+C Prompt Design 
+
+This appendix lists the prompt templates used for document augmentation and evaluation. The aug-mentation prompts are used to construct document-specific parametric knowledge representations, while the evaluation prompt follows the few-shot reasoning format used in our experiments. 
+
+C.1 Prompts for Document Augmentation 
+
+To construct document-specific parametric knowl-edge representations, we employ two augmentation techniques: multi-style rewriting and QA genera-tion. 
+
+Document Rewriting We utilize rewriting to di-versify surface forms while preserving semantic content. 
+
+Prompt 1: Document Rewriting 
+
+Rewrite the following passage. While keeping the entities, proper nouns, and key details such as names, locations, and termi-nology intact, create a new version of the text that expresses the same ideas in a different way. Make sure the revised passage is distinct from the original one, but preserves the core meaning and relevant information. Passage: passage 
+
+QA Pair Generation This prompt is used to gen-erate multiple QA pairs from a passage for down-stream training. 
+
+Prompt 2: Question-Answer Generation 
+
+I will provide a passage of text, and you need to generate three different questions based on the content of this passage. Each question should be answerable using the information provided in the passage. Additionally, please provide an appro-priate answer for each question derived from the passage. You need to generate the question and answer in the following format: [{"question": "What is the capital of France?", "answer": "Paris", "full_answer": "The capital of France is Paris." }, ]This list should have at least three elements. You only need to output this list in the above format. Passage: passage 
+
+C.2 Prompt for HotpotQA 
+
+Following prior work such as FLARE(Jiang et al., 2023) and DRAGIN(Su et al., 2024d), we adopt a similar few-shot prompting strategy. All compared methods use the same prompt format for a fair evaluation. We use reasoning exemplars to guide the model toward concise multi-hop answers. 
+
+Prompt 3: Few-Shot Prompt for HotpotQA 
+
+You should reference the knowledge provided below and combine it with your own knowledge to answer the question. Please follow the format of the example I provided above. Question: Jeremy Theobald and Christopher Nolan share what profession? Answer: Jeremy Theobald is an actor and producer. Christopher Nolan is a director, producer, and screenwriter. Therefore, they both share the profession of being a producer. So the answer is producer. Question: Were Lonny and Allure both founded in the 1990s? Answer: Lonny (magazine) was founded in 2009. Allure (magazine) was founded in 1991. Thus, of the two, only Allure was founded in 1990s. So the answer is no. ... [additional examples truncated for brevity] ... Question: Were Scott Derrickson and Ed Wood of the same nationality? 
+
+16
