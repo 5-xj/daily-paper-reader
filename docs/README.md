@@ -6,55 +6,37 @@
 </div>
 
 ## 每次日报
-- 最新运行日期：2026-06-17
-- 运行时间：2026-06-17 22:31:09 UTC
+- 最新运行日期：2026-06-18
+- 运行时间：2026-06-18 22:35:55 UTC
 - 运行状态：成功
-- 本次总论文数：11
-- 精读区：4
-- 速读区：7
+- 本次总论文数：5
+- 精读区：2
+- 速读区：3
 
 ### 今日简报（AI）
-今日精读4篇、速读7篇，聚焦重排序与检索增强生成技术。  
-最值得关注《RSRank》基于表征漂移学习相关性（9.0分）和《Ricci-Filtration》利用离散曲率流提升重排器效果（8.0分）。  
-建议读者优先精读这两篇高分论文，以掌握语义重排序的前沿方法。
-- 详情：[/202606/17/README](/202606/17/README)
+今日精读两篇高分研究：紧凑型多语言重排序器与元认知进化启发式设计。  
+最值得关注方向：无标签分布适配下的多语言重排序，以及结合元认知的自动启发式搜索算法。  
+建议优先阅读Querit-Reranker，了解无需人工标注即可提升多语言检索效率的实用策略。
+- 详情：[/202606/18/README](/202606/18/README)
 
 ### 精读区论文标签
-1. [RSRank: Learning Relevance from Representational Shifts](/202606/17/2606.17468v1-rsrank-learning-relevance-from-representational-shifts)  
-   标签：评分：9.0/10、query:rerank-train
-   evidence：提出利用表示变化学习相关性的RSRank重排序方法
-2. [Ricci-Filtration: Boosting Retrieval-Augmented Generation Reranker to Query-Answer Tasks by Discrete Ricci Flow](/202606/17/2606.15482v1-ricci-filtration-boosting-retrieval-augmented-generation-reranker-to-query-answer-tasks-by-discrete-ricci-flow)  
-   标签：评分：8.0/10、query:rerank-train
-   evidence：使用离散Ricci流增强RAG重排序器
-3. [FoundCause: Causal Discovery with Latent Confounders from Observational Data](/202606/17/2606.17516v1-foundcause-causal-discovery-with-latent-confounders-from-observational-data)  
-   标签：评分：8.0/10、query:ad
-   evidence：从观测数据中发现因果结构的算法
-4. [Data-Driven Discovery of a Simple Phantom-Crossing Dark Energy Parametrization](/202606/17/2606.17951v1-data-driven-discovery-of-a-simple-phantom-crossing-dark-energy-parametrization)  
-   标签：评分：8.0/10、query:ad
-   evidence：使用穷举符号回归发现暗能量参数化
+1. [Querit-Reranker: Training Compact Multilingual Rerankers via Efficient Label-Free Distribution Adaptation](/202606/18/2606.19037v1-querit-reranker-training-compact-multilingual-rerankers-via-efficient-label-free-distribution-adaptation)  
+   标签：评分：10.0/10、query:rerank-train
+   evidence：通过无标签分布适应训练紧凑的多语言重排序器
+2. [MeEvo: Metacognitive Evolution Combined with Natural Evolution for Automatic Heuristic Design](/202606/18/2606.14202v3-meevo-metacognitive-evolution-combined-with-natural-evolution-for-automatic-heuristic-design)  
+   标签：评分：9.0/10、query:ad
+   evidence：结合元认知和自然进化，利用大模型进行自动启发式设计
 
 ### 速读区论文标签
-1. [miniReranker: Efficient Multimodal Reranking through Visual Cache Reuse and Interaction Sparsity](/202606/17/2606.10759v2-minireranker-efficient-multimodal-reranking-through-visual-cache-reuse-and-interaction-sparsity)  
-   标签：评分：7.0/10、query:rerank-train
-   evidence：提出视觉优先形式的多模态点级重排序器，提升缓存重用效率
-2. [Decoupled Mixture-of-Experts for Parametric Knowledge Injection](/202606/17/2606.14243v1-decoupled-mixture-of-experts-for-parametric-knowledge-injection)  
+1. [NIMO: A Software Platform for Closed-Loop Materials Exploration with Diverse AI Algorithms](/202606/18/2606.15522v1-nimo-a-software-platform-for-closed-loop-materials-exploration-with-diverse-ai-algorithms)  
    标签：评分：7.0/10、query:ad
-   evidence：使用大模型进行知识注入，可辅助发现任务
-3. [ScoreGate: Adaptive Chunk Selection for Retrieval-Augmented Generation via Dual-Score Statistical Fusion](/202606/17/2606.14269v1-scoregate-adaptive-chunk-selection-for-retrieval-augmented-generation-via-dual-score-statistical-fusion)  
-   标签：评分：7.0/10、query:rerank-train
-   evidence：利用交叉编码器重排分数指导检索数量，与重排器训练方法相关
-4. [NIMO: A Software Platform for Closed-Loop Materials Exploration with Diverse AI Algorithms](/202606/17/2606.15522v1-nimo-a-software-platform-for-closed-loop-materials-exploration-with-diverse-ai-algorithms)  
-   标签：评分：7.0/10、query:ad
-   evidence：用于自动发现的闭环材料探索平台，集成多种AI算法
-5. [Temporal Preference Optimization for Unsupervised Retrieval](/202606/17/2606.17664v1-temporal-preference-optimization-for-unsupervised-retrieval)  
-   标签：评分：7.0/10、query:rerank-train
-   evidence：提出使用时间偏好优化的无监督检索器训练方法；直接相关于重排序器训练技术
-6. [Intelligent Multimodal Retrieval and Reasoning for Geospatial Knowledge Discovery on the I-GUIDE Platform](/202606/17/2606.15838v1-intelligent-multimodal-retrieval-and-reasoning-for-geospatial-knowledge-discovery-on-the-i-guide-platform)  
+   evidence：闭环材料探索平台集成多种AI算法，支持自动发现
+2. [OpenAnt: LLM-Powered Vulnerability Discovery Through Code Decomposition, Adversarial Verification, and Dynamic Testing](/202606/18/2606.19149v1-openant-llm-powered-vulnerability-discovery-through-code-decomposition-adversarial-verification-and-dynamic-testing)  
    标签：评分：6.0/10、query:ad
-   evidence：使用多模态检索增强生成系统进行地理空间知识发现
-7. [AGZArank: Investigating epitope-conditioned antibody binder ranking with structure-derived synthetic supervision](/202606/17/biorxiv-10-64898-2026-06-08-730711-v1-agzarank-investigating-epitope-conditioned-antibody-binder-ranking-with-structure-derived-synthetic-supervision)  
-   标签：评分：6.0/10、query:rerank-train
-   evidence：使用合成监督训练抗体结合物排序模型；方法可迁移至重排序器训练
+   evidence：利用大语言模型自动发现代码中的漏洞
+3. [Structured Inference with Large Language Gibbs](/202606/18/2606.19264v1-structured-inference-with-large-language-gibbs)  
+   标签：评分：6.0/10、query:ad
+   evidence：使用大型语言模型进行结构化概率推理以支持发现
 
 
 <div class="dpr-home-promo-card">
