@@ -6,37 +6,42 @@
 </div>
 
 ## 每次日报
-- 最新运行日期：2026-06-18
-- 运行时间：2026-06-18 22:35:55 UTC
+- 最新运行日期：2026-05-21 ~ 2026-06-19
+- 运行时间：2026-06-19 15:10:33 UTC
 - 运行状态：成功
-- 本次总论文数：5
-- 精读区：2
-- 速读区：3
+- 本次总论文数：7
+- 精读区：3
+- 速读区：4
 
 ### 今日简报（AI）
-今日精读两篇高分研究：紧凑型多语言重排序器与元认知进化启发式设计。  
-最值得关注方向：无标签分布适配下的多语言重排序，以及结合元认知的自动启发式搜索算法。  
-建议优先阅读Querit-Reranker，了解无需人工标注即可提升多语言检索效率的实用策略。
-- 详情：[/202606/18/README](/202606/18/README)
+今日处理7篇论文，精读2篇高分研究：路由问题统一求解器SPACE与LLM驱动的双组件耦合优化自动启发式设计。  
+建议优先精读《SPACE》（9.0分）和《LLM-Driven Co-Evolutionary》（9.0分），聚焦大语言模型在组合优化中的前沿应用。
+- 详情：[/20260521-20260619/README](/20260521-20260619/README)
 
 ### 精读区论文标签
-1. [Querit-Reranker: Training Compact Multilingual Rerankers via Efficient Label-Free Distribution Adaptation](/202606/18/2606.19037v1-querit-reranker-training-compact-multilingual-rerankers-via-efficient-label-free-distribution-adaptation)  
-   标签：评分：10.0/10、query:rerank-train
-   evidence：通过无标签分布适应训练紧凑的多语言重排序器
-2. [MeEvo: Metacognitive Evolution Combined with Natural Evolution for Automatic Heuristic Design](/202606/18/2606.14202v3-meevo-metacognitive-evolution-combined-with-natural-evolution-for-automatic-heuristic-design)  
+1. [SPACE: Unifying Symmetric and Asymmetric Routing Problems for Generalist Neural Solver](/20260521-20260619/2605.24484v1-space-unifying-symmetric-and-asymmetric-routing-problems-for-generalist-neural-solver)  
+   标签：评分：9.0/10、query:atsp
+   evidence：针对非对称路径问题（包括ATSP）提出统一神经求解器框架
+2. [LLM-Driven Co-Evolutionary Automated Heuristic Design for Bi-Component Coupled Combinatorial Optimization](/20260521-20260619/2606.00718v1-llm-driven-co-evolutionary-automated-heuristic-design-for-bi-component-coupled-combinatorial-optimization)  
    标签：评分：9.0/10、query:ad
-   evidence：结合元认知和自然进化，利用大模型进行自动启发式设计
+   evidence：大模型驱动的协同进化自动启发式设计，用于组合优化
+3. [Edge-aware Decoding for Neural Asymmetric Routing](/20260521-20260619/2606.02136v1-edge-aware-decoding-for-neural-asymmetric-routing)  
+   标签：评分：9.0/10、query:atsp
+   evidence：神经非对称路由方法直接针对ATSP问题
 
 ### 速读区论文标签
-1. [NIMO: A Software Platform for Closed-Loop Materials Exploration with Diverse AI Algorithms](/202606/18/2606.15522v1-nimo-a-software-platform-for-closed-loop-materials-exploration-with-diverse-ai-algorithms)  
+1. [Regularized Large Neighborhood Search](/20260521-20260619/2606.02294v1-regularized-large-neighborhood-search)  
+   标签：评分：7.0/10、query:atsp
+   evidence：大邻域搜索启发式方法，可应用于ATSP
+2. [Large Language Model-Driven Cooperative Operator Ensemble Evolution for Permutation Flow Shop Scheduling](/20260521-20260619/2606.15334v1-large-language-model-driven-cooperative-operator-ensemble-evolution-for-permutation-flow-shop-scheduling)  
    标签：评分：7.0/10、query:ad
-   evidence：闭环材料探索平台集成多种AI算法，支持自动发现
-2. [OpenAnt: LLM-Powered Vulnerability Discovery Through Code Decomposition, Adversarial Verification, and Dynamic Testing](/202606/18/2606.19149v1-openant-llm-powered-vulnerability-discovery-through-code-decomposition-adversarial-verification-and-dynamic-testing)  
-   标签：评分：6.0/10、query:ad
-   evidence：利用大语言模型自动发现代码中的漏洞
-3. [Structured Inference with Large Language Gibbs](/202606/18/2606.19264v1-structured-inference-with-large-language-gibbs)  
-   标签：评分：6.0/10、query:ad
-   evidence：使用大型语言模型进行结构化概率推理以支持发现
+   evidence：大语言模型驱动的算子集成进化实现自动算法发现
+3. [Large Language Model-Driven Cooperative Operator Ensemble Evolution for Permutation Flow Shop Scheduling](/20260521-20260619/2606.15334v2-large-language-model-driven-cooperative-operator-ensemble-evolution-for-permutation-flow-shop-scheduling)  
+   标签：评分：7.0/10、query:ad
+   evidence：大语言模型驱动的算子集成进化实现自动算法发现
+4. [Towards Implementable Quantum Divide and Conquer: A TSP Solver with Improved Exponential Base over Held-Karp](/20260521-20260619/2606.07322v1-towards-implementable-quantum-divide-and-conquer-a-tsp-solver-with-improved-exponential-base-over-held-karp)  
+   标签：评分：6.0/10、query:atsp
+   evidence：针对一般旅行商问题的量子分治求解器，与ATSP前沿算法相关
 
 
 <div class="dpr-home-promo-card">
