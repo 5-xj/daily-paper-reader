@@ -6,56 +6,59 @@
 </div>
 
 ## 每次日报
-- 最新运行日期：2026-06-21
-- 运行时间：2026-06-21 21:33:01 UTC
+- 最新运行日期：2026-06-22
+- 运行时间：2026-06-22 22:48:26 UTC
 - 运行状态：成功
-- 本次总论文数：12
-- 精读区：4
-- 速读区：8
+- 本次总论文数：13
+- 精读区：2
+- 速读区：11
 
 ### 今日简报（AI）
-今天共处理12篇推荐论文，精读4篇、速读8篇。最值得关注9分的《Agentic Symbolic Search》在PDE表征上突破手工表达式限制，以及8分的《OneRank》提出统一多任务排序架构。建议优先精读这两篇高评分论文，了解符号搜索与多任务推荐的最新进展。
-- 详情：[/202606/21/README](/202606/21/README)
+今日推荐13篇论文，精读2篇、速读11篇，覆盖符号搜索和组合优化。最值得关注的是《Agentic Symbolic Search》（9分）偏微分方程新方法和《N(CO)$^2$》（8分）随机定向优化。建议优先精读这两篇，把握符号推理与机会约束优化的前沿方向。
+- 详情：[/202606/22/README](/202606/22/README)
 
 ### 精读区论文标签
-1. [Agentic Symbolic Search: Characterizing PDEs Beyond Hand-crafted Expressions, Meshes, and Neural Networks](/202606/21/2606.20467v1-agentic-symbolic-search-characterizing-pdes-beyond-hand-crafted-expressions-meshes-and-neural-networks)  
+1. [Agentic Symbolic Search: Characterizing PDEs Beyond Hand-crafted Expressions, Meshes, and Neural Networks](/202606/22/2606.20467v1-agentic-symbolic-search-characterizing-pdes-beyond-hand-crafted-expressions-meshes-and-neural-networks)  
    标签：评分：9.0/10、query:ad
-   evidence：代理符号搜索，结合进化搜索和LLM引导，自动发现偏微分方程的解形式
-2. [OneRank: Unified Transformer-Native Ranking Architecture for Multi-Task Recommendation](/202606/21/2606.16838v1-onerank-unified-transformer-native-ranking-architecture-for-multi-task-recommendation)  
-   标签：评分：8.0/10、query:rerank-train
-   evidence：多任务排名架构，与重排序器训练方法相关
-3. [Learning Augmented Exact Exponential Algorithms](/202606/21/2606.18807v1-learning-augmented-exact-exponential-algorithms)  
+   evidence：提出基于演化搜索和梯度优化的代理符号搜索方法，用于自动发现偏微分方程，符合符号回归与启发式搜索的要求。
+2. [N(CO)$^2$: Neural Combinatorial Optimization with Chance Constraints to Solve Stochastic Orienteering](/202606/22/2606.18514v1-nco2-neural-combinatorial-optimization-with-chance-constraints-to-solve-stochastic-orienteering)  
    标签：评分：8.0/10、query:ad
-   evidence：利用神经网络预测增强精确指数算法实现自动发现
-4. [Interpreting Neural Combinatorial Optimization via Evolving Programmatic Bottlenecks](/202606/21/2606.19741v1-interpreting-neural-combinatorial-optimization-via-evolving-programmatic-bottlenecks)  
-   标签：评分：8.0/10、query:ad
-   evidence：结合大语言模型和进化计算演化程序化瓶颈以解释神经组合优化策略
+   evidence：神经组合优化学习启发式用于算法发现
 
 ### 速读区论文标签
-1. [Beyond Parallel Sampling: Diverse Query Initialization for Agentic Search](/202606/21/2606.17209v1-beyond-parallel-sampling-diverse-query-initialization-for-agentic-search)  
+1. [Proximal Policy Optimization for Amortized Discrete Sampling](/202606/22/2606.15793v1-proximal-policy-optimization-for-amortized-discrete-sampling)  
    标签：评分：7.0/10、query:ad
-   evidence：语言模型引导的启发式搜索，用于多样化查询初始化
-2. [Latent Confounded Causal Discovery via Lie Bracket Geometry](/202606/21/2606.19610v1-latent-confounded-causal-discovery-via-lie-bracket-geometry)  
+   evidence：针对生成流网络的近端策略优化，用于离散采样与发现
+2. [Towards Pareto-Optimal Tool-Integrated Agents with Pareto Ranking Policy Optimization](/202606/22/2606.16111v1-towards-pareto-optimal-tool-integrated-agents-with-pareto-ranking-policy-optimization)  
    标签：评分：7.0/10、query:ad
-   evidence：因果发现算法
-3. [ELVA: Exploring Ranking-Driven Universal Multimodal Retrieval](/202606/21/2606.20280v1-elva-exploring-ranking-driven-universal-multimodal-retrieval)  
+   evidence：使用Pareto排序进行LLM智能体多目标对齐
+3. [A Theoretical Framework for Risk Analysis of Stochastic Rankers](/202606/22/2606.16970v1-a-theoretical-framework-for-risk-analysis-of-stochastic-rankers)  
    标签：评分：7.0/10、query:rerank-train
-   evidence：提出排名驱动的通用多模态检索，解决对比学习中的粒度盲视，与重排序器训练相关
-4. [Speaking the Language of Science: Toward a General-Purpose Generative Foundation Model for the Natural Sciences](/202606/21/2606.16905v1-speaking-the-language-of-science-toward-a-general-purpose-generative-foundation-model-for-the-natural-sciences)  
+   evidence：随机排序器的风险理论分析
+4. [A Tool for the Synthesis of Adaptive Probabilistic Processors Based on the Ising Model](/202606/22/2606.19533v1-a-tool-for-the-synthesis-of-adaptive-probabilistic-processors-based-on-the-ising-model)  
+   标签：评分：7.0/10、query:atsp
+   evidence：基于Ising模型的组合优化工具，自适应选择启发式算法
+5. [Weight Adaptation for Improving Parallel Performance of Adaptive Stochastic Natural Gradient](/202606/22/2606.19861v1-weight-adaptation-for-improving-parallel-performance-of-adaptive-stochastic-natural-gradient)  
+   标签：评分：7.0/10、query:ad
+   evidence：概率模型进化算法用于黑箱优化
+6. [RL-Index: Reinforcement Learning for Retrieval Index Reasoning](/202606/22/2606.16316v1-rl-index-reinforcement-learning-for-retrieval-index-reasoning)  
    标签：评分：6.0/10、query:ad
-   evidence：面向自然科学的通用生成基础模型，统一多种任务，赋能自动发现
-5. [Scalable Pairwise Kernel Learning with Stochastic Vec Trick](/202606/21/2606.16979v1-scalable-pairwise-kernel-learning-with-stochastic-vec-trick)  
+   evidence：强化学习用于检索索引推理，辅助知识自动发现
+7. [PathRouter: Aligning Rewards with Retrieval Quality in Agentic Graph Retrieval-Augmented Generation](/202606/22/2606.16409v1-pathrouter-aligning-rewards-with-retrieval-quality-in-agentic-graph-retrieval-augmented-generation)  
+   标签：评分：6.0/10、query:ad
+   evidence：面向语言模型智能体的路径感知训练用于迭代检索，符合LLM引导的启发式搜索
+8. [Speaking the Language of Science: Toward a General-Purpose Generative Foundation Model for the Natural Sciences](/202606/22/2606.16905v1-speaking-the-language-of-science-toward-a-general-purpose-generative-foundation-model-for-the-natural-sciences)  
+   标签：评分：6.0/10、query:ad
+   evidence：统一的科学生成模型，支持跨自然科学自动发现
+9. [Decoupling Search from Reasoning: A Vendor-Agnostic Grounding Architecture for LLM Agents](/202606/22/2606.18947v1-decoupling-search-from-reasoning-a-vendor-agnostic-grounding-architecture-for-llm-agents)  
+   标签：评分：6.0/10、query:ad
+   evidence：面向基于搜索的发现的LLM代理接地架构
+10. [A Solver-Free Training Method for Predict-then-Optimize](/202606/22/2606.19587v1-a-solver-free-training-method-for-predict-then-optimize)  
+   标签：评分：6.0/10、query:atsp
+   evidence：预测后优化学习，适用于组合优化问题
+11. [ELVA: Exploring Ranking-Driven Universal Multimodal Retrieval](/202606/22/2606.20280v1-elva-exploring-ranking-driven-universal-multimodal-retrieval)  
    标签：评分：6.0/10、query:rerank-train
-   evidence：可扩展的成对核学习方法，可用于重排序训练
-6. [Beyond IGO-Flow: Toward Convergence Analysis of IGO in Continuous Spaces](/202606/21/2606.17523v1-beyond-igo-flow-toward-convergence-analysis-of-igo-in-continuous-spaces)  
-   标签：评分：6.0/10、query:ad
-   evidence：分析离散时间信息几何优化，一种与计算发现相关的启发式黑箱优化方法
-7. [Gray-Box Optimization using Optimism in the Face of Uncertainty](/202606/21/2606.17726v1-gray-box-optimization-using-optimism-in-the-face-of-uncertainty)  
-   标签：评分：6.0/10、query:ad
-   evidence：基于乐观原则的灰盒优化启发式方法
-8. [Bayesian Anytime Pareto Set Identification for Multi-Objective Multi-Armed Bandits](/202606/21/2606.18785v1-bayesian-anytime-pareto-set-identification-for-multi-objective-multi-armed-bandits)  
-   标签：评分：6.0/10、query:ad
-   evidence：贝叶斯任意时刻帕累托识别用于多目标发现
+   evidence：基于排序驱动的多模态检索训练
 
 
 <div class="dpr-home-promo-card">
