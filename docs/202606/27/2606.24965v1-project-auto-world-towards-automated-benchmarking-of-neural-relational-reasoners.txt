@@ -1,0 +1,955 @@
+Title: Project Auto-World: Towards Automated Benchmarking of Neural Relational Reasoners
+
+URL Source: https://arxiv.org/pdf/2606.24965v1
+
+Published Time: Thu, 25 Jun 2026 00:05:19 GMT
+
+Number of Pages: 41
+
+Markdown Content:
+# Project Auto-World: Towards Automated Benchmarking of Neural Relational Reasoners 
+
+Anirban Das *,1 Joanne Boisson *,1 Irtaza Khalid *,1 Sumita Garai 2 Steven Schockaert 1
+
+> 1
+
+Cardiff University 2University of Pennsylvania 
+
+{dasa8,boissonjc,khalidmi,schockaerts1}@cardiff.ac.uk sumita.garai@pennmedicine.upenn.edu 
+
+## Abstract 
+
+Reasoning about relational structures remains a significant challenge for neural models, particularly when they must systematically apply learned knowledge to problem instances that are harder than those seen in training. Progress is hampered by the difficulty of evaluating such generalization, since a priori , it is rarely clear what makes an instance hard. We study how this issue can be addressed by using large language models (LLMs) to automate benchmark generation, learning to produce increasingly challenging instances in an end-to-end manner. Concretely, given a world parametrized by Datalog rules, and an Edge Transformer as the reasoning evaluator, we use LLM-driven evolutionary search (based on FunSearch) and autonomous agentic search to discover sampling functions that yield hard problem instances. We also show that the Edge Transformer can be improved using this data such that it generalizes well to further data perturbations. Finally, we show that the same machinery can be applied to novel worlds proposed by LLMs, opening the door to autonomous research on neural relational reasoning. 
+
+## 1 Introduction 
+
+The problem of inferring relationships between entities in a knowledge graph (KG) has received widespread attention [Bordes et al., 2013, Meilicke et al., 2019, Zhu et al., 2021]. Despite the vast literature on this topic, however, most approaches are not capable of systematic reasoning [Sinha et al., 2019, Das et al., 2025], i.e. they are not capable of applying the learned regularities in a systematic way to solve problems that are harder than those on which they were trained. This presents a stark contrast with classical approaches, such as Inductive Logic Programming [Cropper et al., 2022], where learned rules can be chained to make arbitrarily complex predictions. This observation has sparked a line of work that is focused on systematic neural relational reasoning [Minervini et al., 2020, Bergen et al., 2021, Lu et al., 2022c, Cheng et al., 2023b, Khalid and Schockaert, 2025]. To evaluate the systematic reasoning capabilities of these models, we need to create training/test splits in which the test examples are more difficult than the training instances, in some sense . Crucially, however, this requires that we know what makes problem instances hard. Previous work has primarily considered the number of inference steps for this purpose [Sinha et al., 2019]. However, the number of inference steps is not the only metric of difficulty that makes sense. For instance, Khalid and Schockaert [2025] focused on problems where the answer can only be derived by combining multiple relational paths, finding that the number of such paths has a strong impact on problem difficulty. As another example, Das et al. [2025] found that existing models struggle when reasoning involves edges that are not on any path between the considered head and tail entities. Accordingly, they suggested using the number of such off-path edges as a difficulty metric. This creates a conundrum: when we  
+
+> *co-first authors Code is available at https://github.com/autoworldrules/auto-world-rules/
+> Preprint.
+> arXiv:2606.24965v1 [cs.AI] 23 Jun 2026
+
+are evaluating reasoning models, we do not know a priori what makes problem instances hard for these models. We can evaluate them w.r.t. known difficulty metrics, but these metrics may have blind spots, i.e. strong performance on the resulting training/test splits might mask their real limitations. Figure 1 illustrates this with an example that is hard for current models, despite not being identified as such by existing metrics (we will circle back to this example in the experiments section to discuss why we think it is difficult in a way that is not explained by known metrics). Furthermore, generating problem instances which are hard w.r.t. a given difficulty metric can be challenging in itself. The most common strategy is to create problem instances by randomly sampling KGs and then masking some edges, but the conditions that make reasoning hard are often unlikely to arise in these random graphs. While some authors have explored more structured sampling strategies for this reason [Cohen, 2019, Khalid and Schockaert, 2025], such strategies cannot guarantee that problem instances have the “right” structure, given that we do not even know in advance what structures are needed to make reasoning challenging.   
+
+> e3e1
+> e4e5
+> e0
+> is_female
+> sibling_of
+> sibling_of
+> grandfather_of
+> child_of
+> sister_of
+> grandfather_of
+> maternal_aunt_or_uncle_of
+
+Figure 1: Example of a discovered reasoning instance which challenges existing models. Ini-tial facts are shown as black edges, selected inferred facts as red edges. The task is to infer the relationship between e3 and e4.
+
+Contributions. Inspired by the successes of LLM-based approaches to scientific discov-ery [Novikov et al., 2025], notably FunSearch [Romera-Paredes et al., 2024], we ask whether LLMs can automate the evaluation of rela-tional reasoning models. We adapt FunSearch [Romera-Paredes et al., 2024] into an evolutionary loop in which the LLM proposes Python priority functions that drive the sampling of candidate problem in-stances, using the evaluator’s failure rate as fitness. This leads to self-improving samplers that generate progressively harder instances. Our analysis shows that the difficulty of the sampled problems cannot be (fully) explained by known difficulty metrics. We also show that surprisingly strong samplers can be ob-tained by prompting Claude Opus 4.6 in a dia-logue setting. Further, we find that augmenting the Edge Transformer’s training data with in-stances generated by the learned samplers yields a stronger evaluator (S UPER ET) that largely resists further evolutionary perturbations within the FunSearch loop. However, replacing this loop with an end-to-end autoresearch style [Karpathy, 2026] agent leads to samplers that can still challenge the SUPER ET. 
+
+## 2 Background 
+
+Knowledge representation A KG G is a set of triples G ⊆ E × R × E , where E is a set of entities and R is a set of relations. We can think of KGs as labelled graphs. For instance, if G contains a triple 
+
+(e, r, f ), we say that there is an edge of type r between e and f . At the same time, we can also think of KGs as sets of logical assertions. For example, the triple (bob , father_of , alice ) can be viewed as the assertion that bob is the father of alice . Abusing notation, we will sometimes view KGs as sets of relational facts r(e, f ) rather than sets of triples (e, r, f ). We rely on Datalog rules to encode the knowledge that allows us to reason about KGs. 1 An example of a Datalog rule is as follows: 
+
+father_of (X, Z ) ← father_of (X, Y ) ∧ brother_of (Y, Z )
+
+This rule encodes that whenever some entity X is known to be the father of Y and Y is known to be the brother of Z, we can infer that X is the father of Z. Given a KG G and a set of Datalog rules P, we write G ∪ P | = r(e, f ) to denote that r(e, f ) can be inferred from G using the rules in P. For instance, in the example from Figure 1, we can infer grandfather_of (e3, e 4) from the given KG and the rules from NoRA [Das et al., 2025]. In this context, we often refer to KGs G as 
+
+worlds . The rules in P capture the regularities that hold in these worlds; they are therefore sometimes referred to as world rules . In addition, we often also have access to a set of constraints C. Each 
+
+> 1Further details on Datalog can be found in Appendix A.1
+
+2constraint corresponds to a conjunction of literals that can never be jointly satisfied (e.g. we cannot have mother_of (X, Y ) ∧ father_of (X, Y )). In the following, when generating worlds, we always guarantee that the constraints in C are satisfied, to prevent them from being non-nonsensical. 
+
+Difficulty metrics Current strategies for evaluating the systematic generalization abilities of neural reasoning models rely on metrics for assessing the difficulty of inferences of the form G ∪P | = r(e, f ).The most commonly used metric is the inference depth (D) , which is defined as the number of inference steps (i.e. rule applications) that are needed to infer r(e, f ). While standard Graph Neural Networks (GNNs) and Recurrent Neural Networks (RNNs) struggle to generalize to longer paths, experiments on benchmarks such as CLUTRR suggest that state-of-the-art models are rather robust in this respect [Cheng et al., 2023a, Khalid and Schockaert, 2025]. Das et al. [2025] introduced two additional difficulty metrics, both of which capture the intuition that off-path reasoning is harder than path-based reasoning. The Off-Path Edge Count (OPEC) is defined as the number of triples that are used to infer r(e, f ) which do not correspond to an edge of a path from e to f . The Backtrack Load (BL) instead measures the amount of off-path reasoning based on the close relation between inference depth and path length. It is defined as the ratio of the number of inference steps to the number of entities involved. The higher this ratio, the more the reasoning process intuitively deviates from path-based reasoning. Das et al. [2025] found that all tested models struggled to generalize to reasoning problems with higher OPEC or BL than the training examples. 
+
+Learning to reason Let P be a set of Datalog rules. An example of a P-reasoning problem is a tuple 
+
+(G, s, t, L) where G is a KG, s and t are entities from G (called the source and target entities), and L is the set of all relationships between e and f that can be inferred from G, i.e. L = {r | P ∪G | = r(e, f )}.Given a set of training examples (G1, s 1, t 1, L1), ..., (Gn, s n, t n, Ln), the task of learning to reason 
+
+is to train a model which can answer queries of the form (Gn+1 , h n+1 , t n+1 , ?) , i.e. predict the relationships that hold between two entities in an unseen KG Gn+1 . All KGs Gi share the same set of relations R, but their entities are distinct. Intuitively, the model thus has to learn the rules from P
+
+based on the given training examples, and then apply these rules to the unseen test examples. We typically evaluate models on test examples which are harder than the training examples, according to some metric of difficulty. This means that the models are required to reason about the learned rules, rather than relying on statistical shortcuts, and tests their ability to generalize in a systematic way. In this paper, we will use Edge Transformers (ETs) for learning to reason [Bergen et al., 2021]. While various competitive models have been proposed that can generalize well on path-based reasoning tasks Minervini et al. [2020], Lu et al. [2022c], Cheng et al. [2023b], Khalid and Schockaert [2025], most of these models struggle with off-path reasoning. ETs are theoretically capable of capturing arbitrary formulas from the logic C3, i.e. the three-variable fragment of first-order logic with counting quantifiers [Müller et al., 2024], and can thus in principle learn the required knowledge. Empirically, ETs have also been found to generalize well in several settings Bergen et al. [2021], Müller et al. [2024], and they achieved by far the strongest results on the NoRA benchmark [Das et al., 2025]. 
+
+## 3 Methodology 
+
+Problem setting Let M be a neural reasoning model that was trained on P-reasoning examples (e.g. an ET). We want to find a sampling method which generates P-reasoning examples that are hard for M. Our main focus is on generating graphs G from which difficult queries can be constructed. To make this more precise, we want to find a sampler S, i.e. a generative model from which we can sample worlds G, satisfying a given set of constraint C, which maximizes the following score: 
+
+difficulty (S; M) = 1 − EG∼ S[ min 
+
+> h,t ∈E G
+
+min 
+
+> r∈L G,h,t
+
+Mr (G, h, t )] (1) where we write EG for the set of entities in world G, LG,h,t for the ground truth answer to the query 
+
+(G, h, t, ?) , and Mr (G, h, t ) for the probability that r(h, t ) holds according to M.
+
+3.1 Evolutionary search 
+
+We aim to learn samplers S that maximize difficulty (S; M) for a given model M. We focus on samplers that generate worlds by adding one edge at a time. To decide which edge to add in each step, we first randomly sample a set of Ncand candidate triples (e, r, f ). These candidate triples are then scored by a 3priority function ρ, which depends on the partial world constructed thus far and the candidate triple. The highest scoring triple, according to this priority function, is added to the world. The problem of learning a sampler is thus reduced to that of learning a priority function. To learn this priority function, we use an approach which is based on FunSearch [Romera-Paredes et al., 2024], an LLM-based evolutionary framework aimed at finding high-performing greedy algorithms for combinatorial problems. FunSearch is based on two key insights. First, given a candidate priority function, we can use an LLM to suggest an improved priority function (encoded as a Python method). Second, the quality of any given priority function ρ can be robustly assessed using a task-specific evaluator. In our case, this evaluator uses the priority function ρ to generate a number of KGs G1, ..., GNevalgraphs , and then uses the given model M to obtain an empirical estimate of (1): 
+
+fitness (ρ) = 1 − 1
+
+Nevalgraphs 
+
+> Nevalgraphs
+
+X
+
+> i=1
+
+min  
+
+> h,t ∈E
+
+min 
+
+> r∈L Gi,h,t
+
+Mr (Gi, h, t )
+
+We refer to this estimate as the fitness of the priority function ρ. To obtain a priority function with a high fitness score, following FunSearch, we maintain a database of previously generated priority functions. In each step, we select two of these priority functions and ask the LLM to suggest an improved one, where the selection is biased towards the functions with the highest fitness. To encourage sufficient exploration, FunSearch maintains multiple databases of priority functions, called islands, where the evolution process is applied to each of these islands independently. After Niter 
+
+iterations, half of the islands are removed, namely those whose best-scoring priority functions have the lowest fitness. These islands are then replaced by new databases, which are obtained by sampling the best-performing priority functions from the remaining islands. Each set of Niter iterations is referred to as a cycle . Further details can be found in Appendix A.3. The evolutionary approach is aimed at finding queries that are hard for some model M. If this is successful, then a stronger model might be obtained by adding such queries to the training data. We want to analyze whether this process can be repeated. After a fixed number of Ncycles have been completed, we therefore re-train the ET on a training set that includes queries that were sampled from the best overall priority function found so far. We then repeat the process with this new model. We define a round as a period of Ncycles during which a fixed model M is used, after which it is retrained. 
+
+3.2 Auto-research agents 
+
+As a natural extension of the evolutionary approach, we consider an agent-in-the-loop procedure similar to auto-research [Karpathy, 2026]. Different from the approach from Section 3.1, the agent is able to build context over multiple experimental runs. Moreover, it has the ability to run code and perform rudimentary analysis via tool calls and inspections. We initiate the loop by telling the agent to read a program.md file, which is provided Appendix A.4. For this experiment, we refactored our codebase to its minimal set (a simple ET training loop, a problem instance generator utilizing the sampling function, etc.) to make sure the agent’s context is minimally obfuscated. A coding agent (Claude Opus 4.6) iteratively edits a single Python program containing the priority function for a single round and the rest of protocol is kept the same as before. The agent’s objective is to drive ET evaluation accuracy down while keeping the priority function as simple as possible. 
+
+3.3 Model-agnostic LLM-generated strategies 
+
+We also wanted to assess the potential of directly relying on the coding abilities of frontier LLMs. To this end, we generated a number of different samplers through a dialogue with Claude Opus 4.6. This led to four general samplers: a sampler which uses hill-climbing to optimize graphs for deep derivations ( Cl-hill ), a sampler which uses backward chaining to ensure there is at least one deep derivation ( Cl-bw ), a sampler which builds graphs from small self-contained patterns which trigger specific derivation rules ( Cl-motif ), and a hybrid strategy obtained by prompting Claude to combine ideas from the three aforementioned methods with the specific aim to challenge GNNs ( Cl-atlas ). These samplers can, in principle, be used for any set of Datalog rules P and constraints C. We also obtained, as part of this dialogue, a number of samplers that were specific to the NoRA world: a sampler which starts from a few family skeleton templates ( Cl-N-temp ), a sampler which starts from a minimal two-person married seed and greedily expands the graph one edge at a time ( Cl-N-greedy ), and a variant of Cl-bw with heuristics that are specific to the NoRA world ( Cl-N-bw ). Further details on these samplers, and how they were obtained, can be found in Appendix A.2. 4Table 1: Cross-evaluation of samplers on NoRA in terms of exact-match accuracy, comparing Claude-generated samplers with the result of four independent runs of the evolutionary process with qwen3-coder-next-80b.                                                                                          
+
+> Test set Cl-atlas Cl-motif Cl-N-bw Cl-N-greedy Cl-N-temp Evo1 Evo2 Evo3 Evo4 Training set Cl-atlas 0.92 0.59 0.26 0.02 0.28 0.16 0.17 0.16 0.16
+> Cl-motif 0.58 0.96 0.43 0.19 0.32 0.24 0.25 0.25 0.24
+> Cl-N-bw 0.04 0.09 0.99 0.10 0.13 0.08 0.09 0.06 0.09
+> Cl-N-greedy 0.05 0.10 0.34 0.96 0.16 0.05 0.06 0.07 0.05
+> Cl-N-temp 0.01 0.03 0.06 0.26 0.98 0.01 0.02 0.02 0.02
+> Evo1 0.18 0.23 0.23 0.18 0.29 0.68 0.50 0.52 0.50
+> Evo2 0.17 0.23 0.28 0.19 0.20 0.53 0.62 0.54 0.60
+> Evo3 0.17 0.23 0.31 0.19 0.31 0.52 0.53 0.55 0.54
+> Evo4 0.17 0.23 0.15 0.15 0.36 0.52 0.55 0.55 0.52
+
+## 4 Experiments 
+
+Reasoning models can be straightforwardly challenged by presenting them with sufficiently large KGs. Our main focus is therefore on whether it is possible to find small KGs which challenge these models. In particular, we restrict our experiments to KGs of at most 8 entities. Our analysis primarily focuses on the rules and constraints from the NoRA 1.1 benchmark Das et al. [2025]. Similar to CLUTRR, this benchmark focuses on the problem of reasoning about family relationships. However, in contrast to previous benchmarks, NoRA requires off-path reasoning, which poses particular challenges for existing methods. NoRA 1.1 consists of a training split and three test splits: test-D, test-OPEC and test-BL (consisting of examples that are systematically harder than the training examples in terms of one of the difficulty metrics). For our analysis, some of the examples from test-D, test-OPEC and test-BL will be used for training, since we want to find problems with different forms of difficulty than captured by these test sets. To allow us to validate our findings on a second domain, we used Claude to generate a completely new set of world rules and constraints (see Appendix A.5). The resulting domain is called Iron Coast . In addition to providing another dataset for evaluating the considered sampling strategies, experiments on this domain will allow us to assess the usefulness of LLM-generated reasoning domains, and thus whether it is feasible to fully automate the process of evaluating neural relational reasoners. Results are evaluated in terms of exact-match accuracy, i.e. we report the fraction of queries (G, h, t, ?) 
+
+for which the predicted set of relations exactly matches the ground truth LG,h,t .
+
+Evaluation of sampling strategies The difficulty of the queries that are obtained using a given sampling strategy can only be determined relative to a particular model. In Table 1, we therefore present a cross-evaluation of different samplers. Each entry in the table shows the performance of an ET that was trained on examples from a given training set and evaluated on queries generated by a particular sampler. We have included 5 of the Claude-generated samplers 2, which were used both to generate training sets and test sets. For instance, the results in the row marked Cl-atlas are those for an ET that was trained on examples sampled from Cl-atlas. The column marked Cl-atlas shows the results that were obtained for test queries that were sampled from Cl-atlas. We also included samplers obtained from four independent runs of the evolutionary process with Qwen3-next-80b. In particular, the row marked Evo i show results for an ET that was trained on the round 4 training set of a evolutionary process with initial seed i. The columns marked Evo i show results for test queries that were sampled using the priority function developed in round 5. Note that the diagonal elements are thus in-distribution for the Claude samplers, but not for the evolutionary runs. Full details on the experimental set-up can be found in Appendix A.6. The results show several clear patterns. First, the samplers obtained from the four runs of the evolu-tionary process appear to be similar: models trained on Evo1–Evo4 achieve a similar performance on the Evo1–Evo4 test sets. In contrast, models trained on the evolutionary samplers perform poorly 
+
+> 2The remaining two generic Claude samplers generated non-nonsensical worlds, which is related to the fact that the NoRA constraints do not exhaustively avoid all nonsensical worlds. They were thus omitted for this analysis.
+
+51 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 
+
+Round 
+
+0.0 
+
+0.1 
+
+0.2 
+
+0.3 
+
+0.4 
+
+0.5 
+
+0.6 
+
+0.7 
+
+> Exact-Match Accuracy
+> best
+> zone
+> Baseline: return 0.0
+> Diversity-weighted entailments
+> + strong entailed facts
+> Novel info bonus
+> Penalize spatial/
+> favor family
+> + entity pair bonus
+> + deep family bonus
+> Overlap pairs
+> Alternating phases
+> + seed min bonus
+> Rule-derived detection
+> + stronger multi-hop alt
+> Simplified family count
+> Extreme multi-hop
+> (22x bonus)
+> Multi-hop chain
+> detection
+> + multi-hop
+> entailment bonus
+> Hardcoded multi
+> + forest rand penalty
+> forest + threat
+> rand penalty
+> Pure multi-hop
+> Expanded forest set
+> (kept!)
+> + connectivity bonus
+> + multi-hop perm
+> + connectivity bonus
+
+Trained ET on every round 
+
+ET_0 pretrained only Figure 2: Auto-research results for Claude Opus 4.6 coding agent running in an infinite agent-in-the-loop. Exact-Match accuracies of the ET 0 (trained only once on NoRA 1.1) and the ET that is trained continually on each successive rounds from fresh and historical data generated by each round’s priority function can be seen. Summaries of major changes that are introduced per round are also annotated. 0 1 2 3 4 5
+
+Round 
+
+> 0.2
+> 0.4
+> 0.6
+> 0.8
+> 1.0
+> Exact-match probability
+
+Round-0 ET exact match 
+
+> Evo1
+> Evo2
+> Evo3
+> Evo4
+> SuperEt-evo
+
+(a) NoRA-TRAINING CL-atlas CL-motif CL-N-bw CL-N-greedy CL-N-temp  
+
+> 0
+> 2
+> 4
+> 6
+> 8
+> Percentage Reduction
+> of Unexplained
+
+(b) 
+
+Figure 3: (a) Performance of the original ET after each round of the evolutionary process, comparing a variant initialized with the S UPER ET with four runs that were initialized with the standard ET. The results reflect the performance of the initial model on samples generated by the best priority functions at each round, and are reported in terms of exact-match accuracy. (b) Analysis of percentage reduction in unexplained difficulty when incorporating entailed off-path edges (using queries sampled with priority functions obtained at the end of various standard evolutionary runs.). on the Claude datasets, and vice versa . Among the Claude-based samplers, training on Cl-motif 
+
+examples overall achieves the best results, whereas the NoRA-specific samplers are the weakest in this respect. As expected, the Claude models perform nearly perfectly on in-distribution examples. We performed a similar cross-evaluation of samplers on the Iron Coast domain, finding broadly the same patterns (see Appendix B.1). Furthermore, changing the LLM from Qwen3-next-80b to gpt-oss-120b or deepseek-coder-33b only had a minimal impact (see Appendix B.2). Figure 2 analyzes the effectiveness of the Auto-research experiment, described in Section 3.2. In each round of this process, a priority function is obtained. The figure shows the performance of two ETs on queries sampled from that priority function: the initial ET (trained on the NoRA dataset, as for the evolutionary approach) and an ET which is trained on a combination of the initial training data and examples sampled from the priority functions from previous rounds. As can be seen, most of the adversarial gain occurs in the first 3 rounds. Towards the later rounds, the performance of both ETs converges, suggesting that the Auto-research agent has found a priority function that challenges the ET, even when recent variations of that priority function are used for training the model. 6Table 2: Cross-evaluation of priority functions obtained through evolutionary search (for NoRA) using qwen3-coder-next-80b, the priority function obtained at round 20 of the auto-research agent, and the priority function obtained when the process was initialised with the S UPER ET model. Results are reported in terms of exact-match accuracy.                                          
+
+> Test set Evo1 Evo2 Evo3 Evo4 Auto-research SUPER ET-evo Training set  Evo1 0.68 0.50 0.52 0.50 0.03 0.47
+> Evo2 0.53 0.62 0.54 0.60 0.03 0.47
+> Evo3 0.52 0.53 0.55 0.54 0.04 0.45
+> Evo4 0.52 0.55 0.55 0.52 0.03 0.46
+> Auto-research 0.12 0.09 0.13 0.09 0.15 0.11
+> SUPER ET-evo 0.86 0.86 0.87 0.87 0.57 0.70
+
+Table 3: Analysis of unexplained difficulty, in terms of the score defined in (2).                                    
+
+> Queries Evo Claude Auto-research SUPER ET-evo test-OPEC test-D Model  Evo 0.84 0.79 0.88 0.80 0.59 0.60
+> Cl-atlas 0.54 0.81 0.87 0.53 0.45 0.44
+> Auto-research 0.64 0.79 0.86 0.70 0.53 0.54
+> SUPER ET-evo 0.90 0.79 0.79 0.89 0.61 0.61
+> NoRA-training 0.59 0.77 0.76 0.66 0.51 0.49
+
+Training reasoning models on augmented training data In Table 1, we found that both the evolved priority functions and the model-agnostic LLM-generated samplers succeed in challenging the ET. We now investigate whether a more robust ET model can be obtained by combining training examples from all these samplers. Specifically, for this experiment we train a model from 13 sources: the 9 training sets considered in Table 1, together with the training set, test-OPEC, test-BL and test-D splits from NoRA 1.1. We sampled 1300 examples at random from each of these sources (which reflects the size of the smallest source). In the following, we refer to the resulting model as S UPER ET. We then repeated the evolutionary process for this S UPER ET. Figure 3a shows the performance of the (initial) S UPER ET after each round of the evolutionary process (in purple), together with the performance of the (initial) ET in four runs of the standard evolutionary process. As can be seen, the performance of the S UPER ET remains relatively strong throughout the process, showing that the evolutionary approach struggles to find strategies that challenge this model. Table 2 presents a cross-evaluation of 6 models: ETs trained on the round-4 training data from four standard runs of the evolutionary process (which are distinct from those that were used for training the S UPER ET), a model trained on the round-19 training set from the Auto-research experiment, and the round-4 training data from the evolutionary process with the S UPER ET. The models are evaluated on the round-5 priority functions of the evolutionary approaches and the round-20 priority function from the Auto-research experiment. This analysis confirms the robustness of S UPER ET-evo, i.e. the S UPER ET variant obtained after run 4 of the evolutionary process. We find that, apart from S UPER ET-evo, all models perform poorly on the queries obtained from the Auto-research sampler. We see that the model trained on queries from the Auto-research sampler performs poorly overall, suggesting a lack of diversity in the generated worlds. 
+
+Analysis We analyze to what extent the considered samplers have identified novel forms of difficulty, beyond inference depth, OPEC and BL. For a given model and test set, we train a classifier to predict whether the model will answer a given query correctly or not, using as features only the inference depth, OPEC and BL of that query (see Appendix B.3 for details). We then evaluate the extent to which problem difficulty is unexplained, based on the McFadden pseudo-R 2 (R2
+
+> McF
+
+), as follows: 
+
+Unexplained = 1 − R2 
+
+> McF
+
+= lmodel 
+
+lnull 
+
+=
+
+P 
+
+> q∈Q+
+
+log pmodel (q) + P 
+
+> q∈Q−
+
+log(1 − pmodel (q)) 
+
+P 
+
+> q∈Q+
+
+log pnull (q) + P 
+
+> q∈Q−
+
+log(1 − pnull (q)) (2) 7where Q+ and Q− are the queries that were answered correctly and incorrectly by the ET, for a given set of queries obtained from the considered sampler; pmodel (q) is the probability assigned by our classifier that q will be answered correctly; and pnull (q) is the probability assigned by an uninformed model, i.e. pnull (q) = |Q+||Q+|+|Q−| . In Table 3, we report the Unexplained value for different models and sampling strategies. This value reflects the extent to which there are aspects of difficulty in the queries that are unexplained by inference depth, OPEC and BL. A value of 1 reflects a situation where knowing the inference depth, OPEC and BL of a query does not provide any information about its difficulty. In contrast, a value of 0 reflects a situation where these difficulty metrics fully determine whether a query is answered correctly. Each row in the table corresponds to an ET that was trained on a particular training set: the round-5 training data of a standard evolutionary run, queries sampled from Cl-Atlas, queries sampled using the round-20 training data from the auto-research experiment, the round-5 training data of an evolutionary run based on the S UPER ET, and the standard NoRA 1.1 training split. The columns correspond to different samplers that were used for generating the test queries: the round-5 priority function from a standard evolutionary run, Cl-Atlas, the round-20 sampler of the auto-research experiment, the round-5 priority function from the evolutionary process based on the S UPER ET and the test-OPEC and test-D test splits from NoRA 1.1. As expected, the Unexplained values for the test-OPEC and test-D queries are among the lowest in the table. In contrast, the values for the Claude and Auto-research test sets are consistently high, for all models, showing that these samplers generate problems whose difficulty is poorly explained by the considered metrics. Finally, for Evo and S UPER ET-evo, we see large discrepancies across the different models. Focussing on the S UPER ET-evo model, for instance, we can see a high unexplained value for the Evo queries. Given the stronger overall performance of this model, this suggests that it performs better than the other models on problems that are only difficult because of their inference depth, OPEC or BL value. The problems on which it struggles, however, have a difficulty which cannot be explained by these metrics. When inspecting the generated problem instances from the evolutionary samplers, we identified a class of queries that are difficult because the derivation relies on inferred off-path edges. Figure 1 shows an example of such a query, where the is_female loop is an off-path edge. However, since this edge is inferred, the OPEC value of this query is 0. Despite only involving 5 entities, all models included in the analysis from Figure 3b misclassified this example. More generally, we found that incorporating the number of such inferred off-path edges can reduce the value of the Unexplained 
+
+score. Specifically, let us defined the Off-Path Entailed Edge Count (OPEEC) as the number of entailed off-path edges that are used to derive the answer. Figure 3b shows the percentage reduction in the Unexplained score when adding OPEEC as a feature, for a number of different models evaluated on test queries obtained by combining, for each evolutionary run, the queries sampled using the priority function produced at the end of round 5. (see Appendix B.3 for further detail). 
+
+## 5 Related Work 
+
+Scientific discovery and meta-learning LLMs for automating scientific discovery via methods like FunSearch [Romera-Paredes et al., 2024] and its successor AlphaEvolve [Novikov et al., 2025] (essentially its multi-objective and multi-file editing counterpart) have yielded promising results in various domains including mathematics [Ellenberg et al., 2025], Bayesian and Graph-based Optimization [Aglietti et al., 2024, Verma et al., 2025] and cognitive science [Castro et al., 2025]. They focus on problems with automatically verifiable solutions, e.g., search for mathematical objects with certain properties or designing heuristic algorithms. At its heart, the idea is much older and is related to meta-learning [Schmidhuber, 1987], which attempts to learn algorithms via end-to-end optimization but is encumbered, primarily, by the intrinsic inability to differentiate through complex learning processes such as reinforcement learning (RL). Here, evolution-based optimization is a scalable alternative to RL [Salimans et al., 2017] due its gradient-free nature and has, in fact, also been applied to evolve surrogate objective functions to discover novel loss functions in RL [Lu et al., 2022a, Jackson et al., 2024, Lu et al., 2022b]. Within a wider setting, LLM-based evolution has been applied to prompt engineering [Guo et al., 2024, Agrawal et al., 2026], neural architecture search [Nasir et al., 2024] and reward shaping [Hazra et al., 2025, Sapora et al., 2024]. 
+
+Self-improvement and adversarial learning The idea of self-improvement [Schmidhuber, 1987, Nivel et al., 2013] is closely related to self-play [Samuel, 1959, Sutton et al., 1998], which naturally 8admits an adversarial interpretation [Goodfellow et al., 2014, Arjovsky et al., 2017] in the form of a two-player minimax game. Our approach is similar in spirit to adversarial learning methods, particularly adversarial imitation learning [Goodfellow et al., 2014, Ghasemipour et al., 2020, Chirra et al., 2026] where reward assignment functions are shaped as a function of the outputs of the underlying policy neural network whose training stability and performance are optimized. Another related thread is the idea of self-challenging [Zhou et al., 2026, Kulikov et al., 2026] or self-play [Sukhbaatar et al., 2018] where a challenger generates training examples for a solver, which can both be optimized together, thereby iteratively producing harder training examples. Nie et al. [2020] have also created a benchmark that specifically challenges a given model, focusing on the task of Natural Language Inference (NLI) and relying on crowdworkers to obtain the problem. 
+
+Synthetic benchmark generation The use of LLMs for generating synthetic benchmarks is common practice, e.g., instruction-tuning data for QA and agentic tool-use [Schick and Schütze, 2021, Wang et al., 2023, Shi et al., 2026, Xi et al., 2025] due to inherent scalability of the approach and the scarcity of human data [Singh et al., 2024]. For instance, Guinet et al. [2024] generate question and answer pairs for evaluating Retrieval Augmented Generation (RAG) pipelines. The use of synthetic datasets is also common practice for evaluating the reasoning abilities of LLMs in various settings [Dziri et al., 2023, Valmeekam et al., 2022, Mirzadeh et al., 2025, Shojaee et al., 2025, Xie et al., 2025]. Seedless, self-challenging, agentic data synthesis using a top-down, taxonomic, self-verification loop have also been proposed [Davidson et al., 2026, Kulikov et al., 2026]. However, the evaluation pipelines in such settings rely on predefined sampling strategies, focussing more on generating test examples that cannot have appeared in pre-training than on discovering particular dimensions of difficulty. Another concern is verifying the quality of LLM-based problem instances. In contrast, our approach uses LLM-sampled programs that generate self-challenging instances. 
+
+## 6 Conclusions 
+
+We have studied the potential of LLMs for learning to sample problem instances that are challenging for relational reasoning models. Our analysis has focused on three broad strategies: (i) LLM-driven evolutionary search based on FunSearch, (ii) Auto-research agents which autonomously evolve sampling strategies, and (iii) simple dialogue-based prompting of frontier LLMs. We found all strategies to be successful in challenging the Edge Transformer (ET), a state-of-the-art neural relational learning model, despite the fact that the generated problem instances are small (consisting of at most 8 entities). We then considered whether a more robust ET model could be obtained by incorporating the learned samplers into the training data. The resulting model (S UPER ET) was indeed significantly more robust against the FunSearch-based evolutionary process, although it was still challenged by the sampler that was learned by the Auto-research agent. Our analysis of the learned samplers revealed that they have (implicitly) discovered aspects of difficulty which go beyond what can be explained through known difficulty metrics. Overall, our results show that the considered sampling strategies can play a central role in research on neural relational reasoning, both for stress-testing the robustness of trained models and for generating diverse and informative training examples. In the considered setting, the world rules are assumed to be given, i.e. we use LLM-driven strategies to sample knowledge graphs, but not to sample the rules that determine the regularities that need to be learned. However, we found that this approach can also be successfully applied to LLM-generated world rules. This makes it possible to fully automate the evaluation loop. 
+
+Limitations Our analysis leaves a number of important questions for future work. For instance, we may wonder to what extent the learned priority functions transfer to other sets of world rules. In other words, are the learned priority functions challenging because they exploit particular peculiarities of the considered NoRA world, or do they capture deeper insights into what makes reasoning problems challenging for ETs. Furthermore, we have limited our analysis to sets of Datalog rules, which means that challenging forms of reasoning, such as non-monotonic reasoning and reasoning with disjunctive rules, are not covered. Our preliminary analysis showed that LLMs can generate interesting sets of world rules that require such forms of reasoning (using constructs such as negation-as-failure and choice rules), suggesting that our approach can indeed be extended along these lines. While we believe the ET is a natural choice for the considered setting, our analysis could be extended to a number of alternative reasoning models. 9References 
+
+Virginia Aglietti, Ira Ktena, Jessica Schrouff, Eleni Sgouritsa, Francisco JR Ruiz, Alan Malek, Alexis Bellot, and Silvia Chiappa. Funbo: Discovering acquisition functions for bayesian optimization with funsearch. arXiv preprint arXiv:2406.04824 , 2024. Lakshya A Agrawal, Shangyin Tan, Dilara Soylu, Noah Ziems, Rishi Khare, Krista Opsahl-Ong, Arnav Singhvi, Herumb Shandilya, Michael J Ryan, Meng Jiang, Christopher Potts, Koushik Sen, Alex Dimakis, Ion Stoica, Dan Klein, Matei Zaharia, and Omar Khattab. GEPA: Reflective prompt evolution can outperform reinforcement learning. In The Fourteenth International Conference on Learning Representations , 2026. URL https://openreview.net/forum?id=RQm2KQTM5r .Martin Arjovsky, Soumith Chintala, and Léon Bottou. Wasserstein generative adversarial networks. In International conference on machine learning , pages 214–223. Pmlr, 2017. Leon Bergen, Timothy J. O’Donnell, and Dzmitry Bahdanau. Systematic generalization with edge transformers. In Marc’Aurelio Ranzato, Alina Beygelzimer, Yann N. Dauphin, Percy Liang, and Jennifer Wortman Vaughan, editors, Advances in Neural Information Processing Systems 34: Annual Conference on Neural Information Processing Systems 2021, NeurIPS 2021, December 6-14, 2021, virtual , pages 1390–1402, 2021. URL https://proceedings.neurips.cc/paper/ 2021/hash/0a4dc6dae338c9cb08947c07581f77a2-Abstract.html .Antoine Bordes, Nicolas Usunier, Alberto García-Durán, Jason Weston, and Oksana Yakhnenko. Translating embeddings for modeling multi-relational data. In Christopher J. C. Burges, Léon Bottou, Zoubin Ghahramani, and Kilian Q. Weinberger, editors, Advances in Neural Informa-tion Processing Systems 26: 27th Annual Conference on Neural Information Processing Sys-tems 2013. Proceedings of a meeting held December 5-8, 2013, Lake Tahoe, Nevada, United States , pages 2787–2795, 2013. URL https://proceedings.neurips.cc/paper/2013/ hash/1cecc7a77928ca8133fa24680a88d2f9-Abstract.html .Pablo Samuel Castro, Nenad Tomasev, Ankit Anand, Navodita Sharma, Rishika Mohanta, Aparna Dev, Kuba Perlin, Siddhant Jain, Kyle Levin, Noemi Elteto, Will Dabney, Alexander Novikov, Glenn C Turner, Maria K Eckstein, Nathaniel D. Daw, Kevin J Miller, and Kim Stachenfeld. Discovering symbolic cognitive models from human and animal behavior. In Aarti Singh, Maryam Fazel, Daniel Hsu, Simon Lacoste-Julien, Felix Berkenkamp, Tegan Maharaj, Kiri Wagstaff, and Jerry Zhu, editors, Proceedings of the 42nd International Conference on Machine Learning ,volume 267 of Proceedings of Machine Learning Research , pages 6849–6890. PMLR, 13–19 Jul 2025. URL https://proceedings.mlr.press/v267/castro25a.html .Kewei Cheng, Nesreen K. Ahmed, and Yizhou Sun. Neural compositional rule learning for knowledge graph reasoning. In The Eleventh International Conference on Learning Representations, ICLR 2023, Kigali, Rwanda, May 1-5, 2023 . OpenReview.net, 2023a. URL https://openreview. net/pdf?id=F8VKQyDgRVj .Kewei Cheng, Nesreen K. Ahmed, and Yizhou Sun. Neural compositional rule learning for knowledge graph reasoning. In The Eleventh International Conference on Learning Representations, ICLR 2023, Kigali, Rwanda, May 1-5, 2023 . OpenReview.net, 2023b. URL https://openreview. net/forum?id=F8VKQyDgRVj .Shashank Reddy Chirra, Jayden Teoh, Praveen Paruchuri, and Pradeep Varakantham. On discovering algorithms for adversarial imitation learning. In The Fourteenth International Conference on Learning Representations , 2026. URL https://openreview.net/forum?id=hPz3doftL4 .William W. Cohen. Graphlog: A benchmark for logical learning on graphs. In Proceedings of the 2019 International Symposium on Inductive Logic Programming , 2019. Andrew Cropper, Sebastijan Dumancic, Richard Evans, and Stephen H. Muggleton. Inductive logic programming at 30. Mach. Learn. , 111(1):147–172, 2022. doi: 10.1007/S10994-021-06089-1. URL https://doi.org/10.1007/s10994-021-06089-1 .Anirban Das, Irtaza Khalid, Rafael Peñaloza, and Steven Schockaert. When no paths lead to rome: Benchmarking systematic neural relational reasoning. In NeurIPS , 2025. 10 Tim R. Davidson, Benoit Seguin, Enrico Bacis, Cesar Ilharco, and Hamza Harkous. Reasoning-driven synthetic data generation and evaluation. Transactions on Machine Learning Research , 2026. ISSN 2835-8856. URL https://openreview.net/forum?id=NALsdGEPhB . J2C Certification. Nouha Dziri, Ximing Lu, Melanie Sclar, Xiang Lorraine Li, Liwei Jiang, Bill Yuchen Lin, Sean Welleck, Peter West, Chandra Bhagavatula, Ronan Le Bras, Jena D. Hwang, Soumya Sanyal, Xiang Ren, Allyson Ettinger, Zaïd Harchaoui, and Yejin Choi. Faith and fate: Limits of transformers on compositionality. In Alice Oh, Tristan Naumann, Amir Globerson, Kate Saenko, Moritz Hardt, and Sergey Levine, editors, Advances in Neural Information Processing Systems 36: Annual Conference on Neural Information Processing Systems 2023, NeurIPS 2023, New Orleans, LA, USA, December 10 - 16, 2023 , 2023. URL http://papers.nips.cc/paper_files/paper/ 2023/hash/deb3c28192f979302c157cb653c15e90-Abstract-Conference.html .Jordan S Ellenberg, Cristofero S Fraser-Taliente, Thomas R Harvey, Karan Srivastava, and Andrew V Sutherland. Generative modeling for mathematical discovery. arXiv preprint arXiv:2503.11061 ,2025. Martin Gebser, Benjamin Kaufmann, Roland Kaminski, Max Ostrowski, Torsten Schaub, and Marius Schneider. Potassco: The potsdam answer set solving collection. Ai Communications , 24(2): 107–124, 2011. Seyed Kamyar Seyed Ghasemipour, Richard Zemel, and Shixiang Gu. A divergence minimization perspective on imitation learning methods. In Leslie Pack Kaelbling, Danica Kragic, and Komei Sugiura, editors, Proceedings of the Conference on Robot Learning , volume 100 of Proceedings of Machine Learning Research , pages 1259–1277. PMLR, 30 Oct–01 Nov 2020. URL https: //proceedings.mlr.press/v100/ghasemipour20a.html .Ian J. Goodfellow, Jean Pouget-Abadie, Mehdi Mirza, Bing Xu, David Warde-Farley, Sherjil Ozair, Aaron Courville, and Yoshua Bengio. Generative adversarial nets. In Z. Ghahramani, M. Welling, C. Cortes, N. Lawrence, and K. Weinberger, editors, Advances in Neural Information Processing Systems , volume 27. Curran Associates, Inc., 2014. URL https://proceedings.neurips.cc/ paper_files/paper/2014/file/f033ed80deb0234979a61f95710dbe25-Paper.pdf .Gauthier Guinet, Behrooz Omidvar-Tehrani, Anoop Deoras, and Laurent Callot. Automated eval-uation of retrieval-augmented language models with task-specific exam generation. In Ruslan Salakhutdinov, Zico Kolter, Katherine A. Heller, Adrian Weller, Nuria Oliver, Jonathan Scarlett, and Felix Berkenkamp, editors, Forty-first International Conference on Machine Learning, ICML 2024, Vienna, Austria, July 21-27, 2024 , Proceedings of Machine Learning Research, pages 16773–16801. PMLR / OpenReview.net, 2024. URL https://proceedings.mlr.press/v235/guinet24a. html .Qingyan Guo, Rui Wang, Junliang Guo, Bei Li, Kaitao Song, Xu Tan, Guoqing Liu, Jiang Bian, and Yujiu Yang. Connecting large language models with evolutionary algorithms yields powerful prompt optimizers. In The Twelfth International Conference on Learning Representations , 2024. URL https://openreview.net/forum?id=ZG3RaNIsO8 .Rishi Hazra, Alkis Sygkounas, Andreas Persson, Amy Loutfi, and Pedro Zuidberg Dos Martires. Revolve: Reward evolution with large language models using human feedback. In The Thirteenth International Conference on Learning Representations, ICLR 2025, Singapore, April 24-28, 2025 .OpenReview.net, 2025. URL https://openreview.net/forum?id=cJPUpL8mOw .Matthew Thomas Jackson, Chris Lu, Louis Kirsch, Robert Tjarko Lange, Shimon Whiteson, and Jakob Nicolaus Foerster. Discovering temporally-aware reinforcement learning algo-rithms. In The Twelfth International Conference on Learning Representations , 2024. URL 
+
+https://openreview.net/forum?id=MJJcs3zbmi .Andrej Karpathy. autoresearch. https://github.com/karpathy/autoresearch , March 2026. GitHub repository. Muhammad Khalid and Steven Schockaert. Systematic relational reasoning with epistemic graph neural networks. The Thirteenth International Conference on Learning Representations , 2025. Diederik P. Kingma and Jimmy Ba. Adam: A method for stochastic optimization. 2017. 11 Ilia Kulikov, Chenxi Whitehouse, Tianhao Wu, Swarnadeep Saha, Eryk Helenowski, Weizhe Yuan, Olga Golovneva, Jack Lanchantin, Yoram Bachrach, Jakob Foerster, Xian Li, Han Fang, Sainbayar Sukhbaatar, and Jason Weston. Autodata: an automatic data scientist to create high quality data. April 2026. URL https://facebookresearch.github.io/RAM/blogs/autodata/ .Chris Lu, Jakub Kuba, Alistair Letcher, Luke Metz, Christian Schroeder de Witt, and Jakob Foerster. Discovered policy optimisation. Advances in Neural Information Processing Systems , 35:16455– 16468, 2022a. Christopher Lu, Timon Willi, Christian A Schroeder De Witt, and Jakob Foerster. Model-free opponent shaping. In Kamalika Chaudhuri, Stefanie Jegelka, Le Song, Csaba Szepesvari, Gang Niu, and Sivan Sabato, editors, Proceedings of the 39th International Conference on Machine Learning , volume 162 of Proceedings of Machine Learning Research , pages 14398–14411. PMLR, 17–23 Jul 2022b. URL https://proceedings.mlr.press/v162/lu22d.html .Shengyao Lu, Bang Liu, Keith G. Mills, Shangling Jui, and Di Niu. R5: rule discovery with reinforced and recurrent relational reasoning. In The Tenth International Conference on Learning Representations, ICLR 2022, Virtual Event, April 25-29, 2022 . OpenReview.net, 2022c. URL 
+
+https://openreview.net/forum?id=2eXhNpHeW6E .Christian Meilicke, Melisachew Wudage Chekol, Daniel Ruffinelli, and Heiner Stuckenschmidt. Any-time bottom-up rule learning for knowledge graph completion. In Sarit Kraus, editor, Proceedings of the Twenty-Eighth International Joint Conference on Artificial Intelligence, IJCAI 2019, Macao, China, August 10-16, 2019 , pages 3137–3143. ijcai.org, 2019. doi: 10.24963/IJCAI.2019/435. URL https://doi.org/10.24963/ijcai.2019/435 .Pasquale Minervini, Sebastian Riedel, Pontus Stenetorp, Edward Grefenstette, and Tim Rocktäschel. Learning reasoning strategies in end-to-end differentiable proving. In Proceedings of the 37th International Conference on Machine Learning, ICML 2020, 13-18 July 2020, Virtual Event ,volume 119 of Proceedings of Machine Learning Research , pages 6938–6949. PMLR, 2020. URL 
+
+http://proceedings.mlr.press/v119/minervini20a.html .Iman Mirzadeh, Keivan Alizadeh, Hooman Shahrokhi, Oncel Tuzel, Samy Bengio, and Mehrdad Farajtabar. Gsm-symbolic: Understanding the limitations of mathematical reasoning in large language models. In The Thirteenth International Conference on Learning Representations, ICLR 2025, Singapore, April 24-28, 2025 . OpenReview.net, 2025. URL https://openreview.net/ forum?id=AjXkRZIvjB .Luis Müller, Daniel Kusuma, Blai Bonet, and Christopher Morris. Towards principled graph trans-formers. In Amir Globersons, Lester Mackey, Danielle Belgrave, Angela Fan, Ulrich Paquet, Jakub M. Tomczak, and Cheng Zhang, editors, Advances in Neural Information Processing Systems 38: Annual Conference on Neural Information Processing Systems 2024, NeurIPS 2024, Vancouver, BC, Canada, December 10 - 15, 2024 , 2024. URL http://papers.nips.cc/paper_files/ paper/2024/hash/e5419147e53eba322cf12aff266a66f2-Abstract-Conference.html .Muhammad Umair Nasir, Sam Earle, Julian Togelius, Steven James, and Christopher W. Cleghorn. Llmatic: Neural architecture search via large language models and quality diversity optimization. In Xiaodong Li and Julia Handl, editors, Proceedings of the Genetic and Evolutionary Computation Conference, GECCO 2024, Melbourne, VIC, Australia, July 14-18, 2024 . ACM, 2024. doi: 10.1145/3638529.3654017. URL https://doi.org/10.1145/3638529.3654017 .Yixin Nie, Adina Williams, Emily Dinan, Mohit Bansal, Jason Weston, and Douwe Kiela. Adversarial NLI: A new benchmark for natural language understanding. In Dan Jurafsky, Joyce Chai, Natalie Schluter, and Joel Tetreault, editors, Proceedings of the 58th Annual Meeting of the Association for Computational Linguistics , pages 4885–4901, Online, July 2020. Association for Computational Linguistics. doi: 10.18653/v1/2020.acl-main.441. URL https://aclanthology.org/2020. acl-main.441/ .Eric Nivel, Kristinn R Thórisson, Bas R Steunebrink, Haris Dindo, Giovanni Pezzulo, Manuel Ro-driguez, Carlos Hernández, Dimitri Ognibene, Jürgen Schmidhuber, Ricardo Sanz, et al. Bounded recursive self-improvement. arXiv preprint arXiv:1312.6764 , 2013. 12 Alexander Novikov, Ngân Vu, Marvin Eisenberger, Emilien Dupont, Po-Sen Huang, Adam Zsolt Wagner, Sergey Shirobokov, Borislav Kozlovskii, Francisco J. R. Ruiz, Abbas Mehrabian, M. Pawan Kumar, Abigail See, Swarat Chaudhuri, George Holland, Alex Davies, Sebastian Nowozin, Pushmeet Kohli, and Matej Balog. Alphaevolve: A coding agent for scientific and algorithmic discovery. CoRR , abs/2506.13131, 2025. doi: 10.48550/ARXIV.2506.13131. URL 
+
+https://doi.org/10.48550/arXiv.2506.13131 .Bernardino Romera-Paredes, Mohammadamin Barekatain, Alexander Novikov, Matej Balog, M. Pawan Kumar, Emilien Dupont, Francisco J. R. Ruiz, Jordan S. Ellenberg, Pengming Wang, Omar Fawzi, Pushmeet Kohli, and Alhussein Fawzi. Mathematical discoveries from program search with large language models. Nat. , 625(7995):468–475, 2024. doi: 10.1038/S41586-023-06924-6. URL https://doi.org/10.1038/s41586-023-06924-6 .Tim Salimans, Jonathan Ho, Xi Chen, Szymon Sidor, and Ilya Sutskever. Evolution strategies as a scalable alternative to reinforcement learning. arXiv preprint arXiv:1703.03864 , 2017. Arthur L Samuel. Some studies in machine learning using the game of checkers. IBM Journal of research and development , 3(3):210–229, 1959. Silvia Sapora, Gokul Swamy, Chris Lu, Yee Whye Teh, and Jakob Nicolaus Foerster. EvIL: Evolution strategies for generalisable imitation learning. In Ruslan Salakhutdinov, Zico Kolter, Katherine Heller, Adrian Weller, Nuria Oliver, Jonathan Scarlett, and Felix Berkenkamp, editors, Proceedings of the 41st International Conference on Machine Learning , volume 235 of Proceedings of Machine Learning Research , pages 43407–43421. PMLR, 21–27 Jul 2024. URL https://proceedings. mlr.press/v235/sapora24a.html .Timo Schick and Hinrich Schütze. Generating datasets with pretrained language models. In Marie-Francine Moens, Xuanjing Huang, Lucia Specia, and Scott Wen-tau Yih, editors, Proceedings of the 2021 Conference on Empirical Methods in Natural Language Processing , pages 6943–6951, Online and Punta Cana, Dominican Republic, November 2021. Association for Computational Linguistics. doi: 10.18653/v1/2021.emnlp-main.555. URL https://aclanthology.org/2021. emnlp-main.555/ .Jürgen Schmidhuber. Evolutionary principles in self-referential learning, or on learning how to learn: the meta-meta-... hook . PhD thesis, Technische Universität München, 1987. Dingfeng Shi, Jingyi Cao, Qianben Chen, Weichen Sun, Weizhen Li, Hongxuan Lu, Fangchen Dong, Tianrui Qin, King Zhu, Minghao Liu, Yuchen Eleanor Jiang, Jian Yang, Ge Zhang, Jiaheng Liu, Changwang Zhang, Jun Wang, and Wangchunshu Zhou. Taskcraft: Automated generation of agentic tasks. In The Fourteenth International Conference on Learning Representations , 2026. URL https://openreview.net/forum?id=UJFCyrYM1V .Parshin Shojaee, Iman Mirzadeh, Keivan Alizadeh, Maxwell Horton, Samy Bengio, and Mehrdad Farajtabar. The illusion of thinking: Understanding the strengths and limitations of reasoning models via the lens of problem complexity. CoRR , abs/2506.06941, 2025. doi: 10.48550/ARXIV. 2506.06941. URL https://doi.org/10.48550/arXiv.2506.06941 .Avi Singh, John D Co-Reyes, Rishabh Agarwal, Ankesh Anand, Piyush Patil, Xavier Garcia, Peter J Liu, James Harrison, Jaehoon Lee, Kelvin Xu, Aaron T Parisi, Abhishek Kumar, Alexander A Alemi, Alex Rizkowsky, Azade Nova, Ben Adlam, Bernd Bohnet, Gamaleldin Fathy Elsayed, Hanie Sedghi, Igor Mordatch, Isabelle Simpson, Izzeddin Gur, Jasper Snoek, Jeffrey Pennington, Jiri Hron, Kathleen Kenealy, Kevin Swersky, Kshiteej Mahajan, Laura A Culp, Lechao Xiao, Maxwell Bileschi, Noah Constant, Roman Novak, Rosanne Liu, Tris Warkentin, Yamini Bansal, Ethan Dyer, Behnam Neyshabur, Jascha Sohl-Dickstein, and Noah Fiedel. Beyond human data: Scaling self-training for problem-solving with language models. Transactions on Machine Learning Research , 2024. ISSN 2835-8856. URL https://openreview.net/forum?id=lNAyUngGFK .Expert Certification. Koustuv Sinha, Shagun Sodhani, Jin Dong, Joelle Pineau, and William L. Hamilton. Clutrr: A diagnostic benchmark for inductive reasoning from text. In Proceedings of EMNLP-IJCNLP , pages 4505–4514. Association for Computational Linguistics, 2019. doi: 10.18653/V1/D19-1458. URL 
+
+https://doi.org/10.18653/v1/D19-1458 .13 Sainbayar Sukhbaatar, Zeming Lin, Ilya Kostrikov, Gabriel Synnaeve, Arthur Szlam, and Rob Fergus. Intrinsic motivation and automatic curricula via asymmetric self-play. In International Conference on Learning Representations , 2018. URL https://openreview.net/forum?id=SkT5Yg-RZ .Richard S Sutton, Andrew G Barto, et al. Reinforcement learning: An introduction , volume 1. MIT press Cambridge, 1998. Robert Tarjan. Depth-first search and linear graph algorithms. SIAM Journal on Computing , 1(2): 146–160, 1972. doi: 10.1137/0201010. URL https://doi.org/10.1137/0201010 .Karthik Valmeekam, Alberto Olmo, Sarath Sreedharan, and Subbarao Kambhampati. Large language models still can’t plan (a benchmark for LLMs on planning and reasoning about change). In NeurIPS 2022 Foundation Models for Decision Making Workshop , 2022. URL 
+
+https://openreview.net/forum?id=wUU-7XTL5XO .Samidha Verma, Arushi Goyal, Ananya Mathur, Ankit Anand, and Sayan Ranu. GRAIL: Graph edit distance and node alignment using LLM-generated code. In Forty-second International Conference on Machine Learning , 2025. URL https://openreview.net/forum?id=NzoZXju2bL .Yizhong Wang, Yeganeh Kordi, Swaroop Mishra, Alisa Liu, Noah A. Smith, Daniel Khashabi, and Hannaneh Hajishirzi. Self-instruct: Aligning language models with self-generated instructions. In Anna Rogers, Jordan Boyd-Graber, and Naoaki Okazaki, editors, Proceedings of the 61st Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers) , pages 13484–13508, Toronto, Canada, July 2023. Association for Computational Linguistics. doi: 10.18653/v1/2023.acl-long.754. URL https://aclanthology.org/2023.acl-long.754/ .Zhiheng Xi, Yiwen Ding, Wenxiang Chen, Boyang Hong, Honglin Guo, Junzhe Wang, Xin Guo, Dingwen Yang, Chenyang Liao, Wei He, Songyang Gao, Lu Chen, Rui Zheng, Yicheng Zou, Tao Gui, Qi Zhang, Xipeng Qiu, Xuanjing Huang, Zuxuan Wu, and Yu-Gang Jiang. AgentGym: Evaluating and training large language model-based agents across diverse environments. In Wanxiang Che, Joyce Nabende, Ekaterina Shutova, and Mohammad Taher Pilehvar, editors, 
+
+Proceedings of the 63rd Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers) , pages 27914–27961, Vienna, Austria, July 2025. Association for Computational Linguistics. ISBN 979-8-89176-251-0. doi: 10.18653/v1/2025.acl-long.1355. URL https: //aclanthology.org/2025.acl-long.1355/ .Chulin Xie, Yangsibo Huang, Chiyuan Zhang, Da Yu, Xinyun Chen, Bill Yuchen Lin, Bo Li, Badih Ghazi, and Ravi Kumar. On memorization of large language models in logical reasoning. In Kentaro Inui, Sakriani Sakti, Haofen Wang, Derek F. Wong, Pushpak Bhattacharyya, Biplab Banerjee, Asif Ekbal, Tanmoy Chakraborty, and Dhirendra Pratap Singh, editors, Proceedings of the 14th International Joint Conference on Natural Language Processing and the 4th Conference of the Asia-Pacific Chapter of the Association for Computational Linguistics, IJCNLP-AACL 2025, Mumbai, India, December 20-24, 2025 , pages 2742–2785. The Asian Federation of Natural Language Processing and The Association for Computational Linguistics, 2025. URL https: //aclanthology.org/2025.ijcnlp-long.148/ .Yifei Zhou, Sergey Levine, Jason E Weston, Xian Li, and Sainbayar Sukhbaatar. Self-challenging language model agents. In The Thirty-ninth Annual Conference on Neural Information Processing Systems , 2026. URL https://openreview.net/forum?id=9yusqX9DpR .Zhaocheng Zhu, Zuobai Zhang, Louis-Pascal Xhonneux, and Jian Tang. Neural Bellman-Ford networks: A general graph neural network framework for link prediction. Advances in neural information processing systems , 34:29476–29490, 2021. 14 A Additional details 
+
+A.1 Background on Datalog 
+
+We rely on Datalog rules to encode the knowledge for reasoning about KGs. An example of a Datalog rule is as follows: 
+
+father_of (X, Z ) ← father_of (X, Y ) ∧ brother_of (Y, Z )
+
+This rule encodes that whenever some entity X is known to be the father of Y and Y is known to be the brother of Z, we can infer that X is the father of Z. Following standard practice, we use uppercase arguments such as X to denote variables and lowercase arguments such as bob to denote specific entities (i.e. constants). A literal is an expression of the form r(α1, ..., α n) where r is a relation and α1, ..., α n are either constants or variables. A Datalog rule is an expression of the form 
+
+head ← body , where head is a literal and body is a conjunction of literals, such that every variable which appears in head also appears in body . In this paper, we will not be concerned with literals that have more than two arguments. If all arguments of the literal α are constants, we call α a ground literal. Similarly, a ground rule is a rule in which only ground literals occur. Given a set of Datalog rules P and a KG G, the grounding PG is defined as the set of all ground rules that can be constructed from the rules in P by instantiating their variables by entities from G.
+
+Entailment Given a KG G and a set of Datalog rules P, we write G ∪ P | = r(e, f ) to denote that r(e, f ) can be inferred from G using the rules in P. This entailment relation can be formally defined as follows. We write G ∪ P | =0 r(e, f ) to denote that r(e, f ) ∈ G . For i > 1 we have 
+
+G ∪ P | =i r(e, f ) iff G ∪ P | =i−1 r(e, f ) or there is a rule r(e, f ) ← α1 ∧ ... ∧ αk in PG such that 
+
+G ∪ P | =i−1 αj holds for every j ∈ { 1, ..., k }. We then have G ∪ P | = r(e, f ) iff G ∪ P | =i r(e, f )
+
+for some i ∈ N.
+
+Path-based and off-path reasoning When reasoning about knowledge graphs, so-called closed path rules often play an important role [Meilicke et al., 2019]. These are rules of the following form: 
+
+r(X1, X n) ← r1(X1, X 2) ∧ ... ∧ rn−1(Xn−1, X n)
+
+When all rules in P are closed path rules, then G ∪ P | = r(e, f ) holds iff there is a path G0 =
+
+{(e, r 1, e 1), (e1, r 2, e 2), ..., (ek−1, r k, f )} such that G0 ∪ P | = r(e, f ). Methods such as NCRL [Cheng et al., 2023a] directly exploit this connection, which simplifies learning significantly. For instance, CLUTRR [Sinha et al., 2019] only involves closed path rules, which is why NCRL performs well on this benchmark. Unfortunately, path-based methods are not sufficient for reasoning about other types of rules, as illustrated in the next example. 
+
+Example 1. The rule base Pnora from NoRA [Das et al., 2025] includes the following rules: has_property (X, no_daughters ) ← parent_of (X, Y ) ∧ belongs_to_group (Y, male )
+
+∧ has_property (Y, no_sisters )
+
+belongs_to_group (Y, male ) ← parent_of (X, Y ) ∧ has_property (X, no_daughters )
+
+father_of (X, Y ) ← parent_of (X, Y ) ∧ belongs_to_group (X, male )
+
+Let us furthermore consider the following KG: 
+
+G = {parent_of (bob , dave ), belongs_to_group (dave , male ), has_property (dave , no_sisters ),
+
+parent_of (bob , john ), parent_of (john , alice )}
+
+We have G ∪ P nora |= father_of (john , alice ), but this inference relies on knowledge about dave (to infer that bob has no daughters), even though dave is not on any path between john and alice in G.
+
+A.2 Generating model-agnostic samplers using LLMs 
+
+The samplers from Section 3.3 were generated and iteratively refined by prompting Claude Opus 4.6 through a dialogue. The LLM was initially requested to create a new set of world rules 3 and then to design an associated sampler in the form of a Python program. Next, we prompted the model 
+
+> 3described in more details in Appendix A.5
+
+15 to generalize the approach, to make it suitable for any set of rules. Throughout this conversation, we tested the produced samplers by executing the code and collecting sets of story graphs for rule compliance checks. These story graphs were validated locally using the Clingo ASP solver 4 [Gebser et al., 2011], to detect any violation of the rules in the sampled graphs. When errors were found, they were passed back to Claude, with a prompt requesting the model to identify the problem and apply the necessary corrections. It is worth noting that Claude Opus 4.6 does not have access to Clingo in its sandbox. However, it relies on forward derivation chains implemented in the samplers to explore the worlds, and run internal tests related to the correctness of the sampled stories, relying mostly on Python tool calls. The final version of each sampler was obtained after less than 10 update requests. More details about the generation process and the detected errors are given below. 
+
+First version of the samplers The model was prompted to write Python programs that sample knowledge graphs from a set of rules (either LLM-generated or user provided). The total number of vertices in the sampled graphs is fixed in advance and passed to the Python program as an argument. We specified in the prompt that the objective was to sample graphs that are challenging for reasoning models and would require systems to make difficult inferences beyond transitivity and hierarchy reasoning steps . The model is asked to try and design a smart sampling strategy, which could be based on sampling one edge at a time or expanding a seed graph recursively with subgraph motifs .We also indicated in the prompt that any creative method can be used. The first world-specific samplers were obtained in this way, including the first version of the Cl-N-temp sampler. The two other NoRa-specific samplers were obtained by prompting the model to design two further algorithms, different from this first sampler and different from each other. We thus obtained the first versions of the Cl-N-greedy and Cl-N-bw samplers. General samplers were obtained by prompting Claude to extend the specific samplers so that they can be used for any set of world rules. Claude Opus 4.6 generated the Cl-hill, Cl-bw, Cl-motif and Cl-atlas samplers in this way. 
+
+Errors and refinements Given the initial version of a sampler, we then asked the model to verify, edit and eventually improve the samplers. In general, we found the initial samplers to be quite accurate. Apart from Datalog rules, which is what we focus on in this paper, we also experimented with more general types of rules, in particular rules with negation-as-failure and choice rules. These more general types of rules posed more problems for the samplers. We observed several main types of errors when testing the samplers on the NoRa world: • The arity of the relations was not immediately handled correctly. This was particularly the case for unary predicates expressed with two slots, such are person (a, a ).• The required number of entities in the sampled KGs is specified as an argument to the sampler. The initial samplers did not always ensure the sampled graphs had the correct number of entities. • NoRA’s 292 rules create circular dependencies between all 51 predicates. Cycle detection in the rules was not handled in the first versions of the samplers, leading several samplers, such as Cl-bw to be caught in infinite loops. In addition to NoRA, the general samplers were tested on ten different sets of world rules, which were generated by different LLMs. 
+
+Generated samplers We now describe the main strategy used by each of the generated samplers. • Cl-hill : this hill-climbing algorithm first analyzes and categorizes the rules, using categories such as base, derived, seedable, symmetric, constraint predicates, join patterns from multi-body rules and transitivity rules. It then seeds an initial set of base facts. Finally, it relies on hill climbing to optimize graphs for deep derivations and fewer facts, by operating several mutations on the initial seed graph and scoring the mutated graphs. The possible mutations include the addition of an entire sub-graph at once, to improve graphs connectivity and add transitive chains. It implements a form of forward chaining to measure the associated proof depths. • Cl-bw : this backward sampling method is goal-directed in the sense that it guarantees that every generated graph contains at least one deep derivation chain by construction. Its graph 
+
+> 4https://potassco.org/clingo/
+
+16 scoring function is similar to the one used by Cl-hill. It additionally implements Strongly Connected Component (SCC) analysis to detect and handle circular rules 5. For each target predicate, the sampler traces backwards through the rules to build a proof skeleton , i.e. a template proof tree with variables instead of constants. The proof templates are then instantiated with specific constants and the resulting skeletons are combined into graphs, with constants shared across skeletons so the proofs interconnect. A population of graphs is generated with this method, and the best graphs are selected according to a scoring function. Candidates are ranked first by a cheap proxy score, and the top few candidates are then evaluated with the full scoring function. • Cl-motif : similarly to the backward sampler, and unlike the hill climbing sampler, this method has a certain level of rule awareness. Motifs are similar to the proof skeletons from Cl-bw, but at a smaller scale. They are small self-contained patterns that trigger specific derivation rules. They are instantiated with facts and used as building blocks with shared variables to obtain complete graphs. Generated graphs are then ranked with various strategies for a selection of the best ones. This sampler’s implementation is general in the sense that is can be used with new sets of rules, but it also contains a few heuristics which are specific to the worlds that were used during the validation and refinement process. • Cl-atlas : this hybrid sampler combines ideas Cl-hill, Cl-bw and Cl-motif. In a first step, a “strategy mix” is chosen at random among four weighted items. Each strategy mix combines two elements such as “backward + joins” or “joins + chains”. Once graphs are built following a given strategy mix, hill climbing is applied to improve it by trying random mutations. Cl-Atlas is also the only sampler where we specifically asked, in the Claude prompt, to design a method that would defeat a GNN evaluator. In consequence, (i) the graph scoring function explicitly favors deep reasoning chains, because maximum derivation depth is said to correspond to the number of message-passing steps a graph neural network would need; (ii) predicate diversity is expected to force multi-relational reasoning rather than single-relation pattern matching; and (iii) distractors (irrelevant facts that look useful but are not in any proof) are added because they are expected to make the GNN’s discrimination harder. • Cl-N-temp : with this NoRA-specific method, graphs are first generated using a few family skeleton templates (e.g. nuclear , multi-generational and all male children families) and hard-coded fact selection heuristics such as strategic gender omission to trigger gender inference chains. The best graphs are then selected using a score that estimates reasoning complexity from graph topology, based on the presence or number of certain types of predicates. For example, the score favours the presence of multiple underage children in the story because it triggers living_in_same_place queries, which typically occur in complex reasoning chains. • Cl-N-greedy : this NoRA-specific algorithms starts from a minimal two-person married seed. The graph is then expanded one edge at a time by scoring candidate mutations (e.g. add child , add marriage , flip gender ). Candidate mutations are scored using forward chaining, to measure the inference depth and the number of non-trivial inferences. The method greedily selects the mutation that maximizes this composite score. • Cl-N-bw : this is a NoRA-specific variant of the general backward sampler, with an identical long rule chain sampling goal, but where heuristics specific to the NoRA world are hard-coded. In particular, the algorithm relies on seven hard-coded proof recipes, targeting long derivations in NoRA, instead of building abstract proof skeletons from the available rules. Graphs are built by instantiating and combining proof trees, maximizing the number of deep derivations per entity. Gender information is hidden were possible, to make inference harder. Note that Cl-N-greedy and Cl-hill are not rule-aware, in the sense that they randomly generate facts and then apply a scoring metric to decide if a given modification should be preserved. In contrast, the two backward samplers and the Cl-motif sampler explicitly rely on the rules and the proof derivations to construct the graphs. Several of the samplers also crucially rely on motifs. In addition to Cl-motif, Cl-hill and Cl-N-temp also took into account the motif hint that was given as part of the prompt. The motifs are implemented with different levels of generalization, from hard-coded templates to more abstract rule-aware skeletons. The Atlas sampler was the last generated sampler. It is the only 
+
+> 5The generated script suggests that it relies on the algorithm from Tarjan [1972].
+
+17 sampler where the prompt explicitly referred to the task of defeating a GNN-based reasoner. As a result, the sampler relies on distractor edges, and tried to diversify the generated graphs by a random strategy selection initial step. However, all the samplers rely on a similar scoring function, which makes assumptions about what makes a graph challenging for reasoning models, based on known difficulties such as long rule chains. Unlike the evolutionary algorithm, the scoring function is blind to the real bottlenecks encountered by the ET model. 
+
+A.3 LLM-based improvement of priority functions FunSearch Prompt The LLM is requested to output a priority function that is an improvement over two previously generated priority functions. The prompt contains a full explanation of the evolutionary experimental setting, a detailed description of ASP syntax and the task. A set of callable graph tools are also provided under the form of a list of Python functions. Final format instructions and two previously generated priority functions are included in the body of the prompt. 18 SUMMARY OF THE PROMPT FOR THE GENERATION OF NEW PRIORITY FUNCTIONS 
+
+INSTRUCTIONS 
+
+You are an AI participating in an evolutionary algorithm search to generate candidate priority functions. TASK OVERVIEW 
+
+You are designing a function: p r i o r i t y ( c a n d _ f a c t , d e f i n i t e _ r u l e s _ p r o g r a m , e n t a i l e d _ f a c t s , f a c t s _ p r o g r a m ) −> f l o a t The purpose of this function is to score how useful a candidate edge would be if added to an existing graph, given what additional edges become entailed in that graph by the definite_rules_program. EVOLUTIONARY PROGRESSION 
+
+priority_v0 and a complete priority_v1 are shown. priority_v1 is already an improvement over priority_v0. prior-ity_v2 is incomplete. Your job is to output a complete priority_v2 that improves on priority_v1. ARGUMENTS 
+
+• cand_fact ( str ) : this is a single directed edge string you are scoring. It is exactly one edge statement ending in a period. • definite_rules_program ( str ) : this is a string containing many graph-transformation rules, one rule per line. These rules describe when the presence of certain edge patterns in the graph implies that another edge must also exist. • entailed_facts ( str ) : this is a string containing directed edges that become implied after adding cand_fact to facts_program and then applying the graph-transformation rules, excluding edges that were already explicitly present in facts_program (and excluding the candidate edge itself). • facts_program ( str ) : this is the existing graph, a string containing directed edges already present, usually one per line, each ending in a period. 
+
+GRAPH TOOLKIT 
+
+You may call pre-built graph-theoretic functions directly inside your priority function — no import statement is needed, they are automatically available. The available functions are: # −−− P a t h A n a l y s i s −−− s h o r t e s t _ p a t h _ l e n g t h (G, s r c , t g t ) −> i n t | None Number o f ho ps on t h e s h o r t e s t d i r e c t e d p a t h . R e t u r n s None i f u n r e a c h a b l e . . . . # −−− S t r u c t u r e −−− n o d e _ d e g r e e (G, node , mode = ’ a l l ’ ) −> i n t Degree o f a node . mode : ’ i n ’ ( i n c o m i n g ) , ’ o u t ’ ( o u t g o i n g ) , ’ a l l ’ ( b o t h ) . . . . 
+
+EVOLUTION STRATEGIES 
+
+If you only see complete priority_v0, try simple approaches first: • Count implied edges • Find candidate edges whose endpoint nodes are common with nodes already appearing in facts_program • Return any positive number based on simple metrics When you see full demonstrations priority_v0, priority_v1, and need to complete priority_v2: 1. TWEAK THE BEST : Take priority_vi (the current best) and make small modifications: • Adjust constants/weights slightly (e.g., change 0.5 to 0.7, or 2.0 to 1.5) • Add a small bonus/penalty term to the existing logic • Modify thresholds or conditions slightly • ... 2. TRY SOMETHING COMPLETELY NEW : Ignore previous versions and experiment with a fresh idea 
+
+THE TWO PRIORITY FUNCTIONS 
+
+{priority_v0} {priority_v1} 
+
+19 A.4 Auto-Research Agent-in-the-loop initiation prompt 
+
+PROGRAM .MD 
+
+Experimental loop (agent-in-the-loop). 
+
+An outer loop over rounds where a coding agent iterates on a single priority(...) function per round, then retrains and evaluates an Edge Transformer (ET) end-to-end. 
+
+Goal and criteria. 
+
+Write a priority function that drives the ET’s eval accuracy down ; lower is better. All else being equal, simpler is better: a small improvement that adds ugly complexity is not worth it; removing code while matching or improving accuracy is a simplification win. Weigh complexity cost against improvement magnitude — a 0.001 gain from twenty new lines of hacky code is rejected; a 0.001 gain from deleting code is kept; equal accuracy with simpler code is kept. The first run always establishes the baseline. 
+
+Key idea. 
+
+One round = one priority function ( priority_fns/round_N.py ). The same function is used to generate 
+
+eval.csv (held-out via seed offset), generate base_train.csv , train a new ET on the merged final_train.csv ,and evaluate the new ET (also backfilling the previous ET on the new round’s eval.csv ). No internal proposal loop 
+
+runs over multiple priority functions inside a round; FunSearch / ProgramDB evolution is intentionally removed. 
+
+Per-iteration agent loop. 
+
+For round N : (1) read previous-round artifacts (metrics, sample data); (2) decide a change to priority(...) 
+
+(heuristic tweak, new signal, etc.); (3) write priority_fns/round_N.py ; (4) run exactly one round of the pipeline. 
+
+Round artifacts. 
+
+All outputs live under RUN_DIR/round_N/ : best_priority_fn.py (exact code used), eval.csv ,
+
+base_train.csv , final_train.csv , model.pth , and eval_summary.csv (covering this round’s eval, the pre-vious round’s eval, the base train split, and the merged train split). Run-level records.pkl stores per-ET metric dicts including acc_roundN_eval , acc_roundN-1_eval , acc_roundN_base_train , acc_roundN_final_train ,and acc_roundN+1_eval (backfill: previous ET on the new eval.csv ). 
+
+Workflow. 
+
+(i) Activate the environment; (ii) create round N ’s priority file by copying round N − 1 and editing it; (iii) run one round end-to-end via scripts/run_multiround.py with --init_model_path pointing at the pretrained ET 0;(iv) read the round’s eval_summary.csv , records.pkl , eval.csv , and best_priority_fn.py ; (v) propose the next priority function. Reusing --run_dir naively recreates round_1 ; strict incremental rounds in one run dir would need an explicit resume mode (not implemented). 
+
+Parameters and defaults. 
+
+run_multiround.py reads defaults from a single FullFlow JSON config: multi_round.* for training and eval knobs (story counts, ET hyperparameters, merge cap), and evaluation.* for base story-generation knobs (entity range, base seed). 
+
+Main idea. 
+
+The agent is a completely autonomous researcher: try things, keep what works, move on from what doesn’t, rewind only very sparingly. Never stop. Once the loop has begun, the agent does not pause to ask whether to continue — it does not ask “should I keep going?” or “is this a good stopping point?”. The human may be away, and the agent is expected to keep working until the configured number of rounds is complete or it is manually interrupted. If it runs out of ideas, it thinks harder: re-reads referenced papers, re-reads in-scope files for new angles, combines previous near-misses, attempts more radical changes. The loop runs until the human interrupts it. 
+
+A.5 Generating world rules using LLMs 
+
+LLMs were prompted to generate world rules that can be used to then create challenging reasoning problems. Our prompt describes the ASP syntax, presents the expected rule structure and provide examples. It also contains a few hints regarding the expected characteristics of challenging sets of rules (e.g. the fact that the rule bases should pose reasoning challenges beyond hierarchies and transitivity). The prompt presented below was iteratively refined by querying several models, namely GPT-5.3, Claude Sonnet 4.6 and Gemini 3.1 Pro. Constraints, such as the minimum number of rules to include in the final output and further format restrictions, were progressively added to the prompt during this exploration step, to ensure that the created worlds are complex enough and the syntax of their rules matches the our samplers’ parsers. We additionally noticed that passing the NoRA rules to the LLMs, after giving these instructions, and asking them to create a new world that is both different from NoRA and more challenging, seemed to lead to more complex and interesting sets of rules. The Iron Coast world was obtained with this approach, using Claude Opus 4.6 with our refined prompt. Additional instructions that were used for the creation of this world are to exclude negations and choice rules. Although our approach can in principle be extended to a richer logical syntax, this is beyond the scope of the current paper. 20 PROMPT FOR THE GENERATION OF WORLD RULES 
+
+Your role is to generate new sets of rules used to construct graphs that pose challenging reasoning problems. Your final response must contain a list of domain base facts and the entire set of created rules. I’m looking for an interesting rule base that can be used for evaluating the reasoning abilities of AI models. The rule base should be encoded using Answer Set Programming (ASP) syntax. In particular, it can contain the following types of rules. Facts have the following form. r(a,b). This fact states that the relationship r holds between the objects a and b. r(a,a) can also be written r(a). Next, standard rules have the following form: r(X,Z) :- u(X,Y), v(Y,Z). r(X,X) can also be written r(X). Here X,Y,Z are variables. The rule states that when X is in relation u with Y, and Y is in relation v with Z, then X is in relation r with Z. The number of conditions in a rule can vary. For instance, the following are also valid examples of rules: r(X,Y) :- s(Y,X). r(X,Y) :- u(X,Y), v(Y,Z). In addition to standard rules, we also have choice rules, which have the following form: {r(X,Y),s(X,Y)} :- u(X,Y). This choice rule means that whenever X is in relation u with Y, then at least one of r(X,Y) or s(X,Y) should hold. Other examples of choice rules are: r(X,Y) :- s(Y,X). r(X,Y) :- u(X,Y), v(Y,Z). Choice rules are typically used in combination with constraints. These take the following form: :- r(X,Y), s(X,Y). This constraint means that r(X,Y) and s(X,Y) cannot be jointly satisfied. Another example is: :- r(X,Y), s(X,Z), Y!=Z. This means that r(X,Y), and s(X,Z) cannot both be satisfied when Y is different from Z. Additional constraints for this project : • Relations must not have more than two arguments. • A relation must appear in your final answer only if it is used in more than one rule. Note that we are interested in the creation of rule bases that pose reasoning challenges beyond hierarchies and transitivity. The rules must be connected, and connected in various ways so that the reasoning challenges are diverse. • Do not use any numerical value in the rules. The following example is not acceptable : :- reviewer(R), #count P : assigned(R, P) > 2. • Create at least 40 different rules. • The rules should be preceded by a list of domain base facts. These are good examples of rules, that are part of a rule base in the domain of family relations: maternal_grandmother_of(V,X) :- paternal_grandmother_of(U,X), grandmother_of(V,X), U != V. is_female(X) :- mother_of(X,Y). {father(X,Y),mother(X,Y)} :- parent(X,Y). Please create an extensive rule base which describes some domain of interest and which is likely to be challenging for AI models. Check carefully the consistency of the rules you propose. Your final response must be a complete list of all the rules of the world you created and may contain comments on lines starting with "%". 
+
+21 Table 4: Cross-evaluation of samplers on Iron Coast in terms of exact-match accuracy.                                          
+
+> Test set Cl-Atlas Cl-bw Cl-hill Evo1 Evo2 Evo3 Training set  Cl-Atlas -0.01 0.15 0.03 0.00 0.02
+> Cl-bw 0.03 -0.03 0.34 0.20 0.18
+> Cl-hill 0.13 0.02 -0.04 0.00 0.04
+> Evo1 0.10 0.26 0.07 -0.48 0.28
+> Evo2 0.03 0.23 0.05 0.34 -0.25
+> Evo3 0.06 0.27 0.06 0.42 0.47 -
+
+Table 5: Cross-evaluation of priority functions obtained through evolutionary search (for NoRA), using three different models: qwen3-coder-next-80b (qw), gpt-oss-120b (gpt) and deepseek-coder-33b (ds). Results are reported in terms of exact-match accuracy. Each model was used in four independent runs.                                                                                                                                                            
+
+> Test set qw1 qw2 qw3 qw4 gpt1 gpt2 gpt3 gpt4 ds1 ds2 ds3 ds4 Training set qw1 0.68 0.50 0.52 0.50 0.51 0.51 0.53 0.49 0.51 0.50 0.48 0.48
+> qw2 0.53 0.62 0.54 0.60 0.52 0.51 0.53 0.51 0.51 0.52 0.49 0.49
+> qw3 0.52 0.53 0.55 0.54 0.51 0.51 0.53 0.49 0.49 0.49 0.48 0.47
+> qw4 0.52 0.55 0.55 0.52 0.49 0.50 0.53 0.49 0.48 0.50 0.48 0.47
+> gpt1 0.55 0.52 0.54 0.53 0.65 0.52 0.54 0.52 0.51 0.55 0.50 0.50
+> gpt2 0.52 0.50 0.52 0.50 0.51 0.63 0.52 0.51 0.50 0.50 0.49 0.50
+> gpt3 0.47 0.39 0.50 0.40 0.41 0.40 0.67 0.40 0.39 0.41 0.41 0.40
+> gpt4 0.55 0.52 0.52 0.52 0.55 0.53 0.54 0.59 0.51 0.53 0.48 0.51
+> ds1 0.51 0.48 0.49 0.48 0.51 0.50 0.53 0.49 0.50 0.50 0.48 0.46
+> ds2 0.45 0.43 0.47 0.44 0.43 0.43 0.51 0.43 0.43 0.45 0.42 0.42
+> ds3 0.51 0.47 0.52 0.46 0.46 0.49 0.55 0.47 0.45 0.46 0.47 0.45
+> ds4 0.53 0.51 0.53 0.51 0.52 0.51 0.55 0.50 0.51 0.51 0.49 0.52
+
+A.6 Experimental methodology Evolutionary approach: standard runs Before sampling the KG itself, we first randomly choose the number of entities from {5, ..., 8} and the ratio of edges to entities from [2 .5, 3] . We then use the considered sampler to find a KG with these constraints. For the evolutionary search process, we start with an ET which has been trained on 6000 examples. For our main experiments with NoRA, we sample these examples equally from the training, test-D, test-OPEC and test-BL splits. For subsequent rounds, an ET is trained on 6000 examples which are sampled equally from: (i) the training data from the previous round, (ii) the best priority function from the latest round, (iii) test-D, (iv) test-OPEC and (v) test-BL. Further details on the training splits are provided in Section A.7. We use 10 islands, and for each island Niter = 20 attempts are made in each cycle to improve the priority function. Each round consists of four cycles. We set Nevalgraphs = 8 . In each step of the sampling process, Ncand = 20 candidate edges are scored, with the best-scoring edge being added to the graph. 
+
+Evolutionary approach: S UPER ET When applying the evolutionary approach to the S UPER ET, we make some changes to how the ET is trained after each round, to ensure that the diversity of the initial training data is preserved. In particular, after each round of this process, a new ET is trained on the 16900 original training examples, together with 10400 adversarial examples obtained from the best priority function from the latest round, and 3900 examples obtained from previous rounds (respectively forming 33% and 12.5% of the training data source distribution). 
+
+LLM service implementation We have evaluated three LLMs for generating priority functions: deepseek-coder-33b-instruct 6, qwen3-coder-next 7, and gpt-oss-120b 8. All three models were down-loaded from HuggingFace 9. In our experiments, the LLMs are served on a single GPU or on multiple 
+
+> 6https://huggingface.co/deepseek-ai/deepseek-coder-33b-instruct
+> 7urlhttps://huggingface.co/Qwen/Qwen3-Coder-Next
+> 8https://huggingface.co/openai/gpt-oss-120b
+> 9https://huggingface.co/
+
+22 GPUs using the vLLM library 10 . They receive OpenAI API requests sent from the FunSearch algo-rithm workers, during the evolutionary cycles steps, at each round. Since we found in our experiments that the results are largely insensitive to the chosen model, we believe that experiments with larger LLMs would not justify the cost. In particular, the size of the current models allows us to keep the computation time reasonable (about 40 hours per 5-round run in the main experimental setting of this work), while setting the model context length to a size that leaves enough space for the generation of long priority functions. In particular, deepseek-coder-33b-instruct has a 16K maximum model length. For qwen3-coder-next and gpt-oss-120b, we set the maximal context length to 32K because they tend to generate longer outputs. 
+
+A.7 Training data mix strategy 
+
+We provide further details on the training data mix strategy that was used for the evolutionary runs, including the Auto-research experiment. Note that, as explained in Section A.6, the S UPER ET was trained with a different strategy. At every round i, three types of data contribute to the training set. 1. Priority-generated queries The priority function discovered in round i is used to generate a fresh set of NoRA worlds with 5–8 entities. For each generated world, C candidate facts are scored by the priority function to serve as queries. In our experiments we generate 60 
+
+stories per round, yielding roughly 60 × C queries. 2. Historical data The training data from previous rounds (for i > 0) is retained, so the model still has access to previously discovered hard problem instances. 3. External datasets A fixed collection of external training sets are obtained from the original NoRA dataset, in particular the train split and the test-BL , test-D and test-OPEC splits. The training data for the ET in each round is capped to 6000 queries. To prevent any single source from dominating the training signal, these queries are sampled uniformly from each of the different sources. All sampling uses a fixed random seed for reproducibility. For the first round, only the external datasets are used for training. 
+
+A.8 Auto-Research Agent Experiment 
+
+To test whether the difficulty signals discovered by FunSearch are artefacts of its particular evolu-tionary search procedure, we ran an independent replication using a single LLM agent (Claude) as an autonomous researcher. The agent iterates over priority functions one at a time removing every structural bias introduced by FunSearch. 
+
+A.8.1 Setup 
+
+The agent operates in a sequential outer loop over rounds . At round r it: 1. reads the evaluation artifacts from round r−1 (accuracy table, sample evaluation instances, the previous priority function (whilst all the rest are also in its context)); 2. proposes a single new priority function; 3. generates training and evaluation data using the priority function; 4. trains a fresh Edge Transformer on the merged training set and evaluates it. The same data mix, merge procedure, and ET hyperparameters described previously are used. The initial model is ET 0, pretrained on the baseline data with no adversarial instances. 
+
+A.8.2 Auto-research recovered Difficulty Signals 
+
+The priority functions discovered by the agent converged on four structural signals, each independently rediscovering axes found by the FunSearch runs: 
+
+> 10 https://vllm.ai/
+
+23 1. Maternal/paternal predicates. Facts triggering gender-qualified extended-family rela-tions (e.g. maternal_grandmother_of , paternal_uncle_of ) receive the highest weight (12 × in the final function). These require multi-step reasoning that chains a gender constraint through an intermediate relationship. 2. Multi-hop relations. Grandparent, aunt/uncle, nibling, and in-law predicates, all requiring 
+
+≥2 inference steps, are weighted 5×.3. Entity-pair relationship density. The agent discovered that entity pairs connected by ≥3
+
+distinct relations produce instances the ET struggles with. This targets multi-label prediction difficulty rather than inference depth. 4. Self-referential fact suppression Unary property facts (same source and target entity, e.g. 
+
+is_male(3,3) ) are penalised, forcing the generator to select relational facts that create richer graph structure. These signals align with those found by FunSearch, despite the agent using no evolutionary operators, no population diversity, and a single sequential pass. 
+
+A.9 Training the Edge Transformer 
+
+The training recipe is identical for the ET across all scenarios and is outlined in the following sections. 
+
+Multi-label binary cross entropy We use a multi-label version of the Binary Cross Entropy (BCE) loss for the multi-label classification setting for all problems. The logits for each class are transformed using a sigmoid function and then the problem is treated as a binary classification problem with a multi-hot target binary vector. 
+
+LBCE = X
+
+> i∈D ,j ∈R
+
+CE (σ(xij ), y ij )
+
+where i is the sample index, j is the relation index, xij is the predicted logit and the yij is the one-hot target class label. 
+
+Initialization and compute All trainable parameters for the models are uniformly initialized. All baseline results that were obtained by us were hyperparameter-tuned using grid search, as detailed below. All experiments were conducted using RTX 4090, GH200, and A6000 GPUs. A single training cycle (multipe times per evolutionary round) of the ET can be conducted within a few hours on a single GPU. This includes training and testing a single model on any evaluation split. 
+
+Hyperparameter settings We use the Adam optimizer [Kingma and Ba, 2017]. All the models were hyperparameter tuned using an economical grid search over key parameters. For ET, a grid search was performed over the number of attention heads, hidden dimension size, the number of message passing rounds, and dropout rate. All the optimal hyperparameters are available in the companion code with the manuscript. 
+
+Training Protocol Each round trains a fresh Edge Transformer from scratch on Dtrain . The data is split 80 /20 into training and validation partitions via a random split. We use the Adam optimiser with learning rate 10 −3, batch size 32 , and train for 100 epochs with gradient clipping. Validation accuracy is checked every 10 epochs. 
+
+## B Additional experimental analysis 
+
+B.1 Evaluation on Iron Coast 
+
+Table 4 repeats this analysis for the Iron Coast domain. For this experiment, we initialized the evolutionary runs with an ET that was trained on examples generated by the Cl-motif sampler. We compare three other generic Claude-generated samplers with the priority functions that were obtained in three independent runs of the evolutionary method. The results clearly shows that challenging queries can be constructed for the Iron Coast domain, which demonstrates the feasibility of a fully automatic evaluation setup, where the world rules, constraints and samplers are all LLM-generated. 24 The priority functions from the three evolutionary runs appear again similar (with models performing similarity on Evo1–Evo3, regardless of which evolutionary priority function was used for training). The three generic Claude-generated samplers all manage to generate challenging problems. 
+
+B.2 Comparison of different LLMs 
+
+In Table 5, we present a cross-evaluation of the evolutionary priority functions obtained with three different LLMs, where we completed four independent runs for each LLM. The results show that quality of the priority function remains stable across the three models, with the largest model (gpt-oss-120b) performing on par with a much smaller model (deepseek-coder-33b). 
+
+B.3 Analysis of problem difficulty 
+
+Given a trained ET and a set of queries, we train a classifier to predict whether a given query will be answered correctly by the ET. The features used for classification are the inference depth, OPEC and BL of the query. As the classifier, we use a Gradient Boosting Classifier. We used the scikit-learn implementation (sklearn.ensemble.HistGradientBoostingClassifier) with the following hyperparameters: max_depth = 3, n_estimators = 100 and learning_rate = 0.1. Each fitted tree model is trained for 100 boosting iterations using cross-entropy. For the analysis of problem difficulty, all ET models are first calibrated for 5 epochs on 6000 examples sampled from test-D, test-OPEC and test-BL. This calibration step is intensionally limited, so the unique characteristics of the models are maintained. The aim of this calibration step is to ensure that all models have had some exposure to problems with higher reasoning depth, OPEC and BL values, as our focus is on exploring what forms of difficulty remain beyond these three difficulty metrics. 
+
+Impact of OPEEC In Figure 3b in the main paper, we showed the percentage reduction in the 
+
+Unexplained score, after incorporating the number of entailed off-path edges (OPEEC) as a fourth difficulty metric, in addition to inference depth, OPEC and BL. In particular, this percentage reduction is defined as 
+
+Reduction = 100 · Unexplained base − Unexplained aug 
+
+Unexplained base 
+
+where Unexplained base is the Unexplained score, as defined by (2) , for the classifier that only incorporates inference depth, OPEC and BL; Unexplained aug is the corresponding value for the augmented classifier, which additionally incorporates the number of entailed off-path edges. We report the median value of Reduction that was found across 100 paired bootstrap samples (where each bootstrap sample has the same size as the ET training set for that model). To test for statistical significance, we used a one-sided empirical paired bootstrap test, where the null hypothesis is that 
+
+Reduction ≤ 0. The p-value is computed as 
+
+p = 1 + number of bootstrap samples with Reduction ≤ 01 + 100 
+
+Figure 3b shows the value of Reduction for some of the models. As can be seen, the values are positive for all tested models. The fact that the reduction is positive is statistically significant for all models ( p < 0.05 ). 
+
+B.4 Analysis of the evolved priority functions 
+
+We analyze the best evolved priority functions retained at the end of each evolutionary round using abstract syntax tree (AST) tokens. For each priority function, we parse the source with the standard Python ast module and extract four kinds of pseudo-tokens: calls , attribute accesses , operators and 
+
+imports . The same parser also records structural metrics: the number of AST nodes, the maximum nesting depth, the number of Call nodes, the number of Compare nodes, the number of branching nodes ( If , For , While , Try , etc.), and the number of distinct tokens. Across Evo1–Evo4, this yields 20 priority functions and 158 distinct raw tokens, giving a 20 × 158 token-count matrix. Figure 4a shows the log(1 + count ) abundance of the top-40 most frequent tokens, with rows ordered by round and grouped by run. The dominant columns are logical and relational operators; the graph related tokens (in the right hand side of the heat-map) are sparse, indicating occasional spikes in 25 (a) 
+
+> (b)
+> (c)
+
+Figure 4: (a) AST token heatmap: log(1+ count ) for the top-40 tokens across the 20 priority functions. (b) SVD spectrum of the column-centered token-count matrix: per-component variance share (bars) and cumulative share (line). The horizontal line marks 90% explained variance. (c) Trajectory of each Evolutionary Search run (Evo1–Evo4) in the PC 1–PC 5 space across rounds. 26 R1C1 
+
+> R1C2
+> R1C3
+> R1C4
+> R2C1
+> R2C2
+> R2C3
+> R2C4
+> R3C1
+> R3C2
+> R3C3
+> R3C4
+> R4C1
+> R4C2
+> R4C3
+> R4C4
+> R5C1
+> R5C2
+> R5C3
+> R5C4
+> 0.0
+> 0.2
+> 0.4
+> 0.6
+> 0.8
+> 1.0
+> ROUGE-L F1
+> seed=43
+> vs R1C1
+> vs Previous
+> R1C1
+> R1C2
+> R1C3
+> R1C4
+> R2C1
+> R2C2
+> R2C3
+> R2C4
+> R3C1
+> R3C2
+> R3C3
+> R3C4
+> R4C1
+> R4C2
+> R4C3
+> R4C4
+> R5C1
+> R5C2
+> R5C3
+> R5C4
+> 0.0
+> 0.2
+> 0.4
+> 0.6
+> 0.8
+> 1.0
+> ROUGE-L F1
+> seed=44
+> vs R1C1
+> vs Previous
+> R1C1
+> R1C2
+> R1C3
+> R1C4
+> R2C1
+> R2C2
+> R2C3
+> R2C4
+> R3C1
+> R3C2
+> R3C3
+> R3C4
+> R4C1
+> R4C2
+> R4C3
+> R4C4
+> R5C1
+> R5C2
+> R5C3
+> R5C4
+> 0.0
+> 0.2
+> 0.4
+> 0.6
+> 0.8
+> 1.0
+> ROUGE-L F1
+> seed=50
+> vs R1C1
+> vs Previous
+> R1C1
+> R1C2
+> R1C3
+> R1C4
+> R2C1
+> R2C2
+> R2C3
+> R2C4
+> R3C1
+> R3C2
+> R3C3
+> R3C4
+> R4C1
+> R4C2
+> R4C3
+> R4C4
+> R5C1
+> R5C2
+> R5C3
+> R5C4
+> 0.0
+> 0.2
+> 0.4
+> 0.6
+> 0.8
+> 1.0
+> ROUGE-L F1
+> seed=52
+> vs R1C1
+> vs Previous
+> ROUGE-L of Best Priority Function per Cycle
+> Model: Qwen3-Next-80B-A3B
+
+Figure 5: Analysis of the syntactic similarity between the evolved priority functions and the initial one (blue) and the priority function from the previous cycle (orange), measured in terms of ROUGE-L. R1C1 
+
+> R1C2
+> R1C3
+> R1C4
+> R2C1
+> R2C2
+> R2C3
+> R2C4
+> R3C1
+> R3C2
+> R3C3
+> R3C4
+> R4C1
+> R4C2
+> R4C3
+> R4C4
+> R5C1
+> R5C2
+> R5C3
+> R5C4
+> Cycle
+> 0.0
+> 0.2
+> 0.4
+> 0.6
+> 0.8
+> 1.0
+> NCD (0=identical, 1=unrelated)  NCD vs R1C1
+> NCD vs prev round C1
+> NCD vs prev cycle (same round)
+
+Figure 6: Analysis of the Normalized Compression Distance of the learned priority functions at the current cycle with respect various reference point priority functions. graph-related queries by individual runs. Centering the token matrix column-wise and taking its SVD gives us a low-dimensional structure in token usage (Figure 4b): the first two singular components together explain roughly 55% of the variance, and the first seven explain at least 90% . Figure 4c then projects the evolution of priority functions onto the first five principal components and traces the trajectory of each run across rounds. Figure 5 shows an analysis of how much the priority function changes throughout the evolutionary process. For this analysis, we compute the syntactic similarity between the best priority function obtained at the end of each cycle and (i) the priority function obtained in the first cycle and (ii) the priority function obtained in the previous cycle. Syntactic similarity is measured in terms of ROUGE-L. We can see that large changes are infrequent and may occur in different phases of the evolutionary process. 27 0.24     
+
+> 0.26
+> 0.28
+> 0.30
+> 0.32
+> 0.34
+> Gzip / Raw
+> R1 R2 R3 R4 R5
+> Compression Ratio (gzip)
+> Seed 1
+> Seed 2
+> Seed 3
+> Seed 4
+> R1C1
+> R1C2
+> R1C3
+> R1C4
+> R2C1
+> R2C2
+> R2C3
+> R2C4
+> R3C1
+> R3C2
+> R3C3
+> R3C4
+> R4C1
+> R4C2
+> R4C3
+> R4C4
+> R5C1
+> R5C2
+> R5C3
+> R5C4
+> Cycle
+> 0.0
+> 0.2
+> 0.4
+> 0.6
+> 0.8
+> 1.0
+> NCD vs R1C1
+> Normalized Compression Distance vs R1C1
+> qwen3-next-80B-A3B: Multi-seed Compression for Cycle-level best priority functions
+
+Figure 7: Analysis of the Normalized Compression Distance (NCD) and compression ratio of the learned priority functions at the current cycle with respect to the best priority function at the end of round 1 for multiple seeds. This is a heuristic proxy for Kolmogorov complexity and again confirms what ROUGE-L evolution suggests that syntactically, the priority functions are changing less with respect to their states at the end of round 1. Figure 6 shows how the complexity of the priority function evolves, estimated by its normalized compression distance NCD( x, y ) = C(xy )−min {C(x),C (y)} 
+
+> max {C(x),C (y)}
+
+where C(·) is the compressed length and 
+
+xy denotes concatenation. 
+
+B.5 Analysis of graphs generated by the evolution process 
+
+In this section, we perform an exploratory analysis of the knowledge graphs produced by the priority functions from the evolutionary runs (Evo1–Evo4) and the Claude auto-research protocol. Specifically, given that the graph size remains fixed, we investigate how density, path lengths, and the number of parallel edges evolve across rounds, making reasoning a difficult task for the edge transformer. We test 20 graph connectivity features (derived using NetworkX ), which can be broadly classified into global structure, source-target reasoning paths, spectral/topological connectivity, and number of possible query labels. We note that evolutionary process has the highest jump (increase/decrease) in most graph features from round zero to round one (see Figures 8 and 9) for both sampling methods. The feature edge label entropy (diversity of relational labels between two nodes), parallel edge ratio (fraction of fact-edges that are redundant in the sense that some other relation already connects the same node pair), and the number of potential query labels shows consistent increase from the baseline (Figures 10 and 11). Graph feature trajectories and histogram summaries for the two sampler families are shown in Figures 8, 9, 10, 11. Both sampling methods show increases in the number of parallel edges and edge-label entropy, increasing ambiguity for the edge transformer. 
+
+B.6 Example priority functions 
+
+In this section we present the best priority functions generated by all the approaches used in this paper. The FunSearch function is from a Qwen3-80B-A3B model run for 5 rounds with 4 cycles. Note that 28 Figure 8: E VOLUTIONARY SEARCH : Evolution of mean graph features, across 5 rounds, for Fun-search runs Evo1-Evo4. 
+
+Figure 9: A UTO -RESEARCH : Evolution of mean graph features, across 20 rounds. there are general and world specific features in all the functions. The Auto-Research functions are much more compact and compositional in nature. For instance, round 7 has mostly general features whereas round 20 is more world specific but also contain some features from round 7. 29 Figure 10: E VOLUTIONARY SEARCH : histograms of selected graph features for round 0, round 1 and round 5. 
+
+Figure 11: A UTO -RESEARCH : histograms of selected features for early ( r=1–5), mid ( r=6–14) and late ( r=15–20) phases. 30 ROUND 20 A UTO -RESEARCH (BEST PRIORITY FUNCTION )
+
+def priority ( cand_fact : str , definite_rules_program : str , entailed_facts : str , facts_program : str ) -> float : if not entailed_facts . strip () : return -10.0 cand_rel = cand_fact . strip () . rstrip ( ’. ’) . split ( ’( ’) [0] if ’( ’ in cand_fact else ’ ’ if cand_rel . startswith ( ’ not_ ’) : return -100.0 
+
+# Expanded trivial set : spatial + attributes + non - family social 
+
+trivial = { ’ living_in ’ , ’ living_in_same_place ’ , ’ is_person ’ , ’is_place ’ , ’ is_male ’ , ’ is_female ’ , ’ is_underage ’ , ’ no_brothers ’ , ’no_sisters ’ , ’ no_sons ’ , ’ no_daughters ’ , ’ colleague_of ’ , ’school_mates_with ’} multi_hop = { ’ grandmother_of ’ , ’ grandfather_of ’ , ’ granddaughter_of ’ , ’ grandson_of ’ , ’ maternal_grandmother_of ’ , ’ maternal_grandfather_of ’ , ’ paternal_grandmother_of ’ , ’ paternal_grandfather_of ’ , ’ aunt_of ’ , ’ uncle_of ’ , ’ niece_of ’ , ’ nephew_of ’ , ’ matern al _aunt _or_un cle_of ’ , ’pate rnal_a unt_or _uncle _of ’ , ’ maternal_uncle_of ’ , ’ paternal_uncle_of ’ , ’ great_grandparent_of ’ , ’ great_grandchild_of ’ , ’ sister_in_law_of ’ , ’ brother_in_law_of ’ , ’ father_in_law_of ’ , ’ mother_in_law_of ’ , ’ son_in_law_of ’ , ’ daughter_in_law_of ’} lines = entailed_facts . strip () . split ( ’\ n ’) existing_rels = set () for line in facts_program . strip () . split ( ’\ n ’) : line = line . strip () . rstrip ( ’. ’) if ’( ’ in line : existing_rels . add ( line . split ( ’( ’) [0]) score = 0.0 entailed_rels = set () multi_hop_count = 0for line in lines : line = line . strip () . rstrip ( ’. ’) if ’( ’ in line : rel = line . split ( ’( ’) [0] if rel . startswith ( ’ not_ ’) : continue entailed_rels . add ( rel ) if rel in trivial : score -= 2.0 elif rel in multi_hop : score += 20.0 multi_hop_count += 1else : score += 1.0 novel_rels = entailed_rels - existing_rels - trivial score += len ( novel_rels ) * 10.0 non_trivial = entailed_rels - trivial score += len ( non_trivial ) * 3.0 score += multi_hop_count * 8.0 return score 
+
+31 ROUND 5 C YCLE 4 F UN SEARCH (BEST PRIORITY FUNCTION )
+
+def priority(cand_fact: str, definite_rules_program: str, entailed_facts: str, facts_program: str) -> float: """Improved version of ‘priority‘ that adds scoring for entailed edges that create multi-hop cycles and penalizes redundant edge types.""" from Funsearch.GraphWranglingMethods import betweenness_centrality, build_simple_graph, connected_components, count_paths, get_all_edge_types, has_path, num_nodes, shortest_path_length import re 
+
+# Parse the candidate edge 
+
+try: cand_fact_stripped = cand_fact.strip() match = re.match(r’^(\w+)\s*\(\s*(\d+)\s*,\s*(\d+)\s*\)\s*\.\s*$’, cand_fact_stripped) if not match: return 0.0 relation, source, target = match.groups() except Exception: return 0.0 
+
+# Parse the entailed facts into edges 
+
+try: entailed_lines = [l.strip() for l in entailed_facts.strip().split(’\n’) if l.strip() and not l.startswith(’#’)] except Exception: entailed_lines = [] if not entailed_lines: return 0.0 
+
+# Basic score: number of entailed edges with base multiplier 
+
+score = len(entailed_lines) * 0.35 
+
+# Relation type weights (tuned for fine-grained differentiation) 
+
+if relation in (’parent_of’, ’sibling_of’, ’spouse_of’): score += 1.6 if relation in (’grandparent_of’, ’uncle_of’, ’aunt_of’, ’nibling_of’): score += 0.85 if relation in (’living_in_same_place’, ’school_mates_with’, ’colleague_of’): score += 0.55 
+
+# Structural analysis 
+
+try: G = build_simple_graph(facts_program) betweenness = betweenness_centrality(G) original_edge_types = get_all_edge_types(G) edge_types_seen = set() long_range_bonus = 0.0 bridge_bonus = 0.0 new_reach_bonus = 0.0 chain_potential_bonus = 0.0 indirect_bonus = 0.0 constraint_bonus = 0.0 multi_hop_cycle_bonus = 0.0 redundancy_penalty = 0.0 n = num_nodes(G) 
+
+# Analyze each entailed edge 
+
+for line in entailed_lines: try: em = re.match(r’^(\w+)\s*\(\s*(\d+)\s*,\s*(\d+)\s*\)\s*\.\s*$’, line.strip()) if not em: continue rel_name, src, tgt = em.groups() edge_types_seen.add(rel_name) 
+
+# Enhanced novel reachability scoring 
+
+if not has_path(G, src, tgt): score += 2.3 new_reach_bonus += 0.5 * (n / max(n, 4)) 
+
+32 ... 
+
+else: pl = shortest_path_length(G, src, tgt) if pl is not None: if pl >= 6: long_range_bonus += 3.0 elif pl >= 5: long_range_bonus += 2.0 elif pl >= 4: long_range_bonus += 1.3 elif pl >= 3: long_range_bonus += 0.7 
+
+# Bridge detection with stricter thresholds 
+
+if src in betweenness and tgt in betweenness: avg_bc = (betweenness[src] + betweenness[tgt]) / 2 if not has_path(G, src, tgt) and avg_bc > 0.14: bridge_bonus += 2.6 elif avg_bc > 0.10: bridge_bonus += 0.6 
+
+# Novelty scoring with tighter penalty/bonus balance 
+
+if rel_name in original_edge_types: score -= 0.25 redundancy_penalty += 0.1 # Track redundant types for bonus/penalty calculation 
+
+else: score += 0.75 
+
+# Shortcut detection (counting paths up to 5 hops for better sensitivity) 
+
+paths_count = count_paths(G, src, tgt, cutoff=5) if paths_count >= 2 and has_path(G, src, tgt): score += 0.6 
+
+# Constraint sensitivity: stronger bonus for distinct nodes 
+
+if src != tgt: constraint_bonus += 0.2 
+
+# Chain potential bonus: slightly increased weight 
+
+chain_relations = {’child_of’, ’parent_of’, ’grandparent_of’, ’sibling_of’, ’ spouse_of’} if rel_name in chain_relations: chain_potential_bonus += 0.28 
+
+# Indirect edge bonus: detect if entailed edge has high betweenness endpoints 
+
+try: if src in betweenness and tgt in betweenness: bc_product = betweenness[src] * betweenness[tgt] if bc_product > 0.006 and not has_path(G, src, tgt): indirect_bonus += 0.35 except: pass 
+
+# Multi-hop cycle detection: detect cycles with path length >= 2 
+
+if src != tgt and has_path(G, src, tgt): path_len_to_tgt = shortest_path_length(G, src, tgt) if path_len_to_tgt is not None and path_len_to_tgt >= 2: if has_path(G, tgt, src): multi_hop_cycle_bonus += 1.1 * (path_len_to_tgt / max(path_len_to_tgt, 2) )except Exception: continue 
+
+# Add bonuses with optimized weights 
+
+score += bridge_bonus * 1.5 score += long_range_bonus * 1.1 score += new_reach_bonus * 1.2 score += chain_potential_bonus * 1.8 score += indirect_bonus * 1.4 score += constraint_bonus * 1.5 score += multi_hop_cycle_bonus * 1.3 # NEW: emphasize multi-hop cycles more strongly # Diversity bonus: slightly stronger nonlinearity and cap the bonus 
+
+score += 1.0 * (len(edge_types_seen) ** 0.82) 
+
+# Redundancy penalty scaling 
+
+score -= redundancy_penalty * 0.4 
+
+33 ... 
+
+# Bridge candidate analysis with refined degree criteria 
+
+try: src_deg = len(set(G.successors(source)) | set(G.predecessors(source))) tgt_deg = len(set(G.successors(target)) | set(G.predecessors(target))) 
+
+# Prefer asymmetric connections (low-degree to high-degree) 
+
+if (src_deg <= 1 and tgt_deg >= 5) or (tgt_deg <= 1 and src_deg >= 5): score += 1.5 elif (src_deg <= 2 and tgt_deg >= 4) or (tgt_deg <= 2 and src_deg >= 4): score += 0.85 elif (src_deg <= 1 and tgt_deg >= 4) or (tgt_deg <= 1 and src_deg >= 4): score += 0.75 
+
+# Bonus for connecting components 
+
+components = list(connected_components(G)) if len(components) > 1: src_comp = next((c for c in components if source in c), None) tgt_comp = next((c for c in components if target in c), None) if src_comp and tgt_comp and src_comp != tgt_comp: score += 2.6 except Exception: pass except Exception: pass # Fall back to basic score if graph building fails 
+
+return float(score) 
+
+ROUND 7 A UTO -R ESEARCH (BEST PRIORITY FUNCTION )
+
+def priority(cand_fact: str, definite_rules_program: str, entailed_facts: str, facts_program: str) -> float: if not entailed_facts.strip(): return 0.0 cand_rel = cand_fact.strip().rstrip(’.’).split(’(’)[0] if ’(’ in cand_fact else ’’ if cand_rel.startswith(’not_’): return -100.0 lines = entailed_facts.strip().split(’\n’) 
+
+# Parse existing entity pairs from the story 
+
+existing_pairs = {} for line in facts_program.strip().split(’\n’): line = line.strip().rstrip(’.’) if ’(’ in line: rel = line.split(’(’)[0] args = line.split(’(’)[1].rstrip(’)’).split(’,’) if len(args) == 2: pair = (args[0].strip(), args[1].strip()) existing_pairs.setdefault(pair, set()).add(rel) 
+
+# Score entailed facts: prefer those that ADD relations to existing pairs 
+
+score = 0.0 entailed_rels = set() overlap_count = 0 for line in lines: line = line.strip().rstrip(’.’) if ’(’ in line: rel = line.split(’(’)[0] if rel.startswith(’not_’): continue entailed_rels.add(rel) args = line.split(’(’)[1].rstrip(’)’).split(’,’) if len(args) == 2: pair = (args[0].strip(), args[1].strip()) if pair in existing_pairs: overlap_count += 1 # adds complexity to existing pairs # Prefer: many entailed, many overlapping pairs, diverse relations 
+
+score = float(len(lines)) + overlap_count * 5.0 + len(entailed_rels) * 3.0 return score 
+
+34 NeurIPS Paper Checklist 
+
+1. Claims 
+
+Question: Do the main claims made in the abstract and introduction accurately reflect the paper’s contributions and scope? Answer: [Yes] Justification: The paper and the abstract are aligned in content and scope. Guidelines: • The answer [N/A] means that the abstract and introduction do not include the claims made in the paper. • The abstract and/or introduction should clearly state the claims made, including the contributions made in the paper and important assumptions and limitations. A [No] or [N/A] answer to this question will not be perceived well by the reviewers. • The claims made should match theoretical and experimental results, and reflect how much the results can be expected to generalize to other settings. • It is fine to include aspirational goals as motivation as long as it is clear that these goals are not attained by the paper. 2. Limitations 
+
+Question: Does the paper discuss the limitations of the work performed by the authors? Answer: [Yes] Justification: The limitations of this work are discussed in the Conclusions section. Guidelines: • The answer [N/A] means that the paper has no limitation while the answer [No] means that the paper has limitations, but those are not discussed in the paper. • The authors are encouraged to create a separate “Limitations” section in their paper. • The paper should point out any strong assumptions and how robust the results are to violations of these assumptions (e.g., independence assumptions, noiseless settings, model well-specification, asymptotic approximations only holding locally). The authors should reflect on how these assumptions might be violated in practice and what the implications would be. • The authors should reflect on the scope of the claims made, e.g., if the approach was only tested on a few datasets or with a few runs. In general, empirical results often depend on implicit assumptions, which should be articulated. • The authors should reflect on the factors that influence the performance of the approach. For example, a facial recognition algorithm may perform poorly when image resolution is low or images are taken in low lighting. Or a speech-to-text system might not be used reliably to provide closed captions for online lectures because it fails to handle technical jargon. • The authors should discuss the computational efficiency of the proposed algorithms and how they scale with dataset size. • If applicable, the authors should discuss possible limitations of their approach to address problems of privacy and fairness. • While the authors might fear that complete honesty about limitations might be used by reviewers as grounds for rejection, a worse outcome might be that reviewers discover limitations that aren’t acknowledged in the paper. The authors should use their best judgment and recognize that individual actions in favor of transparency play an impor-tant role in developing norms that preserve the integrity of the community. Reviewers will be specifically instructed to not penalize honesty concerning limitations. 3. Theory assumptions and proofs 
+
+Question: For each theoretical result, does the paper provide the full set of assumptions and a complete (and correct) proof? Answer: [N/A] 35 Justification: [N/A] Guidelines: • The answer [N/A] means that the paper does not include theoretical results. • All the theorems, formulas, and proofs in the paper should be numbered and cross-referenced. • All assumptions should be clearly stated or referenced in the statement of any theorems. • The proofs can either appear in the main paper or the supplemental material, but if they appear in the supplemental material, the authors are encouraged to provide a short proof sketch to provide intuition. • Inversely, any informal proof provided in the core of the paper should be complemented by formal proofs provided in appendix or supplemental material. • Theorems and Lemmas that the proof relies upon should be properly referenced. 4. Experimental result reproducibility 
+
+Question: Does the paper fully disclose all the information needed to reproduce the main ex-perimental results of the paper to the extent that it affects the main claims and/or conclusions of the paper (regardless of whether the code and data are provided or not)? Answer: [Yes] Justification: Broad details are provided in the main paper. The full details are included in Appendix. Code is available publicly. Guidelines: • The answer [N/A] means that the paper does not include experiments. • If the paper includes experiments, a [No] answer to this question will not be perceived well by the reviewers: Making the paper reproducible is important, regardless of whether the code and data are provided or not. • If the contribution is a dataset and/or model, the authors should describe the steps taken to make their results reproducible or verifiable. • Depending on the contribution, reproducibility can be accomplished in various ways. For example, if the contribution is a novel architecture, describing the architecture fully might suffice, or if the contribution is a specific model and empirical evaluation, it may be necessary to either make it possible for others to replicate the model with the same dataset, or provide access to the model. In general. releasing code and data is often one good way to accomplish this, but reproducibility can also be provided via detailed instructions for how to replicate the results, access to a hosted model (e.g., in the case of a large language model), releasing of a model checkpoint, or other means that are appropriate to the research performed. • While NeurIPS does not require releasing code, the conference does require all submis-sions to provide some reasonable avenue for reproducibility, which may depend on the nature of the contribution. For example (a) If the contribution is primarily a new algorithm, the paper should make it clear how to reproduce that algorithm. (b) If the contribution is primarily a new model architecture, the paper should describe the architecture clearly and fully. (c) If the contribution is a new model (e.g., a large language model), then there should either be a way to access this model for reproducing the results or a way to reproduce the model (e.g., with an open-source dataset or instructions for how to construct the dataset). (d) We recognize that reproducibility may be tricky in some cases, in which case authors are welcome to describe the particular way they provide for reproducibility. In the case of closed-source models, it may be that access to the model is limited in some way (e.g., to registered users), but it should be possible for other researchers to have some path to reproducing or verifying the results. 5. Open access to data and code 
+
+Question: Does the paper provide open access to the data and code, with sufficient instruc-tions to faithfully reproduce the main experimental results, as described in supplemental material? 36 Answer: [Yes] Justification: The dataset has been shared. The code used for generating and evaluating the dataset was also shared, with instructions for creating environment and running the Python code. Guidelines: • The answer [N/A] means that paper does not include experiments requiring code. • Please see the NeurIPS code and data submission guidelines ( https://neurips.cc/ public/guides/CodeSubmissionPolicy ) for more details. • While we encourage the release of code and data, we understand that this might not be possible, so [No] is an acceptable answer. Papers cannot be rejected simply for not including code, unless this is central to the contribution (e.g., for a new open-source benchmark). • The instructions should contain the exact command and environment needed to run to reproduce the results. See the NeurIPS code and data submission guidelines ( https: //neurips.cc/public/guides/CodeSubmissionPolicy ) for more details. • The authors should provide instructions on data access and preparation, including how to access the raw data, preprocessed data, intermediate data, and generated data, etc. • The authors should provide scripts to reproduce all experimental results for the new proposed method and baselines. If only a subset of experiments are reproducible, they should state which ones are omitted from the script and why. • At submission time, to preserve anonymity, the authors should release anonymized versions (if applicable). • Providing as much information as possible in supplemental material (appended to the paper) is recommended, but including URLs to data and code is permitted. 6. Experimental setting/details 
+
+Question: Does the paper specify all the training and test details (e.g., data splits, hyperpa-rameters, how they were chosen, type of optimizer) necessary to understand the results? Answer: [Yes] Justification: Broad details are provided in the main paper. The full details are included in Appendix. Code is available publicly. Guidelines: • The answer [N/A] means that the paper does not include experiments. • The experimental setting should be presented in the core of the paper to a level of detail that is necessary to appreciate the results and make sense of them. • The full details can be provided either with the code, in appendix, or as supplemental material. 7. Experiment statistical significance 
+
+Question: Does the paper report error bars suitably and correctly defined or other appropriate information about the statistical significance of the experiments? Answer: [Yes] Justification: This information is in the Appendices. Guidelines: • The answer [N/A] means that the paper does not include experiments. • The authors should answer [Yes] if the results are accompanied by error bars, confidence intervals, or statistical significance tests, at least for the experiments that support the main claims of the paper. • The factors of variability that the error bars are capturing should be clearly stated (for example, train/test split, initialization, random drawing of some parameter, or overall run with given experimental conditions). • The method for calculating the error bars should be explained (closed form formula, call to a library function, bootstrap, etc.) • The assumptions made should be given (e.g., Normally distributed errors). 37 • It should be clear whether the error bar is the standard deviation or the standard error of the mean. • It is OK to report 1-sigma error bars, but one should state it. The authors should preferably report a 2-sigma error bar than state that they have a 96% CI, if the hypothesis of Normality of errors is not verified. • For asymmetric distributions, the authors should be careful not to show in tables or figures symmetric error bars that would yield results that are out of range (e.g., negative error rates). • If error bars are reported in tables or plots, the authors should explain in the text how they were calculated and reference the corresponding figures or tables in the text. 8. Experiments compute resources 
+
+Question: For each experiment, does the paper provide sufficient information on the com-puter resources (type of compute workers, memory, time of execution) needed to reproduce the experiments? Answer: [Yes] Justification: Details are included in Appendix A. Guidelines: • The answer [N/A] means that the paper does not include experiments. • The paper should indicate the type of compute workers CPU or GPU, internal cluster, or cloud provider, including relevant memory and storage. • The paper should provide the amount of compute required for each of the individual experimental runs as well as estimate the total compute. • The paper should disclose whether the full research project required more compute than the experiments reported in the paper (e.g., preliminary or failed experiments that didn’t make it into the paper). 9. Code of ethics 
+
+Question: Does the research conducted in the paper conform, in every respect, with the NeurIPS Code of Ethics https://neurips.cc/public/EthicsGuidelines ?Answer: [Yes] Justification: The research conducted in the paper fully conforms with the Code of Ethics. Guidelines: Guidelines: • The answer [N/A] means that the authors have not reviewed the NeurIPS Code of Ethics. • If the authors answer [No], they should explain the special circumstances that require a deviation from the Code of Ethics. • The authors should make sure to preserve anonymity (e.g., if there is a special consid-eration due to laws or regulations in their jurisdiction). 10. Broader impacts 
+
+Question: Does the paper discuss both potential positive societal impacts and negative societal impacts of the work performed? Answer: [N/A] Justification: We foresee no immediate scope for potential malicious or unintended uses, fairness considerations, privacy considerations, and security considerations. Guidelines: • The answer [N/A] means that there is no societal impact of the work performed. • If the authors answer [N/A] or [No], they should explain why their work has no societal impact or why the paper does not address societal impact. • Examples of negative societal impacts include potential malicious or unintended uses (e.g., disinformation, generating fake profiles, surveillance), fairness considerations (e.g., deployment of technologies that could make decisions that unfairly impact specific groups), privacy considerations, and security considerations. 38 • The conference expects that many papers will be foundational research and not tied to particular applications, let alone deployments. However, if there is a direct path to any negative applications, the authors should point it out. For example, it is legitimate to point out that an improvement in the quality of generative models could be used to generate Deepfakes for disinformation. On the other hand, it is not needed to point out that a generic algorithm for optimizing neural networks could enable people to train models that generate Deepfakes faster. • The authors should consider possible harms that could arise when the technology is being used as intended and functioning correctly, harms that could arise when the technology is being used as intended but gives incorrect results, and harms following from (intentional or unintentional) misuse of the technology. • If there are negative societal impacts, the authors could also discuss possible mitigation strategies (e.g., gated release of models, providing defenses in addition to attacks, mechanisms for monitoring misuse, mechanisms to monitor how a system learns from feedback over time, improving the efficiency and accessibility of ML). 11. Safeguards 
+
+Question: Does the paper describe safeguards that have been put in place for responsible release of data or models that have a high risk for misuse (e.g., pre-trained language models, image generators, or scraped datasets)? Answer: [N/A] Justification: No pretrained language models, image generators, or scraped datasets are created. Guidelines: • The answer [N/A] means that the paper poses no such risks. • Released models that have a high risk for misuse or dual-use should be released with necessary safeguards to allow for controlled use of the model, for example by requiring that users adhere to usage guidelines or restrictions to access the model or implementing safety filters. • Datasets that have been scraped from the Internet could pose safety risks. The authors should describe how they avoided releasing unsafe images. • We recognize that providing effective safeguards is challenging, and many papers do not require this, but we encourage authors to take this into account and make a best faith effort. 12. Licenses for existing assets 
+
+Question: Are the creators or original owners of assets (e.g., code, data, models), used in the paper, properly credited and are the license and terms of use explicitly mentioned and properly respected? Answer: [Yes] Justification: The NoRA benchmark is used fully in line with its intended purpose. The corresponding paper has been cited. Other external resources include [Potassco / clingo] (https://potassco.org/), [google-deepmind/funsearch](https://github.com/google-deepmind/funsearch). These resources are compatible with non-commercial research use, as we have cited them appropriately here. Guidelines: • The answer [N/A] means that the paper does not use existing assets. • The authors should cite the original paper that produced the code package or dataset. • The authors should state which version of the asset is used and, if possible, include a URL. • The name of the license (e.g., CC-BY 4.0) should be included for each asset. • For scraped data from a particular source (e.g., website), the copyright and terms of service of that source should be provided. • If assets are released, the license, copyright information, and terms of use in the package should be provided. For popular datasets, paperswithcode.com/datasets 
+
+39 has curated licenses for some datasets. Their licensing guide can help determine the license of a dataset. • For existing datasets that are re-packaged, both the original license and the license of the derived asset (if it has changed) should be provided. • If this information is not available online, the authors are encouraged to reach out to the asset’s creators. 13. New assets 
+
+Question: Are new assets introduced in the paper well documented and is the documentation provided alongside the assets? Answer: [Yes] Justification: The main assets introduced in the paper are the learned samplers, which have been made available. Guidelines: • The answer [N/A] means that the paper does not release new assets. • Researchers should communicate the details of the dataset/code/model as part of their submissions via structured templates. This includes details about training, license, limitations, etc. • The paper should discuss whether and how consent was obtained from people whose asset is used. • At submission time, remember to anonymize your assets (if applicable). You can either create an anonymized URL or include an anonymized zip file. 14. Crowdsourcing and research with human subjects 
+
+Question: For crowdsourcing experiments and research with human subjects, does the paper include the full text of instructions given to participants and screenshots, if applicable, as well as details about compensation (if any)? Answer: [N/A] Justification: The paper does not involve crowdsourcing nor research with human subjects. Guidelines: • The answer [N/A] means that the paper does not involve crowdsourcing nor research with human subjects. • Including this information in the supplemental material is fine, but if the main contribu-tion of the paper involves human subjects, then as much detail as possible should be included in the main paper. • According to the NeurIPS Code of Ethics, workers involved in data collection, curation, or other labor should be paid at least the minimum wage in the country of the data collector. 15. Institutional review board (IRB) approvals or equivalent for research with human subjects 
+
+Question: Does the paper describe potential risks incurred by study participants, whether such risks were disclosed to the subjects, and whether Institutional Review Board (IRB) approvals (or an equivalent approval/review based on the requirements of your country or institution) were obtained? Answer: [N/A] Justification: The paper does not involve crowdsourcing nor research with human subjects. Guidelines: • The answer [N/A] means that the paper does not involve crowdsourcing nor research with human subjects. • Depending on the country in which research is conducted, IRB approval (or equivalent) may be required for any human subjects research. If you obtained IRB approval, you should clearly state this in the paper. 40 • We recognize that the procedures for this may vary significantly between institutions and locations, and we expect authors to adhere to the NeurIPS Code of Ethics and the guidelines for their institution. • For initial submissions, do not include any information that would break anonymity (if applicable), such as the institution conducting the review. 16. Declaration of LLM usage 
+
+Question: Does the paper describe the usage of LLMs if it is an important, original, or non-standard component of the core methods in this research? Note that if the LLM is used only for writing, editing, or formatting purposes and does not impact the core methodology, scientific rigor, or originality of the research, declaration is not required. Answer: [Yes] Justification: The central aim of this paper is to use LLMs to learn samplers for evaluating reasoning models. The way in which LLMs are used is described in detail in Section 3. Guidelines: • The answer [N/A] means that the core method development in this research does not involve LLMs as any important, original, or non-standard components. • Please refer to our LLM policy in the NeurIPS handbook for what should or should not be described. 41

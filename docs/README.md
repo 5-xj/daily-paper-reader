@@ -6,59 +6,83 @@
 </div>
 
 ## 每次日报
-- 最新运行日期：2026-06-22
-- 运行时间：2026-06-22 22:48:26 UTC
+- 最新运行日期：2026-06-27
+- 运行时间：2026-06-27 21:33:23 UTC
 - 运行状态：成功
-- 本次总论文数：13
-- 精读区：2
-- 速读区：11
+- 本次总论文数：21
+- 精读区：8
+- 速读区：13
 
 ### 今日简报（AI）
-今日推荐13篇论文，精读2篇、速读11篇，覆盖符号搜索和组合优化。最值得关注的是《Agentic Symbolic Search》（9分）偏微分方程新方法和《N(CO)$^2$》（8分）随机定向优化。建议优先精读这两篇，把握符号推理与机会约束优化的前沿方向。
-- 详情：[/202606/22/README](/202606/22/README)
+今日共收录21篇论文，精读8篇，两篇高分论文分别聚焦神经关系推理自动化基准测试和搜索算法的自动化发现。最值得关注的方向是《Project Auto-World》（10分）提出的自动化基准测试新范式，以及《Learning the ARTS of Search》（9分）对搜索发现过程的革新；速读中因果感知框架《ARIA》与LLM增强A*搜索也值得一读。建议优先精读这两篇10分和9分文章，把握自动化推理与搜索的前沿进展。
+- 详情：[/202606/27/README](/202606/27/README)
 
 ### 精读区论文标签
-1. [Agentic Symbolic Search: Characterizing PDEs Beyond Hand-crafted Expressions, Meshes, and Neural Networks](/202606/22/2606.20467v1-agentic-symbolic-search-characterizing-pdes-beyond-hand-crafted-expressions-meshes-and-neural-networks)  
+1. [Project Auto-World: Towards Automated Benchmarking of Neural Relational Reasoners](/202606/27/2606.24965v1-project-auto-world-towards-automated-benchmarking-of-neural-relational-reasoners)  
+   标签：评分：10.0/10、query:ad
+   evidence：利用LLM驱动进化搜索自动生成基准
+2. [Learning the ARTS of Search for Automated Discovery](/202606/27/2606.21891v1-learning-the-arts-of-search-for-automated-discovery)  
    标签：评分：9.0/10、query:ad
-   evidence：提出基于演化搜索和梯度优化的代理符号搜索方法，用于自动发现偏微分方程，符合符号回归与启发式搜索的要求。
-2. [N(CO)$^2$: Neural Combinatorial Optimization with Chance Constraints to Solve Stochastic Orienteering](/202606/22/2606.18514v1-nco2-neural-combinatorial-optimization-with-chance-constraints-to-solve-stochastic-orienteering)  
+   evidence：利用推理语言模型进行自动科学发现搜索
+3. [KaLM-Reranker-V1: Fast but Not Late Interaction for Compressed Document Reranking](/202606/27/2606.22807v1-kalm-reranker-v1-fast-but-not-late-interaction-for-compressed-document-reranking)  
+   标签：评分：9.0/10、query:rerank-train
+   evidence：提出了一种解耦查询和文档计算的重排序器架构及其训练方法
+4. [Agentic evolution of physically constrained foundation models](/202606/27/2606.25532v1-agentic-evolution-of-physically-constrained-foundation-models)  
+   标签：评分：9.0/10、query:ad
+   evidence：使用多智能体大模型和进化知识图谱的自动科学发现
+5. [AutoRelAnnotator: Calibrated Model Cascades for Cost-Efficient Relevance Evaluation in Sponsored Search](/202606/27/2606.25871v1-autorelannotator-calibrated-model-cascades-for-cost-efficient-relevance-evaluation-in-sponsored-search)  
+   标签：评分：9.0/10、query:rerank-train
+   evidence：用于相关性标注训练的校准模型级联方法
+6. [EvoOptiGraph: Weakness-Driven Coevolution via Graph-Based Structural Generation for Optimization Modeling](/202606/27/2606.26578v1-evooptigraph-weakness-driven-coevolution-via-graph-based-structural-generation-for-optimization-modeling)  
+   标签：评分：9.0/10、query:ad
+   evidence：大模型与进化计算自动生成优化模型
+7. [Scientific discovery as meta-optimization: a combinatorial optimization case study](/202606/27/2606.26728v1-scientific-discovery-as-meta-optimization-a-combinatorial-optimization-case-study)  
+   标签：评分：9.0/10、query:ad
+   evidence：使用大型语言模型进行科学发现的元优化
+8. [Beyond Data-Driven: How Physics-Informed Neural Networks are Reshaping Multi-Physics Design and Discovery](/202606/27/2606.21945v1-beyond-data-driven-how-physics-informed-neural-networks-are-reshaping-multi-physics-design-and-discovery)  
    标签：评分：8.0/10、query:ad
-   evidence：神经组合优化学习启发式用于算法发现
+   evidence：用于科学发现的物理信息神经网络
 
 ### 速读区论文标签
-1. [Proximal Policy Optimization for Amortized Discrete Sampling](/202606/22/2606.15793v1-proximal-policy-optimization-for-amortized-discrete-sampling)  
+1. [ARIA: A Causal-Aware Framework for Rescuing LLM Reasoning in Trustworthy Materials Discovery](/202606/27/2606.22375v1-aria-a-causal-aware-framework-for-rescuing-llm-reasoning-in-trustworthy-materials-discovery)  
+   标签：评分：8.0/10、query:ad
+   evidence：因果感知的LLM框架用于可信材料发现
+2. [LLM-Aided A* Search in Non-Geometric Network Graphs](/202606/27/2606.23136v1-llm-aided-a-search-in-non-geometric-network-graphs)  
+   标签：评分：8.0/10、query:ad
+   evidence：大语言模型生成中间路径点以指导非几何网络图中的A*启发式搜索
+3. [Adaptive Re-Ranking](/202606/27/2606.25249v1-adaptive-re-ranking)  
+   标签：评分：8.0/10、query:rerank-train
+   evidence：提出自适应重排序，训练成本感知的路由分类器
+4. [FactorLibrary: From Polynomials to Circuits via Recursive Subgoals](/202606/27/2606.25394v1-factorlibrary-from-polynomials-to-circuits-via-recursive-subgoals)  
+   标签：评分：8.0/10、query:ad
+   evidence：用强化学习发现最小算术电路
+5. [DCD-PFN: A Decoupling-Aware Foundation Model for Causal Discovery](/202606/27/2606.21212v1-dcd-pfn-a-decoupling-aware-foundation-model-for-causal-discovery)  
    标签：评分：7.0/10、query:ad
-   evidence：针对生成流网络的近端策略优化，用于离散采样与发现
-2. [Towards Pareto-Optimal Tool-Integrated Agents with Pareto Ranking Policy Optimization](/202606/22/2606.16111v1-towards-pareto-optimal-tool-integrated-agents-with-pareto-ranking-policy-optimization)  
+   evidence：基于解耦感知基础模型的因果发现；数据自动发现
+6. [Physics-Informed Neural Optimization Based Antenna Coding Design for Pixel Antenna Systems](/202606/27/2606.21235v1-physics-informed-neural-optimization-based-antenna-coding-design-for-pixel-antenna-systems)  
    标签：评分：7.0/10、query:ad
-   evidence：使用Pareto排序进行LLM智能体多目标对齐
-3. [A Theoretical Framework for Risk Analysis of Stochastic Rankers](/202606/22/2606.16970v1-a-theoretical-framework-for-risk-analysis-of-stochastic-rankers)  
+   evidence：使用神经网络进行天线编码设计的优化算法发现
+7. [HAKARI-Bench: A Lightweight Benchmark for Comparing Retrieval Architectures and Efficiency Settings under Unified Conditions](/202606/27/2606.22778v1-hakari-bench-a-lightweight-benchmark-for-comparing-retrieval-architectures-and-efficiency-settings-under-unified-conditions)  
    标签：评分：7.0/10、query:rerank-train
-   evidence：随机排序器的风险理论分析
-4. [A Tool for the Synthesis of Adaptive Probabilistic Processors Based on the Ising Model](/202606/22/2606.19533v1-a-tool-for-the-synthesis-of-adaptive-probabilistic-processors-based-on-the-ising-model)  
-   标签：评分：7.0/10、query:atsp
-   evidence：基于Ising模型的组合优化工具，自适应选择启发式算法
-5. [Weight Adaptation for Improving Parallel Performance of Adaptive Stochastic Natural Gradient](/202606/22/2606.19861v1-weight-adaptation-for-improving-parallel-performance-of-adaptive-stochastic-natural-gradient)  
+   evidence：用于比较重排序设置的基准
+8. [Scaling Dense Retrieval with LLM-Annotated Training Data: Structured Mining and Progressive Curriculum for E-Commerce Sponsored Search](/202606/27/2606.23911v1-scaling-dense-retrieval-with-llm-annotated-training-data-structured-mining-and-progressive-curriculum-for-e-commerce-sponsored-search)  
+   标签：评分：7.0/10、query:rerank-train
+   evidence：使用LLM标注数据训练密集检索，可迁移至reranker训练
+9. [Reasoning as Attractor Dynamics: Latent Memory Retrieval via Gibbs-Weighted Energy Minimization](/202606/27/2606.24543v1-reasoning-as-attractor-dynamics-latent-memory-retrieval-via-gibbs-weighted-energy-minimization)  
    标签：评分：7.0/10、query:ad
-   evidence：概率模型进化算法用于黑箱优化
-6. [RL-Index: Reinforcement Learning for Retrieval Index Reasoning](/202606/22/2606.16316v1-rl-index-reinforcement-learning-for-retrieval-index-reasoning)  
-   标签：评分：6.0/10、query:ad
-   evidence：强化学习用于检索索引推理，辅助知识自动发现
-7. [PathRouter: Aligning Rewards with Retrieval Quality in Agentic Graph Retrieval-Augmented Generation](/202606/22/2606.16409v1-pathrouter-aligning-rewards-with-retrieval-quality-in-agentic-graph-retrieval-augmented-generation)  
-   标签：评分：6.0/10、query:ad
-   evidence：面向语言模型智能体的路径感知训练用于迭代检索，符合LLM引导的启发式搜索
-8. [Speaking the Language of Science: Toward a General-Purpose Generative Foundation Model for the Natural Sciences](/202606/22/2606.16905v1-speaking-the-language-of-science-toward-a-general-purpose-generative-foundation-model-for-the-natural-sciences)  
-   标签：评分：6.0/10、query:ad
-   evidence：统一的科学生成模型，支持跨自然科学自动发现
-9. [Decoupling Search from Reasoning: A Vendor-Agnostic Grounding Architecture for LLM Agents](/202606/22/2606.18947v1-decoupling-search-from-reasoning-a-vendor-agnostic-grounding-architecture-for-llm-agents)  
-   标签：评分：6.0/10、query:ad
-   evidence：面向基于搜索的发现的LLM代理接地架构
-10. [A Solver-Free Training Method for Predict-then-Optimize](/202606/22/2606.19587v1-a-solver-free-training-method-for-predict-then-optimize)  
-   标签：评分：6.0/10、query:atsp
-   evidence：预测后优化学习，适用于组合优化问题
-11. [ELVA: Exploring Ranking-Driven Universal Multimodal Retrieval](/202606/22/2606.20280v1-elva-exploring-ranking-driven-universal-multimodal-retrieval)  
+   evidence：大模型推理吸引子动力学用于数学发现
+10. [DREAM: Dense Retrieval Embeddings via Autoregressive Modeling](/202606/27/2606.24667v1-dream-dense-retrieval-embeddings-via-autoregressive-modeling)  
+   标签：评分：7.0/10、query:rerank-train
+   evidence：使用自回归语言模型监督训练密集检索嵌入
+11. [Leveraging Population Dynamics to Steer Efficient Search in Large-Scale Combinatorial Optimization](/202606/27/2606.25203v1-leveraging-population-dynamics-to-steer-efficient-search-in-large-scale-combinatorial-optimization)  
+   标签：评分：7.0/10、query:atsp
+   evidence：基于种群的启发式方法用于大规模组合优化
+12. [TALAS: Teacher-Anchored Layer Alignment with Adaptive Sharpness-Aware Minimization for Embedding Distillation](/202606/27/2606.21851v1-talas-teacher-anchored-layer-alignment-with-adaptive-sharpness-aware-minimization-for-embedding-distillation)  
    标签：评分：6.0/10、query:rerank-train
-   evidence：基于排序驱动的多模态检索训练
+   evidence：提出嵌入模型的蒸馏方法，可应用于reranker训练
+13. [Unified Multi-Task Relevance Modeling for E-Commerce: Comparing Task Routing Architectures Across LLMs and Cross-Encoders](/202606/27/2606.23919v1-unified-multi-task-relevance-modeling-for-e-commerce-comparing-task-routing-architectures-across-llms-and-cross-encoders)  
+   标签：评分：6.0/10、query:rerank-train
+   evidence：比较跨多个相关性任务的交叉编码器训练的任务路由架构
 
 
 <div class="dpr-home-promo-card">

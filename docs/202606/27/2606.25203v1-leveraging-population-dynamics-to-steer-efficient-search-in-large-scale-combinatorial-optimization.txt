@@ -1,0 +1,646 @@
+Title: Leveraging Population Dynamics to Steer Efficient Search in Large-Scale Combinatorial Optimization
+
+URL Source: https://arxiv.org/pdf/2606.25203v1
+
+Published Time: Thu, 25 Jun 2026 00:20:47 GMT
+
+Number of Pages: 19
+
+Markdown Content:
+# Leveraging Population Dynamics to Steer Efficient Search in Large-Scale Combinatorial Optimization 
+
+Nikhat Khan, Ridge Redding, Nikhil Shukla 
+
+University of Virginia, Charlottesville, VA 22903, USA 
+
+Combinatorial optimization problems pose substantial computational challenges because their fea-sible solution spaces grow exponentially with problem size. This paper presents a GPU-accelerated augmented Population Annealing Monte Carlo (PAMC) framework for large-scale graph-partitioning problems, with emphasis on Max-Cut and Max-K-Cut. The proposed framework extends conven-tional PAMC by coupling population-based resampling with two stagnation-driven mechanisms: adaptive temperature control and energy-preserving nonlocal cluster moves. By using population-level optimization history as feedback, these mechanisms regulate the balance between exploration and refinement by reheating stalled populations and enabling collective transitions across locally confined regions of the solution space. Experiments on G-set benchmark instances show that the augmented PAMC framework achieves competitive or lower time-to-solution than reported state-of-the-art baselines on several large Max-Cut instances, while matching or improving solution quality under comparable runtime budgets. The solver also discovers a new best-known solution for the G63 Max-Cut instance and scales to a fully connected 100 ,000-spin Ising instance. For Max-3-Cut, the same framework establishes new best-known solutions on 36 G-set instances, demonstrating its applicability beyond binary Ising formulations. These results indicate that feedback-controlled population dynamics provide an effective and scalable strategy for steering stochastic search in large-scale combinatorial optimization. 
+
+I. INTRODUCTION 
+
+Combinatorial optimization problems (COPs) are cen-tral to many applications across industry and research, including machine learning, operations research, materi-als design, and scientific computing. Many COPs can be reformulated as Ising-energy minimization problems. Astandard pairwise Ising Hamiltonian can be written as 
+
+H(s) = − P Jij sisj , where s = ( s1, . . . , s N ) denotes a spin configuration, each spin variable si ∈ {− 1, +1 } rep-resents one of two possible spin states, Jij is the coupling coefficient between spins i and j, and N is the number of spins. After mapping the COP objective function to an Ising Hamiltonian, finding the ground state, or minimum-energy configuration of this Hamiltonian, corresponds to solving the original COP. However, many COPs are non-deterministic polynomial-time (NP)-hard, and the size of the feasible solution space grows exponentially with prob-lem size, creating a combinatorial explosion that makes even moderately sized instances computationally chal-lenging for classical digital solvers in terms of runtime and memory requirements. In this work, we focus on Max-Cut, one of the most widely used benchmark problems for comparing combina-torial optimization solvers, and its multi-state generaliza-tion, Max-K-Cut, which extends this benchmark beyond binary decision variables [1][2]. Given a graph, Max-Cut seeks a partition of the vertex set into two disjoint sub-sets such that the weight of the edges crossing between the subsets is maximized. Its objective function admits a direct mapping to an Ising Hamiltonian, making it a natural and convenient testbed for Ising-based optimiza-tion frameworks. Max-K-Cut extends this objective by partitioning the vertices into K > 2 subsets and maxi-mizing the total weight of edges with endpoints in dif-ferent subsets. This multi-state partitioning structure makes Max-K-Cut relevant to a broader class of parti-tioning and assignment problems that arise in applica-tions such as clustering, frequency resource allocation, and scheduling. However, unlike Max-Cut, Max-K-Cut is not natively an Ising problem, and embedding it in an Ising form requires an additional mapping step that introduces auxiliary nodes and edges. This embedding inflates the problem size. Among the many algorithmic paradigms applied to COPs, Markov-chain Monte Carlo (MCMC) methods [3] are especially relevant to energy-based optimization. Rather than exhaustively searching an exponentially large configuration space, MCMC generates stochastic trajectories whose stationary distribution is chosen to fa-vor desirable configurations. In optimization settings, this target distribution is commonly chosen to be the Boltzmann distribution, so that lower-energy configura-tions are sampled with higher probability at a given tem-perature. A prominent realization of this principle is simulated annealing (SA) [4], in which a single Markov chain is evolved under a gradually decreasing temper-ature schedule, progressively biasing the chain toward low-energy states. However, since the search is carried out along a single trajectory, SA can struggle to move between distant basins in rugged energy landscapes. Al-though independent SA runs are easily parallelized, they do not exchange information, making their performance sensitive to initial conditions, annealing schedules, and other solver parameters. Two parallel descendants of SA address this limita-tion by replacing the independent-runs structure with a coordinated ensemble of replicas that can share infor-mation [5]. The first one is parallel tempering (PT), which runs multiple replicas of the same system at differ-
+
+> arXiv:2606.25203v1 [physics.comp-ph] 23 Jun 2026
+
+2ent temperatures, so high-temperature replicas explore broadly, while low-temperature replicas concentrate on low-energy states [6]. Periodic swaps between repli-cas allow configurations to move across the tempera-ture ladder, helping low-temperature chains escape local minima and explore rugged landscapes more effectively. The second one is Population Annealing Monte Carlo (PAMC), the focus of this paper, which follows a dif-ferent ensemble-based strategy [7]. It evolves a popula-tion of replicas through a sequence of increasing inverse temperature and performs an energy-dependent resam-pling step at each temperature. This resampling pref-erentially replicates low-energy configurations while re-moving higher-energy ones, allowing the population to approximate a Gibbs distribution at each stage. Although PT has been extensively exploited as aCOP solver [8–11], PAMC remains less explored in optimization-focused settings despite its natural suitabil-ity for accelerator-based hardware. Prior work on PAMC as a COP solver includes [12], which showed that both PT and PAMC outperform SA on hard spin-glass optimiza-tion benchmarks, with PAMC achieving performance comparable to PT. Since then, PAMC has been improved along several directions, including adaptive temperature schedules based on culling fraction and energy variance [13], energy-histogram overlap [14], or optimal annealing schedules [15]; massively parallel GPU and MPI imple-mentations [14, 16]; weighted averaging [17] and error diagnostics [18]; and more recently, topological-defect-driven nonlocal updates [19]. However, many of these ad-vances have been demonstrated primarily on spin-glass or gauge-model benchmarks, motivating a closer evaluation of PAMC for graph-partitioning COPs such as Max-Cut and Max-K-Cut. To address this question, we introduce an augmented PAMC framework for Max-Cut and Max-K-Cut that coordinates adaptive temperature control and energy-preserving nonlocal cluster moves through a single stagnation-driven controller. Fig. 1 presents an overview of the proposed augmented PAMC framework. The con-troller tracks the population-wide best-so-far cut values over a finite memory window and uses lack of improve-ment as a signal of stagnation, allowing the population to increase exploration when progress stalls. The contri-bution of this work lies in using this common stagnation-detection signal to coordinate both adaptive reheating and nonlocal moves within a unified PAMC framework. Adaptive temperature control has been studied in SA [20, 21], PT [22, 23], and PAMC [13, 14]. Prior PT and PAMC schemes typically rely on sampling-equilibration metrics to tune the temperature ladder or adjust the inverse-temperature step size, whereas reheating mecha-nisms based on optimization progress have, by contrast, mainly appeared in SA [24]. Energy-preserving nonlocal cluster moves have likewise been studied in several forms. Houdayer’s isoenergetic cluster move [25] constructs clus-ters from disagreement domains between two replicas in two-dimensional spin glasses, while [26] generalized this idea to spin glasses in any space dimension. More re-cently, [19] introduced topological defect-driven nonlo-cal cluster updates within PA for the three-dimensional model, derived from a random 3D Ising gauge theory in plaquette representation. Our nonlocal cluster move dif-fers from these prior approaches in how it is constructed and applied. Furthermore, relatively few solvers address Max-Cut and Max-K-Cut within a single framework. Sev-eral of the strongest classical software heuristics for Max-Cut—including Breakout Local Search (BLS) [27], Global Equilibrium Search with path relinking (GES-PR) [28], and the Large Population Island (LPI) frame-work [29] —are focused primarily on the ( K=2) case. For Max-K-Cut, the Multiple-Operator Heuristic (MOH) [30] remains one of the strongest classical heuristics for general K and provides an important benchmark for so-lution quality. In addition, Parameterized Local Search (PLS) has reported competitive Max-K-Cut results on benchmark instances, using both local-search based and ILP variants, making it a relevant classical baseline for evaluating solution quality [31]. Notably, the reported MOH and PLS results are based on CPU implementa-tions. On the other hand, GPU-based dynamical Ising solvers such as Toshiba’s Simulated Bifurcation Machine (SBM) [32] achieve competitive time-to-solution for large Ising problems and have been demonstrated at scales up to one million variables. However, SBM has pri-marily focused on binary optimization problems. In ad-dition, specialized solvers such as Cosm have demon-strated strong performance on sparse Ising optimization instances [33]. In parallel, p-bit-based probabilistic com-puting has emerged as a promising approach for Ising optimization, since many existing platforms are built from binary stochastic units [34–37]. Recent work has extended this paradigm to multi-state problems by de-signing K-state p-bit engines [38–40]. Complementary to these efforts, the GPU-accelerated augmented PAMC framework presented here provides a scalable algorithmic approach that supports both Max-Cut and Max-K-Cut within a common framework. The key contributions of this work are summarized as follows: 
+
+• We augment conventional PAMC with a stagnation-driven temperature control and a uniquely imple-mented non-local cluster move strategy, yielding a com-mon framework for solving both Max-Cut and Max-K-Cut. 
+
+• We implement the framework on a GPU, exploiting the inherent parallelism of its replica population to acceler-ate the solver and achieve a lower time-to-solution than the state-of-the-art on several large G-set instances at matched solution quality. 
+
+• The solver establishes a new best-known Max-Cut so-lution for the G63 instance and new best-known Max-3-Cut solutions for 36 G-set instances. 3     
+
+> FIG. 1. Overview of the augmented PAMC framework proposed here. (a) The framework targets graph partitioning COPs, including Max-Cut and Max-K-Cut. (b) An augmented PAMC framework with a feedback-driven control loop that monitors solution history and activates adaptive temperature control and non-local cluster moves when search progress stalls. (c) Representative Max-Cut result on the G63 instance, illustrating improved solution quality obtained by the augmented PAMC relative to conventional PAMC, including discovery of a new best-known cut value for G63. (d) Conceptual illustration of the population dynamics on an energy landscape. During annealing, replicas initially sample diverse regions of the landscape but may concentrate in local minima. Adaptive reheating and nonlocal cluster moves help restore exploration and guide the population toward high-quality solution regions.
+> II. GPU IMPLEMENTATION AND BENCHMARK SETUP
+
+The augmented PAMC algorithm is implemented on a graphics processing unit (GPU) using CUDA, leveraging optimized libraries such as cuRAND, cuDNN, cuBLAS, and Thrust. All GPU kernels are executed on the Uni-versity of Virginia High Performance Computing (HPC) cluster [41]. The G-set benchmarking experiments were performed on an NVIDIA RTX A6000 GPU (compute capability 8.6), while the large Ising problem evaluation was performed using an eight-GPU NVIDIA A100 (com-pute capability 8.0). We benchmark the proposed framework on instances from the widely used G-set suite [42], a standard testbed for large-scale graph-partitioning solvers. The bench-mark contains instances G1–G81, with graph sizes rang-ing from 800 to 20 ,000 vertices and approximately 4 ,000 to 40 ,000 edges, including both unipolar (+1) and bipo-lar ( ±1) edge weights. Because best-known solutions for several G-set instances continue to be refined, the suite remains an active and informative benchmark for evalu-ating new combinatorial-optimization solvers. In all benchmarking experiments, including both Max-Cut and Max-3-Cut, the algorithm was executed for each graph Gi using the same replica count (=512) and inverse-temperature spacing ∆ β = 0 .02 across all graphs. The number of iterations was also fixed across all graphs, with 2000 iterations for Max-Cut and 400 iterations for Max-3-Cut, and the system was reset after every 400 it-erations. At the same time, the number of Monte Carlo sweeps for Max-Cut was scaled with the graph size, rang-ing from 10 to 400 sweeps, and was kept constant at 100 for Max-3-Cut across all graphs.   
+
+> III. RESULTS A. Population Annealing Monte Carlo
+
+PAMC, first introduced by Hukushima and Iba in 2003, is an advanced population-based extension of Monte Carlo. Rather than propagating a single Markov chain, PAMC evolves a population of spin configurations simul-taneously along an annealing schedule. In its native for-mulation, a population of R independent system replicas is randomly initialized at a high initial temperature β
+
+and then gradually cooled. While this aspect of the al-4gorithm is similar to simulated annealing of the R repli-cas with different initial conditions, population annealing uniquely employs a periodic resampling step to main-tain a Gibbs-like energy distribution for the ensemble as demonstrated in Fig. 2.     
+
+> FIG. 2. (a) Schematic illustration of the energy-dependent resampling step in PAMC. Each panel represents a replica of the system, with energy Eindicated by the vertical ar-row and color shading from high energy (top, purple) to low energy (bottom, green). As the system is cooled from tem-perature T1 to T2, higher-energy replicas are more likely to be discarded, whereas lower-energy replicas are replicated. (b) Replica-energy distributions before and after resampling, showing that resampling shifts the population toward lower energies.
+
+The reweighting factor for a replica j with energy Ej
+
+is exp( −∆βE j ), where ∆ β = βi+1 − βi. The number of copies of replica j is then expressed as 
+
+τj (βi, β i+1 ) = e−(βi+1 −βi)Ej
+
+Q(βi, β i+1 ) , (1) where Q(βi, β i+1 ) is the normalization factor that en-forces P 
+
+> j
+
+τj = 1, 
+
+Q(βi, β i+1 ) = 1
+
+R
+
+> R
+
+X
+
+> j=1
+
+e−(βi+1 −βi)Ej . (2) During resampling, low-energy replicas are preferentially replicated, while high-energy replicas are more likely to be removed from the population. After resampling, the replicas become highly corre-lated. To decorrelate them, each replica undergoes a fixed number of Monte Carlo sweeps using a stochas-tic local spin-update rule, equivalent to the Gibbs sam-pler. This update rule is mathematically equivalent to the stochastic activation used in p-bit neurons, where the output state fluctuates probabilistically according to its input bias, with the effective temperature controlling the strength of the stochastic response [34]. Specifically, for a spin configuration s and site k, the local effective field is 
+
+hk = X
+
+> j
+
+Jkj sj , (3) and the spin is updated according to 
+
+sk ← sgn[tanh( βh k) − (2 r − 1)] , r ∼ U (0 , 1) . (4) where r is drawn from a uniform random distribution over the interval [0 , 1]. During each Monte Carlo sweep, all spins were sequentially updated once in a randomized order, ensuring unbiased sampling of the configuration space. Population annealing collectively utilizes the infor-mation from the samples in parallel to improve the effectiveness of the search. By maintaining population diversity, PAMC achieves broader exploration of the solution landscape while still reinforcing promising candidates.  
+
+> B. PAMC and SA
+
+To elucidate the effect of resampling on the population dynamics, we compared Population Annealing Monte Carlo (PAMC) with Simulated Annealing (SA) baseline. In the SA baseline, R replicas were initialized randomly and evolved independently in parallel. Both methods used the same Gibbs single-spin update rule and the same initialization protocol within each run, so that the algo-rithmic distinction was the presence of the resampling step in PAMC. Each method was evaluated over five in-dependent runs, with different random seeds used across runs. The results in Fig. 3 indicate that resampling signifi-cantly contributes to the improved performance of PAMC over SA on the G53 instance. As shown in Fig. 3(a), PAMC attains a higher Max-Cut value than SA under otherwise matched update and initialization conditions. Since the local stochastic dynamics are held fixed be-tween the two methods, the observed difference is con-sistent with the population-level selection mechanism in-troduced by resampling. The corresponding evolution of the mean normalized pairwise Hamming distance ( ¯dH), shown in Fig. 3(b), fur-ther illustrates this effect, where ¯dH is computed by av-eraging the normalized pairwise Hamming distances over all replica pairs. Details of the normalized pairwise Ham-ming distance ( dH) calculation are provided in Supple-mentary Material S1 A. In the PAMC approach, ¯dH de-creases rapidly during the annealing process, indicating increasing structural concentration of the replica popu-lation. This concentration occurs concurrently with the 5
+
+FIG. 3. Comparison of PAMC and SA on the G53 (N: 1000; E: 5914) Max-Cut instance using replicas (=512). (a) Best Max-Cut value obtained by each method. (b) Evolution of ¯dH
+
+among replicas across annealing iterations. (c) Distribution summary (mean and standard deviation) of the dH among replicas with the same final energies. 
+
+attainment of the ground-state cut value, suggesting that the population is being selectively concentrated around high-quality regions of the configuration space rather than collapsing arbitrarily. In contrast, the SA replicas exhibit a larger ¯dH and quickly approach a plateau, in-dicating that independently evolving trajectories remain more widely dispersed in configuration space and lack a mechanism to propagate favorable configurations across the ensemble. Fig. 3(c) provides a complementary view by examining the distribution of dH among replicas with the same ener-gies at the final iteration. For SA, replicas with identical final energy exhibit a larger mean dH, indicating that in-dependent trajectories can terminate in structurally dis-tinct configurations of comparable quality. In PAMC, the lower mean dH at comparable energies indicates stronger population concentration within favorable regions. At the same time, the finite standard deviation shows that the population does not collapse to a single configura-tion, but retains structural variability within these re-gions. Taken together, Fig. 3(b,c) suggests that resam-pling promotes population-level refinement, while sub-sequent MCMC sweeps preserve sufficient variability to maintain local exploration. 
+
+Algorithm 1: Augmented PAMC with Adaptive Temperature and Non-local Cluster Moves 
+
+Input : Coupling matrix J; population size R;sweeps per step S; target cut MC ⋆; reset threshold zrst ; initial inverse temperature β0;annealing increment ∆ β; cluster-move cooldown τ ; number of top configurations n
+
+Output: Best cut value M ∗ 
+
+> 1
+
+Initialization: ; Generate a randomly initialized population P of R replicas;  
+
+> 2
+
+Set z ← 1; cycle ← 0; β ← β0; ∆ ← ∆β 
+
+> 3
+
+Initialize M ∗ ← 0; enable-cluster-move ← false ;cooldown ← 0 
+
+> 4
+
+while M ∗ < MC ⋆ do  
+
+> 5
+
+if z > 1 then  
+
+> 6
+
+Resample P by Boltzmann weights of the current energies with increment ∆ 
+
+// Non-local Cluster Moves  
+
+> 7
+
+if enable-cluster-move and cooldown = 0 then  
+
+> 8
+
+Apply non-local cluster moves to the n top configurations  
+
+> 9
+
+enable-cluster-move ← false ; cooldown 
+
+← τ 
+
+> 10
+
+Run S MCMC updates on every replica at inverse temperature β 
+
+> 11
+
+M ∗ ← max  M ∗, max Cut (P) 
+
+> 12
+
+Record M ∗ in the recent-progress history 
+
+// Adaptive temperature control  
+
+> 13
+
+if cooldown = 0 and history is long enough then  
+
+> 14
+
+if Diversity( history ) is very low then  
+
+> 15
+
+β ← 0.8 β; ∆ ← ∆β;enable-cluster-move ← true  
+
+> 16
+
+else if β > β 0 then  
+
+> 17
+
+∆ ← − ∆β 
+
+> 18
+
+else  
+
+> 19
+
+break  
+
+> 20
+
+if z ≥ zrst then 
+
+// Restart annealing schedule  
+
+> 21
+
+cycle ← cycle + 1; z ← 1; β ← β0 
+
+> 22
+
+∆ ← ∆β; enable-cluster-move ← false ;cooldown ← 0 
+
+> 23
+
+else  
+
+> 24
+
+z ← z + 1; β ← β + ∆  
+
+> 25
+
+if cooldown > 0 then  
+
+> 26
+
+cooldown ← cooldown −1 
+
+> 27
+
+return M ∗
+
+C. Augmented PAMC 
+
+As noted earlier, the PAMC framework was further ex-tended with two enhancements as summarized in Algo-rithm 1 to improve the solution quality and convergence speed. 
+
+• Non-local Cluster Moves (NCM) : A known lim-itation of local spin-flip updates in MCMC and con-ventional PAMC is that the system can get trapped in clusters of states separated by barriers that single-spin 6
+
+> FIG. 4. Evolution of replica diversity during annealing for the G62 (N: 7000; E: 14000) instance using replicas (=512). The distributions show the normalized pairwise Hamming distances between all replica pairs at selected annealing iterations for (a) conventional PAMC and (b) augmented PAMC. The insets show frontal views of the same distributions to better visualize population spread. The augmented PAMC maintains a richer diversity over intermediate distances and attains a higher-quality solution (Max-Cut 4864) than the conventional PAMC (Max-Cut 4860).
+
+updates cannot efficiently overcome. To mitigate this, the non-local move strategy introduces non-local up-dates by identifying iso-sites, that is, variables (spins) where the local field is exactly balanced, so flipping them does not alter the system energy. From these iso-sites, a maximal independent set (MIS) is constructed using randomized selection, in which the iso-sites are randomly permuted, the first site is selected, and each subsequent site is added only if it has zero coupling to all previously selected sites. This procedure is repeated for a fixed number of times, and the largest result-ing subset of independent spins is flipped simultane-ously. Thus, the move preserves energy while providing a mechanism for the system to traverse otherwise dis-connected regions of the configuration space. Within PAMC, NCM is invoked periodically when population dynamics stall. By enabling larger collective moves, NCM diversifies the population and increases the like-lihood of escaping plateaus. This contributes to better convergence properties and improved final cut values in Max-Cut optimization benchmarks. 
+
+• Adaptive Temperature Control : Another critical component of PAMC is the annealing schedule, which determines how the inverse temperature β is updated during the search. Rather than relying entirely on a fixed linear or exponential schedule, PAMC uses an adaptive control rule based on the recent evolution of the best cut value in the population. Specifically, the algorithm monitors the number of distinct best-cut values observed over recent temperature windows to distinguish short-term stagnation from stronger stag-nation. In the experiments reported here, we used the following rule. If the recent 25-step window con-tains at most three distinct best-cut values, while the recent 40-step window contains more than five, the algorithm identifies mild stagnation and reverses the inverse-temperature update, temporarily reheating the population to restore exploration. If both windows in-dicate stagnation, the algorithm applies a stronger in-tervention by reducing the inverse temperature by a factor of 0 .8 and activating the iso-cluster move. Once progress resumes, the algorithm returns to the usual cooling direction. This adaptive schedule therefore reg-ulates the level of randomness according to the popu-lation’s optimization progress, balancing continued ex-ploration with local refinement. We examine how these enhancements influence the effi-ciency of landscape exploration within PAMC. In partic-ular, we compare a conventional PAMC implementation with the augmented version that incorporates an adap-tive temperature schedule and non-local cluster moves. This comparison allows us to isolate the effect of these enhancements on the population dynamics while holding the other algorithmic settings fixed. To quantify the extent of landscape exploration, we monitored the diversity among replicas at intermediate stages of the algorithm using dH. This metric mea-sures structural dissimilarity between candidate solu-tions. By tracking its evolution over time, we can de-termine whether the population rapidly collapses into a single basin or continues to explore multiple regions of the solution space. The results, shown in Fig. 4, reveal a clear difference between the two cases. As observed in Fig. 4(a), conventional PAMC quickly converges to a narrow region of the solution space, as indicated by the rapid decrease in dH. After this initial collapse, the repli-7cas remain confined to the same basin until the end of the run, suggesting limited exploration capability. In contrast, Fig. 4(b) shows that the augmented PAMC maintains a higher level of diversity throughout the run. The inclusion of nonlocal cluster moves enables occasional energy-preserving long-range transitions, in-creasing the likelihood that replicas escape locally con-fined regions. At the same time, the adaptive temper-ature controller introduces additional stochasticity by temporarily reheating the population. By reducing the inverse temperature β, this reheating step increases the likelihood of energetically unfavorable spin updates and further helps replicas move away from locally trapped configurations. As a result, even at later iterations of the annealing process, the ensemble retains a broad distribu-tion of dH, typically in the range of (0.1) to (0.3). This suggests that multiple regions of the energy landscape continue to be explored during the later iterations of the run.    
+
+> D. Impact of PAMC Parameters
+> FIG. 5. Genealogical evolution of the replica population (R= 512) in PAMC for the G55 (N: 5000; E: 12498) Max-Cut instance under two different temperature-step sizes. Each color represents a replica, and the persistence or disappear-ance of colors indicates how resampling evolves the population during annealing.
+
+Although the pairwise Hamming distance captures the structural diversity among replicas, it does not fully ex-plain how this diversity is shaped by the resampling mechanism. To better understand this process, we turn to lineage analysis, which provides a direct view of how replica families evolve and compete during the anneal-ing process. The lineage plots in Fig. 5 show that the effect of resampling in PAMC is strongly modulated by the temperature-step size and that the optimal sched-ule depends on the graph instance. In these plots, each color represents an ancestral lineage, so the persistence or disappearance of colors provides a direct view of how strongly resampling concentrates the population as the temperature is lowered. For G55 instance, the final Max-Cut solution changes noticeably with the temperature discretization, and the associated lineage plots indicate that coarse temperature steps lead to rapid genealogical collapse. In this regime, resampling becomes too strong, causing a few lineages to dominate early and eliminating alternative families before they can be sufficiently refined by the MCMC updates. As a result, the population loses diversity too quickly and is more likely to become trapped in suboptimal basins. By contrast, a finer temperature schedule mitigates this effect by producing a more grad-ual reduction in lineage diversity, thereby preserving ex-ploration for longer, and allowing multiple families to compete over a wider range of temperatures, which re-sults in an improved final Max-Cut solution. For this finer schedule, the number of MCMC sweeps per tem-perature stage was reduced from (400) to (10), since the smaller spacing between successive temperatures leads to a more gradual change in the target distribution and therefore requires less local re-equilibration at each step. The choice also avoids an excessive increase in total com-putational cost due to the larger number of temperature levels. These results show that temperature-step size acts as a practical control on the exploration-refinement balance in PAMC, such that coarse steps strengthen selection and can accelerate convergence on favorable landscapes, whereas fine steps preserve diversity and are more ef-fective for rugged instances where extended competition among lineages is required. More broadly, these diagnos-tics provide insight into how PAMC interacts with the energy landscape induced by each graph instance and reveal how the structure of the instance affects the algo-rithmic dynamics. Fig. 6 examines the effect of two key computational parameters on PAMC performance for the G62 instance: the number of replicas and the number of MCMC sweeps, which directly control the breadth of population-level ex-ploration and the depth of local refinement, respectively. In both cases, the results show that improved solution quality comes at an increased computational cost, but the gains are not proportional across the full parameter range. For Fig. 6(a), increasing the number of replicas generally improves the Max-Cut value, indicating that a larger population enhances the ability of PAMC to sam-ple and preserve promising regions of the configuration space. With more replicas, the algorithm can maintain broader coverage of the landscape during the annealing process, which increases the probability that high-quality basins are discovered and retained through resampling. This trend is visible from (64) to (512) replicas, where the distribution of Max-Cut values shifts upward. However, the improvement becomes much smaller between (512) and (1024) replicas, while the mean runtime increases sharply. These results indicate a regime of diminish-ing returns: beyond a certain population size, additional replicas substantially increase computational cost while yielding only marginal gains in solution quality. Thus, increasing the replica count improves exploration up to a point, but further increases may not be cost-effective unless the goal is to maximize solution quality regardless 8  
+
+> FIG. 6. Effect of the number of replicas and MCMC sweeps on PAMC performance for the G62 (N: 7000; E: 14000) Max-Cut instance. (a) Max-Cut values obtained for different replica counts at sweep (=400). Mean runtime shown on the sec-ondary axis. (b) Max-Cut values obtained for different num-bers of sweeps at replica count (=512), with mean runtime shown on the secondary axis.
+
+of runtime. For Fig. 6(b), increasing the number of sweeps also improves the Max-Cut value initially, showing that local refinement through additional MCMC updates helps the replicas better exploit the basins they occupy. In partic-ular, moving from very few sweeps to a moderate number produces a clear improvement, indicating that insufficient local equilibration can limit performance. However, be-yond this range, the Max-Cut values begin to plateau, while the runtime continues to rise substantially. The re-sults therefore show that simply increasing the amount of local refinement does not guarantee continued improve-ment in solution quality. Once the replicas have already been refined adequately within their current basins, ad-ditional sweeps mostly increase computational cost with-out producing comparable gains. This again highlights a diminishing-return effect, now with respect to local search effort rather than population size. Overall, the figure shows that both population size and local refinement depth must be balanced carefully, and neither parameter should be increased indefinitely. For the G62 instance, the results indicate that moderate-to-large values are sufficient to obtain most of the achievable gain, while very large values primarily increase runtime. Therefore, the result highlights the practical trade-off be-tween solution quality and computational cost, and sug-gests that efficient PAMC performance depends on iden-tifying a parameter regime in which the marginal im-provement in Max-Cut remains in proportion with the additional time and resource investment.  
+
+> E. Max-Cut
+
+The augmented PAMC solver was benchmarked against SBM by evaluating two key metrics: a) Time-to-solution (TTS) and b) Solution quality. The SBM provides a stringent reference point because it has re-ported state-of-the-art time-to-solution performance on the same G-set benchmark suite, making it a strong base-line for evaluating the runtime efficiency of the proposed PAMC framework [32]. TTS is the total time required for a solver to reach a target solution with 99% success probability and is expressed as; TTS = Tcom · log(1 − 0.99) log(1 − Ps) , (5) where Tcom is the total compute time per run, and Ps is the empirical success probability. The first experiment evaluated the TTS required by PAMC to reach the Max-Cut value reported by SBM for each benchmark instance. For each graph, the target solution was fixed to SBM’s reported best cut value. We launched 100 independent PAMC runs and terminated each run as soon as the tar-get solution was reached. The wall-clock time required to reach the target was recorded as the total compute runtime Tcom for that run. For each candidate runtime Tcom , the empirical success probability Ps(Tcom ) was calculated as the fraction of the 100 independent runs that reached the target (SBM best cut) within that time. TTS was then computed for each candidate pair {Tcom , P s(Tcom )}, and the lowest TTS value obtained over this scan was reported. Table I presents the TTS computed for PAMC with those reported for SBM. In the main text, we focus on the harder benchmark instances for which SBM reports TTS greater than 7000 s. This selection emphasizes graphs where the runtime is governed mainly by the difficulty of exploring the optimization landscape. This is im-portant because our current GPU implementation is not yet performance-optimized, and hence smaller and easier graphs are reflective of implementation costs more than algorithmic efficiency. Nevertheless, detailed results for all the instances have been presented in Supplementary Note S1 B. The results indicate that on several larger and more challenging graphs, PAMC attains the same cut value as SBM in a comparatively shorter runtime as shown in Table I. The second benchmark experiment evaluated solution quality under a fixed runtime budget, using SBM’s re-ported TTS as the reference wall-clock time for each in-stance. To do so, we compared the solutions obtained by PAMC with SBM’s, while allowing the PAMC solver a runtime budget Tcom approximately equal to the TTS re-ported by SBM. Each graph was executed 10 times. For 9
+
+TABLE I. Comparison of the time-to-solution (TTS) of SBM and PAMC on selected G-set benchmark instances, using the solution reported by SBM as target solution quality. For each graph, the table lists the best-known cut value, the SBM solution used as the target, and the corresponding TTS and success probability Ps for both SBM and PAMC. Statistics are computed over 100 independent runs. Graphs shown in parentheses were evaluated using only 10 independent runs. The PAMC speedup is computed as the ratio of the SBM TTS to the PAMC TTS. Instances in which PAMC achieves a lower TTS than SBM for the same target solution quality are highlighted in bold. Entries marked as “–” correspond to instances for which PAMC was unable to reach the target solution quality with the specified parameter settings across all runs.                                                                                                                          
+
+> Graph nBest-known SBM Sol. SBM [32] PAMC Speedup TTS (s) PsTTS (s) Ps
+> G35 2000 7687 7686 8319 0.0005 348.30 0.60 23.88 ×
+> G36 2000 7680 7680 62647 0.0001 12361.42 0.02 5.07 ×
+> G37 2000 7691 7691 27343 0.0002 11244.34 0.02 2.43 ×
+> G58 5000 19294 19283 21638 0.0010 9062.50 0.93 2.39 ×
+> G59 5000 6088 6086 22651 0.0010 ---G60 7000 14190 14186 21827 0.0010 25798.32 0.51 0.85 ×
+> G61 7000 5798 5796 10883 0.0020 ---G62 7000 4872 4862 20501 0.0010 20931.07 0.81 0.98 ×
+> G63 7000 27045 27023 31279 0.0010 5345.05 0.96 5.85 ×
+> G64 7000 8752 8739 31448 0.0010 75175.96 0.15 0.42 ×
+> G66 9000 6364 6342 27408 0.0010 7099.79 0.99 3.86 ×
+> G70 10000 9595 9578 31599 0.0010 12804.60 0.99 2.47 ×
+> (G77) 14000 9940 9904 46760 0.0010 22225 1.00 2.10 ×
+> (G81) 20000 14060 13392 62194 0.0010 37397 1.00 1.66 ×
+
+TABLE II. Comparison of solution quality between SBM and PAMC on selected G-set benchmark instances, evaluated at a target runtime equal to SBM’s time-to-solution (TTS). The selected instances are those for which SBM reports a TTS greater than 7000 s. For each graph, the table reports the best-known cut value, SBM’s TTS, the solution obtained by SBM, the solution obtained by PAMC with the same target time, and the best overall solution.                                                                                           
+
+> Graph nBest-known SBM TTS SBM Sol. PAMC Sol. Best Sol. Achieved G35 2000 7687 8319 7686 7686 7687
+> G36 2000 7680 62647 7680 7680 7680 G37 2000 7691 27343 7691 7691 7691 G58 5000 19294 21638 19283 19286 19293
+> G59 5000 6088 22651 6086 6073 6080 G60 7000 14190 21827 14186 14186 14188
+> G61 7000 5798 10883 5796 5791 5798
+> G62 7000 4872 20501 4862 4862 4866
+> G63 7000 27045 31279 27023 27031 27047*
+> G64 7000 8752 31448 8739 8732 8750
+> G66 9000 6364 27408 6342 6346 6356
+> G70 10000 9595 31599 9578 9586 9592
+> G77 14000 9940 46760 9904 9908 9918
+> G81 20000 14060 62194 13392 14008 14014
+
+each graph, the best solution achieved across 10 runs was recorded. The best solutions achieved across these runs are shown in Table II (Best Sol. Achieved). The com-parable solutions are those generated with 100% prob-ability across all runs also shown in Table II (PAMC Sol.). A total of 6 out of 14 graphs achieved better so-lutions than SBM, with 5 graphs generating the same solution as SBM when run for an equal amount of time. On the other hand, when considering only the best so-lutions achieved across the 10 runs, PAMC equaled or outperformed SBM in all the graphs considered in Ta-ble II except one. The solver also found a new best-known solution for the G63 instance. A spin configura-tion corresponding to the best-known Max-Cut for the G63 instance can be found at [43]. 
+
+F. Max-3-Cut 
+
+As noted earlier, approaches based on binary Ising for-mulations naturally support Max-Cut but require an ad-ditional mapping step for Max-K-Cut with ( K > 2). This mapping introduces auxiliary variables and inflates the effective problem size, which can affect time-to-solution, solution quality, and energy efficiency in both physical hardware and digital emulators. To avoid this overhead, we adopt the (q)-state Potts model, a stan-dard statistical-physics generalization of the Ising model in which each spin can occupy one of (q) discrete states [44, 45]. For Max-K-Cut, we set (q= K), so each graph vertex is represented directly by a single K-state Potts spin. Thus, no graph-conversion step or auxiliary binary expansion is required, and the problem size remains equal to the original input graph. Here, we focus on the Max-10 3-Cut case as a representative multi-state benchmark, although the same Potts-based formulation is applicable to Max-K-Cut with K > 3. 
+
+TABLE III. Comparative Max-3-Cut (M3C) results for G-set instances on which our solver improves the previously best-known Max-3-Cut solution. ∆ = M 3COur-Work −
+
+M 3CBest-Known ; ‘–’ indicates that the solution to the instance was not reported in the work; MOH: Multi-Operator Heuris-tic; n: nodes; m: edges. Entries marked with ( ∗) were ob-tained using the second update strategy, based on cascaded p-bits for Gibbs sampling.                                                                                                                                                                                                                                                                                                
+
+> Graph nmMOH [30] PLS [31] Our ∆LS ILP G16 800 4672 3991 ––3992 1G17 800 4667 3983 ––3986 3G21 800 4667 1109 ––1110 1G22 2000 19990 17167 ––17169 2G23 2000 19990 17168 ––17172 4G25 2000 19990 17163 17164 –17167 3G26 2000 19990 17154 17155 –17157 2G28 2000 19990 3973 3975 –3978 3G29 2000 19990 4106 ––4110 4G30 2000 19990 4119 ––4121 2G31 2000 19990 4003 4005 –4008 3G35 2000 11778 10046 10048 –10058 10 G36 2000 11766 10039 ––10047 8G37 2000 11785 10052 10053 10053 10058 5G38 2000 11779 10040 ––10054 14 G39 2000 11778 2903 ––2910 7G40 2000 11766 2870 2871 –2878 7G41 2000 11785 2887 2888 –2889 1G42 2000 11779 2980 ––2983 3G48 3000 6000 6000 ––6000* 0G49 3000 6000 6000 ––6000* 0G50 3000 6000 6000 ––6000* 0G51 1000 5909 5037 ––5039 2G52 1000 5916 5040 ––5043 3G53 1000 5914 5039 ––5042 3G54 1000 5916 5036 ––5040 4G56 5000 12498 4752 4757 –4763 6G57 5000 10000 4083 4092 4103 4114 11 G58 5000 29570 25195 ––25216 21 G59 5000 29570 7262 7276 –7309 33 G60 7000 17148 17076 ––17082 6G61 7000 17148 6853 6861 –6872 11 G62 7000 14000 5685 5710 5706 5731 21 G63 7000 41459 35322 35318 –35355 33 G64 7000 41459 10443 10437 –10508 65 G65 8000 16000 6490 6512 6535 6544 9G66 9000 18000 7416 7442 7443 7475 32 G67 10000 20000 8086 8116 8141 8152 11 G70 10000 9999 9999 ––9999* 0G72 10000 20000 8192 8244 8244 8259 15
+
+For the Max-K-Cut problem, each vertex is assigned a Potts spin σi ∈ { 1, 2, . . . , K }, allowing direct optimiza-tion over K partitions without reducing the problem to a binary Ising form. The energy of a configuration is defined as 
+
+E(σ) = − X
+
+> i,j
+
+Jij 
+
+ 2δ(σi, σ j ) − 1, (6) where δ(.) is the Kronecker delta. In this formulation, the coupling Jij is edge dependent but not label depen-dent, which is appropriate for Max-K-Cut because all partitions are equivalent and the objective depends only on whether adjacent vertices share the same label. This form penalizes assignments in which adjacent vertices oc-cupy the same partition and favors assignments in differ-ent partitions. For each vertex i, a k-label local field is formed, syn k(i) = X
+
+> j
+
+Jij δ(σj , k ), k = 1 , . . . , K, (7) which measures the weighted influence of neighbors cur-rently occupying state k.We then update the state of the vertex i using two com-plementary methods. The first method is a randomized softmax-based K-state spin update, in which the K-label local field is converted into a softmax distribution over the possible spin states. For k = 1 , . . . , K , the condi-tional softmax probability is 
+
+P (σi = k | { σj }) = exp( β syn k(i)) 
+
+PKm=1 exp( β syn m(i)) . (8) The resulting probabilities are then used in a stochastic update rule. Specifically, each probability is perturbed by independent uniform noise, and the new state is selected as 
+
+σi ← arg max  
+
+> k
+
+[P (σi = k | σj ) − γU k] , (9) where Uk ∼ U (0 , 1) and γ controls the noise amplitude. The second method is an exact cascaded binary p-bit sampler derived specifically for the ( K = 3) case. Rather than sampling directly from a three-state softmax dis-tribution, this method decomposes the same three-state Gibbs update into two sequential binary stochastic de-cisions. The cascade reproduces the exact three-state Potts conditional distribution while using only binary probabilistic updates, providing a binary-compatible for-mulation of the Max-3-Cut Gibbs sampler. The full derivation of the cascaded sampler is provided in sup-plementary material S1 C. Although the cascaded con-struction exactly reproduces the three-state Gibbs condi-tional distribution, our empirical results in Table III indi-cate that, in the present GPU implementation, the direct softmax update is more efficient for most benchmark in-stances. An exception is observed for the tripartite G-set instances, namely G48, G49, G50, and G70, where the cascaded binary sampler performs competitively or fa-vorably. Understanding this instance-dependent behav-ior, and whether binary-compatible Potts sampling can be further optimized for structured graph classes, will be investigated in future work. For each graph instance, the algorithm was run 10 times independently, and the best solution obtained across these runs is reported for these 36 graph instances on which the solver establishes new best-known Max-3-Cut solutions. Extended Max-3-Cut results are provided in Supplementary Material S1 B. 
+
+G. Scalability on a Large-Scale Ising Problem 
+
+Inspired by SBM results, we also evaluate the scal-ability of the proposed augmented PAMC solver be-11     
+
+> FIG. 7. Scalability of the augmented PAMC solver on an ultra-large fully connected Ising problem with N= 100 ,000 spins.
+
+yond the Gset graph sizes. We considered a large, fully connected Ising instance with N = 100 , 000 spins and signed weights. The instance was generated using the pseudocode described in [32]. Since the graph is fully connected, it represents a substantially larger and com-plementary dense Ising instance than the sparse G-set graphs considered above. For this problem, the expected ground state energy was estimated using the Parisi-limit expression also re-ported in [32]. The augmented PAMC solver reached the estimated target cut value in approximately 10 4 seconds, as shown in Fig. 7. This result suggests that the pro-posed framework can be extended to large dense Ising instances.  
+
+> IV. CONCLUSION
+
+This work presented an augmented Population Anneal-ing Monte Carlo framework for large-scale combinato-rial optimization. The method combines population re-sampling with stagnation-driven temperature control and energy-preserving nonlocal cluster moves, allowing the replica population to concentrate around promising solu-tion regions while retaining sufficient diversity to avoid premature convergence. The framework was implemented on a GPU and ap-plied to both Max-Cut and Max-K-Cut within a common computational architecture. On G-set Max-Cut bench-marks, the augmented PAMC solver achieves compet-itive time-to-solution relative to the simulated bifurca-tion machine, improves the best-known solution for the G63 instance, and matches or improves solution quality on most tested large instances under comparable run-time budgets. For Max-3-Cut, the solver establishes new best-known solutions on 36 G-set instances, demonstrat-ing that the approach extends beyond binary Ising for-mulations. The solver also scales to a fully connected 100,000-spin Ising instance. Taken together, these results show that feedback-controlled population dynamics provide an effective and GPU-compatible strategy for steering stochastic search in large, complex energy landscapes. 
+
+> ACKNOWLEDGMENTS
+
+The authors gratefully acknowledge Prof. Kerem Cam-sari for his valuable input. This work was supported by the National Science Foundation grant # 2132198. The authors also acknowledge support from a DAC Analytics Resource Award from the University of Virginia. 12 
+
+[1] K. Seo, S. Hyun, and Y.-H. Kim. An edge-set rep-resentation based on a spanning tree for searching cut space. IEEE Transactions on Evolutionary Computation ,19(4):465–473, 2015. [2] U. Benlic and J.-K. Hao. A multilevel memetic approach for improving graph k-partitions. IEEE Transactions on Evolutionary Computation , 15(5):624–642, 2011. [3] N. Metropolis, A. W. Rosenbluth, M. N. Rosenbluth, A. H. Teller, and E. Teller. Equation of state calculations by fast computing machines. The Journal of Chemical Physics , 21(6):1087–1092, 1953. [4] S. Kirkpatrick, C. D. Gelatt, and M. P. Vecchi. Optimiza-tion by simulated annealing. Science , 220(4598):671–680, 1983. [5] Y. Iba. Population Monte Carlo algorithms. Transac-tions of the Japanese Society for Artificial Intelligence ,16(2):279–286, 2001. [6] D. J. Earl and M. W. Deem. Parallel tempering: Theory, applications, and new perspectives. Physical Chemistry Chemical Physics , 7(23):3910–3916, 2005. [7] K. Hukushima and Y. Iba. Population annealing and its application to a spin glass. In The Monte Carlo Method in the Physical Sciences: Celebrating the 50th Anniversary of the Metropolis Algorithm , volume 690 of AIP Confer-ence Proceedings , pages 200–206. American Institute of Physics, 2003. [8] K.-P. Huang, C.-F. Nien, Y.-T. Zhang, C.-K. Lee, and Y.-C. Wang. GPU-based Ising machine for solving com-binatorial optimization problems with enhanced parallel tempering techniques. In 2024 IEEE Asia Pacific Con-ference on Circuits and Systems (APCCAS) , pages 636– 640, Taipei, Taiwan, 2024. IEEE. [9] Z. Zhu, C. Fang, and H. G. Katzgraber. borealis—A gen-eralized global update algorithm for Boolean optimiza-tion problems. Optimization Letters , 14(8):2495–2514, 2020. [10] C. Delacour, M. M. H. Sajeeb, J. P. Hespanha, and K. Y. Camsari. Two-dimensional parallel temper-ing for constrained optimization. Physical Review E ,112(2):L023301, 2025. [11] S. Nikhar, S. Kannan, N. A. Aadit, S. Chowdhury, and K. Y. Camsari. All-to-all reconfigurability with sparse and higher-order Ising machines. Nature Communica-tions , 15(1):8977, 2024. [12] W. Wang, J. Machta, and H. G. Katzgraber. Comparing Monte Carlo methods for finding ground states of Ising spin glasses: Population annealing, simulated annealing, and parallel tempering. Physical Review E , 92(1):013303, 2015. [13] C. Amey and J. Machta. Analysis and optimization of population annealing. Physical Review E , 97(3):033301, 2018. [14] L. Yu. Barash, M. Weigel, M. Borovsk´ y, W. Janke, and L. N. Shchur. GPU accelerated population annealing al-gorithm. Computer Physics Communications , 220:341– 350, 2017. [15] A. Barzegar, F. Hamze, C. Amey, and J. Machta. Opti-mal schedules for annealing algorithms. Physical Review E, 109(6):065301, 2024. [16] A. Barzegar, C. Pattison, W. Wang, and H. G. Katz-graber. Optimization of population annealing Monte Carlo for large-scale spin-glass simulations. Physical Re-view E , 98(5):053308, 2018. [17] P. L. Ebert, D. Gessert, and M. Weigel. Weighted av-erages in population annealing: Analysis and general framework. Physical Review E , 106(4):045303, 2022. [18] M. Weigel, L. Barash, L. Shchur, and W. Janke. Under-standing population annealing Monte Carlo simulations. 
+
+Physical Review E , 103(5):053301, 2021. [19] D. Cirauqui, M. ´A. Garc´ ıa-March, J. R. Mart´ ınez Saave-dra, M. Lewenstein, and P. R. Grzybowski. Population annealing with topological defect driven nonlocal updates for spin systems with quenched disorder. Physical Review B, 109(14):144202, 2024. [20] L. Ingber. Very fast simulated re-annealing. Mathemati-cal and Computer Modelling , 12(8):967–973, 1989. [21] M. Karabin and S. J. Stuart. Simulated annealing with adaptive cooling rates. The Journal of Chemical Physics ,153(11):114103, 2020. [22] H. G. Katzgraber, S. Trebst, D. A. Huse, and M. Troyer. Feedback-optimized parallel tempering Monte Carlo. 
+
+Journal of Statistical Mechanics: Theory and Experi-ment , 2006(03):P03018, 2006. [23] B. Miasojedow, E. Moulines, and M. Vihola. An adaptive parallel tempering algorithm. Journal of Computational and Graphical Statistics , 22(3):649–664, 2013. [24] K. D. Boese and A. B. Kahng. Best-so-far vs. where-you-are: implications for optimal finite-time annealing. 
+
+Systems & Control Letters , 22(1):71–78, 1994. [25] J. Houdayer. A cluster Monte Carlo algorithm for 2-dimensional spin glasses. The European Physical Journal B, 22(4):479–484, 2001. [26] Z. Zhu, A. J. Ochoa, and H. G. Katzgraber. Efficient cluster algorithm for spin glasses in any space dimension. 
+
+Physical Review Letters , 115(7):077201, 2015. [27] U. Benlic and J.-K. Hao. Breakout local search for the Max-Cut problem. Engineering Applications of Artificial Intelligence , 26(3):1162–1173, 2013. [28] V. P. Shylo, F. Glover, and I. V. Sergienko. Teams of global equilibrium search algorithms for solving the weighted maximum cut problem in parallel. Cybernetics and Systems Analysis , 51(1):16–24, 2015. [29] O. Goudet, A. Go¨ effon, and J.-K. Hao. A large pop-ulation island framework for the unconstrained binary quadratic problem. Computers & Operations Research ,168:106684, 2024. [30] F. Ma and J.-K. Hao. A multiple search operator heuris-tic for the max-k-cut problem. Annals of Operations Re-search , 248(1):365–403, 2017. [31] J. Garvardt, N. Gr¨ uttemeier, C. Komusiewicz, and N. Morawietz. Parameterized local search for Max c-Cut. 
+
+arXiv preprint arXiv:2409.13380, 2024. [32] H. Goto, K. Endo, M. Suzuki, Y. Sakai, T. Kanao, Y. Hamakawa, R. Hidaka, M. Yamasaki, and K. Tat-sumura. High-performance combinatorial optimiza-tion based on classical mechanics. Science Advances ,7(6):eabe7953, 2021. [33] K. M. Zick, N. Shukla, and A. Marakov. Cosm: Collec-tive switched motion for fast and accurate sparse Ising optimization. arXiv preprint arXiv:2605.30355, 2026. [34] K. Y. Camsari, R. Faria, B. M. Sutton, and S. Datta. Stochastic p-bits for invertible logic. Physical Review X ,13 
+
+7(3):031014, 2017. [35] N. A. Aadit, A. Grimaldi, M. Carpentieri, L. Theogara-jan, J. M. Martinis, G. Finocchio, and K. Y. Camsari. Massively parallel probabilistic computing with sparse Ising machines. Nature Electronics , 5(7):460–468, 2022. [36] W. A. Borders, A. Z. Pervaiz, S. Fukami, K. Y. Cam-sari, H. Ohno, and S. Datta. Integer factorization using stochastic magnetic tunnel junctions. Nature ,573(7774):390–393, 2019. [37] S. Yang, A. Grimaldi, Y. Bao, E. Raimondo, J. Si, G. Finocchio, and H. Yang. 250 magnetic tun-nel junctions-based probabilistic Ising machine. arXiv preprint arXiv:2506.14590, 2025. [38] M. K. Bashar, A. Hasan, and N. Shukla. Designing a K-state p-bit engine. arXiv preprint arXiv:2403.06436, 2024. [39] S. Cheong, S. H. Lee, J. Han, J.-Y. Park, D. H. Shin, Y. H. Jang, S. K. Shim, S. Kim, C. S. Hwang, and J.-K. Han. Multi-state probabilistic computing using floating-body MOSFETs based on the Potts model for solving complex combinatorial optimization problems. Advanced Materials , 38(16):e2516797, 2026. [40] C. Duffee, J. Athas, A. Grimaldi, D. Volpe, G. Finoc-chio, E. Wei, and P. Khalili Amiri. P-dits: Probabilis-tic d-dimensional bits for extended-variable probabilistic computing. Physical Review Applied , 24:044077, 2025. [41] University of Virginia Research Computing. UVA Re-search Computing. 2026. [Online]. Accessed: Jun. 21, 2026. Available: https://rc.virginia.edu/ 
+
+[42] C. Helmberg and F. Rendl. Gset: Max-cut bench-mark instances. 2000. Generated with the machine-independent graph generator RUDY by Giovanni Ri-naldi; hosted/maintained by Yinyu Ye. [Online]. Avail-able: https://web.stanford.edu/~yyye/yyye/Gset/ 
+
+[43] N. Khan and N. Shukla. New best-known Max-Cut solu-tion for the G63 instance in the G-set benchmark. arXiv preprint arXiv:2510.21105, 2025. [44] R. B. Potts. Some generalized order-disorder transforma-tions. Mathematical Proceedings of the Cambridge Philo-sophical Society , 48(1):106–109, 1952. [45] F. Y. Wu. The Potts model. Reviews of Modern Physics ,54(1):235–268, 1982. 14 
+
+SUPPLEMENTARY MATERIAL A. Hamming Distance Computation to Measure Replica Diversity 
+
+To quantify the diversity among replicas during the optimization process, we computed the pairwise Hamming distance between replica configurations at each stage. For an ensemble of R replicas, the total number of distinct replica pairs is 
+
+R(R − 1) 2 .
+
+For each pair of replicas, we measured the Hamming distance ( dH) as the number of bit positions at which the two configurations differ. This distance was then normalized by the total number of bits, yielding 
+
+dH ∈ [0 , 1] ,
+
+where d = 0 indicates identical configurations and d = 1 indicates configurations that differ at every bit. Since the Max-Cut objective is invariant under a global bit flip, two complementary configurations represent the same cut. Therefore, a distance close to 1 may correspond to an equivalent solution rather than a genuinely different one. To account for this symmetry, we defined the corrected distance as 
+
+dH = min( d, 1 − d).
+
+This corrected distance lies in the interval 
+
+dH ∈ [0 , 0.5] .
+
+Values close to 0 indicate that the replicas correspond to the same or nearly identical cuts, whereas larger values indicate that the replicas occupy genuinely distinct regions of the solution space. The distribution of dH over all replica pairs was tracked over the course of the run to assess whether the ensemble maintained diversity or collapsed into a common basin. 
+
+B. Detailed results of Augmented PAMC implemented on a GPU 
+
+1. Max-Cut 
+
+TABLE S1: Comparison of SBM and PAMC on benchmark graphs. Comparison of the time-to-solution (TTS) of SBM and PAMC on se-lected G-set benchmark instances, using the solution reported by SBM as target solution quality. For each graph, the table lists the best-known cut value, the SBM solution used as the target, and the corresponding TTS and success probability Ps for both SBM and PAMC. Statistics are computed over 100 independent runs. Graphs shown in parentheses were evaluated using only 10 independent runs. The PAMC speedup is computed as the ratio of the SBM TTS to the PAMC TTS. Instances in which PAMC achieves a lower TTS than SBM for the same target solu-tion quality are highlighted in bold. Entries marked as “–” correspond to instances for which PAMC was unable to reach the target solution quality with the specified parameter settings across all runs. Graph Nodes Best-known SBM Sol. SBM [32] PAMC TTS Ps TTS Ps G1 800 11624 11624 0.033 0.9870 0.54 0.99 G2 800 11620 11620 0.048 0.8200 1.29 0.87 G3 800 11622 11622 0.003 0.9960 0.62 0.99 G4 800 11646 11646 0.005 0.9830 0.95 0.92 G5 800 11631 11631 0.012 0.9720 0.49 0.99 Continued on next page 15 
+
+TABLE S1: Comparison of SBM and PAMC on benchmark graphs con-tinued. Graph Nodes Best-known SBM Sol. SBM PAMC TTS Ps TTS Ps G6 800 2178 2178 72 0.9790 1.00 0.95 G7 800 2006 2006 0.34 0.9740 0.54 0.99 G8 800 2005 2005 0.35 0.9540 0.62 0.99 G9 800 2054 2054 1.6 0.8670 1.04 0.96 G10 800 2000 2000 0.38 0.4070 4.24 0.53 G11 800 564 564 0.018 0.9800 1.92 0.99 G12 800 556 556 0.24 0.9730 1.77 0.99 G13 800 582 582 0.009 0.9960 2.00 0.99 G14 800 3064 3064 0.26 0.0050 155.78 0.11 G15 800 3050 3050 0.046 0.8040 8.06 0.85 G16 800 3052 3052 0.034 0.9920 2.24 0.99 G17 800 3047 3047 0.059 0.2830 35.48 0.25 G18 800 992 992 0.006 0.0740 39.05 0.18 G19 800 906 906 0.007 0.9950 2.54 0.95 G20 800 941 941 0.012 0.9800 1.50 0.99 G21 800 931 931 0.036 0.1360 25.98 0.28 G22 2000 13359 13359 0.43 0.9280 75.71 0.89 G23 2000 13344 13342 0.089 0.9890 213.70 0.98 G24 2000 13337 13337 0.46 0.6480 17.29 0.99 G25 2000 13340 13340 2.3 0.3990 434.41 0.16 G26 2000 13328 13328 0.48 0.6430 377.28 0.18 G27 2000 3341 3341 0.05 0.9710 41.18 0.80 G28 2000 3298 3298 0.087 0.9520 25.43 0.95 G29 2000 3405 3405 0.22 0.7370 90.12 0.54 G30 2000 3413 3413 0.44 0.7380 87.74 0.99 G31 2000 3310 3310 1.2 0.1990 93.33 0.67 G32 2000 1410 1410 3.6 0.0930 190.94 0.90 G33 2000 1382 1382 58 0.0050 2119.67 0.34 G34 2000 1384 1384 2.1 0.2310 105.04 0.95 G35 2000 7687 7686 8319 0.0005 348.30 0.60 G36 2000 7680 7680 62647 0.0001 12361.42 0.02 G37 2000 7691 7691 27343 0.0002 11244.34 0.02 G38 2000 7688 7688 99 0.0680 120.36 0.78 G39 2000 2408 2408 56 0.1070 147.23 0.62 G40 2000 2400 2400 24 0.1540 3924.85 0.05 G41 2000 2405 2405 11 0.2820 219.44 0.45 G42 2000 2481 2480 550 0.0001 11966.40 0.01 G43 1000 6660 6660 0.006 0.9920 2.11 0.99 G44 1000 6650 6650 0.007 0.9850 2.31 0.99 G45 1000 6654 6654 0.043 0.9850 3.73 0.94 G46 1000 6649 6649 0.016 0.9920 2.70 0.99 G47 1000 6657 6657 0.045 0.9820 7.05 0.83 G48 3000 6000 6000 0.0008 0.9870 36.61 0.99 G49 3000 6000 6000 0.0008 0.9950 53.43 0.96 G50 3000 5880 5880 0.0026 1.0000 48.38 0.99 G51 1000 3848 3848 12 0.0670 7.25 0.99 G52 1000 3851 3851 6.9 0.2130 38.29 0.49 G53 1000 3850 3850 94 0.0430 65.60 0.32 G54 1000 3852 3852 2307 0.0010 217.82 0.22 G55 5000 10299 10298 6874 0.0020 – –G56 5000 4017 4016 6887 0.0020 – –G57 5000 3494 3490 6569 0.0020 10861.40 0.99 G58 5000 19294 19283 21638 0.0010 9062.50 0.93 G59 5000 6088 6086 22651 0.0010 – –G60 7000 14190 14186 21827 0.0010 25798.32 0.51 G61 7000 5798 5796 10883 0.0020 – –G62 7000 4872 4862 20501 0.0010 20931.07 0.81 G63 7000 27045 27023 31279 0.0010 5345.05 0.96 G64 7000 8752 8739 31448 0.0010 75175.96 0.15 G65 8000 5562 5546 5651 0.0040 9622.08 0.99 G66 9000 6364 6342 27408 0.0010 7099.79 0.99 G67 10000 6950 6922 6340 0.0050 6411.22 0.99 Continued on next page 16 
+
+TABLE S1: Comparison of SBM and PAMC on benchmark graphs con-tinued. Graph Nodes Best-known SBM Sol. SBM PAMC TTS Ps TTS Ps G70 10000 9595 9578 31599 0.0010 12804.60 0.99 G72 10000 7008 6982 6142 0.0050 10265.30 0.99 (G77) 14000 9940 9904 46760 0.0010 22225 1.00 (G81) 20000 14060 13392 62194 0.0010 37397 1.00 
+
+2. Max-3-Cut 
+
+TABLE S2: Comparative Max-3-Cut (M3C) results for G-set in-stances relative to the previously best-known Max-3-Cut solution. ∆= M 3COur-Work − M 3CBest-Known ; “–” indicates that the solution to the instance was not reported in the work; MOH: Multi-Operator Heuristic; 
+
+n: nodes; m: edges. Entries marked with ( ∗) were obtained using the second update strategy, based on cascaded p-bits for Gibbs sampling. Graph n m MOH [30] PLS [31] Our ∆LS ILP G1 800 19176 15165 – – 15165 0G2 800 19176 15172 – – 15172 0G3 800 19176 15173 – – 15173 0G4 800 19176 15184 – – 15184 0G5 800 19176 15193 – – 15193 0G6 800 19176 2632 – – 2632 0G7 800 19176 2409 – – 2409 0G8 800 19176 2428 – – 2428 0G9 800 19176 2478 – – 2478 0G10 800 19176 2407 – – 2407 0G11 800 1600 669 – 671 671 0G12 800 1600 660 661 663 663 0G13 800 1600 686 687 688 688 0G14 800 4694 4012 – – 4012 0G15 800 4661 3984 3985 3985 3983 -2 G16 800 4672 3991 – – 3992 1G17 800 4667 3983 – – 3986 3G18 800 4694 1207 – – 1207 0G19 800 4661 1081 – – 1081 0G20 800 4672 1122 – – 1122 0G21 800 4667 1109 – – 1110 1G22 2000 19990 17167 – – 17169 2G23 2000 19990 17168 – – 17172 4G24 2000 19990 17162 17163 – 17162 -1 G25 2000 19990 17163 17164 – 17167 3G26 2000 19990 17154 17155 – 17157 2G27 2000 19990 4020 4021 – 4021 0G28 2000 19990 3973 3975 – 3978 3G29 2000 19990 4106 – – 4110 4G30 2000 19990 4119 – – 4121 2G31 2000 19990 4003 4005 – 4008 3G32 2000 4000 1653 1658 1666 1664 -2 G33 2000 4000 1625 1628 1636 1635 -1 G34 2000 4000 1607 1609 1616 1615 -1 G35 2000 11778 10046 10048 – 10058 10 G36 2000 11766 10039 – – 10047 8G37 2000 11785 10052 10053 10053 10058 5Continued on next page 17 
+
+TABLE S2: Comparative Max-3-Cut results for Gset instances, contin-ued. Graph n m MOH PLS Our ∆LS ILP G38 2000 11779 10040 – – 10054 14 G39 2000 11778 2903 – – 2910 7G40 2000 11766 2870 2871 – 2878 7G41 2000 11785 2887 2888 – 2889 1G42 2000 11779 2980 – – 2983 3G43 1000 9990 8573 – – 8573 0G44 1000 9990 8571 – – 8571 0G45 1000 9990 8566 – – 8566 0G46 1000 9990 8568 – – 8568 0G47 1000 9990 8572 – – 8572 0G48 3000 6000 6000 – – 6000* 0G49 3000 6000 6000 – – 6000* 0G50 3000 6000 6000 – – 6000* 0G51 1000 5909 5037 – – 5039 2G52 1000 5916 5040 – – 5043 3G53 1000 5914 5039 – – 5042 3G54 1000 5916 5036 – – 5040 4G55 5000 12498 12429 12429 12432 12432 0G56 5000 12498 4752 4757 – 4763 6G57 5000 10000 4083 4092 4103 4114 11 G58 5000 29570 25195 – – 25216 21 G59 5000 29570 7262 7276 – 7309 33 G60 7000 17148 17076 – – 17082 6G61 7000 17148 6853 6861 – 6872 11 G62 7000 14000 5685 5710 5706 5731 21 G63 7000 41459 35322 35318 – 35355 33 G64 7000 41459 10443 10437 – 10508 65 G65 8000 16000 6490 6512 6535 6544 9G66 9000 18000 7416 7442 7443 7475 32 G67 10000 20000 8086 8116 8141 8152 11 G70 10000 9999 9999 – – 9999* 0G72 10000 20000 8192 8244 8244 8259 15 
+
+C. Derivation of a three-state cascaded p-bit sampler for the Potts model 
+
+This Supplementary Note derives the cascaded binary p-bit sampler used to implement the exact (K=3) Potts Gibbs update. The goal is to show that a three-state Potts variable can be sampled exactly through two sequential binary stochastic decisions, enabling a binary-compatible realization of the Max-3-Cut update rule. Consider a three-state Potts variable at node i,
+
+σi ∈ { α, β, γ }. (S1) That is, node i may occupy one of the three possible states α, β, or γ. The corresponding Gibbs conditional probabilities are 
+
+P (σ+ 
+
+> i
+
+= α) = ωαi
+
+ωαi + ωβi + ωγi
+
+, (S2) 
+
+P (σ+ 
+
+> i
+
+= β) = ωβi
+
+ωαi + ωβi + ωγi
+
+, (S3) 
+
+P (σ+ 
+
+> i
+
+= γ) = ωγi
+
+ωαi + ωβi + ωγi
+
+. (S4) Here, 
+
+ωαi = e−ρE αi , ωβi = e−ρE βi , ωγi = e−ρE γi , (S5) 18 are the Boltzmann weights associated with assigning node i to states α, β, and γ, respectively. The parameter ρ
+
+denotes the inverse temperature. The goal is to sample from the distribution in Eqs. (S2)–(S4) using a cascade of binary p-bits. The first binary decision determines whether state α is selected. If α is rejected, a second binary decision determines whether state β
+
+or γ is selected. Starting with the probability of choosing state α, we have 
+
+P (σ+ 
+
+> i
+
+= α) = ωαi
+
+ωαi + ωβi + ωγi
+
+. (S6) Dividing the numerator and denominator by ωαi gives 
+
+P (σ+ 
+
+> i
+
+= α) = 11 + ωβi + ωγi
+
+ωαi
+
+. (S7) Equivalently, 
+
+P (σ+ 
+
+> i
+
+= α) = 11 + exp 
+
+h
+
+ln( ωβi + ωγi ) − ln ωαi
+
+i . (S8) Using the identity 11 + e−x = 12
+
+h
+
+1 + tanh 
+
+ x
+
+2
+
+i 
+
+, (S9) define the first p-bit input as ∆1 = 12
+
+h
+
+ln ωαi − ln( ωβi + ωγi )
+
+i
+
+. (S10) Then 
+
+P (σ+ 
+
+> i
+
+= α) = 12 [1 + tanh(∆ 1)] . (S11) Let η(1)  
+
+> i
+
+be uniformly distributed on [ −1, 1]. The first binary p-bit is defined by 
+
+b1 =1 + sgn 
+
+h
+
+tanh(∆ 1) − η(1) 
+
+> i
+
+i
+
+2 , η(1)  
+
+> i
+
+∼ Uniform[ −1, 1] . (S12) Thus, b1 = 1 corresponds to selecting state α. If state α is rejected, then the sampler chooses between states β and 
+
+γ. The conditional probability of choosing β, given that α was not selected, is 
+
+P (σ+ 
+
+> i
+
+= β | σ+
+
+> i
+
+̸ = α) = ωβi
+
+ωβi + ωγi
+
+. (S13) Define the second p-bit input as ∆2 = 12
+
+h
+
+ln ωβi − ln ωγi
+
+i
+
+. (S14) Then 
+
+P (σ+ 
+
+> i
+
+= β | σ+
+
+> i
+
+̸ = α) = 12 [1 + tanh(∆ 2)] . (S15) Let η(2)  
+
+> i
+
+be another independent random variable uniformly distributed on [ −1, 1]. The second binary p-bit is 
+
+b2 =1 + sgn 
+
+h
+
+tanh(∆ 2) − η(2) 
+
+> i
+
+i
+
+2 , η(2)  
+
+> i
+
+∼ Uniform[ −1, 1] . (S16) 19 The resulting cascaded three-state update is 
+
+σ+ 
+
+> i
+
+= αb 1 + (1 − b1) [ βb 2 + γ(1 − b2)] . (S17) Equivalently, 
+
+σ+ 
+
+> i
+
+=
+
+
+
+α, b1 = 1 ,β, b1 = 0 , b 2 = 1 ,γ, b1 = 0 , b 2 = 0 .
+
+(S18) The output probabilities are 
+
+P (σ+ 
+
+> i
+
+= α) = P (b1 = 1) = ωαi
+
+ωαi + ωβi + ωγi
+
+, (S19) 
+
+P (σ+ 
+
+> i
+
+= β) = P (b1 = 0) P (b2 = 1) = ωβi + ωγi
+
+ωαi + ωβi + ωγi
+
+!
+
+ωβi
+
+ωβi + ωγi
+
+!
+
+= ωβi
+
+ωαi + ωβi + ωγi
+
+, (S20) 
+
+P (σ+ 
+
+> i
+
+= γ) = P (b1 = 0) P (b2 = 0) = ωβi + ωγi
+
+ωαi + ωβi + ωγi
+
+!
+
+ωγi
+
+ωβi + ωγi
+
+!
+
+= ωγi
+
+ωαi + ωβi + ωγi
+
+. (S21) Thus, the cascaded p-bit update exactly samples from the desired three-state Gibbs conditional distribution. Using 
+
+ωai = e−ρE ai , we have ln ωai = −ρE ai . (S22) Therefore, the second p-bit input can be written as ∆2 = 12
+
+h
+
+ln ωβi − ln ωγi
+
+i
+
+= − ρ
+
+2
+
+h
+
+Eβi − Eγi
+
+i
+
+. (S23) Thus, ∆ 2 compares the relative energetic preference for β versus γ.Similarly, ∆1 = 12
+
+h
+
+ln ωαi − ln( ωβi + ωγi )
+
+i
+
+. (S24) Thus, ∆ 1 compares the weight of state α against the combined weight of the two remaining alternatives, β and γ.
