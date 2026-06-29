@@ -6,49 +6,38 @@
 </div>
 
 ## 每次日报
-- 最新运行日期：2026-06-28
-- 运行时间：2026-06-28 21:31:07 UTC
+- 最新运行日期：2026-06-29
+- 运行时间：2026-06-29 22:07:28 UTC
 - 运行状态：成功
-- 本次总论文数：9
-- 精读区：6
-- 速读区：3
+- 本次总论文数：6
+- 精读区：4
+- 速读区：2
 
 ### 今日简报（AI）
-1) 今日共9篇论文，精读6篇，其中《Agentic evolution of physically constrained foundation models》以满分10.0领衔，《Learning the ARTS of Search for Automated Discovery》获9.0高分。  
-2) 最值得关注两个方向：受物理约束基础模型的智能体演化，以及面向自动发现的搜索策略学习。  
-3) 建议优先精读上述两篇高分论文，并留意速读中《DREAM》等7.0分工作对具体领域的启发。
-- 详情：[/202606/28/README](/202606/28/README)
+今日精选6篇论文，精读4篇，重点推荐评分10.0的物理约束基础模型演进与9.0的混合LLM驱动图像聚类。建议优先精读这两篇，深入理解智能体在科学与聚类中的前沿应用。
+- 详情：[/202606/29/README](/202606/29/README)
 
 ### 精读区论文标签
-1. [Agentic evolution of physically constrained foundation models](/202606/28/2606.25532v1-agentic-evolution-of-physically-constrained-foundation-models)  
+1. [Agentic evolution of physically constrained foundation models](/202606/29/2606.25532v1-agentic-evolution-of-physically-constrained-foundation-models)  
    标签：评分：10.0/10、query:ad
-   evidence：多智能体发现引擎结合进化知识图谱与算法思维链，自动演化硬件感知压缩方法
-2. [Learning the ARTS of Search for Automated Discovery](/202606/28/2606.21891v1-learning-the-arts-of-search-for-automated-discovery)  
+   evidence：自动科学发现引擎，结合大模型引导的启发式搜索
+2. [Universal Guideline-Driven Image Clustering via a Hybrid LLM Agent](/202606/29/2606.24094v1-universal-guideline-driven-image-clustering-via-a-hybrid-llm-agent)  
    标签：评分：9.0/10、query:ad
-   evidence：使用推理语言模型进行树搜索的自动发现方法
-3. [KaLM-Reranker-V1: Fast but Not Late Interaction for Compressed Document Reranking](/202606/28/2606.22807v1-kalm-reranker-v1-fast-but-not-late-interaction-for-compressed-document-reranking)  
-   标签：评分：9.0/10、query:rerank-train
-   evidence：重排序器训练方法与架构
-4. [ARIA: A Causal-Aware Framework for Rescuing LLM Reasoning in Trustworthy Materials Discovery](/202606/28/2606.22375v1-aria-a-causal-aware-framework-for-rescuing-llm-reasoning-in-trustworthy-materials-discovery)  
-   标签：评分：8.0/10、query:ad
-   evidence：利用大模型进行材料发现，结合因果推理
-5. [Random Walk on Bézier Curves for Global Optimization](/202606/28/2606.26714v1-random-walk-on-bzier-curves-for-global-optimization)  
-   标签：评分：8.0/10、query:ad
-   evidence：几何驱动的元启发式优化框架
-6. [Scientific discovery as meta-optimization: a combinatorial optimization case study](/202606/28/2606.26728v1-scientific-discovery-as-meta-optimization-a-combinatorial-optimization-case-study)  
-   标签：评分：8.0/10、query:ad
-   evidence：利用大语言模型进行元优化的科学发现方法
+   evidence：使用LLM代理进行自动图像聚类发现
+3. [Scientific discovery as meta-optimization: a combinatorial optimization case study](/202606/29/2606.26728v1-scientific-discovery-as-meta-optimization-a-combinatorial-optimization-case-study)  
+   标签：评分：9.0/10、query:ad
+   evidence：LLM元优化用于科学发现
+4. [Single and Multi Truth Data Fusion using Large Language Models](/202606/29/2606.28062v1-single-and-multi-truth-data-fusion-using-large-language-models)  
+   标签：评分：9.0/10、query:ad
+   evidence：使用大语言模型进行数据融合（真理发现），属于自动知识发现的一种形式
 
 ### 速读区论文标签
-1. [DREAM: Dense Retrieval Embeddings via Autoregressive Modeling](/202606/28/2606.24667v1-dream-dense-retrieval-embeddings-via-autoregressive-modeling)  
-   标签：评分：7.0/10、query:rerank-train
-   evidence：利用大语言模型的自回归下一token预测目标监督密集检索器的训练
-2. [Geometry-Aware MCTS for Extremal Problems in Combinatorial Geometry](/202606/28/2606.26399v1-geometry-aware-mcts-for-extremal-problems-in-combinatorial-geometry)  
+1. [CPAgents: Agentic Composite Phenotype Generation for Cardiac Disease Association](/202606/29/2606.28179v1-cpagents-agentic-composite-phenotype-generation-for-cardiac-disease-association)  
+   标签：评分：7.0/10、query:sr
+   evidence：自动构建复合表型，类似于符号回归进行知识发现
+2. [GR-SAFS: A Graph-Regularized Stacking Framework with Adaptive Feature Selection for High-Dimensional Prognostic Biomarker Discovery](/202606/29/biorxiv-10-64898-2026-06-23-733986-v1-gr-safs-a-graph-regularized-stacking-framework-with-adaptive-feature-selection-for-high-dimensional-prognostic-biomarker-discovery)  
    标签：评分：7.0/10、query:ad
-   evidence：蒙特卡洛树搜索用于组合几何问题
-3. [PhenoXtract: combining Large Language Model and Knowledge Graph embedding to extract phenotypes from clinical descriptions](/202606/28/biorxiv-10-64898-2026-06-22-733382-v1-phenoxtract-combining-large-language-model-and-knowledge-graph-embedding-to-extract-phenotypes-from-clinical-descriptions)  
-   标签：评分：7.0/10、query:ad
-   evidence：结合大语言模型和知识图谱进行表型抽取
+   evidence：使用图正则化堆叠和自适应特征选择的生物标志物发现框架
 
 
 <div class="dpr-home-promo-card">
