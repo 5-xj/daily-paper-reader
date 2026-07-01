@@ -1,0 +1,467 @@
+Title: GR2 Technical Report
+
+URL Source: https://arxiv.org/pdf/2606.31984v1
+
+Published Time: Wed, 01 Jul 2026 01:32:14 GMT
+
+Number of Pages: 18
+
+Markdown Content:
+# GR2 Technical Report 
+
+Yufei Li ∗, Zaiwei Zhang ∗, Mingfu Liang ∗, Kavosh Asadi ∗, Jay Xu , Jimmy Kim , Chongyang Bai , Jieyi Zhang ,
+
+Hongye Xie , Prachi Agrawal , Dian Yu , Tianyi Chen , Jean-Pascal Billaud , Garret Buell , YK (Yongkang) Zhu ,
+
+Sachin Patil , Brooke Bian , Zhou Fang , Kevin Huang , Shiva Sudanagunta , Yuzhen Huang , Emma Lu , Chris O’Brien , Yang Song , Lihong Li , Jacob Tao , Zhicheng Zhu , Chao Li , Gaoxiang Liu , Neil Wu , Zhongyin Hu ,
+
+Li Han , Loki Chen , Ming Lei , Greg Rehm , Siyuan Song , Tianwei Zhang , Li Li , Ketan Singh , Yavuz Yetim ,
+
+Ilyas Atishev , Satendra Gera , Ashkan Sadeghi , Rachel Yan , Nikko Mizutani , Shuaiwen Wang , Song Yang ,
+
+Zhijing Li , Jiang Liu , Mengying Sun , Fei Tian , Xiaohan Wei , Chonglin Sun , Parish Aggarwal , Kaushik Rangadurai , Zhi Hua , Frank Shyu , Ruchit Sharma , Liyuan Li , Shike Mei , Wenlin Chen , Santanu Kolay , Ben Schulte , Deepak Chandra , Adam (Yang) Song , Sandeep Pandey , Xi Liu 1, Hamed Firooz 2, Luke Simon 2
+
+Meta AI 
+
+> ∗
+
+Co-first author , 1Project lead , 2Direction lead 
+
+Industrial recommendation systems serve billions of users through a multi-stage funnel—retrieval, early-stage ranking, and re-ranking—where the final re-ranking step disproportionately shapes user engagement and downstream performance, particularly for carousel and grid display formats. Despite growing enthusiasm for Large Language Models (LLMs) in recommendation, three gaps hinder industrial adoption: (1) most efforts target retrieval and ranking, leaving re-ranking—the stage closest to the final user experience—largely underexplored; (2) LLMs are typically deployed zero-shot or via supervised fine-tuning, underutilizing the reasoning capabilities unlocked by reinforcement learning (RL) on verifiable rewards; (3) deployed catalogs index billions of items with non-semantic identifiers that lie outside any base-LLM vocabulary. We present GR2 (Generative Reasoning Re-Ranker), an end-to-end framework that combines (i) mid-training on semantic IDs produced by a tokenizer with 
+
+≥99% uniqueness, (ii) reasoning-trace distilled from a stronger teacher via targeted prompting and rejection sampling, and (iii) RL with verifiable rewards purpose-built for re-ranking. To make GR2 resource-viable, we further (iv) introduce a context compressor that amortizes training cost, On-Policy Distillation (OPD) as a scalable alternative to SFT—which we find collapses at industrial scale—and reasoning distillation for low-latency serving. GR2 delivers +18.7% R@1, +7.1% R@3, and +9.6% N@3 over legacy baselines on industrial-scale traffic. We further find that reward design is critical in re-ranking: LLMs often hack rewards by preserving the incoming order or exploiting position bias, motivating conditional verifiable rewards as essential industrial components. 
+
+# 1 Introduction 
+
+Recommendation systems have become indispensable across modern online platforms, mitigating information overload by surfacing items aligned with users’ interests(Ramanujam et al., 2025; Behdin et al., 2025; Deng et al., 2025). Over the past decade, deep neural networks built on large embedding tables have dominated the modeling of user–item interactions (Liang et al., 2025; Luo et al., 2025; Zhang et al., 2024, 2022; Wang et al., 2021; Zhou et al., 2019). More recently, Large Language Models (LLMs) have emerged as a transformative paradigm for recommendation (Zhou et al., 2025c; Zhang et al., 2025b; Zhao et al., 2024; Wu et al., 2024), driven by their continual scaling gains, broad world knowledge, and contextual understanding. Representative efforts include P5 (Geng et al., 2022), which unifies diverse recommendation tasks within a single LLM model; OneRec-Think (Liu et al., 2025), which fuses retrieval and ranking stages via fine-tuned LLMs; and PLUM (He et al., 2025) that adapts pre-trained LLMs for scalable retrieval at YouTube. Within the multi-stage industrial funnel, the final re-ranking step disproportionately shapes what users see 
+
+> arXiv:2606.31984v1 [cs.IR] 30 Jun 2026
+
+and interact with—most notably in carousel and grid layouts where top positions dominate engagement (Gao et al., 2025, 2024; Liu et al.). Despite this, LLM-based re-ranking remains underexplored: existing work concentrates on retrieval and early ranking, while industrial re-rankers still rely on point-wise CTR scoring without explicit reasoning over user intent or item semantics. Three concrete gaps block adoption at scale.  
+
+> (G1) Reasoning is left on the table.
+
+LLMs are typically deployed zero-shot or supervised-fine-tuned on plain ranking labels, leaving the chain-of-thought capabilities most effectively elicited through reinforcement learning (RL) on verifiable rewards largely unused for re-ranking. (G2) Vocabulary mismatch. Industrial catalogs index billions of items via non-semantic identifiers that lie outside any base-LLM vocabulary, breaking the model’s ability to reason about candidates directly. (G3) Industrial-scale tax. Naive recipes incur prohibitive training cost, low serving throughput from long thinking traces, and—as we show—reward hacking that inflates offline metrics without reflecting genuine ranking quality. To close these gaps we introduce GR2, the Generative Reasoning Re-Ranker . GR2 is built on a three-stage training pipeline (Figure 1) tailored to large-scale re-ranking. First , a pre-trained student LLM (e.g., Qwen3-8B (Team, 2025)) is mid-trained on semantic item IDs produced by a tokenizer that achieves ≥99% uniqueness, allowing the model to recognize and generalize over the catalog without vocabulary blowup. 
+
+Second , a stronger teacher (e.g., Qwen3-32B (Team, 2025)) is prompted with re-ranking-specific templates to generate hierarchical reasoning traces; targeted sampling or rejection sampling yields a curated SFT corpus that grounds the student’s reasoning in user behavior and item semantics. Third , we adapt DAPO (Yu et al., 2025) with a re-ranking-specific reward composed of a format term, an AUC/NDCG-based verifiable ranking term, and an optional LLM-as-a-judge reasoning term, providing scalable, reward-driven supervision. Bridging this recipe to industry exposes failure modes that is often overlooked. Our contribution is to propose targeted solutions for each: a context compressor that cuts input length by >80% while matching full-context quality, amortizing training cost; On-Policy Distillation (OPD) as a scalable replacement for SFT—naive SFT collapses at industrial scale, whereas a 1.7B OPD student recovers ≈82% of a 32B teacher’s gain at 5% of its size; de-hacking conditional reward , without which RL learns to preserve the incoming order or fail to generate valid output format; and reasoning distillation that internalizes chain-of-thought into a non-thinking policy, yielding ∼15 × serving ROI at iso-quality. We summarize our contributions as follows: 
+
+• Re-ranking-first LLM design. Distinct from prior work that adapts LLMs for retrieval and early ranking, we establish design principles for LLM-based re-ranking and demonstrate that LLM world knowledge and reasoning translate into measurable ranking gains. 
+
+• Semantic-ID mid-training. A tokenization scheme that converts non-semantic item IDs into semantic IDs with ≥99% uniqueness, combined with a mixed mid-training corpus of semantic IDs and world knowledge, enabling LLMs to reason over catalog items directly. 
+
+• Reasoning activation pipeline. Re-ranking-specific prompts paired with targeted and rejection sampling produce hierarchical reasoning traces; SFT (or OPD at industrial scale) on these curated traces installs a reasoning prior that pure RL cannot recover. 
+
+• Verifiable-reward RL for re-ranking. A re-ranking-tailored adaptation of DAPO with a multi-component reward; we identify and mitigate two reward-hacking modes (incoming-order preservation and position-bias exploitation) through conditional verifiable rewards and debiased training data. 
+
+• Industrial adaptations. A context compressor, OPD-based scalable distillation, and CoT distillation for non-thinking serving—each ablated to quantify its contribution to deployment feasibility. 
+
+• Comprehensive evaluation. GR2 improves over internal baselines on industrial traffic (+18.7% R@1, +9.6% N@3) and shows no decay over subsequent 9 days serving; ablations confirm that OPD supplies the reasoning prior and RL sharpens the ranking objective on top of it. 
+
+# 2 Tokenized Mid-Training 
+
+In this section, we introduce the key components for attaining the LLM-based generative recommender:  
+
+> tokenization
+
+and mid-training . To obtain the generative retriever, we stemmed from the mid-training workflow from the advanced LLM-based generative retriever that perform multi-task training on an LLM. Figure 1 Overview of the 4-stage training pipeline: student LLM mid-training on tokenized semantic IDs, reasoning data generation using teacher LLM via rejection sampling and on-policy distillation, student LLM reasoning enablement by RL, and serving ROI optimization. 
+
+2.1 Tokenizer and Semantic ID (SID) 
+
+Learning the so-called semantic IDs (SIDs) has been widely adopted in recommendation systems to mitigate generalization issues pertaining to large embedding tables. The seminal work, TIGER (Rajput et al., 2023), was the first to apply this technique to sequential recommendation. At a high level, given the textual feature x of an item, the tokenizer maps it to a sequence of discrete integers, i.e., a compact symbolic representation, defined as Tokenizer (x) = ( z1, z 2, . . . , z K ) where the final representation is a memeber of the set {1, . . . , C 1} × · · · × { 1, . . . , C K }, where Ci is the cardinality of the i-th codebook. The core of the tokenizer is an (RQ-VAE) (Lee et al., 2022). The SID tokens are added to the vocabulary as special tokens. We refer the reader to Sec 2 from our previous technical paper (Liang et al., 2026) for further details. 
+
+2.2 Mid-Training via Multi-Task Learning 
+
+TIGER (Rajput et al., 2023) trains an autoregressive model purely over Semantic ID sequences. In the era of LLMs, leveraging world knowledge encoded in pretrained LMs has become an important direction. To this end, OneRec-Think (Liu et al., 2025) developed by Kuaishou introduces a mid-training stage. Referred to as the ‘item alignment’, this stage enables the LLM to align the recommendation knowledge and language (Semantic IDs) with the LLM’s linguistic space and world knowledge. More concretely, the idea here is to 
+
+interleave Semantic IDs (SIDs) with natural language tokens within a single sequence and to optimize the SID embedding table through the next-token prediction objective . The mid-training tasks follows the same design from our previous technical paper (Liang et al., 2026). 
+
+# 3 Reasoning Enhancement 
+
+We now present the design of reasoning enhancement for re-ranking. In Sec.3.1, we introduce a chat-format training-sample structure that grounds item representation in semantic IDs and enables chain-of-thought reasoning with structured JSON output. In Sec.3.2, we present two complementary strategies for generating high-quality reasoning traces, i.e., targeted sampling , which leverages ground-truth guidance, and rejection sampling , which ensures reasoning authenticity through iterative verification, together with five prompt-design principles that enable grounded, interpretable, and behaviorally-aware reasoning from large language models. 
+
+3.1 Chat-formatted Template of Reasoning Data 
+
+We construct training samples in a chat-format structure with three message roles. The design follows six principles: 
+
+• Role-based System Prompt. The system message instantiates an analyst persona and specifies the re-ranking objective, activating domain reasoning without invoking purchase-intent or persuasion framing. 
+
+• Rich Item Metadata. Each item carries its title and category hierarchy, supporting both semantic and category-aware reasoning. 
+
+• Unified Item Format. History and candidates share the same structural format (SID + title + categories), ensuring consistent representation learning across input contexts. 
+
+• Chain-of-Thought Reasoning Trace. The assistant response contains step-by-step reasoning that explicitly cites items by their SIDs, producing grounded, verifiable traces. 
+
+• Structured JSON Output. The response is a JSON object containing the reasoning explanation and the ranked list, enabling deterministic parsing and evaluation. 
+
+3.2 Reasoning Trace Generation 
+
+To generate high-quality reasoning trace, we consider two generation strategies for the reasoning trace: targeted sampling and rejection sampling .
+
+Targeted Sampling. In the targeted approach, we provide the target item svn+1 and most recent k historical items, then query a larger LLM to generate a reasoning trace τ explaining the target interaction: 
+
+τ ∼ Pθ (·|P targeted ([ sv1 , ..., svk ], [sy1 , ..., syc ], svn+1 )) , (1) where Ptargeted (x, y, z ) constructs a prompt to query the rationale for why a user who interacts with item sequence x would be most interested in z from candidate list y. As the ground truth is involved, the targeted approach always yields rationales for why the target might be favored by the user. Notice that this requires having ground truth in the prompt. 
+
+Rejection Sampling. In sharp contrast to targeted sampling, in rejection sampling we do not provide the ground truth. Instead we repeatedly query the LLM to predict which item ˆsyc among the pre-ranked candidates is most likely to be the user’s next interest, until the prediction matches the ground-truth target: 
+
+(τ, ˆsyc ) ∼ Pθ
+
+ · Prejection 
+
+ [sv1 , . . . , svk ], [sy1 , . . . , syc ] 
+
+s.t. ˆsyc = svn+1 . (2) where Prejection (x, y ) constructs a prompt to query which item in candidate list y is most likely to be the user’s next interest, given history x.To generate high quality reasoning trace for re-ranking, we leverage following principles to design the prompt for instructing LLM for reasoning: 
+
+• Concrete System Role and Re-ranking Task definition : To incentivize re-ranking capabilities, we elucidate the recommendation domain, the dedicated roles for the LLM to display, and the concrete definition of the re-ranking task. 
+
+• Collaborative Context Presentation : To provide comprehensive decision context, we present both the user’s engagement history (with structured metadata including titles and categories) and the complete candidate set, enabling the model to perform holistic comparison rather than isolated item evaluation. • Domain Knowledge Priming : To leverage sequential engagement patterns inherent in e-commerce (e.g., shampoo → conditioner → styling products), we explicitly prompt the model to consider such domain-specific heuristics, enabling it to apply common-sense reasoning about product complementarity and routine-based purchasing behavior. 
+
+• Critical Guidelines as Output Constraint : To ensure reasoning traces are grounded and verifiable, we impose explicit constraints such as requiring the model to cite items by their SIDs. This forces the model to anchor its reasoning in specific historical items rather than generating hallucinated justifications, enabling direct traceability between reasoning steps and context. 
+
+• Structured Multi-Step Reasoning Format : To elicit progressive and interpretable reasoning, we provide an explicit step-by-step output format with examples. This hierarchical structure guides the model through: (1) broad pattern recognition, (2) identifying complementary product types, and (3) matching to specific candidates, mirroring human decision-making processes. 
+
+3.3 Supervised Fine-tuning on Reasoning Traces 
+
+Problem Setup and Prompt Interface Given a user engagement history and a pre-ranked list of candidate items produced by a previous stage, our desire is to re-rank the candidates so as to promote the ground-truth next item. Each training or inference instance is formatted as a chat prompt consisting of three roles: system ,
+
+user , and assistant . During supervised fine-tuning (SFT), the model is trained to generate the full assistant message. During reinforcement learning (RL), the policy conditions only on the system and user messages, and the assistant output is treated as the action. Recommender models often struggle to generate effective CoT reasoning from noisy and lengthy real-world user behavior sequences (Liu et al., 2025). The generated reasoning traces are used to supervise a base LLM to acquire reasoning capability for re-ranking. We fine-tune the model to generate both the reasoning trace 
+
+τ = [ r1, . . . , r M ] and the ranked output o = [ o1, . . . , o T ].To preserve ranking performance while enabling reasoning, we decouple the losses for reasoning and ranking tokens. Specifically, we apply the language modeling loss only to the assistant message , with separate weights for reasoning and ranking segments: 
+
+LSFT = −λrMX
+
+> i=1
+
+log P (ri | P , r <i ) − λoTX
+
+> j=1
+
+log P (oj | P , τ, o <j ), (3) where λr < λ o balances reasoning fluency and ranking accuracy. This training procedure teaches the model to generate grounded, coherent reasoning traces that connect user history with candidate comparisons, while maintaining strong re-ranking behavior. 
+
+3.4 OPD for Reasoning Activation 
+
+We use on-policy distillation (OPD) (Zhao et al., 2026) to transfer reasoning from a frozen teacher into the deployed student. A GRPO-style loop treats the student as the trainable actor and the teacher as the reference policy: at every step the student samples reasoning chains and ranked lists from its own distribution πθ , each rollout receives the reward of Section 4, and the actor is updated with a clipped surrogate plus a per-token reverse-KL anchor to the teacher, 
+
+LOPD (θ) = − E
+
+h
+
+min  ρt ˆAt, clip( ρt, 1−ϵlo , 1+ ϵhi ) ˆAt
+
+i
+
++ β KL πθ (· | st) ∥ πT(· | st),
+
+(4) where ρt is the per-token importance ratio, ˆAt the group-relative advantage, and β the distillation strength. The teacher contributes only token log-probabilities, never labels, acting as a distributional anchor while gradients flow through the student. Why on-policy beats off-policy CoT supervision. The two CoT-SFT baselines introduced earlier in Section 3.3 both reduce reasoning transfer to behavior cloning on a static, teacher-defined corpus, and inherit the standard pathologies of teacher-forced sequence learning: the student is supervised on states it will never visit at deployment, producing a train/inference distribution mismatch that compounds along the generated chain. Each method also adds its own bias on top of this. Targeted sampling conditions the teacher on the answer, so the resulting traces tend to encode post-hoc, label-aware shortcuts that the student memorizes as fluent but non-causal reasoning. Rejection sampling, by contrast, silently discards every prompt on which the teacher cannot meet the AUC bar within the sampling budget, which both wastes teacher compute and removes precisely the hardest examples—where supervision is most needed—from the training set. OPD avoids both failure modes by construction: the gradient is computed on trajectories the student itself samples, every prompt contributes a continuous reward signal regardless of how easy or hard it is for the teacher, and the teacher’s role is reduced from generating the target trace to regularizing the student’s own distribution. This combination of on-policy exposure, dense per-rollout reward, and per-token KL anchoring is what allows the small student to absorb the teacher’s reasoning competence without inheriting its trace-style mismatch. 
+
+# 4 RL Post-Training 
+
+While SFT enables coherent reasoning, it does not directly optimize the re-ranking objective. Building on the distilled reasoning capability of Sec. 3.3, we apply RL to refine both the reasoning process and the final ranking quality. Given a prompt P(H, D), the policy πθ generates an output o = ( τ, o); during RL the policy conditions only on the system and user messages and o is treated as the action. Unlike public benchmarks, where each impression has a single positive next item, industrial slates are multi-positive : a candidate list may carry several engagement labels at once. We therefore replace the single-target rank-delta of prior work with reward functions that score the whole permutation against a multi-label ground truth. 
+
+4.1 Ranking Reward 
+
+A candidate slate D = {c1, . . . , c K } is associated with a binary engagement label vector y ∈ { 0, 1}K that may contain multiple ones. We adopt the per-impression AUC of the predicted permutation π against y as the primary ranking signal: 
+
+RAUC (π, y) = 1
+
+|M||N | 
+
+X
+
+> i∈M
+
+X
+
+> j∈N
+
+1[rank π (i) < rank π (j)] , (5) where M = {i|yi= 1} and N = {j|yj = 0}. AUC handles multiple positives natively, is bounded in [0 , 1] , and is permutation-invariant within each label class, providing a stable RL signal. When richer post-engagement signals are available, we further incorporate a graded-relevance NDCG term using a three-level label gi ∈ { 0, 1, 2} for {no engagement , click , click + conversion }:
+
+RNDCG (π, g) = 1
+
+Z
+
+> K
+
+X
+
+> i=1
+
+2gπ−1(i) − 1log 2(i + 1) , (6) with Z the ideal DCG. The combined ranking reward is Rrank = RAUC or RNDCG in our internal-data setup. Slates with no positives or no negatives ( |P| = 0 or |N | = 0 ) are filtered at data-loading. 
+
+4.2 Conditional Format Reward 
+
+To ensure parseable outputs, we add a format reward Rfmt = Ω( o) that checks whether (i) the reasoning trace 
+
+τ and ranking output o can be reliably parsed, and (ii) the parsed ranking is a valid permutation of {1, . . . , K }
+
+matching the slate size. Naively combining Rrank and Rfmt exposes the policy to two reward-hacking pathways. First, an invalid permutation could still earn a non-trivial Rrank from a partial parse; we therefore gate Rrank 
+
+on Ω( o) = 1 . Second, when the upstream slate is itself non-trivially ordered—i.e., the identity permutation already attains Rrank < 1—the policy can harvest format reward by emitting [1 , 2, . . . , K ] without performing any re-ranking, riding on whatever AUC the input order already supplies. We detect this identity-permutation cheating and zero out Rrank when the model output equals the input order and the input order is suboptimal: 
+
+R =
+
+(
+
+Rrank + αR fmt , π̸ = [1 , . . . , K ] or RAUC ([1 , . . . , K ], y) = 1 ,αR fmt , π = [1 , . . . , K ] and RAUC ([1 , . . . , K ], y) < 1, (7) where α is the format-reward weight. When the upstream slate is already optimal, the identity permutation is the genuinely correct answer and reward flows normally. 
+
+4.3 Training via DAPO 
+
+We optimize the policy using Decoupled Clip and Dynamic sAmpling Policy Optimization (DAPO) algo-rithm (Yu et al., 2025), a recently state-of-the-art RL algorithm developed upon Grouped Policy Optimization (GRPO) (Shao et al., 2024). It can effectively resolve the entropy collapse phenomenon and rollout length bias identified in the GRPO training process. For each prompt, we sample a group of G outputs {oi}Gi=1 and optimize: 
+
+JDAPO (θ) = E(q,a )∼D , {oi}Gi=1 ∼πθold (·| q)
+
+"
+
+1
+
+PGi=1 |oi|
+
+> G
+
+X
+
+> i=1
+> |oi|
+
+X
+
+> t=1
+
+min 
+
+
+
+ri,t (θ) ˆAi,t ,
+
+clip  ri,t (θ), 1 − εlow , 1 + εhigh 
+
+ ˆAi,t 
+
+#
+
+,
+
+(8) where 
+
+ri,t (θ) = πθ (oi,t |q, o i,<t )
+
+πθold (oi,t |q, o i,<t ) , ˆAi,t = Ri − mean ({Ri}Gi=1 )
+
+std ({Ri}Gi=1 ) . (9) 
+
+πθ and πθold denote the current and previous policies, respectively. The pair (q, D ) ∼ D is sampled from the training distribution. The advantage estimate ˆAi,t is computed for each output sequence oi and normalized within the group G. Adhering to the Clip-Higher strategy, DAPO decouples the lower and higher clipping range as εlow and εhigh ). Additionally, to avoid zero policy gradients (advantages) and improve sample efficiency, it oversamples and filters out prompts with the accuracy equal to 1 and 0. 
+
+# 5 Serving ROI Optimization 
+
+The first three stages yield a capable but expensive reasoning ranker: mid-training adapts the model to RecSys inputs and compresses prompts via semantic IDs (§2), reasoning enablement instills a reasoning prior (§3), and RL post-training sharpens ranking behavior under that prior (§4). The final stage preserves these ROI gains while slashing serving cost along its two dominant axes: the input cost of prompting over an O(B) item catalog, and the decode cost of generating a chain-of-thought (CoT) per request. We address them with two complementary levers—input-side context compression and decode-side reasoning internalization—delivering higher throughput and lower latency without sacrificing ranking quality. 
+
+5.1 Input-Side: Context Compression 
+
+Mid-training over an O(B) item catalog requires generating large volumes of SID-aligned data and incurs heavy GPU cost per iteration, which slows online experimentation. As a faster alternative for cutting input cost, we train a context compressor that shrinks the input before it reaches the ranker. The compressor is trained with GRPO using an LLM-as-a-judge that scores each compressed output along three axes: solvability s ∈ { 0, 1}, information preservation p ∈ { 1, . . . , 10 }, and ranking quality q ∈ { 1, . . . , 10 }.The judge prompt is mode-aware (item-level vs. free-form summary). The reward combines a continuous compression term with a solvability-conditioned judge term: 
+
+rjudge =
+
+(
+
+0.2 ¯ p + 0 .8 ¯ q s = 1 0.8 ¯ p + 0 .2 ¯ q otherwise (10) 
+
+r =  α r comp + (1 −α) rjudge 
+
+ · λellipsis , (11) where ¯p = p/ 10 , ¯q = q/ 10 , rcomp = max (0 , 1 − | compressed |/|original |), α trades off compression against quality, and λellipsis ∈ [0 , 1] penalizes truncation shortcuts. When the task is solvable we weight ranking signal over raw information completeness, since we find preservation correlates weakly with downstream ranking while higher compression can suppress noise. 
+
+5.2 Decode-Side: Internalizing Reasoning for Efficient Serving 
+
+Generating a full CoT per request is the dominant decode cost of GR2. To preserve the reasoning gains under large-scale serving latency, we run a second RL pass on the RL post-training checkpoint (§4) with explicit reasoning bypassed: the policy is trained to emit only the structured ranked output, conditioned directly on the system and user prompts. Because the reasoning prior—instilled via OPD during reasoning enablement (§3) and sharpened by RL (§4)—is already encoded in the shared backbone, it transfers to the direct-output policy without incurring CoT generation cost. This reasoning-free variant is the deployed artifact; the CoT-enabled model is retained offline for evaluation and reward design. 
+
+5.3 Systems-Level Optimizations: Pruning and KV Caching 
+
+The above levers reduce token counts; two systems-level techniques further cut the cost per token. Model pruning shrinks the served network via depth-wise (layer) pruning followed by redistillation to recover quality, lowering compute across both prefill and decode. KV caching exploits the structure of RecSys prompts: the candidate set for a request is fixed and largely shared across users, so we precompute its key–value representations once and reuse them across requests, ordering the prompt as system prompt, candidates, then user context so the candidate KV remains reusable. Together these amortize compute over the stable parts of the input and the reduced model, compounding the savings from compression and reasoning internalization. 
+
+# 6 Experiments 
+
+We focus this section on the industrial setting and answer the following research questions: 
+
+• Q1 : Does GR2 outperform the point-wise lagacy baseline, and is the gain robust to test-set scale, traffic freshness, and student model size? 
+
+• Q2 : How do different reasoning-activation strategies (SFT, OPD) and RL post-training affect re-ranking quality at industrial scale? 
+
+• Q3 : Can the enterprise-scale adaptations—context compression, OPD-based distillation, and implicit-CoT serving—preserve ranking quality under industrial latency and GPU budgets? Public-benchmark results, the semantic-ID tokenizer design, and the codebook/uniqueness study are reported in a prior technical paper Liang et al. (2026); here we concentrate on the industrial setting, where adaptation challenges dominate. 
+
+6.1 Experiment Setup  
+
+> 6.1.1 Datasets
+
+GR2 is trained on a single day ( 01-25 ) of internal logs containing roughly 70k user sessions and evaluated on held-out sessions from 02-01 through 02-09 . Each training example corresponds to one impression list paired with the user’s historical feedback (e.g., clicked products). We apply standard industrial filtering to Figure 2 Re-ranking performance comparison with legacy baseline on industrial traffic across 70k sessions.  
+
+> Figure 3 Relative performance gain across different testing data scales (regarding the training data size).
+
+drop duplicated logging events and users with fewer than three interactions in the observation window. To stress-test generalization, the test split is constructed so that user identifiers and interacted products rarely overlap with training: >99% of candidate products, 100% of user IDs, and 93% of user-history items are unseen during training. User histories are aggregated up to day −2 relative to the impression to prevent label leakage. Unless noted otherwise, we report relative gains over the point-wise legacy baseline, which is online-trained with snapshot refresh every 60–90 minutes.  
+
+> 6.1.2 Metrics
+
+We report standard sequential-recommendation metrics, Recall@K and Normalized Discounted Cumulative Gain at K (NDCG@K) , computed over held-out impression lists. 
+
+6.2 Main Results 
+
+GR2 substantially outperforms the legacy baseline (Fig. 2). On the internal test set, GR2 delivers +18.7% R@1 and +7.1% R@3 over a heavily-tuned legacy baseline, despite being trained on a single day of logs. Since the GR2 checkpoint is roughly two weeks stale relative to the test window while the baseline is refreshed hourly, the lift cannot be attributed to data freshness; it reflects a genuine improvement in ranking quality driven by reasoning over product semantics. 
+
+The lift is preserved at industrial scale (Fig. 3). Holding training data fixed at 70k sessions, we sweep test-set size from 0.14 × through 1.4× up to 100 × training data size. Relative R@K and N@K gains remain essentially constant across all three scales, indicating that GR2’s improvement is not an artifact of small-sample evaluation and transfers to traffic volumes seen in industrial serving. Figure 4 Relative performance gain tested on 9 consecutive days of traffic after 2 weeks training.  
+
+> Figure 5 Relative R@3 gain for various Qwen3 model sizes.
+
+Gains do not decay under model staleness (Fig. 4). Evaluated daily for nine consecutive days starting 02-01 ,the relative lift over the legacy baseline shows no measurable decay even though the GR2 checkpoint is more than two weeks stale by the end of the window. This is striking given the cold-start setting described above (Section 6.1.1): nearly every user and product at test time is novel, yet GR2 generalizes without retraining. We attribute this robustness to GR2’s reliance on LLM world knowledge and reasoning rather than memorized sparse IDs, which is precisely what forces the legacy baseline to refresh every 60–90 minutes to avoid distribution drift. We expect this gap to widen on lower-funnel signals (delayed conversions), where sparse-ID models are further disadvantaged by feedback delay and label sparsity. 
+
+Performance scales with model size (Fig. 5). Sweeping over Qwen-3 from 1.7B to 32B parameters, we observe R@3 lift grows monotonically with model size, demonstrating that GR2 inherits the LLM scaling law in the ads re-ranking domain. This stands in contrast to sparse-ID baseline models, whose scaling is bounded by ID-vocabulary capacity rather than parameter count. The current curve has not yet flattened despite our 
+
+∼10-GPU budget, suggesting potential headroom; we discuss how on-policy distillation (Section 3.4) closes the resulting serving-cost gap. 
+
+6.3 Serving Latency and Distillation 
+
+Serving ROI via On-Policy Distillation (Fig. 6) Our default GR2 recipe, denoted RL-OPD , first applies OPD to bootstrap reasoning without the catastrophic forgetting we observe with token-level SFT, then runs RL post-training on the OPD checkpoint to sharpen ranking quality while preserving the reasoning prior. A 1.7B Figure 6 On-policy Distillation (OPD) can significantly improve Serving ROI. ZS denotes zeroshot.  
+
+> Figure 7 Performance Comparison between Full Context vs Compressed Context (80% fewer tokens).
+
+student distilled from a 32B teacher (5% of teacher size) recovers 82% of the 32B’s gain over the baseline baseline and delivers 2.6 × the gain of an 8B model trained without distillation, yielding a ∼15 × serving-ROI boost ( 32 /1.7 × 0.82 ) at iso-quality. 
+
+Context Compression (Fig. 7) Both RL-OPD variants improve substantially over the zero-shot 0.6B baseline (+10–12% R@1, +4–6% R@5/N@5). The compressed-context variant matches or slightly surpasses the full-context counterpart at R@3/N@3 ( +7.71% vs. +7.14% ; +8.16% vs. +7.98% ) while consuming <20% of the tokens—an additional >5× context reduction at iso-quality. We attribute this to the solvability-conditioned reward: when s=1, the compressor is pushed toward ranking quality ¯q rather than literal preservation ¯p,learning to discard ranking-irrelevant signal. This confirms our hypothesis that information preservation correlates only weakly with ranking utility, and that aggressive ranking-aware compression acts as a denoiser. 
+
+Internalizing Reasoning (Fig. 8) To stress-test whether implicit reasoning can replace explicit CoT, we evaluate on a hard subset—sessions flagged by a large foundation LLM as requiring above-average reasoning, where bypassing CoT should hurt most. The first two points trace the same RL-OPD checkpoint with and without CoT: removing the trace at inference drops Recall and NDCG sharply on both 0.6B and 1.7B students (−6–7% R@1/N@1, −3–5% R@3/N@3), confirming the CoT carries real ranking signal on this slice. AFigure 8 Recall and NDCG across RL-OPD with CoT (explicit reasoning traces), without CoT, and after a second RL pass that internalizes reasoning. 
+
+second RL pass closes the gap entirely and slightly surpasses the CoT reference at the head of the ranking (R@1/N@1: 0.3012 vs. 0.2968 for 0.6B; 0.3070 vs. 0.3059 for 1.7B), and matches it at deeper cutoffs (0.6B R@5: 0.9256 vs. 0.9278 ; N@5: 0.6174 vs. 0.6190 , both within ∼0.3%). The OPD-pretrained backbone already encodes a robust ranking prior over reasoning traces, so the second RL phase only needs to re-route this prior into the direct-output policy, internalizing CoT through the shared backbone. The deployed artifact is thus reasoning-free at iso- or super-CoT quality even on reasoning-heavy traffic. 
+
+6.4 Reasoning Quality and Ablation 
+
+Reasoning quality across training recipes (Fig. 9). Applying RL directly on top of the zero-shot checkpoint slightly degrades reasoning quality across all five rubrics relative to OPD-initialized variants; the degradation is sharpest on Depth (≈1.02 , near the rubric floor), confirming that RL alone learns to rank well without thinking well . The RL-OPD recipe recovers reasoning quality while preserving the ranking gains, producing   
+
+> Figure 9 Reasoning quality (5 rubrics evaluated by LLM-as-a-judge using Claude CLI) of different GR2 variants. Figure 10 Ranking performance of different GR2 variants.
+
+traces that are simultaneously shorter and more focused. 
+
+Ablation: training recipe trade-offs (Fig. 10). We compare three recipes side-by-side on both ranking metrics and reasoning quality: (i) RL-only on the zero-shot checkpoint, and (ii) RL-OPD . RL-only matches RL-OPD on ranking metrics but underperforms on every reasoning rubric; RL-OPD Pareto-dominates both, supporting our headline claim that OPD supplies the reasoning prior while RL sharpens the ranking objective on top of it. 
+
+Case study (Table 1). GR2 grounds its ranking in product attributes (category, material, function) and the user’s revealed click patterns—semantics the sparse-ID baseline cannot represent. From a history dominated by leather holsters, pistol cases, and leather outerwear, GR2 infers a coherent “leather goods + firearms accessories” profile and promotes the vintage leather police coat to the top, recovering the click that the baseline ranks fourth. Non-leather, off-theme candidates (jewelry-making hammer, safety razor, Oakley sunglasses) are correctly pushed to the bottom, while the leather boots and leather pants are kept in the middle as plausible but weaker matches. 
+
+# 7 Related Works 
+
+Generative LLM RecSys Recent work increasingly reformulates recommendation as sequence generation. TIGER (Rajput et al., 2023) pioneered the use of Semantic IDs (SIDs), discretizing item representations via RQ-VAE to enable autoregressive recommendation without large embedding tables. OneRec (Zhou et al., 2025b) cast multiple recommendation tasks into a unified text-to-text LLM framework, and OneRec-Think (Liu et al., 2025) extended it with explicit reasoning traces, showing that chain-of-thought intermediate steps improve accuracy and robustness. OpenOneRec (Zhou et al., 2025a) contributes a reproducible research framework for this family. PLUM (He et al., 2025) similarly uses continued pre-training to align LLMs with the recommendation domain and adds a task-specific fine-tuning objective for generative retrieval. GR2 inherits the SID and item-alignment ideas but differs in three respects: (1) a tokenizer that achieves substantially higher SID uniqueness, (2) high-quality reasoning traces produced via targeted prompting and rejection sampling, and (3) a DAPO-based reward optimization. 
+
+Reasoning LLM Chain-of-thought (CoT) prompting elicits multi-step reasoning by generating intermediate steps before final answers (Wei et al., 2022), and subsequent work has formalized and extended reasoning structures beyond CoT (Xia et al., 2025; Wang et al., 2024). RL methods such as GRPO and its variants further improve reasoning faithfulness and coherence via verifiable rewards (Shao et al., 2024; Yu et al., 2025; Zheng et al., 2025; Chen et al., 2025), providing the broader context for our optimization strategy. A close work is LLM-based document re-ranking. ReaRank reasons before re-ranking passage lists via RL (Zhang et al., 2025a); Rank-R1 applies RL-based reasoning optimization to document ranking (Feng et al., 2025); ReasonRank and MM-R5 extend reasoning-augmented reranking to multi-view and multi-modal settings (Xu et al., 2025); R4ec (Gu et al., 2025) adds iterative reflection and refinement; and Wang et al. (2025) use a candidate-randomization bootstrap to improve fairness in LLM-based reranking. GR2 differs in its focus on semantic IDs and reward functions tailored to recommendation re-ranking, combined with structured reasoning traces and rejection sampling for higher-quality supervision. 
+
+# 8 Conclusion 
+
+We presented GR2 , a Generative Reasoning Re-Ranker that brings LLM world knowledge and chain-of-thought reasoning to the final re-ranking stage of large-scale recommendation systems. GR2 combines mid-training on SIDs, reasoning-trace distilled from a stronger teacher, and RL with verifiable rewards. To make the recipe industry-viable, we further introduced a context compressor that cuts input length by >80% at iso-quality, OPD as a scalable alternative to SFT, and reasoning-internalizing CoT distillation that delivers a ∼15 ×
+
+serving-ROI gain. Across industrial-scale traffic, GR2 improves over internal baselines (+18.7% R@1, +7.1% R@3; +9.6% N@3), with gains robust to test-set scale, two-week traffic staleness, and increasing model size. Ablations and LLM-as-judge analysis confirm that OPD supplies the reasoning prior while RL sharpens the ranking objective on top of it—neither is sufficient alone. Table 1 A case study demonstrating the value of GR2 vs. the pointwise legacy baseline on a representative session. Red marks the clicked candidate. Special tokens and SID are removed for readability.    
+
+> User interaction history Legacy baseline (Top-6) GR2 reasoning + Top-6 (reranked indices) 1.
+
+TRX AMBIDEXTROUS HOLSTER PRO (TRX Hol-ster): The TRX HolsterTM Slim offers reliable com-patibility and a snug fit for your Glock, P80, Smith & Wess...  
+
+> 2.
+
+Leather Drop Leg Holster with Light (Falco): Light-bearing Duty Drop Leg holster made of leather, specifically designed for professional use and ...  
+
+> 3.
+
+Leather Drop Leg Holster with Light (Falco): Light-bearing Duty Drop Leg holster made of leather, specifically designed for professional use and ...  
+
+> 4.
+
+Menseventwear Casual Men’s Double Breasted Tweed Herringbone V Neck Waistcoat XS / Brown (Adam Reed): 20% Wool / 80% Polyester Herring-bone V Neck 2 Real Welt pocket Double Breasted 8 Buttons Back metal ...  
+
+> 5.
+
+US Flag & Constitution Pistol Case (Relic Wood): US Flag & Constitution Pistol Case The perfect pistol case for proud and patriotic handgun owners. I...  
+
+> 6.
+
+Guides Choice ® Speed Loader Pouch (Diamond D Custom Leather): Due To Popular Demand We Have Created What We Believe To Be A Very Ergonomic And Easy To Use Pouch F...  
+
+> 7.
+
+Alaska Hunter Hip Holster (Diamond D Custom Leather): The Alaska Hunter Leather Gun Holster Is A Hip Holster With Ease Of Carry In Mind. We Have Placed Th...  
+
+> 8.
+
+Leather Drop Leg Holster with Light (Falco): Light-bearing Duty Drop Leg holster made of leather, specifically designed for professional use and ...  
+
+> 9.
+
+Wearable Recorder: Wearable Recorder  
+
+> 10.
+
+John Wayne Cowboy Leather Vest - Brown Real Sheep Leather Waistcoat For Mens (Handmade)  
+
+> 11.
+
+Minolta MND20 Point & Shoot Digital Camera with SD Card (Minolta): Whether you’re sightseeing, cel-ebrating with family, or gathering with friends, this point and shoot...  
+
+> 12.
+
+Gordon ® 6 in. Bowie Knife (Gordon ®): The GOR-DONTM 6 in. Bowie Knife is perfect for piercing and cutting in tight spaces. Stainless steel b...  
+
+> 13.
+
+Jos. A. Bank Solid Watch Cap (Jos. A. Bank): A versatile essential for cooler weather, this watch cap is designed for both warmth and timeless st...  
+
+> 14.
+
+HyperIce Hyperboot by Nike × (HyperIce): These wearable technology shoes offer three levels of heat and Normatec dynamic air compression to s...  
+
+> 15.
+
+Alleviate Loft 2 Left Foot Brace (Alleviate): Get immediate relief from plantar fasciitis or posterior tibial tendonitis (PTTD) pain with the Alle...  
+
+> 1.
+
+Diesel Men9.5us Leather Lace-up Boots Dark Brown Distressed Finish Almost Unused (Diesel)  
+
+> 2.
+
+Oakley Probation Polished Chrome No Lens Oo4041-02 Inmate Metal Rare (Oak-ley)  
+
+> 3.
+
+1-1/2" Domed Face German-style Chasing Hammer 11" Length Jew-elry Making Tool (2)  
+
+> 4.
+
+70s-80ś Germany Police German Policeman Genuine Leather Leather Coat Vin-tage (Police)  
+
+> 5.
+
+Mens Leather Jeans Pants Trouser 5 Pockets Cowhide Brown Breeches Bluf Levis 501 (Dexa Apperals)  
+
+> 6.
+
+Cnc Stainless Steel Replace-ment Safety Razor Stubby Short 3.0" Inch Handle Only (Unspecified) <think> The user has a history of clicking on various products, mainly related to holsters, leather items, and some accessories. Let’s look at their previous interactions to see what they like. They have a strong interest in leather holsters and cases (TRX, Falco, Diamond D), which are all related to firearms accessories. They also clicked on leather coats, like the John Wayne Vest and Menseventwear. So products related to leather and accessories would be a good fit. Looking at the products to predict:  
+
+> 1.
+
+The first one is Leather boots.  
+
+> 2.
+
+Oakley is a brand they haven’t clicked before, but maybe not relevant.  
+
+> 3.
+
+The third one is a jewelry making tool. The user didn’t click anything like this before.  
+
+> 4.
+
+The forth one is similar to previous leather coats (John Wayne Cowboy Vest, Menseventwear Waistcoat) they clicked on.  
+
+> 5.
+
+Mens Leather Jeans Pants – They clicked on leather pants/jeans in the past (like the Menseventwear Waistcoat).  
+
+> 6.
+
+Cnc Stainless Steel Razor – The user didn’t click on any razors before. Product 4 (Leather Coat) is similar in style. Product 5 (Leather Pants) is also a type of clothing. Product 1 (Leather Boots) might be a bit less relevant than pants but could be clicked if they like the style. Product 2 (Oakley Probation) is not leather and not firearms. Product 3 (Jewelry tool) and prod-uct 6 (Stainless Steel Razor) are not aligned with their past behavior. So the most likely clicked would be 4 and 5, followed by 1. Product 2 (Oakley), 3 (tool), and 6 (razor) might be lower on the list. </think> [4, 5, 1, 2, 3, 6] References 
+
+Kayhan Behdin, Yun Dai, Ata Fatahibaarzi, Aman Gupta, Qingquan Song, Shao Tang, Hejian Sang, Gregory Dexter, Sirou Zhu, Siyu Zhu, et al. Efficient ai in practice: Training and deployment of efficient llms for industry applications. 2025. Aili Chen, Aonian Li, Bangwei Gong, Binyang Jiang, Bo Fei, Bo Yang, Boji Shan, Changqing Yu, Chao Wang, Cheng Zhu, et al. Minimax-m1: Scaling test-time compute efficiently with lightning attention. arXiv preprint arXiv:2506.13585 , 2025. Jiaxin Deng, Shiyao Wang, Kuo Cai, Lejian Ren, Qigen Hu, Weifeng Ding, Qiang Luo, and Guorui Zhou. Onerec: Unifying retrieve and rank with generative recommender and iterative preference alignment. arXiv preprint arXiv:2502.18965 , 2025. Tao Feng, Zhigang Hua, Zijie Lei, Yan Xie, Shuang Yang, Bo Long, and Jiaxuan You. Iranker: Towards ranking foundation model. arXiv preprint arXiv:2506.21638 , 2025. Jingtong Gao, Xiangyu Zhao, Muyang Li, Minghao Zhao, Runze Wu, Ruocheng Guo, Yiding Liu, and Dawei Yin. Smlp4rec: An efficient all-mlp architecture for sequential recommendations. ACM Transactions on Information Systems , 42(3):1–23, 2024. Jingtong Gao, Bo Chen, Xiangyu Zhao, Weiwen Liu, Xiangyang Li, Yichao Wang, Wanyu Wang, Huifeng Guo, and Ruiming Tang. Llm4rerank: Llm-based auto-reranking framework for recommendations. In Proceedings of the ACM on Web Conference 2025 , pages 228–239, 2025. Shijie Geng, Shuchang Liu, Zuohui Fu, Yingqiang Ge, and Yongfeng Zhang. Recommendation as language processing (rlp): A unified pretrain, personalized prompt & predict paradigm (p5). In Proceedings of the 16th ACM Conference on Recommender Systems , pages 299–315, 2022. Hao Gu, Rui Zhong, Yu Xia, Wei Yang, Chi Lu, Peng Jiang, and Kun Gai. R 4ec: A reasoning, reflection, and refinement framework for recommendation systems. In Proceedings of the Nineteenth ACM Conference on Recommender Systems ,pages 411–421, 2025. Ruining He, Lukasz Heldt, Lichan Hong, Raghunandan Keshavan, Shifan Mao, Nikhil Mehta, Zhengyang Su, Alicia Tsai, Yueqi Wang, Shao-Chuan Wang, et al. Plum: Adapting pre-trained language models for industrial-scale generative recommendations. arXiv preprint arXiv:2510.07784 , 2025. Doyup Lee, Chiheon Kim, Saehoon Kim, Minsu Cho, and Wook-Shin Han. Autoregressive image generation using residual quantization. In Proceedings of the IEEE/CVF conference on computer vision and pattern recognition , pages 11523–11532, 2022. Mingfu Liang, Xi Liu, Rong Jin, Boyang Liu, Qiuling Suo, Qinghai Zhou, Song Zhou, Laming Chen, Hua Zheng, Zhiyuan Li, et al. External large foundation model: How to efficiently serve trillions of parameters for online ads recommendation. In Companion Proceedings of the ACM on Web Conference 2025 , pages 344–353, 2025. Mingfu Liang, Yufei Li, Jay Xu, Kavosh Asadi, Xi Liu, Shuo Gu, Kaushik Rangadurai, Frank Shyu, Shuaiwen Wang, Song Yang, et al. Generative reasoning re-ranker. arXiv preprint arXiv:2602.07774 , 2026. Weiwen Liu, Yunjia Xi, Jiarui Qin, Fei Sun, Bo Chen, Weinan Zhang, Rui Zhang, and Ruiming Tang. Neural re-ranking in multi-stage recommender systems: A review. Zhanyu Liu, Shiyao Wang, Xingmei Wang, Rongzhou Zhang, Jiaxin Deng, Honghui Bao, Jinghao Zhang, Wuchao Li, Pengfei Zheng, Xiangyu Wu, Yifei Hu, Qigen Hu, Xinchen Luo, Lejian Ren, Zixing Zhang, Qianqian Wang, Kuo Cai, Yunfan Wu, Hongtao Cheng, Zexuan Cheng, Lu Ren, Huanjie Wang, Yi Su, Ruiming Tang, Kun Gai, and Guorui Zhou. Onerec-think: In-text reasoning for generative recommendation. CoRR , abs/2510.11639, 2025. doi: 10.48550/ARXIV.2510.11639. https://doi.org/10.48550/arXiv.2510.11639 .Liang Luo, Yuxin Chen, Zhengyu Zhang, Mengyue Hang, Andrew Gu, Buyun Zhang, Boyang Liu, Chen Chen, Chengze Fan, Dong Liang, et al. Meta lattice: Model space redesign for cost-effective industry-scale ads recommendations. 
+
+arXiv preprint arXiv:2512.09200 , 2025. Shashank Rajput, Nikhil Mehta, Anima Singh, Raghunandan Hulikal Keshavan, Trung Vu, Lukasz Heldt, Lichan Hong, Yi Tay, Vinh Tran, Jonah Samost, et al. Recommender systems with generative retrieval. Advances in Neural Information Processing Systems , 36:10299–10315, 2023. Sudarshan Srinivasa Ramanujam, Antonio Alonso, Saurabh Kataria, Siddharth Dangi, Akhilesh Gupta, Birjodh Singh Tiwana, Manas Somaiya, Luke Simon, David Byrne, Sojeong Ha, et al. Large scale retrieval for the linkedin feed using causal language models. arXiv preprint arXiv:2510.14223 , 2025. Zhihong Shao, Peiyi Wang, Qihao Zhu, Runxin Xu, Junxiao Song, Xiao Bi, Haowei Zhang, Mingchuan Zhang, YK Li, Yang Wu, et al. Deepseekmath: Pushing the limits of mathematical reasoning in open language models. arXiv preprint arXiv:2402.03300 , 2024. Qwen Team. Qwen3 technical report, 2025. https://arxiv.org/abs/2505.09388 .Ruoxi Wang, Rakesh Shivanna, Derek Cheng, Sagar Jain, Dong Lin, Lichan Hong, and Ed Chi. Dcn v2: Improved deep & cross network and practical lessons for web-scale learning to rank systems. In Proceedings of the web conference 2021 , pages 1785–1797, 2021. Yaqi Wang, Haojia Sun, and Shuting Zhang. Llm as explainable re-ranker for recommendation system. arXiv preprint arXiv:2512.03439 , 2025. Yu Wang, Shiwan Zhao, Zhihu Wang, Heyuan Huang, Ming Fan, Yubo Zhang, Zhixing Wang, Haijun Wang, and Ting Liu. Strategic chain-of-thought: Guiding accurate reasoning in llms through strategy elicitation. arXiv preprint arXiv:2409.03271 , 2024. Jason Wei, Xuezhi Wang, Dale Schuurmans, Maarten Bosma, Fei Xia, Ed Chi, Quoc V Le, Denny Zhou, et al. Chain-of-thought prompting elicits reasoning in large language models. Advances in neural information processing systems , 35:24824–24837, 2022. Likang Wu, Zhi Zheng, Zhaopeng Qiu, Hao Wang, Hongchao Gu, Tingjia Shen, Chuan Qin, Chen Zhu, Hengshu Zhu, Qi Liu, et al. A survey on large language models for recommendation. World Wide Web , 27(5):60, 2024. Yu Xia, Rui Wang, Xu Liu, Mingyan Li, Tong Yu, Xiang Chen, Julian McAuley, and Shuai Li. Beyond chain-of-thought: A survey of chain-of-X paradigms for LLMs. In Owen Rambow, Leo Wanner, Marianna Apidianaki, Hend Al-Khalifa, Barbara Di Eugenio, and Steven Schockaert, editors, Proceedings of the 31st International Conference on Computational Linguistics , pages 10795–10809, Abu Dhabi, UAE, January 2025. Association for Computational Linguistics. https://aclanthology.org/2025.coling-main.719/ .Mingjun Xu, Jinhan Dong, Jue Hou, Zehui Wang, Sihang Li, Zhifeng Gao, Renxin Zhong, and Hengxing Cai. Mm-r5: Multimodal reasoning-enhanced reranker via reinforcement learning for document retrieval. arXiv preprint arXiv:2506.12364 , 2025. Qiying Yu, Zheng Zhang, Ruofei Zhu, Yufeng Yuan, Xiaochen Zuo, Yu Yue, Weinan Dai, Tiantian Fan, Gaohong Liu, Lingjun Liu, et al. Dapo: An open-source llm reinforcement learning system at scale. arXiv preprint arXiv:2503.14476 ,2025. Buyun Zhang, Liang Luo, Xi Liu, Jay Li, Zeliang Chen, Weilin Zhang, Xiaohan Wei, Yuchen Hao, Michael Tsang, Wenjun Wang, et al. Dhen: A deep and hierarchical ensemble network for large-scale click-through rate prediction. 
+
+arXiv preprint arXiv:2203.11014 , 2022. Buyun Zhang, Liang Luo, Yuxin Chen, Jade Nie, Xi Liu, Shen Li, Yanli Zhao, Yuchen Hao, Yantao Yao, Ellie Dingqiao Wen, et al. Wukong: towards a scaling law for large-scale recommendation. In Proceedings of the 41st International Conference on Machine Learning , pages 59421–59434, 2024. Le Zhang, Bo Wang, Xipeng Qiu, Siva Reddy, and Aishwarya Agrawal. REARANK: Reasoning re-ranking agent via reinforcement learning. In Christos Christodoulopoulos, Tanmoy Chakraborty, Carolyn Rose, and Violet Peng, editors, Proceedings of the 2025 Conference on Empirical Methods in Natural Language Processing , pages 2458–2471, Suzhou, China, November 2025a. Association for Computational Linguistics. ISBN 979-8-89176-332-6. doi: 10.18653/v1/2025.emnlp-main.125. https://aclanthology.org/2025.emnlp-main.125/ .Yihua Zhang, Xi Liu, Xihuan Zeng, Mingfu Liang, Jiyan Yang, Rong Jin, Wen-Yen Chen, Yiping Han, Hao Ma, Bo Long, et al. Reasonrec: A reasoning-augmented multimodal agent for unified recommendation. In ICML 2025 Workshop on Programmatic Representations for Agent Learning , 2025b. Siyan Zhao, Zhihui Xie, Mengchen Liu, Jing Huang, Guan Pang, Feiyu Chen, and Aditya Grover. Self-distilled reasoner: On-policy self-distillation for large language models. arXiv preprint arXiv:2601.18734 , 2026. Zihuai Zhao, Wenqi Fan, Jiatong Li, Yunqing Liu, Xiaowei Mei, Yiqi Wang, Zhen Wen, Fei Wang, Xiangyu Zhao, Jiliang Tang, et al. Recommender systems in the era of large language models (llms). IEEE Transactions on Knowledge and Data Engineering , 36(11):6889–6907, 2024. Chujie Zheng, Shixuan Liu, Mingze Li, Xiong-Hui Chen, Bowen Yu, Chang Gao, Kai Dang, Yuqiong Liu, Rui Men, An Yang, et al. Group sequence policy optimization. arXiv preprint arXiv:2507.18071 , 2025. Guorui Zhou, Na Mou, Ying Fan, Qi Pi, Weijie Bian, Chang Zhou, Xiaoqiang Zhu, and Kun Gai. Deep interest evolution network for click-through rate prediction. In Proceedings of the AAAI conference on artificial intelligence ,volume 33, pages 5941–5948, 2019. Guorui Zhou, Honghui Bao, Jiaming Huang, Jiaxin Deng, Jinghao Zhang, Junda She, Kuo Cai, Lejian Ren, Lu Ren, Qiang Luo, et al. Openonerec technical report. arXiv preprint arXiv:2512.24762 , 2025a. Guorui Zhou, Hengrui Hu, Hongtao Cheng, Huanjie Wang, Jiaxin Deng, Jinghao Zhang, Kuo Cai, Lejian Ren, Lu Ren, Liao Yu, et al. Onerec-v2 technical report. arXiv preprint arXiv:2508.20900 , 2025b. Huixue Zhou, Hengrui Gu, Zaifu Zhan, Xi Liu, Kaixiong Zhou, Yongkang Xiao, Mingfu Liang, Srinivas Prasad Govindan, Piyush Chawla, Jiyan Yang, et al. The efficiency vs. accuracy trade-off: Optimizing rag-enhanced llm recommender systems using multi-head early exit. In Proceedings of the 63rd Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers) , pages 26443–26458, 2025c.

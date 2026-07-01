@@ -1,0 +1,380 @@
+Title: Diagnosing and Mitigating Retrieval Bottlenecks in LLM-Based Cold-Start Recommendation
+
+URL Source: https://arxiv.org/pdf/2606.29947v1
+
+Published Time: Tue, 30 Jun 2026 01:54:51 GMT
+
+Number of Pages: 17
+
+Markdown Content:
+# Diagnosing and Mitigating Retrieval Bottlenecks in LLM-Based Cold-Start Recommendation 
+
+Zhe Dong 1,∗
+
+zhe.dong@maine.edu dongzhe181@gmail.com 
+
+> 1
+
+University of Maine at Presque Isle Fang Qin 2
+
+fangq@stanford.edu 
+
+> 2
+
+Stanford University Manish Shah 3
+
+shahmh@ieee.org 
+
+> 3
+
+Independent Researcher Yicheng Wang 3
+
+ethanwang63@163.com 
+
+> 3
+
+Independent Researcher Preprint / extended version 
+
+> ∗
+
+Corresponding author 
+
+Abstract 
+
+Large language models (LLMs) are increasingly used as rerankers in recommender systems, with the expectation that semantic understanding will help in cold-start and long-tail regimes. We test this assumption with a five-domain benchmark that explicitly separates reranking quality from retrieval coverage . In a positive-controlled regime where the gold item is guaranteed present, calibrated LLM rerankers fail to consistently outperform strong collaborative and content baselines under natural traffic, and within-family scaling from Qwen3-8B to Qwen3-32B narrows but does not close the gap on most domains. In a retrieval-realistic regime where the gold item is not injected, the bottleneck is more severe: standard single retrievers place the gold item in a 200-item pool only 4.6–22.9% of the time, largely because 32–91% of cold-start targets are brand-new items with no training interactions. We introduce LHF, a validation-trained learned hybrid fusion layer over a multi-retriever union pool, as a retrieval-side realizability baseline. LHF is the only combiner we test that beats every single retriever on all five domains and recovers 17–61% of oracle coverage headroom on content-rich domains, but only 5–7% on collaboratively strong domains. End-to-end experiments reveal the remaining mismatch: learned non-LLM ranking exploits the LHF pool, while prompt-level LLM reranking often degrades it. LLMs exhibit pockets of semantic cold-start advantage, especially in text-rich domains when the item is already present, but this advantage is largely unreachable in current retrieve-then-rerank pipelines. We release the benchmark protocol, splits, prompts, evaluation tooling, and archived reproducibility artifacts: data at https://doi.org/10.5281/zenodo.20991039 and code at 
+
+https://doi.org/10.5281/zenodo.20993306 .
+
+## 1 Introduction 
+
+LLM-based recommendation commonly follows a multi-stage pipeline: a fast retriever proposes a few hundred candidates and an LLM reranks them using item text and user history. The appeal is intuitive. Cold-start users, new items, and long-tail content are precisely where interaction signals are sparse and semantic content should matter. Yet a reranker can only reorder items it sees. If the correct item never enters the candidate pool, increasing LLM size or refining prompts cannot recover it. 1
+
+> arXiv:2606.29947v1 [cs.IR] 29 Jun 2026 Gold guaranteed present → isolates reranking quality
+> (A) Positive-controlled reranking
+> User history + item text
+> Pool = gold item + sampled negatives
+> Reranker / LLM reranker
+> Recall@10 = reranking quality
+> Gold NOT injected → measures candidate-generation coverage
+> (B) Retrieval-realistic coverage
+> User history
+> Retriever over full catalogue
+> Top-N pool (gold not injected)
+> Coverage@N = 1[gold in pool]
+> Coverage@200 × ConditionalTop10 → real-pipeline test
+> (C) End-to-end retrieve→rerank
+> Retriever / LHF top-200
+> Downstream ranker or LLM reranker
+> Top-10 recommendation
+> E2E Recall@10 =
+> Cov.@200 × Cond.
+> Dual-regime evaluation protocol: disentangling reranking quality from retrieval coverage
+
+Figure 1: Dual-regime evaluation protocol. Positive-controlled pools isolate reranking by injecting the gold item. Retrieval-realistic pools remove this injection and measure coverage. End-to-end evaluation feeds the realistic pool to a downstream ranker. We study that mismatch. Rather than evaluate LLM recommendation only in injected-candidate pools, we separate the problem into three regimes (Fig. 1): (i) a positive-controlled pool, where the gold item is guaranteed present and the question is whether the ranker can identify it; (ii) a 
+
+retrieval-realistic pool, where each retriever searches the full catalogue and the question is whether the gold item appears at all; and (iii) an end-to-end retrieve-then-rerank pipeline, where recall decomposes as E2E@10 = Cov@200 × Cond@10 , (1) with Cond @10 the probability that a reranker puts the gold item in the top 10 given that it was covered. Across Amazon Arts, Amazon Video Games, MIND news, MovieLens-20M, and Yelp restaurants, we find a consistent picture. LLM rerankers have genuine semantic cold-start ability in controlled pools, especially on news, but this advantage does not transfer to realistic pipelines. Standard retrievers cover the gold item in only 4.6–22.9% of top-200 pools, and even strong dense encoders, a two-tower retriever, and a learned fusion raise this only to 6.1–24.3%. Meanwhile, when coverage is non-trivial, prompt-level LLM reranking often demotes correct items that collaborative or learned rankers place near the top. We contribute four main results: (1) a dual-regime and end-to-end benchmark that disentangles reranking from retrieval; (2) a five-domain diagnosis showing that within-family LLM scale narrows but does not remove the gap to strong collaborative baselines because retrieval coverage is capped by item-new targets; (3) LHF, a validation-trained retrieval-side realizability baseline that partially converts multi-retriever complementarity into coverage gains; and (4) evidence that the improved LHF pool is exploited by a lightweight learned ranker but not by prompt-level LLM reranking. We also provide a graph-prompt side-signal audit and cost characterization. The reproducibility artifacts are archived separately as a data release ( https://doi.org/10.5281/zenodo.20991039 )and a code release ( https://doi.org/10.5281/zenodo.20993306 ); the code is also available at 
+
+https://github.com/dongzhe1/rec-diag-bench/tree/0.0.0 .22 Related Work 
+
+LLMs for recommendation and reranking. Prior work frames recommendation as language modeling or instruction following, including P5 [ 1], TALLRec [ 2 ], and zero-shot or instruction-tuned LLM rerankers such as LLMRank, RecRanker, and ChatGPT-style recommenders [ 3– 5]. Surveys summarize LLM-for-recommendation pipelines and paradigms [ 6 , 7 ]. Much of this work evaluates in warm or candidate-injected settings. We stress-test LLM reranking under temporal cold-start and explicitly separate the reranking step from candidate generation. 
+
+Cold-start and hybrid retrieval. Cold-start has long motivated content-to-collaborative hybridization, including DropoutNet [ 8 ], Heater/MWUF [ 9 ], MetaEmb [ 10 ], MeLU [ 11 ], contrastive cold-start learning [ 12 ], and modality-aware ranking [ 13 ]. Our work quantifies where content helps: not primarily in prompt-level reranking, but in retrieving new items that have no interaction history. We also compare standard dense retrieval, strong off-the-shelf encoders, a frozen two-tower retriever, and learned fusion against collaborative retrievers. 
+
+Recommendation baselines and evaluation. Our baseline pool covers matrix factoriza-tion [ 14 ], graph CF [ 15 , 16 ], sequential recommendation [ 17 ], dense retrieval [ 18 –23 ], reciprocal-rank fusion [ 24 ], and gradient-boosted ranking [ 25 ]. Recommender evaluation is sensitive to negative sampling, leakage, and weak baselines [ 26 – 28 ]. We extend this perspective to LLM recommendation: candidate injection, stratified cold-tail subsets, negative sampling, and tail priors can all over-credit LLM rerankers. 
+
+Closest prior work. The closest prior diagnostic study is a single-domain cold-start reranking analysis on movies [ 29 ]. It links LLM/cross-encoder reranking failures to coverage and exposure. We differ by evaluating real instruct LLMs, using a positive-controlled regime to isolate reranking, adding full-catalogue retrieval and end-to-end tests across five domains, and introducing a learned retrieval-side mitigation. 
+
+## 3 Setup and Protocol 
+
+3.1 Datasets and temporal buckets 
+
+We evaluate five public domains: Amazon Reviews 2023 Arts and Video Games [ 30 , 31 ], MIND small news [ 32 ], MovieLens-20M [ 33 ], and Yelp Philadelphia restaurants [ 34 ]. We treat ratings above a domain-specific threshold or clicks as positive feedback, split interactions chronologically into 70/10/20 train/validation/test, evaluate users seen in training, and cap test users at 5,000 where applicable. At retrieval time, the candidate catalogue includes items whose metadata is available before the request timestamp, while all post-training interactions are withheld; this is what makes text retrieval possible for item new targets while keeping interaction signals unavailable. Cold-start labels are computed from the training split only. Each test interaction is assigned to one primary bucket by priority: item new (target has zero training interactions), item cold 
+
+(bottom active-item frequency), long tail , user cold , and warm . Table 1 shows that temporal evaluation is dominated by item-new targets. 
+
+3.2 Models, prompts, and metrics 
+
+Candidate generators include popularity, item-kNN, TF-IDF, Markov, BPR, LightGCN, SASRec, graph co-occurrence and embeddings, SBERT/BGE dense retrieval, and several fusions. Rerankers include a cross-encoder and prompt-based LLM rerankers. The primary LLM is Qwen3-8B [ 35 ]; 3Table 1: Temporal test buckets. Item-new targets have zero training interactions and dominate several domains.                                     
+
+> Domain New Cold Tail U-cold Warm Total Arts 1768 372 174 360 2326 5000 VideoG 3481 145 56 242 1076 5000 MIND 4528 57 440 371 5000 ML-20M 1894 322 61 971 2951 Yelp 817 125 89 231 1330 2592
+
+Table 2: Positive-controlled reranking Recall@10. Gold is injected, so this isolates reranking quality.                                    
+
+> Model Arts VideoG MIND ML-20M Yelp Popularity .115 .140 .038 .419 .093 Item-kNN .098 .096 .107 .371 .157 LightGCN .147 .140 .069 .490 .159 Fusion .220 .157 .084 .390 .159
+> Cross-enc. .152 .163 .100 .129 .085 LLM-8B .145 .143 .092 .219 .085
+
+Qwen3-32B and Llama-3.3-70B-Instruct [ 36 ] are scale checks. Candidates are scored by the log-probability of a calibrated “Yes” answer. Unless noted, results use seed 42, top-200 retrieval, full history, and Recall@10 or Coverage@200. 
+
+## 4 LLM Reranking in Controlled Pools 
+
+4.1 Gold-injected positive-controlled evaluation 
+
+The positive-controlled pool contains the gold item and sampled negatives. It asks whether a ranker can identify a correct item after retrieval has already succeeded. Table 2 shows representative Recall@10 rows. Qwen3-8B does not win any domain; LightGCN dominates ML-20M, graph/content fusion wins Arts/Yelp, and a cross-encoder wins Video Games. Under natural traffic, scaling narrows but does not close the gap. Qwen3-32B improves over 8B on four domains, but still loses to the best collaborative or fusion baseline on four of five domains (Table 3). The exception is MIND, where interaction signal is weak and text is rich. 
+
+4.2 Negative sampling and prompting checks 
+
+Evaluation choices can flip controlled-pool conclusions. With uniform negatives, CF appears stronger on Video Games; with popularity-weighted negatives, CF/popularity methods rank popular distractors above the gold item and collapse, while the LLM is more robust (Video Games: best-CF .157 to .084, LLM .143 to .171). On Yelp, the CF-LLM gap shrinks from .074 to .010. In all controlled-pool comparisons, every ranker sees the same candidate pool for a user; negatives are sampled from non-positive items after excluding the user’s observed history and held-out positives, either uniformly or proportional to training-set item frequency. Prompting variants do not rescue the LLM: pointwise yes/no log-probability beats 0–100 scoring and listwise top-10 selection on the tested subsets (VideoG .040 vs .020/.020; MIND .047 vs .040/.033). Controlled reranking is therefore fragile; realistic retrieval is the decisive test. 4Table 3: Natural-reweighted reranking Recall@10 and scale. Scaling helps, but does not rescue most domains.                         
+
+> Domain Best CF/fusion LLM-8B LLM-32B LLM-70B Arts .252 .094 .141 .118 VideoG .233 .155 .211 .172 MIND .093 .089 .169 .137 ML-20M .602 .210 .190 .116 Yelp .274 .061 .089 .050
+
+Table 4: Retrieval-realistic coverage@200. Standard single retrievers cover 4.6–22.9%. Strong dense encoders and a two-tower retriever narrow but do not close the gap; LHF raises coverage to 6.1–24.3%. 
+
+Domain item-new share Best standard Best dense Two-tower LHF Oracle union Arts .354 .046 .038 .034 .061 .133 VideoG .696 .047 .046 .038 .071 .144 MIND .906 .046 .050 .032 .075 .094 ML-20M .642 .138 .051 .107 .147 .272 Yelp .315 .229 .106 .147 .243 .522 
+
+## 5 Retrieval Coverage Is the Bottleneck 
+
+In the retrieval-realistic regime, the gold item is not injected. Recall@200 is coverage: did the retriever surface the target at all? Table 4 shows that standard single retrievers cover only 4.6–22.9% of cases. Strong dense encoders and a two-tower retriever do not remove the bottleneck: best dense coverage remains at most 10.6%, and the two-tower model does not surpass the strongest CF retriever on CF-strong domains. The reason is structural. Under temporal splits, 32–91% of test targets are item new ; these items have zero training interactions. CF and co-occurrence retrievers have no item embedding or history to exploit. Text can help, but even text retrievers are bounded by weak user-to-item semantic matching over a large catalogue. MIND illustrates the extreme: 90.6% of news targets are new; the best text retriever reaches .046 coverage, 5x the best CF retriever, but still covers only about one in twenty users. 
+
+## 6 Mitigation: Learned Hybrid Fusion 
+
+6.1 Oracle headroom and heuristic fusion 
+
+Different retrievers find different items. The oracle union of standard retrievers raises coverage substantially, yet real single-stage fusions capture little of that headroom. We compare reciprocal-rank fusion (RRF), round-robin interleaving, and a cold-aware retrieval allocation baseline (CARA) that assigns more content-retrieval budget to user-cold requests and more CF budget to warm requests. Figure 2 shows that LHF is the only tested combiner that consistently improves on the best single retriever. 5Arts VideoG MIND ML-20M Yelp     
+
+> 0.0
+> 0.1
+> 0.2
+> 0.3
+> 0.4
+> 0.5
+> Coverage@200
+> Best single RRF CARA LHF Oracle
+
+Figure 2: Retriever complementarity is large, but difficult to realize. LHF is the only combiner that beats every single retriever on all five domains, yet it still captures only part of the oracle union. Table 5: Serving-time availability of LHF features. All features are computed without validation/test interactions for the target event.       
+
+> Feature group Source and time boundary Retriever ranks/scores/present flags Produced by retrievers from the training snapshot and current request. Hit count, min/mean rank Aggregates over retriever outputs for the same request. User history length, user-cold User interactions observed in the training prefix. Item popularity, item-new/cold Counts from the training prefix only; item-new means zero training interactions at retrieval time. Item text length/metadata Static catalogue metadata available before the request/ranking timestamp.
+
+6.2 LHF: validation-trained fusion over retriever evidence 
+
+LHF scores the union of ten retrievers’ top-200 pools. For each user-item pair it uses retriever ranks, scores, present flags, hit counts, min/mean rank, user history length, user-cold flag, item popularity, item-new flag, and item text length. A domain-specific gradient-boosted classifier is trained on the validation split only: positives are validation gold items when covered by the union, and negatives are other union candidates for the same user. At test time, LHF reranks the union and returns top-200. All LHF features are available at serving time and computed from the training snapshot, catalogue metadata, or request-time retriever outputs. The downstream LightGBM ranker used later is also trained only on validation examples and evaluated on held-out test users; no test interactions are used to train either stage. LHF improves coverage on all domains: MIND .046 to .075, VideoG .047 to .071, Arts .046 to .061, ML-20M .138 to .147, and Yelp .229 to .243. It realizes 61% of oracle headroom on MIND, 25% on Video Games, and 17% on Arts, but only 5–7% on the collaboratively strong domains. The gain is not simply a larger union. Removing cold-start metadata collapses MIND from .075 to .035, below the best single retriever; removing text retrievers collapses MIND further to .019. Logistic regression performs similarly to GBDT, suggesting that the critical signal is the feature set rather than model class. Coverage-aware training further confirms the regime conflict (Fig. 3). Upweighting item-new positives by 5 × raises item-new coverage on Yelp by about 10 percentage points and on Video Games by about 2 points, while reducing warm coverage by 4–5 points. The method therefore exposes a tunable allocation tradeoff: cold-start retrieval can be improved, but not for free. 6Table 6: LHF procedure for candidate generation. 
+
+Input: retriever bank R, budget N , validation split. 1. For each user u, form Cu = ∪r∈R TopN r (u). 2. Extract retriever evidence and serving-time metadata features ϕ(u, i ) for each i ∈ C u.3. Train a domain-specific GBDT classifier on validation positives and in-pool negatives. 4. At test time, score ˆ s(u, i ) = fθ (ϕ(u, i )) and return top-N .
+
+Output: fused candidate pool for downstream ranking. Amazon     
+
+> Arts
+> Amazon
+> VideoG
+> MIND
+> (news)
+> ML-20M Yelp
+> 0.00
+> 0.02
+> 0.04
+> 0.06
+> 0.08
+> 0.10
+> 0.12
+> 0.14
+> Coverage@200
+> +2pp
+> +2pp
+> +0pp
+> +3pp
+> +10pp
+> item_new coverage@200 (↑ large gain)
+> LHF base
+> LHF + item_new×5
+> Amazon
+> Arts
+> Amazon
+> VideoG
+> MIND
+> (news)
+> ML-20M Yelp
+> 0.0
+> 0.1
+> 0.2
+> 0.3
+> 0.4
+> 0.5
+> −2pp
+> −5pp
+> −1pp
+> −4pp
+> −4pp
+> warm coverage@200 (↓ tradeoff)
+> Error bars = ±SEM across 3 seeds (VideoG/MIND/Yelp); single seed for ML-20M/Arts
+> Coverage-aware training confirms the regime conflict: item_new gains trade off warm (overall coverage ≈ preserved; warm is a small share of natural traffic)
+
+Figure 3: Coverage-aware training exposes a regime conflict. Upweighting item-new positives improves new-item coverage, especially on Yelp and Video Games, but trades off warm coverage. 
+
+## 7 End-to-End: Better Pools Still Need the Right Ranker 
+
+7.1 Retriever pool to LLM reranker 
+
+Feeding realistic pools to the LLM gives end-to-end Recall@10 at or below 1.4% across domains. Coverage caps the pipeline, and where coverage is non-trivial, LLM reranking removes more correct top-10 items than it adds. Expanded 1,000-user paired tests confirm this: Yelp LightGCN drops by 3.1 points (37 losses, 6 gains, McNemar p < . 001), VideoG fusion drops by 1.2 points ( p < . 001), and ML-20M fusion drops by 5.7 points on the stratified subset. 
+
+7.2 The LHF pool contains rankable signal, but not for the LLM 
+
+A key question is whether the pool is bad or the prompt-level LLM is the wrong ranker. We compare three rankers on the same LHF top-200 pool and the same 1,000 LLM-scored users: LHF’s own order, a validation-trained LightGBM downstream ranker, and the LLM reranker. Figure 4 shows the outcome. LightGBM improves Recall@10 over LHF-only by 1.3–2.7 percentage points on all five domains (paired p < . 001 each). The LLM does not: it significantly degrades Yelp and Arts, is not significantly better on the remaining domains, and loses to LightGBM head-to-head on every domain. 7Arts VideoG MIND ML-20M Yelp    
+
+> 0.00
+> 0.02
+> 0.04
+> 0.06
+> Recall@10
+> LHF order LHF + LightGBM LHF + LLM Coverage@200 ceiling
+> 0.00
+> 0.05
+> 0.10
+> 0.15
+> 0.20
+> 0.25
+> Coverage@200
+
+Figure 4: The LHF pool contains rankable signal, but the prompt-level LLM does not exploit it. Coverage@200 is the ceiling; a learned LightGBM ranker improves top-10 recall, while LHF →LLM remains low and often degrades. This localizes the failure. The problem is not that all realistic pools are useless: a lightweight learned ranker can exploit them. It is also not that semantic cold-start signal is absent: positive-controlled examples and MIND results show that LLMs can rank new content when it is present. The failure is that prompt-level LLM reranking is deployed too late and conflicts with behavioral signals when retrieval is strong. 
+
+## 8 Auditing Prompt-Level Side Signals 
+
+A natural mitigation is to add graph evidence to the prompt. We audit an internal graph-evidence prompt variant, which we call GraphPrompt+Tail: it includes LightGCN percentiles, co-occurrence evidence, and an additive tail bonus. Table 7 decomposes its effect. Graph evidence itself is non-positive on four of five domains; almost all apparent gain comes from the tail prior. Under natural reweighting, that gain disappears except marginally on MIND and can collapse the warm cell. This supports the broader diagnosis: prompt-level side-signal injection can create convincing stratified gains without improving natural traffic. Retrieval-side learning is the more promising place to use semantic or cold-start evidence. 
+
+## 9 Cost, Discussion, and Limitations 
+
+LLM reranking is expensive. We measure all systems on the same Amazon Video Games candidate pairs on a single H100-class GPU where applicable. Qwen3-8B uses bf16 and the same prompt template, history window, and candidate-text truncation as the accuracy runs; throughput includes prompt/tokenization overhead and forward scoring in our pipeline. LightGCN scores about 55k pairs/s with 4.2GB peak GPU memory; Qwen3-8B scores 58.7 pairs/s and uses 36GB; Graph-Prompt+Tail is slower still. Thus the model that does not improve realistic end-to-end recall is also roughly 1000x slower than a CF retriever and about 9x more memory-intensive. The practical implication is not that LLMs are useless for recommendation. They are useful where text is the only signal, and their semantic judgments can inform offline supervision, item representations, or candidate generation. But spending LLM capacity online at the reranking stage is 8Table 7: GraphPrompt+Tail decomposition. Prompt graph evidence rarely helps; apparent gains are mostly tail-prior effects on stratified subsets.             
+
+> Domain Evidence effect Tail-prior effect Arts -.065 +.170 VideoG -.017 +.208 MIND +.015 +.023 ML-20M -.148 +.010 Yelp -.041 +.159
+
+poorly matched to the dominant failure mode. Future work should target retrieval coverage, learned candidate generation, and lightweight downstream ranking rather than prompt-only reranking. This study has limitations. LLM reranking is evaluated on sampled subsets for cost reasons, though paired tests and 1,000-user expanded runs reduce this concern. LHF and the downstream LightGBM ranker are both trained on validation data and tested on held-out interactions; we do not claim a nested production training protocol, only a leakage-free offline test of whether the candidate pool contains rankable signal. We leave cross-fitted deployment calibration to future work. We evaluate several prompts but do not exhaustively search prompt designs. Qwen3 8B to 32B is the clean scale axis; Llama-70B is a cross-family 4-bit check. Finally, LHF is a lightweight retrieval-side mitigation rather than a fully optimized production candidate generator. Stronger LLM-distilled or two-tower retrievers may narrow the bottleneck, but our two-tower experiment and item-new analysis suggest they will not remove it without addressing new-item coverage directly. 
+
+## 10 Conclusion 
+
+LLMs exhibit pockets of semantic cold-start advantage, especially in text-rich domains when the correct item is already in the pool. In realistic retrieve-then-rerank pipelines, that advantage is largely unreachable. Standard retrievers cover the target in only 4.6–22.9% of top-200 pools, because many targets are genuinely new items with no interaction history. LHF partially mitigates this by learning when to trust different retrievers and cold-start metadata, especially on content-rich domains. Yet even improved pools are better exploited by a lightweight learned ranker than by prompt-level LLM reranking. The cold-start opportunity therefore lives at retrieval and candidate generation, not at the final LLM reranking stage. 
+
+## Data and Code Availability 
+
+The reproducibility artifacts for this preprint are archived in two DOI-backed records. The data artifact, available at https://doi.org/10.5281/zenodo.20991039 , contains the processed benchmark material used to reproduce the paper’s analyses, including temporal splits, candidate pools, prompts or prompt metadata, model outputs, aggregate metrics, and diagnostic tables where redistribution is permitted by the underlying dataset licenses. The code artifact, available at https://doi.org/10.5281/zenodo.20993306 , contains the evaluation and analysis code for the dual-regime benchmark, retrieval-realistic coverage evaluation, LHF candidate generation, downstream ranking, LLM reranking, plotting, and statistical tests. The corresponding Git repository tag is https://github.com/dongzhe1/rec-diag-bench/tree/0.0.0 .9Table 8: Full positive-controlled Recall@10 with 95% bootstrap intervals. 
+
+Model Arts VideoG MIND ML-20M Yelp Popularity .115 [.09,.15] .140 [.11,.18] .038 [.02,.06] .419 [.35,.49] .093 [.07,.12] Item-kNN .098 [.07,.13] .096 [.06,.13] .107 [.07,.15] .371 [.30,.44] .157 [.12,.19] TF-IDF .188 [.15,.23] .132 [.10,.17] .096 [.06,.13] .124 [.09,.17] .113 [.08,.14] Markov .080 [.06,.11] .096 [.06,.13] .057 [.03,.09] .352 [.29,.42] .077 [.05,.11] BPR .083 [.06,.11] .101 [.07,.13] .050 [.03,.08] .486 [.41,.55] .129 [.10,.16] LightGCN .147 [.11,.18] .140 [.11,.18] .069 [.04,.10] .490 [.42,.56] .159 [.12,.20] SASRec .072 [.05,.10] .065 [.04,.09] .042 [.02,.07] .229 [.17,.29] .057 [.04,.08] SBERT .163 [.13,.20] .107 [.08,.14] .092 [.06,.13] .095 [.06,.13] .082 [.06,.11] Graph-aware .220 [.18,.26] .157 [.12,.20] .084 [.05,.12] .390 [.32,.45] .159 [.12,.20] 
+
+Cross-encoder .152 [.12,.19] .163 [.13,.20] .100 [.07,.14] .129 [.09,.18] .085 [.06,.11] LLM-8B .145 [.11,.18] .143 [.11,.18] .092 [.06,.13] .219 [.17,.28] .085 [.06,.11] 
+
+Table 9: End-to-end retrieve-then-rerank on the LLM-scored subset. Coverage is gold-in-pool at top 200; retriever-only and +LLM are end-to-end Recall@10. These subset coverages are not directly comparable to the full-test coverage in the main paper. 
+
+Domain Retriever Coverage@200 Retriever-only R@10 +LLM R@10 Arts LightGCN .030 .007 .005 Arts SBERT .050 .013 .007 Arts RRF .045 .013 .000 Arts CARA .048 .010 .007 VideoG LightGCN .070 .017 .000 VideoG SBERT .051 .000 .000 VideoG RRF .070 .017 .000 VideoG CARA .079 .011 .000 MIND LightGCN .046 .004 .000 MIND SBERT .035 .004 .000 MIND RRF .042 .008 .008 MIND CARA .069 .004 .008 ML-20M LightGCN .271 .057 .014 ML-20M SBERT .024 .000 .005 ML-20M RRF .271 .057 .000 ML-20M CARA .257 .038 .014 Yelp LightGCN .188 .028 .013 Yelp SBERT .087 .010 .003 Yelp RRF .162 .015 .010 Yelp CARA .159 .018 .010 
+
+## A Additional Diagnostic Results 
+
+A.1 Full positive-controlled reranking table 
+
+Table 8 reports the full set of positive-controlled Recall@10 baselines. Confidence intervals are 95% bootstrap intervals over users. These are the numbers behind the condensed reranking table in the main paper; the conclusion is unchanged: Qwen3-8B is competitive only in some cold/content-heavy cells and never wins a full domain. 
+
+A.2 End-to-end retrieval and LLM reranking 
+
+Table 9 shows the full end-to-end table over the LLM-scored reranking subsets. These subsets are used to measure the costly LLM stage and are not the same denominator as the full-test coverage table; the full-test coverage cap is reported separately in the main paper. In almost every cell, adding the LLM fails to improve top-10 recall; apparent improvements are one-user effects under very low coverage. 10 Table 10: Selected LHF ablations. Values are Coverage@200.                   
+
+> Domain LHF No metadata No text retr. Arts .061 .058 .054 VideoG .071 .062 .058 MIND .075 .035 .019 ML-20M .147 .144 .149 Yelp .243 .235 .240
+
+Table 11: Throughput and peak GPU memory on Amazon Video Games.               
+
+> Model Pairs/s Peak GPU MB Popularity 503,440 0LightGCN 55,455 4,232 SBERT 14,086 4,232 Cross-encoder 583 5,281 Qwen3-8B LLM 58.7 36,103 GraphPrompt+Tail 42.8 40,244
+
+A.3 LHF ablations, coverage-aware training, and cost 
+
+Table 10 summarizes the ablations most relevant to the method claim. Removing metadata or text retrievers damages the cold-start regimes, while item-new reweighting trades warm performance for new-item coverage. Table 11 reports serving cost. 
+
+A.4 Additional LHF diagnostics 
+
+Figure 5 compares realized candidate generators across cutoffs; the oracle ceiling is reported separately in the main paper. The learned fusion advantage is not an artifact of the top-200 point. On content-rich domains, LHF improves early recall as well as coverage; on CF-strong domains, the main benefit is coverage at larger candidate budgets, which is why a downstream learned ranker is needed. Figure 6 summarizes ablations over the LHF feature set and retriever pool. The largest drops occur when removing text retrievers or cold-start metadata on MIND, confirming that the learned fusion works by routing cold-start cases to the appropriate evidence source rather than merely averaging retrievers. 11 10 50 100 200             
+
+> K
+> 0.01
+> 0.02
+> 0.03
+> 0.04
+> 0.05
+> 0.06
+> Recall@K
+> Amazon Arts
+> 10 50 100 200
+> K
+> 0.02
+> 0.04
+> 0.06
+> Recall@K
+> Amazon VideoG
+> 10 50 100 200
+> K
+> 0.00
+> 0.02
+> 0.04
+> 0.06
+> Recall@K
+> MIND (news)
+> 10 50 100 200
+> K
+> 0.025
+> 0.050
+> 0.075
+> 0.100
+> 0.125
+> 0.150
+> Recall@K
+> ML-20M
+> 10 50 100 200
+> K
+> 0.05
+> 0.10
+> 0.15
+> 0.20
+> 0.25
+> Recall@K
+> Yelp
+> Method
+> best single retriever
+> RRF
+> CARA
+> LHF (ours)
+> Recall@K: LHF consistently improves over RRF/CARA and helps early recall on content-rich domains
+
+Figure 5: Candidate-generation Recall@K (gold-in-pool coverage at cutoff K) for realizable rankers. LHF beats heuristic fusions across cutoffs and improves early recall on content-rich domains; on CF-strong domains, gains appear mainly at larger K. The oracle union is omitted here because this plot compares executable rankers, not coverage ceilings. Table 12: Strong dense and learned retrieval checks. Best dense encoders and a frozen-encoder two-tower retriever do not eliminate the coverage bottleneck; LHF improves the standard union but remains far below oracle on CF-strong domains. 
+
+Domain Pop. ItemKNN TF-IDF SBERT LightGCN Best dense Two-tower LHF Oracle Arts .027 .019 .036 .037 .046 .038 .034 .061 .133 VideoG .042 .021 .027 .035 .047 .046 .038 .071 .144 MIND .003 .003 .046 .040 .009 .050 .032 .075 .094 ML-20M .105 .138 .041 .026 .131 .051 .107 .147 .272 Yelp .187 .187 .126 .096 .229 .106 .147 .243 .522 
+
+Table 13: Coverage-aware training over LHF. Item-new upweighting improves new-item coverage with a measurable warm-coverage tradeoff; means and SEM are over three seeds where available. 
+
+Domain LHF overall LHF item-new LHF warm +new ×5 overall +new ×5 item-new +new ×5 warm Arts .063 .007 .111 .059 .027 .088 VideoG .074 ± .002 .016 ± .002 .241 ± .004 .079 ± .001 .038 ± .001 .194 ± .003 MIND .076 ± .001 .062 ± .001 .230 ± .006 .075 ± .001 .062 ± .001 .218 ± .006 ML-20M .149 .000 .424 .153 .026 .380 Yelp .242 ± .002 .022 ± .008 .376 ± .002 .235 ± .002 .124 ± .002 .336 ± .003 
+
+12 Amazon 
+
+Arts 
+
+Amazon 
+
+VideoG 
+
+MIND 
+
+(news) 
+
+ML-20M Yelp 
+
+0.00 
+
+0.05 
+
+0.10 
+
+0.15 
+
+0.20 
+
+0.25 
+
+> Coverage@200
+
+Ablation: on MIND, removing text retrievers (0.019) or all metadata drops LHF below best-single      
+
+> best single LHF (full) −all metadata −text retr. −CF retr. rank-only
+
+Figure 6: LHF ablations. Removing text retrievers or cold-start metadata severely hurts the content-rich cold-start regime, especially MIND. Rank-only features are insufficient without routing metadata. 13 Ethical Considerations 
+
+This work evaluates offline recommendation datasets and does not deploy a system or collect new user data. The main risks concern privacy in user histories, popularity amplification, unfair long-tail exposure, and overconfidence in LLM-based semantic judgments. Our LLM scoring is performed offline on open-weight models rather than by sending histories to third-party APIs. Any online use of LLM reranking should minimize, truncate, or anonymize user histories before prompting and should audit subgroup coverage and exposure. The public artifacts release processed splits, scripts, prompts, model outputs, and aggregate metrics where redistribution is allowed, while avoiding private user information beyond what is already contained in the underlying public datasets. 
+
+## References 
+
+[1] Shijie Geng, Shuchang Liu, Zuohui Fu, Yingqiang Ge, and Yongfeng Zhang. Recommendation as language processing (rlp): A unified pretrain, personalized prompt and predict paradigm (p5). In Proceedings of the 16th ACM Conference on Recommender Systems , pages 299–315, 2022. doi: 10.1145/3523227.3546767. [2] Keqin Bao, Jizhi Zhang, Yang Zhang, Wenjie Wang, Fuli Feng, and Xiangnan He. Tallrec: An effective and efficient tuning framework to align large language model with recommendation. In Proceedings of the 17th ACM Conference on Recommender Systems , pages 1007–1014, 2023. doi: 10.1145/3604915.3608857. [3] Yupeng Hou, Junjie Zhang, Zihan Lin, Hongyu Lu, Ruobing Xie, Julian McAuley, and Wayne Xin Zhao. Large language models are zero-shot rankers for recommender systems. In 
+
+Advances in Information Retrieval: 46th European Conference on Information Retrieval , pages 364–381, 2024. [4] Sichun Luo, Bowei He, Haohan Zhao, Wei Shao, Yanlin Qi, Yinya Huang, Aojun Zhou, Yuxuan Yao, Zongpeng Li, Yuanzhang Xiao, Mingjie Zhan, and Linqi Song. Recranker: Instruction tuning large language model as ranker for top-k recommendation. arXiv preprint arXiv:2312.16018 , 2024. [5] Junling Liu, Chao Liu, Peilin Zhou, Renjie Lv, Kang Zhou, and Yan Zhang. Is chatgpt a good recommender? a preliminary study. arXiv preprint arXiv:2304.10149 , 2023. [6] Likang Wu, Zhi Zheng, Zhaopeng Qiu, Hao Wang, Hongchao Gu, Tingjia Shen, Chuan Qin, Chen Zhu, Hengshu Zhu, Qi Liu, Hui Xiong, and Enhong Chen. A survey on large language models for recommendation. World Wide Web , 27:1–49, 2024. doi: 10.1007/s11280-024-01291-2. [7] Jianghao Lin, Xinyi Dai, Yunjia Xi, Weiwen Liu, Bo Chen, Hao Zhang, Yong Liu, Chuhan Wu, Xiangyang Li, Chenxu Zhu, Huifeng Guo, Yong Yu, Ruiming Tang, and Weinan Zhang. How can recommender systems benefit from large language models: A survey. ACM Transactions on Information Systems , 43(2):28:1–28:47, 2025. doi: 10.1145/3678004. [8] Maksims Volkovs, Guang Wei Yu, and Tomi Poutanen. Dropoutnet: Addressing cold start in recommender systems. In Advances in Neural Information Processing Systems , volume 30, 2017. [9] Yongchun Zhu, Ruobing Xie, Fuzhen Zhuang, Kaikai Ge, Ying Sun, Xu Zhang, Leyu Lin, and Juan Cao. Learning to warm up cold item embeddings for cold-start recommendation with 14 meta scaling and shifting networks. In Proceedings of the 44th International ACM SIGIR Conference on Research and Development in Information Retrieval , pages 1167–1176, 2021. doi: 10.1145/3404835.3462843. [10] Feiyang Pan, Shuokai Li, Xiang Ao, Pingzhong Tang, and Qing He. Warm up cold-start advertisements: Improving ctr predictions via learning to learn id embeddings. In Proceedings of the 42nd International ACM SIGIR Conference on Research and Development in Information Retrieval , pages 695–704, 2019. doi: 10.1145/3331184.3331268. [11] Hoyeop Lee, Jinbae Im, Seongwon Jang, Hyunsouk Cho, and Sehee Chung. Melu: Meta-learned user preference estimator for cold-start recommendation. In Proceedings of the 25th ACM SIGKDD International Conference on Knowledge Discovery and Data Mining , pages 1073–1082, 2019. doi: 10.1145/3292500.3330859. [12] Yinwei Wei, Xiang Wang, Qi Li, Liqiang Nie, Yan Li, Xuanping Li, and Tat-Seng Chua. Con-trastive learning for cold-start recommendation. In Proceedings of the 29th ACM International Conference on Multimedia , pages 5382–5390, 2021. doi: 10.1145/3474085.3475665. [13] Ruining He and Julian McAuley. Vbpr: Visual bayesian personalized ranking from implicit feedback. In Proceedings of the Thirtieth AAAI Conference on Artificial Intelligence , pages 144–150, 2016. [14] Steffen Rendle, Christoph Freudenthaler, Zeno Gantner, and Lars Schmidt-Thieme. Bpr: Bayesian personalized ranking from implicit feedback. In Proceedings of the Twenty-Fifth Conference on Uncertainty in Artificial Intelligence , pages 452–461, 2009. [15] Xiang Wang, Xiangnan He, Meng Wang, Fuli Feng, and Tat-Seng Chua. Neural graph collaborative filtering. In Proceedings of the 42nd International ACM SIGIR Conference on Research and Development in Information Retrieval , pages 165–174, 2019. doi: 10.1145/3331184. 3331267. [16] Xiangnan He, Kuan Deng, Xiang Wang, Yan Li, Yongdong Zhang, and Meng Wang. Lightgcn: Simplifying and powering graph convolution network for recommendation. In Proceedings of the 43rd International ACM SIGIR Conference on Research and Development in Information Retrieval , pages 639–648, 2020. doi: 10.1145/3397271.3401063. [17] Wang-Cheng Kang and Julian McAuley. Self-attentive sequential recommendation. In 2018 IEEE International Conference on Data Mining , pages 197–206, 2018. [18] Nils Reimers and Iryna Gurevych. Sentence-bert: Sentence embeddings using siamese bert-networks. In Proceedings of the 2019 Conference on Empirical Methods in Natural Language Processing and the 9th International Joint Conference on Natural Language Processing , pages 3982–3992, 2019. doi: 10.18653/v1/D19-1410. [19] Shitao Xiao, Zheng Liu, Peitian Zhang, Niklas Muennighoff, Defu Lian, and Jian-Yun Nie. C-pack: Packed resources for general chinese embeddings. arXiv preprint arXiv:2309.07597 ,2023. [20] Jianlv Chen, Shitao Xiao, Peitian Zhang, Kun Luo, Defu Lian, and Zheng Liu. Bge m3-embedding: Multi-lingual, multi-functionality, multi-granularity text embeddings through self-knowledge distillation. arXiv preprint arXiv:2402.03216 , 2024. 15 [21] Liang Wang, Nan Yang, Xiaolong Huang, Binxing Jiao, Linjun Yang, Daxin Jiang, Rangan Majumder, and Furu Wei. Text embeddings by weakly-supervised contrastive pre-training. 
+
+arXiv preprint arXiv:2212.03533 , 2022. [22] Vladimir Karpukhin, Barlas Oguz, Sewon Min, Patrick Lewis, Ledell Wu, Sergey Edunov, Danqi Chen, and Wen-tau Yih. Dense passage retrieval for open-domain question answering. In Proceedings of the 2020 Conference on Empirical Methods in Natural Language Processing ,pages 6769–6781, 2020. doi: 10.18653/v1/2020.emnlp-main.550. [23] Xinyang Yi, Ji Yang, Lichan Hong, Derek Zhiyuan Cheng, Lukasz Heldt, Aditee Kumthekar, Zhe Zhao, Li Wei, and Ed H. Chi. Sampling-bias-corrected neural modeling for large corpus item recommendations. In Proceedings of the 13th ACM Conference on Recommender Systems ,pages 269–277, 2019. doi: 10.1145/3298689.3346996. [24] Gordon V. Cormack, Charles L. A. Clarke, and Stefan Buettcher. Reciprocal rank fusion outperforms condorcet and individual rank learning methods. In Proceedings of the 32nd International ACM SIGIR Conference on Research and Development in Information Retrieval ,pages 758–759, 2009. doi: 10.1145/1571941.1572114. [25] Guolin Ke, Qi Meng, Thomas Finley, Taifeng Wang, Wei Chen, Weidong Ma, Qiwei Ye, and Tie-Yan Liu. Lightgbm: A highly efficient gradient boosting decision tree. In Advances in Neural Information Processing Systems , volume 30, 2017. [26] Maurizio Ferrari Dacrema, Paolo Cremonesi, and Dietmar Jannach. Are we really making much progress? a worrying analysis of recent neural recommendation approaches. In Proceedings of the 13th ACM Conference on Recommender Systems , pages 101–109, 2019. doi: 10.1145/ 3298689.3347058. [27] Maurizio Ferrari Dacrema, Simone Boglio, Paolo Cremonesi, and Dietmar Jannach. A troubling analysis of reproducibility and progress in recommender systems research. ACM Transactions on Information Systems , 39(2):20:1–20:49, 2021. doi: 10.1145/3434185. [28] Rocio Canamares and Pablo Castells. On target item sampling in offline recommender system evaluation. In Proceedings of the 14th ACM Conference on Recommender Systems , pages 259–268, 2020. doi: 10.1145/3383313.3412259. [29] Ekaterina Lemdiasova and Nikita Zmanovskii. Diagnosing llm-based rerankers in cold-start recommender systems: Coverage, exposure and practical mitigations. arXiv preprint arXiv:2604.16318 , 2026. [30] Yupeng Hou, Jiacheng Li, Zhankui He, An Yan, Xiusi Chen, and Julian McAuley. Bridging language and items for retrieval and recommendation. arXiv preprint arXiv:2403.03952 , 2024. [31] McAuley Lab. Amazon Reviews 2023. https://amazon-reviews-2023.github.io/ , 2023. [32] Fangzhao Wu, Ying Qiao, Jiun-Hung Chen, Chuhan Wu, Tao Qi, Jianxun Lian, Danyang Liu, Xing Xie, Jianfeng Gao, Winnie Wu, and Ming Zhou. Mind: A large-scale dataset for news recommendation. In Proceedings of the 58th Annual Meeting of the Association for Computational Linguistics , pages 3597–3606, 2020. doi: 10.18653/v1/2020.acl-main.331. [33] F. Maxwell Harper and Joseph A. Konstan. The movielens datasets: History and context. ACM Transactions on Interactive Intelligent Systems , 5(4):19:1–19:19, 2015. doi: 10.1145/2827872. 16 [34] Yelp Inc. Yelp Open Dataset. https://www.yelp.com/dataset , 2024. [35] An Yang et al. Qwen3 technical report. arXiv preprint arXiv:2505.09388 , 2025. [36] Meta AI. Llama 3.3 70B Instruct Model Card. https://huggingface.co/meta-llama/ Llama-3.3-70B-Instruct , 2024. 17
