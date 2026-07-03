@@ -1,14 +1,11 @@
 // Docsify 配置与公共插件（评论区 + Zotero 元数据）
+// 注意：侧边栏由 app/dpr-sidebar.js 自建接管，这里不再让 docsify 渲染 _sidebar.md
 window.$docsify = {
   name: 'Daily Paper Reader',
   repo: '',
   // 文档内容与侧边栏都存放在 docs/ 下
   basePath: 'docs/', // 所有 Markdown 路由以 docs/ 为前缀
-  loadSidebar: '_sidebar.md', // 在 basePath 下加载 _sidebar.md
-  // 始终使用根目录的 _sidebar.md，避免每个子目录都要放一份
-  alias: {
-    '/.*/_sidebar.md': '/_sidebar.md',
-  },
+  loadSidebar: false, // sidebar 由 app/dpr-sidebar.js 接管
   // 只在侧边栏展示论文列表标题，不展示文内小节（例如 Abstract）
   subMaxLevel: 0,
 
@@ -886,16 +883,60 @@ window.$docsify = {
           console.error('Zotero meta update failed:', e);
         });
 
+      // 公共工具：保护 LaTeX 公式不被 marked 破坏
+      // 在 beforeEach 阶段调用，将公式包裹成 HTML 标签（marked 不解析 HTML）
+      const protectLatex = (text) => {
+        if (!text) return text;
+        // 1) 将 \[...\] 转为 $$...$$，\(...\) 转为 $...$
+        //    注意：\[ 可能在行首也可能在行内
+        text = text.replace(/\\\[([\s\S]*?)\\\]/g, (_, inner) => `$$${inner}$$`);
+        text = text.replace(/\\\((.*?)\\\)/g, (_, inner) => `$${inner}$`);
+        // 2) 保护块级公式 $$...$$ → <div class="dpr-math" data-display="true">
+        text = text.replace(/\$\$([\s\S]*?)\$\$/g, (_, inner) => {
+          const escaped = inner.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+          return `<div class="dpr-math" data-display="true">${escaped}</div>`;
+        });
+        // 3) 保护行内公式 $...$ → <span class="dpr-math" data-display="false">
+        //    不跨行，排除 $ 后紧跟空格或 $ 前紧跟空格的情况（减少误匹配）
+        text = text.replace(/\$([^\$\n]+?)\$/g, (match, inner) => {
+          // 排除明显不是公式的情况（如 $10 这种价格）
+          if (/^\d+$/.test(inner.trim())) return match;
+          const escaped = inner.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+          return `<span class="dpr-math" data-display="false">${escaped}</span>`;
+        });
+        return text;
+      };
+
       // 公共工具：在指定元素上渲染公式
       const renderMathInEl = (el) => {
-        if (!window.renderMathInElement || !el) return;
-        window.renderMathInElement(el, {
-          delimiters: [
-            { left: '$$', right: '$$', display: true },
-            { left: '$', right: '$', display: false },
-          ],
-          throwOnError: false,
-        });
+        if (!el) return;
+        // 优先渲染 protectLatex 产生的 .dpr-math 标签
+        if (window.katex) {
+          el.querySelectorAll('.dpr-math').forEach((node) => {
+            const latex = node.textContent;
+            const displayMode = node.getAttribute('data-display') === 'true';
+            try {
+              window.katex.render(latex, node, {
+                displayMode,
+                throwOnError: false,
+              });
+            } catch (e) {
+              // 渲染失败保留原文
+            }
+          });
+        }
+        // 兜底：对纯文本中残留的 $...$ / $$...$$ 用 auto-render 处理
+        if (window.renderMathInElement) {
+          window.renderMathInElement(el, {
+            delimiters: [
+              { left: '$$', right: '$$', display: true },
+              { left: '$', right: '$', display: false },
+              { left: '\\[', right: '\\]', display: true },
+              { left: '\\(', right: '\\)', display: false },
+            ],
+            throwOnError: false,
+          });
+        }
       };
 
       // 公共工具：简单表格 + 标记修正：
@@ -946,6 +987,10 @@ window.$docsify = {
         // 保护 LaTeX 公式：先用占位符替换，渲染后再恢复
         const latexBlocks = [];
         let protectedText = text;
+
+        // 先将 \[...\] → $$...$$ 和 \(...\) → $...$
+        protectedText = protectedText.replace(/\\\[([\s\S]*?)\\\]/g, (_, inner) => `$$${inner}$$`);
+        protectedText = protectedText.replace(/\\\((.*?)\\\)/g, (_, inner) => `$${inner}$`);
 
         // 保护块级公式 $$...$$
         protectedText = protectedText.replace(/\$\$([\s\S]*?)\$\$/g, (match) => {
@@ -1093,1024 +1138,21 @@ window.$docsify = {
       };
 
       // 3. 小屏下：点击侧边栏条目后自动收起侧边栏（全屏列表 → 正文）
-      const setupMobileSidebarAutoCloseOnItemClick = () => {
-        const nav = document.querySelector('.sidebar-nav');
-        if (!nav) return;
-        if (nav.dataset.mobileAutoCloseBound === '1') return;
-        nav.dataset.mobileAutoCloseBound = '1';
-
-        nav.addEventListener('click', (event) => {
-          const link = event.target.closest('a');
-          if (!link) return;
-
-          const href = link.getAttribute('href') || '';
-          // 只处理 Docsify 内部路由（#/ 开头），避免影响外链
-          if (!href.includes('#/')) return;
-
-          const width =
-            window.innerWidth || document.documentElement.clientWidth || 0;
-          // 统一“微宽屏 + 窄屏”为同一套逻辑：<1024 时点击条目后自动收起 sidebar（全屏列表 → 正文）
-          if (width >= 1024) return;
-
-          // 让 Docsify 先完成路由跳转，再收起侧边栏
-          setTimeout(() => {
-            const body = document.body;
-            if (!body) return;
-            // 适配 Docsify 移动端原生语义：小屏收起侧边栏时不保留 close 类
-            body.classList.remove('close');
-          }, 0);
-        });
-      };
+      const setupMobileSidebarAutoCloseOnItemClick = () => {};
 
       // 4. 侧边栏按“日期”折叠的辅助函数
-      const setupCollapsibleSidebarByDay = () => {
-        const nav = document.querySelector('.sidebar-nav');
-        if (!nav) return;
+      const setupCollapsibleSidebarByDay = () => {};
 
-        const joinUrlPath = (a, b) => {
-          const aa = String(a || '');
-          const bb = String(b || '');
-          if (!aa) return bb.replace(/^\/+/, '');
-          if (!bb) return aa;
-          const left = aa.endsWith('/') ? aa : `${aa}/`;
-          const right = bb.replace(/^\/+/, '');
-          return `${left}${right}`;
-        };
-
-        const getDocsifyBasePath = () => {
-          const bp =
-            window.$docsify && typeof window.$docsify.basePath === 'string'
-              ? window.$docsify.basePath
-              : '';
-          return String(bp || '');
-        };
-
-        const normalizeHashHref = (href) => {
-          const raw = String(href || '').trim();
-          if (!raw) return '';
-          if (raw.startsWith('#/')) return raw;
-          if (raw.startsWith('#')) return `#/${raw.slice(1).replace(/^\//, '')}`;
-          return `#/${raw.replace(/^\//, '')}`;
-        };
-
-        const isPaperRouteHash = (hash) => {
-          const route = String(hash || '')
-            .replace(/^#\/?/, '')
-            .replace(/\.md$/i, '')
-            .replace(/\/$/, '');
-          return (
-            /^(\d{6}\/\d{2}|\d{8}(?:-\d{8}))\/(?!README$).+/i.test(route) &&
-            /^(\d{6}\/\d{2}|\d{8}(?:-\d{8}))\/[^/]+$/i.test(route)
-          );
-        };
-
-        const getDirectText = (li) => {
-          if (!li) return '';
-          if (typeof Node !== 'undefined') {
-            const directTextNode = Array.from(li.childNodes || []).find((n) => {
-              if (!n || n.nodeType !== Node.TEXT_NODE) return false;
-              return String(n.textContent || '').trim();
-            });
-            if (directTextNode) {
-              return String(directTextNode.textContent || '').trim();
-            }
-          }
-          const title = li.querySelector(
-            ':scope > .sidebar-day-toggle .sidebar-day-toggle-label',
-          );
-          return String((title && title.textContent) || '').trim();
-        };
-
-        const getPaperSectionFromAnchor = (anchor, rowLi) => {
-          if (!anchor || !rowLi) return '';
-          let currentLi = anchor.closest('li');
-          while (currentLi) {
-            const parentUl = currentLi.parentElement;
-            const parentLi = parentUl ? parentUl.closest('li') : null;
-            if (!parentLi || parentLi === rowLi) break;
-            const text = getDirectText(parentLi);
-            if (
-              text &&
-              !/^(\d{4}-\d{2}-\d{2})(\s*~\s*\d{4}-\d{2}-\d{2})?$/.test(
-                text,
-              )
-            ) {
-              return text;
-            }
-            currentLi = parentLi;
-          }
-          return '';
-        };
-
-        const collectDayPaperItems = (rowLi) => {
-          if (!rowLi) return [];
-          const anchors = Array.from(rowLi.querySelectorAll('a[href*=\"#/\"]'));
-          const out = [];
-          const seen = new Set();
-
-          anchors.forEach((anchor) => {
-            const href = normalizeHashHref(anchor.getAttribute('href'));
-            if (!href || !isPaperRouteHash(href)) return;
-            const paperId = href.replace(/^#\//, '');
-            if (!paperId || paperId.endsWith('/README')) return;
-            if (seen.has(paperId)) return;
-            seen.add(paperId);
-            out.push({
-              anchor,
-              href,
-              paperId,
-              section: getPaperSectionFromAnchor(anchor, rowLi),
-            });
-          });
-          return out;
-        };
-
-        const normalizeSection = (section) => {
-          const v = String(section || '').trim();
-          if (!v) return '';
-          if (/深度|精读|deep/i.test(v)) return 'deep';
-          if (/速读|速览|quick/i.test(v)) return 'quick';
-          return v.toLowerCase();
-        };
-
-        const normalizeAuthorsForExport = (authors) => {
-          if (Array.isArray(authors)) {
-            return authors
-              .map((item) => String(item || '').trim())
-              .filter(Boolean)
-              .join(', ');
-          }
-          return String(authors || '').trim();
-        };
-
-        const normalizeTagsForExport = (tags) => {
-          if (!tags) return '';
-          if (Array.isArray(tags)) {
-            return tags
-              .map((tag) => {
-                if (typeof tag === 'string') return tag.trim();
-                if (!tag || typeof tag !== 'object') return '';
-                const kind = String(tag.kind || '').trim();
-                const label = String(tag.label || '').trim();
-                return kind ? `${kind}:${label}` : label;
-              })
-              .filter(Boolean)
-              .join(', ');
-          }
-          return String(tags || '').trim();
-        };
-
-        const normalizeDateField = (value) => {
-          const text = String(value || '').trim();
-          if (!text) return '';
-          const m = text.match(/(\d{4})(\d{2})(\d{2})/);
-          if (!m) return text;
-          return `${m[1]}-${m[2]}-${m[3]}`;
-        };
-
-        const buildPaperMetaFromMarkdown = (paperId, section, markdownText) => {
-          const parsed = parseFrontMatter(markdownText || '');
-          const meta = parsed && parsed.meta ? parsed.meta : {};
-          const body = parsed && parsed.body ? parsed.body : '';
-
-          const title_en = String(meta.title_en || meta.title || '').trim();
-          const abstractFromFrontMatter = String(
-            meta.abstract_en || meta.abstract || '',
-          ).trim();
-          const authors = normalizeAuthorsForExport(meta.authors || meta.author);
-          const score = String(meta.score || '').trim();
-          const evidence = String(meta.evidence || '').trim();
-          const tldr = String(meta.tldr || meta.summary || '').trim();
-
-          const abstractFromBody = trimBeforeMarkers(
-            extractSectionByTitle(body, (title) => {
-              const normalized = String(title || '').trim().toLowerCase();
-              return normalized === 'abstract' || normalized === '摘要';
-            }),
-            [],
-          ).trim();
-
-          return {
-            paper_id: paperId,
-            section: normalizeSection(section) || 'quick',
-            title_en,
-            source: String(meta.source || meta.Source || '').trim(),
-            selection_source: String(meta.selection_source || '').trim(),
-            authors,
-            date: normalizeDateField(meta.date || ''),
-            pdf: String(meta.pdf || meta.PDF || '').trim(),
-            score,
-            evidence,
-            tldr,
-            tags: normalizeTagsForExport(meta.tags || []),
-            abstract_en: abstractFromFrontMatter || abstractFromBody,
-          };
-        };
-
-        const markDayPapersUnrecommended = (paperItems) => {
-          if (!Array.isArray(paperItems) || !paperItems.length) return;
-          let readState = loadReadState();
-          if (!readState || typeof readState !== 'object') readState = {};
-          const toClear = new Set(['good', 'blue', 'orange', 'bad']);
-          let changed = false;
-          paperItems.forEach((item) => {
-            const paperId = item && typeof item.paperId === 'string' ? item.paperId : '';
-            if (!paperId) return;
-            if (toClear.has(String(readState[paperId] || '').trim().toLowerCase())) {
-              delete readState[paperId];
-              changed = true;
-            }
-          });
-          if (changed) saveReadState(readState);
-        };
-
-        const closeAllDayMenus = () => {
-          const openedMenus = nav.querySelectorAll('.sidebar-day-menu.is-open');
-          openedMenus.forEach((m) => {
-            m.classList.remove('is-open');
-          });
-        };
-
-        if (!nav.dataset.dprDayMenuBound) {
-          nav.dataset.dprDayMenuBound = '1';
-          document.addEventListener('click', (e) => {
-            const target = e && e.target ? e.target : null;
-            if (!target || !target.closest) return;
-            if (!target.closest('.sidebar-day-toggle-actions')) {
-              closeAllDayMenus();
-            }
-          });
-        }
-
-        const downloadJson = (filename, data) => {
-          const blob = new Blob([JSON.stringify(data, null, 2)], {
-            type: 'application/json;charset=utf-8',
-          });
-          const url = URL.createObjectURL(blob);
-          const a = document.createElement('a');
-          a.href = url;
-          a.download = filename;
-          a.className = 'dpr-sidebar-export-link';
-          a.target = '_self';
-          a.style.display = 'none';
-          const stopLinkNav = (event) => {
-            event.stopPropagation();
-            if (event.stopImmediatePropagation) event.stopImmediatePropagation();
-          };
-          a.addEventListener('click', stopLinkNav, true);
-          document.body.appendChild(a);
-          requestAnimationFrame(() => {
-            a.click();
-            setTimeout(() => {
-              a.remove();
-            }, 0);
-          });
-          setTimeout(() => URL.revokeObjectURL(url), 500);
-        };
-
-        const STORAGE_KEY = 'dpr_sidebar_day_state_v1';
-        const HIDDEN_DAYS_KEY = '__hiddenDays';
-        let state = {};
-        let hiddenDays = new Set();
-        try {
-          const raw = window.localStorage
-            ? window.localStorage.getItem(STORAGE_KEY)
-            : null;
-          if (raw) {
-            state = JSON.parse(raw) || {};
-            const savedHidden = state[HIDDEN_DAYS_KEY];
-            if (Array.isArray(savedHidden)) {
-              hiddenDays = new Set(
-                savedHidden
-                  .map((x) => (typeof x === 'string' ? x : ''))
-                  .filter(Boolean),
-              );
-            }
-          }
-        } catch {
-          state = {};
-          hiddenDays = new Set();
-        }
-        // 先扫描一遍，找出所有日期和最新一天
-        const items = nav.querySelectorAll('li');
-        const dayItems = [];
-        let latestDay = '';
-
-        items.forEach((li) => {
-          const childUl = li.querySelector(':scope > ul');
-          const directLink = li.querySelector(':scope > a');
-          if (!childUl || directLink) return;
-
-          // 取日期文本：
-          // - 初次：li 的第一个文本节点
-          // - 已初始化过：wrapper 内的 label
-          let rawText = '';
-          let firstTextNode = null;
-          const first = li.firstChild;
-          if (first && first.nodeType === Node.TEXT_NODE) {
-            rawText = (first.textContent || '').trim();
-            firstTextNode = first;
-          } else {
-            const label = li.querySelector(
-              ':scope > .sidebar-day-toggle .sidebar-day-toggle-label',
-            );
-            rawText = (label && (label.textContent || '').trim()) || '';
-          }
-
-          const rangeMatch = rawText.match(
-            /^(\d{4}-\d{2}-\d{2})\s*~\s*(\d{4}-\d{2}-\d{2})$/,
-          );
-          const isSingleDay = /^\d{4}-\d{2}-\d{2}$/.test(rawText);
-          if (!isSingleDay && !rangeMatch) return;
-
-          const dayKey = rangeMatch ? rangeMatch[2] : rawText; // 用区间“结束日”参与最新日判断
-          if (hiddenDays.has(dayKey)) return;
-
-          dayItems.push({ li, text: rawText, firstTextNode, dayKey });
-          if (!latestDay || dayKey > latestDay) {
-            latestDay = dayKey;
-          }
-        });
-
-        if (!dayItems.length) return;
-
-        // 判断是否出现了“更新后的新一天”
-        const prevLatest =
-          typeof state.__latestDay === 'string' ? state.__latestDay : null;
-        const isNewDay =
-          latestDay &&
-          (!prevLatest || (typeof prevLatest === 'string' && latestDay > prevLatest));
-
-        // 如果出现了新的一天：清空历史状态，只保留最新一天的信息
-        if (isNewDay) {
-          const prevHidden = hiddenDays;
-          state = { __latestDay: latestDay };
-          if (prevHidden.size) {
-            state[HIDDEN_DAYS_KEY] = Array.from(prevHidden);
-          }
-        } else if (!prevLatest && latestDay) {
-          // 第一次使用，没有历史记录但也不算“新一天触发重置”的场景：记录当前最新日期
-          state.__latestDay = latestDay;
-        }
-
-        const hasAnyState =
-          !isNewDay &&
-          Object.keys(state).some((k) => k && !k.startsWith('__'));
-
-        const ensureStateSaved = () => {
-          try {
-            if (window.localStorage) {
-              state[HIDDEN_DAYS_KEY] = Array.from(hiddenDays);
-              window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-            }
-          } catch {
-            // ignore
-          }
-        };
-
-        const downloadDayMeta = async (opts) => {
-          const { li: rowLi, rawText: rowText } = opts || {};
-          const dayPaperItems = collectDayPaperItems(rowLi);
-          const payload = {
-            label: String(rowText || 'daily-papers').trim(),
-            date: String(rowText || '').trim(),
-            generated_at: new Date().toISOString(),
-            count: 0,
-            papers: [],
-            errors: [],
-          };
-
-          const menuDownload = rowLi
-            ? rowLi.querySelector('.sidebar-day-menu-item-download')
-            : null;
-          const oldText = menuDownload ? menuDownload.textContent : null;
-          if (menuDownload) {
-            menuDownload.disabled = true;
-            menuDownload.textContent = '下载中...';
-          }
-          try {
-            if (!dayPaperItems.length) {
-              payload.errors.push({
-                paper_id: '',
-                error: '本日分组下未找到可导出的论文',
-              });
-            } else {
-              const baseHref = window.location.href.split('#')[0];
-              await Promise.all(
-                dayPaperItems.map(async (item) => {
-                  let rawMarkdown = '';
-                  try {
-                    const rel = joinUrlPath(
-                      getDocsifyBasePath(),
-                      `${item.paperId}.md`,
-                    );
-                    const mdUrl = new URL(rel, baseHref).toString();
-                    const resp = await fetch(mdUrl, { cache: 'no-store' });
-                    if (!resp.ok) {
-                      throw new Error(`HTTP ${resp.status}`);
-                    }
-                    rawMarkdown = await resp.text();
-                  } catch (err) {
-                    payload.errors.push({
-                      paper_id: item.paperId,
-                      error: String(err && err.message ? err.message : err),
-                    });
-                    return;
-                  }
-
-                  try {
-                    payload.papers.push(
-                      buildPaperMetaFromMarkdown(item.paperId, item.section, rawMarkdown),
-                    );
-                  } catch (err) {
-                    payload.errors.push({
-                      paper_id: item.paperId,
-                      error: String(err && err.message ? err.message : err),
-                    });
-                  }
-                }),
-              );
-            }
-
-            payload.count = payload.papers.length;
-            window.DPRLastDayExport = payload;
-
-            const safeLabel = String(payload.label || 'daily-papers')
-              .replace(/\s+/g, ' ')
-              .trim()
-              .replace(/[^\d\-~_ ]/g, '')
-              .replace(/\s+/g, '_');
-            const filename = `${safeLabel || 'daily-papers'}.json`;
-            downloadJson(filename, payload);
-
-            if (rowLi) {
-              const trigger = rowLi.querySelector('.sidebar-day-menu-trigger');
-              if (trigger) {
-                trigger.title = `已下载：${payload.count || 0} 篇`;
-              }
-            }
-          } catch (err) {
-            if (rowLi) {
-              const trigger = rowLi.querySelector('.sidebar-day-menu-trigger');
-              if (trigger) {
-                trigger.title = `下载失败（见控制台）：${String(
-                  err && err.message ? err.message : err,
-                )}`;
-              }
-            }
-            console.warn('[DPR Export] 下载失败：', err);
-            throw err;
-          } finally {
-            if (menuDownload) {
-              menuDownload.disabled = false;
-              menuDownload.textContent = oldText || '下载 JSON';
-            }
-          }
-        };
-
-        const deleteDaySection = ({ rowLi, rowText, dayKey }) => {
-          if (!rowLi) return;
-          if (dayKey) hiddenDays.add(dayKey);
-          if (dayKey) delete state[dayKey];
-          if (rowText) delete state[rowText];
-          markDayPapersUnrecommended(collectDayPaperItems(rowLi));
-          closeAllDayMenus();
-          ensureStateSaved();
-          rowLi.remove();
-          syncSidebarActiveIndicator({ animate: false });
-        };
-
-        const DAY_ANIM_MS = 240;
-
-        const setDayCollapsed = (li, collapsed, options = {}) => {
-          const { animate = true } = options || {};
-          const ul = li.querySelector(':scope > ul');
-          if (!ul) return;
-          ul.classList.add('sidebar-day-content');
-
-          const doAnimate = animate && !prefersReducedMotion();
-          if (!doAnimate) {
-            ul.style.transition = 'none';
-            ul.style.maxHeight = collapsed ? '0px' : `${ul.scrollHeight}px`;
-            ul.style.opacity = collapsed ? '0' : '1';
-            requestAnimationFrame(() => {
-              ul.style.transition = '';
-            });
-            return;
-          }
-
-          if (collapsed) {
-            ul.style.maxHeight = `${ul.scrollHeight}px`;
-            ul.style.opacity = '0';
-            requestAnimationFrame(() => {
-              ul.style.maxHeight = '0px';
-            });
-          } else {
-            ul.style.opacity = '1';
-            ul.style.maxHeight = '0px';
-            requestAnimationFrame(() => {
-              ul.style.maxHeight = `${ul.scrollHeight}px`;
-            });
-          }
-
-          setTimeout(() => {
-            try {
-              if (!li.classList.contains('sidebar-day-collapsed')) {
-                ul.style.maxHeight = `${ul.scrollHeight}px`;
-              }
-            } catch {
-              // ignore
-            }
-          }, DAY_ANIM_MS + 30);
-        };
-
-        // 第二遍：真正安装折叠行为
-        dayItems.forEach(({ li, text: rawText, firstTextNode, dayKey }) => {
-          const childUl = li.querySelector(':scope > ul');
-          if (childUl) childUl.classList.add('sidebar-day-content');
-          const key = dayKey || rawText;
-
-          // 复用或创建 wrapper（包含日期文字和小箭头）
-          let wrapper = li.querySelector(':scope > .sidebar-day-toggle');
-          if (!wrapper) {
-            wrapper = document.createElement('div');
-            wrapper.className = 'sidebar-day-toggle';
-
-            const labelSpan = document.createElement('span');
-            labelSpan.className = 'sidebar-day-toggle-label';
-            labelSpan.textContent = rawText;
-
-            const menuTrigger = document.createElement('button');
-            menuTrigger.type = 'button';
-            menuTrigger.className = 'sidebar-day-menu-trigger';
-            menuTrigger.title = '更多操作';
-            menuTrigger.setAttribute('aria-label', '更多操作');
-            menuTrigger.textContent = '⋮';
-
-            const menu = document.createElement('span');
-            menu.className = 'sidebar-day-menu';
-
-            const downloadBtn = document.createElement('button');
-            downloadBtn.type = 'button';
-            downloadBtn.className = 'sidebar-day-menu-item sidebar-day-menu-item-download';
-            downloadBtn.textContent = '下载 JSON';
-            downloadBtn.setAttribute('aria-label', '下载论文元数据 JSON');
-
-            const arrowSpan = document.createElement('span');
-            arrowSpan.className = 'sidebar-day-toggle-arrow';
-            arrowSpan.textContent = '▾';
-
-            const actions = document.createElement('span');
-            actions.className = 'sidebar-day-toggle-actions';
-            actions.appendChild(menuTrigger);
-            menu.appendChild(downloadBtn);
-            actions.appendChild(menu);
-            actions.appendChild(arrowSpan);
-
-            wrapper.appendChild(labelSpan);
-            wrapper.appendChild(actions);
-
-            // 用 wrapper 替换原始文本节点
-            if (firstTextNode && firstTextNode.parentNode === li) {
-              li.replaceChild(wrapper, firstTextNode);
-            }
-          }
-
-          const labelSpan = wrapper.querySelector('.sidebar-day-toggle-label');
-          if (labelSpan) labelSpan.textContent = rawText;
-          const arrowSpan = wrapper.querySelector('.sidebar-day-toggle-arrow');
-          const menuTrigger = wrapper.querySelector('.sidebar-day-menu-trigger');
-          const menu = wrapper.querySelector('.sidebar-day-menu');
-          const downloadBtn = wrapper.querySelector('.sidebar-day-menu-item-download');
-
-          if (menuTrigger && !menuTrigger.dataset.dprDayMenuTriggerBound) {
-            menuTrigger.dataset.dprDayMenuTriggerBound = '1';
-            menuTrigger.addEventListener('click', (e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              if (e.stopImmediatePropagation) e.stopImmediatePropagation();
-              if (!menu) return;
-              const nowOpen = !menu.classList.contains('is-open');
-              if (nowOpen) {
-                closeAllDayMenus();
-                menu.classList.add('is-open');
-              } else {
-                menu.classList.remove('is-open');
-              }
-            });
-          }
-
-          if (downloadBtn && !downloadBtn.dataset.dprDownloadBound) {
-            downloadBtn.dataset.dprDownloadBound = '1';
-            downloadBtn.addEventListener('click', async (e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              if (e.stopImmediatePropagation) e.stopImmediatePropagation();
-              if (downloadBtn.disabled) return;
-              try {
-                await downloadDayMeta({
-                  li,
-                  rawText,
-                  dateKey: dayKey || rawText,
-                });
-              } catch {
-                // ignore
-              }
-              if (menu) {
-                menu.classList.remove('is-open');
-              }
-            });
-          }
-
-          // 决定默认展开 / 收起：
-          // - 如果本次是“出现了新的一天”：清空历史，只展开最新一天；
-          // - 否则若已有用户偏好（state），按偏好来；
-          // - 否则（首次使用且没有历史）：仅“最新一天”展开，其余收起。
-          let collapsed;
-          if (isNewDay) {
-            collapsed = key === latestDay ? false : true;
-          } else if (hasAnyState) {
-            const saved = state[rawText];
-            if (saved === 'open') {
-              collapsed = false;
-            } else if (saved === 'closed') {
-              collapsed = true;
-            } else {
-              // 新出现的日期：默认跟最新一天策略走
-              collapsed = key === latestDay ? false : true;
-            }
-          } else {
-            collapsed = key === latestDay ? false : true;
-          }
-
-          if (collapsed) {
-            li.classList.add('sidebar-day-collapsed');
-            if (arrowSpan) arrowSpan.textContent = '▸';
-          } else {
-            li.classList.remove('sidebar-day-collapsed');
-            if (arrowSpan) arrowSpan.textContent = '▾';
-          }
-
-          // 初始化一次高度（不做动画，避免首次渲染闪动）
-          setDayCollapsed(li, collapsed, { animate: false });
-
-          // 绑定点击：使用 capture 阶段，确保即使旧版本已有 handler 也能覆盖
-          if (!wrapper.dataset.dprDayToggleBound) {
-            wrapper.dataset.dprDayToggleBound = '1';
-            wrapper.addEventListener(
-              'click',
-              (e) => {
-                // 点击菜单控件时，不触发日期折叠（否则 capture 阶段会先被 wrapper 拦截，导致菜单无响应）
-                try {
-                  const target = e && e.target && e.target.closest
-                    ? e.target.closest(
-                        '.sidebar-day-menu-trigger,.sidebar-day-menu,.sidebar-day-menu-item',
-                      )
-                    : null;
-                  if (target) return;
-                } catch {
-                  // ignore
-                }
-                closeAllDayMenus();
-                e.preventDefault();
-                e.stopPropagation();
-                if (e.stopImmediatePropagation) e.stopImmediatePropagation();
-                const collapsed = li.classList.toggle('sidebar-day-collapsed');
-                if (arrowSpan) arrowSpan.textContent = collapsed ? '▸' : '▾';
-                setDayCollapsed(li, collapsed, { animate: true });
-                state[rawText] = collapsed ? 'closed' : 'open';
-                state.__latestDay = latestDay;
-                ensureStateSaved();
-                // 先做一次即时同步（保证交互反馈），再在动画结束后做一次终态校准，
-                // 否则列表在 max-height 过渡中继续位移，会让高亮条“越开越往上偏”。
-                requestAnimationFrame(() => {
-                  syncSidebarActiveIndicator({ animate: false });
-                });
-                setTimeout(() => {
-                  syncSidebarActiveIndicator({ animate: false });
-                }, DAY_ANIM_MS + 34);
-              },
-              true,
-            );
-          }
-
-          li.dataset.dayToggleApplied = '2';
-        });
-
-        // 每次 doneEach 触发时都刷新一次“已展开分组”的 max-height：
-        // 避免 active 项显示评价按钮等导致内容高度变化后被截断，从而出现“只有灰色高亮但看不到文字”的错觉。
-        requestAnimationFrame(() => {
-          try {
-            nav
-              .querySelectorAll('li:not(.sidebar-day-collapsed) > ul.sidebar-day-content')
-              .forEach((ul) => {
-                // 仅做“静默修正”，避免因为 max-height 变化触发过渡，导致侧边栏看起来“滚动/刷新”一下
-                const prevTransition = ul.style.transition;
-                ul.style.transition = 'none';
-                ul.style.maxHeight = `${ul.scrollHeight}px`;
-                ul.style.opacity = '1';
-                requestAnimationFrame(() => {
-                  ul.style.transition = prevTransition || '';
-                });
-              });
-          } catch {
-            // ignore
-          }
-        });
-      };
-
-      const setupCollapsibleConferenceSidebar = () => {
-        const nav = document.querySelector('.sidebar-nav');
-        if (!nav) return;
-
-        const STORAGE_KEY = 'dpr_sidebar_conference_state_v1';
-        const ANIM_MS = 240;
-
-        const readState = () => {
-          try {
-            const raw = window.localStorage
-              ? window.localStorage.getItem(STORAGE_KEY)
-              : null;
-            return raw ? JSON.parse(raw) || {} : {};
-          } catch {
-            return {};
-          }
-        };
-
-        const state = readState();
-        const saveState = () => {
-          try {
-            if (window.localStorage) {
-              window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-            }
-          } catch {
-            // ignore
-          }
-        };
-
-        const getDirectTextNode = (li) => {
-          if (!li || typeof Node === 'undefined') return null;
-          return (
-            Array.from(li.childNodes || []).find((node) => {
-              return node && node.nodeType === Node.TEXT_NODE && String(node.textContent || '').trim();
-            }) || null
-          );
-        };
-
-        const getDirectLabelNode = (li) => {
-          if (!li) return null;
-          const textNode = getDirectTextNode(li);
-          if (textNode) return textNode;
-          return (
-            Array.from(li.children || []).find((node) => {
-              if (!node || node.tagName === 'UL') return false;
-              if (node.classList && node.classList.contains('sidebar-conference-content')) return false;
-              if (node.classList && node.classList.contains('sidebar-conference-toggle')) return true;
-              return !!String(node.textContent || '').trim();
-            }) || null
-          );
-        };
-
-        const getToggleLabel = (li) => {
-          if (!li) return '';
-          const label = li.querySelector(
-            ':scope > .sidebar-conference-toggle .sidebar-conference-toggle-label',
-          );
-          if (label) return String(label.textContent || '').trim();
-          const labelNode = getDirectLabelNode(li);
-          return String((labelNode && labelNode.textContent) || '').trim();
-        };
-
-        const normalizeKeyPart = (value) => {
-          return String(value || '').trim().toLowerCase().replace(/\s+/g, '-');
-        };
-
-        const getElementDepth = (el) => {
-          let depth = 0;
-          let current = el;
-          while (current && current.parentElement) {
-            depth += 1;
-            current = current.parentElement;
-          }
-          return depth;
-        };
-
-        const syncOpenDescendantHeights = (li) => {
-          if (!li) return;
-          Array.from(
-            li.querySelectorAll(
-              'li.sidebar-conference-node:not(.sidebar-conference-collapsed) > ul.sidebar-conference-content',
-            ),
-          )
-            .sort((a, b) => getElementDepth(b) - getElementDepth(a))
-            .forEach((ul) => {
-              ul.style.maxHeight = `${ul.scrollHeight}px`;
-              ul.style.opacity = '1';
-            });
-        };
-
-        const getConferenceContentHeight = (li) => {
-          if (!li) return 0;
-          syncOpenDescendantHeights(li);
-          const ul = li.querySelector(':scope > ul.sidebar-conference-content, :scope > ul');
-          return ul ? ul.scrollHeight : 0;
-        };
-
-        const updateOpenAncestorHeights = (li) => {
-          let parent = li ? li.parentElement : null;
-          while (parent) {
-            const parentLi = parent.closest('li.sidebar-conference-node');
-            if (!parentLi) break;
-            if (!parentLi.classList.contains('sidebar-conference-collapsed')) {
-              const ul = parentLi.querySelector(':scope > ul.sidebar-conference-content');
-              if (ul) ul.style.maxHeight = `${getConferenceContentHeight(parentLi)}px`;
-            }
-            parent = parentLi.parentElement;
-          }
-        };
-
-        const setConferenceCollapsed = (li, collapsed, options = {}) => {
-          const { animate = true } = options || {};
-          const ul = li.querySelector(':scope > ul');
-          if (!ul) return;
-          ul.classList.add('sidebar-conference-content');
-          const doAnimate = animate && !prefersReducedMotion();
-
-          if (!doAnimate) {
-            ul.style.transition = 'none';
-            ul.style.maxHeight = collapsed ? '0px' : `${getConferenceContentHeight(li)}px`;
-            ul.style.opacity = collapsed ? '0' : '1';
-            requestAnimationFrame(() => {
-              ul.style.transition = '';
-              updateOpenAncestorHeights(li);
-            });
-            return;
-          }
-
-          if (collapsed) {
-            ul.style.maxHeight = `${getConferenceContentHeight(li)}px`;
-            ul.style.opacity = '0';
-            requestAnimationFrame(() => {
-              ul.style.maxHeight = '0px';
-              updateOpenAncestorHeights(li);
-            });
-          } else {
-            ul.style.opacity = '1';
-            ul.style.maxHeight = '0px';
-            requestAnimationFrame(() => {
-              ul.style.maxHeight = `${getConferenceContentHeight(li)}px`;
-              updateOpenAncestorHeights(li);
-              requestAnimationFrame(() => {
-                updateOpenAncestorHeights(li);
-              });
-            });
-          }
-
-          setTimeout(() => {
-            try {
-              if (!li.classList.contains('sidebar-conference-collapsed')) {
-                ul.style.maxHeight = `${getConferenceContentHeight(li)}px`;
-              }
-              updateOpenAncestorHeights(li);
-              syncSidebarActiveIndicator({ animate: false });
-            } catch {
-              // ignore
-            }
-          }, ANIM_MS + 30);
-        };
-
-        const ensureToggle = (li, label, storageKey) => {
-          if (!li || !label || !storageKey) return;
-          const childUl = li.querySelector(':scope > ul');
-          if (!childUl) return;
-
-          li.classList.add('sidebar-conference-node');
-          childUl.classList.add('sidebar-conference-content');
-
-          let wrapper = li.querySelector(':scope > .sidebar-conference-toggle');
-          if (!wrapper) {
-            wrapper = document.createElement('div');
-            wrapper.className = 'sidebar-conference-toggle';
-
-            const labelSpan = document.createElement('span');
-            labelSpan.className = 'sidebar-conference-toggle-label';
-
-            const arrowSpan = document.createElement('span');
-            arrowSpan.className = 'sidebar-conference-toggle-arrow';
-            arrowSpan.setAttribute('aria-hidden', 'true');
-
-            wrapper.appendChild(labelSpan);
-            wrapper.appendChild(arrowSpan);
-
-            const labelNode = getDirectLabelNode(li);
-            if (labelNode && labelNode.parentNode === li) {
-              li.replaceChild(wrapper, labelNode);
-            } else {
-              li.insertBefore(wrapper, li.firstChild);
-            }
-          }
-
-          const labelSpan = wrapper.querySelector('.sidebar-conference-toggle-label');
-          const arrowSpan = wrapper.querySelector('.sidebar-conference-toggle-arrow');
-          if (labelSpan) labelSpan.textContent = label;
-
-          const collapsed = state[storageKey] === 'closed';
-          li.dataset.sidebarConferenceKey = storageKey;
-          li.classList.toggle('sidebar-conference-collapsed', collapsed);
-          if (arrowSpan) arrowSpan.textContent = collapsed ? '▸' : '▾';
-          wrapper.setAttribute('role', 'button');
-          wrapper.setAttribute('tabindex', '0');
-          wrapper.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
-          setConferenceCollapsed(li, collapsed, { animate: false });
-
-          if (!wrapper.dataset.dprConferenceToggleBound) {
-            wrapper.dataset.dprConferenceToggleBound = '1';
-            const toggle = (event) => {
-              if (event) {
-                event.preventDefault();
-                event.stopPropagation();
-                if (event.stopImmediatePropagation) event.stopImmediatePropagation();
-              }
-              const nowCollapsed = li.classList.toggle('sidebar-conference-collapsed');
-              const currentArrow = wrapper.querySelector('.sidebar-conference-toggle-arrow');
-              if (currentArrow) currentArrow.textContent = nowCollapsed ? '▸' : '▾';
-              wrapper.setAttribute('aria-expanded', nowCollapsed ? 'false' : 'true');
-              state[storageKey] = nowCollapsed ? 'closed' : 'open';
-              saveState();
-              setConferenceCollapsed(li, nowCollapsed, { animate: true });
-              requestAnimationFrame(() => {
-                syncSidebarActiveIndicator({ animate: false });
-              });
-            };
-            wrapper.addEventListener('click', toggle, true);
-            wrapper.addEventListener('keydown', (event) => {
-              const keyName = event && event.key ? event.key : '';
-              if (keyName !== 'Enter' && keyName !== ' ') return;
-              toggle(event);
-            });
-          }
-        };
-
-        const buildNodeKey = (rootLi, li, label) => {
-          if (li === rootLi) return 'root:conference-papers';
-          const labels = [];
-          let current = li;
-          while (current && current !== rootLi) {
-            const currentLabel = getToggleLabel(current);
-            if (currentLabel) labels.unshift(normalizeKeyPart(currentLabel));
-            const parentUl = current.parentElement;
-            current = parentUl ? parentUl.closest('li.sidebar-conference-node, li') : null;
-          }
-          const path = labels.filter(Boolean).join('/');
-          return `conference:${path || normalizeKeyPart(label)}`;
-        };
-
-        const setupConferenceTree = (rootLi, li) => {
-          if (!li || !li.querySelector(':scope > ul')) return;
-          const label = li === rootLi ? 'Conference Papers' : getToggleLabel(li);
-          if (!label) return;
-          ensureToggle(li, label, buildNodeKey(rootLi, li, label));
-          Array.from(li.querySelectorAll(':scope > ul > li')).forEach((childLi) => {
-            setupConferenceTree(rootLi, childLi);
-          });
-        };
-
-        const rootItems = Array.from(nav.querySelectorAll('li')).filter((li) => {
-          if (!li.querySelector(':scope > ul')) return false;
-          return getToggleLabel(li) === 'Conference Papers';
-        });
-
-        rootItems.forEach((rootLi) => {
-          setupConferenceTree(rootLi, rootLi);
-        });
-
-        requestAnimationFrame(() => {
-          try {
-            Array.from(
-              nav.querySelectorAll(
-                'li.sidebar-conference-node:not(.sidebar-conference-collapsed) > ul.sidebar-conference-content',
-              ),
-            )
-              .sort((a, b) => getElementDepth(b) - getElementDepth(a))
-              .forEach((ul) => {
-                const prevTransition = ul.style.transition;
-                ul.style.transition = 'none';
-                ul.style.maxHeight = `${ul.scrollHeight}px`;
-                ul.style.opacity = '1';
-                requestAnimationFrame(() => {
-                  ul.style.transition = prevTransition || '';
-                });
-              });
-          } catch {
-            // ignore
-          }
-        });
-      };
+      const setupCollapsibleConferenceSidebar = () => {};
 
       // 4. 论文“已阅读”状态管理（存储在 localStorage）
       const READ_STORAGE_KEY = 'dpr_read_papers_v1';
 
       const loadReadState = () => {
+        // 认证用户优先从 Supabase 缓存读取
+        if (window.DPRReadStateSync && window.DPRReadStateSync.isActive()) {
+          return window.DPRReadStateSync.getAll();
+        }
         try {
           if (!window.localStorage) return {};
           const raw = window.localStorage.getItem(READ_STORAGE_KEY);
@@ -2135,12 +1177,51 @@ window.$docsify = {
       };
 
       const saveReadState = (state) => {
+        // localStorage 始终保存（离线回退）
         try {
-          if (!window.localStorage) return;
-          window.localStorage.setItem(READ_STORAGE_KEY, JSON.stringify(state));
+          if (window.localStorage) {
+            window.localStorage.setItem(READ_STORAGE_KEY, JSON.stringify(state));
+          }
         } catch {
           // ignore
         }
+      };
+
+      const dispatchReadStateChanged = (paperId, status) => {
+        try {
+          document.dispatchEvent(
+            new CustomEvent('dpr-paper-read-state-changed', {
+              detail: { paperId, status: status || null },
+            }),
+          );
+        } catch {
+          // ignore
+        }
+      };
+
+      const markPaperRead = (paperId, status) => {
+        if (!paperId) return;
+        const st = status || 'read';
+        // 写 localStorage
+        const state = loadReadState();
+        state[paperId] = st;
+        saveReadState(state);
+        // 同步到 Supabase
+        if (window.DPRReadStateSync && window.DPRReadStateSync.isActive()) {
+          window.DPRReadStateSync.markRead(paperId, st);
+        }
+        dispatchReadStateChanged(paperId, st);
+      };
+
+      const clearPaperRead = (paperId) => {
+        if (!paperId) return;
+        const state = loadReadState();
+        delete state[paperId];
+        saveReadState(state);
+        if (window.DPRReadStateSync && window.DPRReadStateSync.isActive()) {
+          window.DPRReadStateSync.clearRead(paperId);
+        }
+        dispatchReadStateChanged(paperId, null);
       };
 
       // ---------- Share to GitHub Gist ----------
@@ -2447,358 +1528,20 @@ window.$docsify = {
         showShareModal(url, preview ? `精美预览：${preview}` : '');
       };
 
-	      const markSidebarReadState = (currentPaperId) => {
-	        const nav = document.querySelector('.sidebar-nav');
-	        if (!nav) return;
+      // --- Sidebar 未读 badge 更新 ---
+      const updateSidebarUnreadBadges = () => {};
 
-	        const state = loadReadState();
-        if (currentPaperId) {
-          if (!state[currentPaperId]) {
-            state[currentPaperId] = 'read';
-          }
-          saveReadState(state);
-        }
+      const markSidebarReadState = () => {};
 
-        const applyLiState = (li, paperIdFromHref) => {
-          const status = state[paperIdFromHref];
-          li.classList.remove(
-            'sidebar-paper-read',
-            'sidebar-paper-good',
-            'sidebar-paper-bad',
-            'sidebar-paper-blue',
-            'sidebar-paper-orange',
-          );
-          if (status === 'good') {
-            li.classList.add('sidebar-paper-good');
-          } else if (status === 'bad') {
-            li.classList.add('sidebar-paper-bad');
-          } else if (status === 'blue') {
-            li.classList.add('sidebar-paper-blue');
-          } else if (status === 'orange') {
-            li.classList.add('sidebar-paper-orange');
-          } else if (status) {
-            li.classList.add('sidebar-paper-read');
-          }
-        };
+      const scoreToStarRating = () => null;
 
-	        const links = nav.querySelectorAll('a[href*="#/"]');
-	        links.forEach((a) => {
-	          const href = a.getAttribute('href') || '';
-	          const m = href.match(/#\/(.+)$/);
-	          if (!m) return;
-	          const paperIdFromHref = m[1].replace(/\/$/, '');
-	          const li = a.closest('li');
-	          if (!li) return;
-	          // 标记这是一个具体论文条目，方便样式细化（避免整天标题一起高亮）
-	          li.classList.add('sidebar-paper-item');
+      const buildSidebarStarsHtml = () => {};
 
-          // 为侧边栏条目追加"书签标记"按钮（绿/蓝/橙/红）
-	          let actionWrapper = li.querySelector('.sidebar-paper-rating-icons');
-	          let goodIcon = actionWrapper
-	            ? actionWrapper.querySelector('.sidebar-paper-rating-icon.good')
-	            : null;
-            let blueIcon = actionWrapper
-              ? actionWrapper.querySelector('.sidebar-paper-rating-icon.blue')
-              : null;
-            let orangeIcon = actionWrapper
-              ? actionWrapper.querySelector('.sidebar-paper-rating-icon.orange')
-              : null;
-	          let badIcon = actionWrapper
-	            ? actionWrapper.querySelector('.sidebar-paper-rating-icon.bad')
-	            : null;
+      const hydrateStructuredSidebarItems = () => {};
 
-          // 左侧按钮容器（分享 + 收藏）
-          let leftActions = li.querySelector('.sidebar-paper-left-actions');
-	          if (!actionWrapper) {
-	            actionWrapper = document.createElement('span');
-	            actionWrapper.className = 'sidebar-paper-rating-icons';
+      const neutralizeSidebarNoactiveLinks = () => {};
 
-	            goodIcon = document.createElement('button');
-	            goodIcon.className = 'sidebar-paper-rating-icon good';
-	            goodIcon.title = '标记为「绿色书签」';
-	            goodIcon.setAttribute('aria-label', '绿色书签');
-	            goodIcon.innerHTML = '';
-
-              blueIcon = document.createElement('button');
-              blueIcon.className = 'sidebar-paper-rating-icon blue';
-              blueIcon.title = '标记为「蓝色书签」';
-              blueIcon.setAttribute('aria-label', '蓝色书签');
-              blueIcon.innerHTML = '';
-
-              orangeIcon = document.createElement('button');
-              orangeIcon.className = 'sidebar-paper-rating-icon orange';
-              orangeIcon.title = '标记为「橙色书签」';
-              orangeIcon.setAttribute('aria-label', '橙色书签');
-              orangeIcon.innerHTML = '';
-
-	            badIcon = document.createElement('button');
-	            badIcon.className = 'sidebar-paper-rating-icon bad';
-	            badIcon.title = '标记为「红色书签」';
-	            badIcon.setAttribute('aria-label', '红色书签');
-	            badIcon.innerHTML = '';
-
-              // 创建左侧按钮容器
-              leftActions = document.createElement('span');
-              leftActions.className = 'sidebar-paper-left-actions';
-
-              const favoriteIcon = document.createElement('button');
-              favoriteIcon.className = 'sidebar-paper-favorite-icon';
-              favoriteIcon.title = '收藏';
-              favoriteIcon.setAttribute('aria-label', '收藏');
-              favoriteIcon.textContent = '☆';
-              favoriteIcon.addEventListener('click', (e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                // 切换收藏状态（功能待实现）
-                const isActive = favoriteIcon.classList.toggle('active');
-                favoriteIcon.textContent = isActive ? '★' : '☆';
-              });
-
-              const shareIcon = document.createElement('button');
-              shareIcon.className = 'sidebar-paper-share-icon';
-              shareIcon.title = '分享（生成 GitHub Gist 链接）';
-              shareIcon.setAttribute('aria-label', '分享');
-              shareIcon.textContent = '⤴';
-
-              const setStateAndRefresh = (value) => {
-                const latestState = loadReadState();
-                const current = latestState[paperIdFromHref];
-                if (current === value) {
-                  latestState[paperIdFromHref] = 'read';
-                } else {
-                  latestState[paperIdFromHref] = value;
-                }
-                saveReadState(latestState);
-                markSidebarReadState(null);
-                requestAnimationFrame(() => {
-                  syncSidebarActiveIndicator({ animate: false });
-                });
-              };
-
-	            goodIcon.addEventListener('click', (e) => {
-	              e.preventDefault();
-	              e.stopPropagation();
-	              setStateAndRefresh('good');
-	            });
-
-              blueIcon.addEventListener('click', (e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                setStateAndRefresh('blue');
-              });
-
-              orangeIcon.addEventListener('click', (e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                setStateAndRefresh('orange');
-              });
-
-              shareIcon.addEventListener('click', async (e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                if (shareIcon.disabled) return;
-                const old = shareIcon.textContent;
-                shareIcon.disabled = true;
-                shareIcon.textContent = '...';
-                try {
-                  await sharePaperToGist(paperIdFromHref);
-                } catch (err) {
-                  const msg = String(err && err.message ? err.message : err);
-                  showShareModal('', `上传失败：${msg}`);
-                } finally {
-                  shareIcon.disabled = false;
-                  shareIcon.textContent = old || '⤴';
-                }
-              });
-
-	            badIcon.addEventListener('click', (e) => {
-	              e.preventDefault();
-	              e.stopPropagation();
-	              setStateAndRefresh('bad');
-	            });
-
-              // 左侧容器添加收藏和分享按钮
-              leftActions.appendChild(favoriteIcon);
-              leftActions.appendChild(shareIcon);
-              a.parentNode.insertBefore(leftActions, a);
-
-              // 右侧容器添加书签按钮
-	            actionWrapper.appendChild(goodIcon);
-              actionWrapper.appendChild(blueIcon);
-              actionWrapper.appendChild(orangeIcon);
-	            actionWrapper.appendChild(badIcon);
-	            a.parentNode.insertBefore(actionWrapper, a.nextSibling);
-	          }
-
-	          // 无论按钮是否刚创建，都要基于“最新 state”刷新激活态（支持空格键切换）
-	          try {
-	            const s = state[paperIdFromHref];
-	            if (goodIcon) goodIcon.classList.toggle('active', s === 'good');
-              if (blueIcon) blueIcon.classList.toggle('active', s === 'blue');
-              if (orangeIcon) orangeIcon.classList.toggle('active', s === 'orange');
-	            if (badIcon) badIcon.classList.toggle('active', s === 'bad');
-	          } catch {
-	            // ignore
-	          }
-
-	          applyLiState(li, paperIdFromHref);
-	        });
-	      };
-
-      const scoreToStarRating = (scoreValue) => {
-        const score = Number(scoreValue);
-        if (!Number.isFinite(score)) return 0;
-        const clamped = Math.max(0, Math.min(10, score));
-        return Math.floor(clamped + 0.5) / 2;
-      };
-
-      const buildSidebarStarsHtml = (scoreValue) => {
-        const rating = scoreToStarRating(scoreValue);
-        const scoreNum = Number(scoreValue);
-        const scoreText = Number.isFinite(scoreNum) ? scoreNum.toFixed(1) : '';
-        const title = scoreText
-          ? `评分：${scoreText}/10（${rating.toFixed(1)}/5）`
-          : '评分：无';
-        const pct = Math.max(0, Math.min(100, (rating / 5) * 100));
-        return (
-          `<span class="dpr-stars" title="${escapeHtml(title)}" aria-label="${rating.toFixed(1)} out of 5">` +
-          '<span class="dpr-stars-bg">☆☆☆☆☆</span>' +
-          `<span class="dpr-stars-fill" style="width:${pct.toFixed(0)}%">★★★★★</span>` +
-          '</span>'
-        );
-      };
-
-      const hydrateStructuredSidebarItems = () => {
-        const nav = document.querySelector('.sidebar-nav');
-        if (!nav) return;
-        const links = nav.querySelectorAll('a.dpr-sidebar-item-link.dpr-sidebar-item-structured');
-        links.forEach((a) => {
-          if (a.dataset.sidebarStructuredHydrated === '1') return;
-          const li = a.closest('li');
-          if (li && li.classList) {
-            li.classList.add('sidebar-paper-item');
-          }
-          const href = String(a.getAttribute('href') || '').trim();
-          const routeMatch = href.match(/#\/(.+)$/);
-          const routeId = routeMatch ? decodeURIComponent(routeMatch[1]).replace(/\/$/, '') : '';
-          const arxivId = routeId ? routeId.split('/').slice(-1)[0] : '';
-          const fallbackLink = arxivId ? `https://arxiv.org/abs/${arxivId}` : '';
-
-          let payload = null;
-          const raw = a.getAttribute('data-sidebar-item') || '';
-          if (raw) {
-            try {
-              payload = JSON.parse(raw);
-            } catch {
-              payload = null;
-            }
-          }
-
-          // 兼容历史 sidebar：从旧 DOM（title/tags/score）回填结构化数据
-          if (!payload || typeof payload !== 'object') {
-            const legacyTitle = String(
-              (a.querySelector('.dpr-sidebar-title') && a.querySelector('.dpr-sidebar-title').textContent) ||
-                a.textContent ||
-                '',
-            ).trim();
-            const legacyScoreNode = a.querySelector('.dpr-sidebar-tag-score .dpr-stars');
-            const legacyScoreTitle = String(
-              (legacyScoreNode && legacyScoreNode.getAttribute('title')) || '',
-            );
-            const scoreMatch = legacyScoreTitle.match(/评分：\s*([0-9]+(?:\.[0-9]+)?)\s*\/10/);
-            const legacyScore = scoreMatch ? scoreMatch[1] : '-';
-            const legacyTags = [];
-            const tagNodes = a.querySelectorAll('.dpr-sidebar-tag');
-            tagNodes.forEach((node) => {
-              if (node.classList.contains('dpr-sidebar-tag-score')) return;
-              const label = String(node.textContent || '').trim();
-              if (!label) return;
-              let kind = 'other';
-              if (node.classList.contains('dpr-sidebar-tag-keyword')) kind = 'keyword';
-              if (node.classList.contains('dpr-sidebar-tag-query')) kind = 'query';
-              if (node.classList.contains('dpr-sidebar-tag-paper')) kind = 'paper';
-              legacyTags.push({ kind, label });
-            });
-            payload = {
-              title: legacyTitle || routeId,
-              link: fallbackLink || href,
-              score: legacyScore,
-              tags: legacyTags,
-            };
-          }
-
-          if (!payload || typeof payload !== 'object') return;
-
-          const title = String(payload.title || a.textContent || '').trim();
-          const link = String(payload.link || fallbackLink || href || '').trim();
-          const score = String(payload.score || '').trim();
-          const evidence = String((payload && payload.evidence) || '').trim();
-          const tags = Array.isArray(payload.tags) ? payload.tags : [];
-
-          const scoreHtml =
-            score && score !== '-'
-              ? `<span class="dpr-sidebar-tag dpr-sidebar-tag-score">${buildSidebarStarsHtml(score)}</span>`
-              : '<span class="dpr-sidebar-score-empty">-</span>';
-
-          const tagsHtml = tags
-            .map((item) => {
-              const rawKind = String((item && item.kind) || 'other').trim().toLowerCase();
-              const kind = /^(keyword|query|paper|other)$/.test(rawKind) ? rawKind : 'other';
-              const label = String((item && item.label) || '').trim();
-              if (!label) return '';
-              return `<span class="dpr-sidebar-tag dpr-sidebar-tag-${kind}">${escapeHtml(label)}</span>`;
-            })
-            .filter(Boolean)
-            .join(' ');
-
-          a.innerHTML =
-            `<div class="dpr-sidebar-title">${escapeHtml(title)}</div>` +
-            `<div class="dpr-sidebar-link-line">${escapeHtml(evidence || '-')}</div>` +
-            `<div class="dpr-sidebar-meta-line">` +
-            `${scoreHtml}` +
-            `<span class="dpr-sidebar-meta-tags">${tagsHtml || '<span class="dpr-sidebar-tag dpr-sidebar-tag-other">-</span>'}</span>` +
-            `</div>`;
-          a.dataset.sidebarStructuredHydrated = '1';
-        });
-      };
-
-      const neutralizeSidebarNoactiveLinks = () => {
-        const nav = document.querySelector('.sidebar-nav');
-        if (!nav) return;
-        const links = nav.querySelectorAll('a.dpr-sidebar-noactive-link');
-        links.forEach((a) => {
-          try {
-            a.classList.remove('active', 'router-link-active');
-          } catch {
-            // ignore
-          }
-          try {
-            const li = a.closest('li');
-            if (li) {
-              li.classList.remove('active');
-            }
-          } catch {
-            // ignore
-          }
-        });
-      };
-
-      const bindSidebarVirtualHashLinks = () => {
-        const nav = document.querySelector('.sidebar-nav');
-        if (!nav) return;
-        const links = nav.querySelectorAll('a[data-dpr-hash]');
-        links.forEach((a) => {
-          if (a.dataset.dprHashBound === '1') return;
-          a.dataset.dprHashBound = '1';
-          a.addEventListener('click', (e) => {
-            const target = normalizeHref(a.getAttribute('data-dpr-hash') || '');
-            if (!target) return;
-            e.preventDefault();
-            DPR_NAV_STATE.lastNavSource = 'click';
-            window.location.hash = target;
-          });
-        });
-      };
+      const bindSidebarVirtualHashLinks = () => {};
 
       // 侧边栏/正文的论文页标题条：英文右侧，中文左侧，中间竖线
       const isPaperRouteFile = (file) => {
@@ -2979,197 +1722,19 @@ window.$docsify = {
         return nav;
       };
 
-      const ensureSidebarActiveIndicator = () => {
-        const nav = document.querySelector('.sidebar-nav');
-        if (!nav) return null;
+      const ensureSidebarActiveIndicator = () => {};
 
-        if (
-          DPR_SIDEBAR_ACTIVE_INDICATOR.el &&
-          DPR_SIDEBAR_ACTIVE_INDICATOR.parent === nav &&
-          nav.contains(DPR_SIDEBAR_ACTIVE_INDICATOR.el)
-        ) {
-          return { el: DPR_SIDEBAR_ACTIVE_INDICATOR.el, newlyCreated: false };
-        }
+      const hideSidebarActiveIndicator = () => {};
 
-        // 清理旧的（例如热更新/重复初始化场景）
-        try {
-          if (DPR_SIDEBAR_ACTIVE_INDICATOR.el && DPR_SIDEBAR_ACTIVE_INDICATOR.el.remove) {
-            DPR_SIDEBAR_ACTIVE_INDICATOR.el.remove();
-          }
-        } catch {
-          // ignore
-        }
+      const showSidebarActiveIndicator = () => {};
 
-        const indicator = document.createElement('div');
-        indicator.className = 'dpr-sidebar-active-indicator';
-        indicator.setAttribute('aria-hidden', 'true');
-        // 刚创建时先禁用 transition，避免出现“从 sidebar 顶部滑下来”的二次动效
-        indicator.style.transition = 'none';
-        // 放在最前面，确保在所有 li 下面
-        nav.insertBefore(indicator, nav.firstChild);
-        DPR_SIDEBAR_ACTIVE_INDICATOR.el = indicator;
-        DPR_SIDEBAR_ACTIVE_INDICATOR.parent = nav;
-        return { el: indicator, newlyCreated: true };
-      };
+      const isSidebarItemVisible = () => {};
 
-      const hideSidebarActiveIndicator = () => {
-        const ensured = ensureSidebarActiveIndicator();
-        if (!ensured || !ensured.el) return;
-        const indicator = ensured.el;
-        // 避免后续复用时残留 good/bad 配色
-        indicator.classList.remove('is-good', 'is-bad', 'is-blue', 'is-orange');
-        indicator.style.opacity = '0';
-        indicator.style.width = '0';
-        indicator.style.height = '0';
-      };
+      const moveSidebarActiveIndicatorToEl = () => {};
 
-      const showSidebarActiveIndicator = () => {
-        const ensured = ensureSidebarActiveIndicator();
-        if (!ensured || !ensured.el) return;
-        ensured.el.style.opacity = '1';
-      };
+      const moveSidebarActiveIndicatorToHref = () => {};
 
-      const isSidebarItemVisible = (el) => {
-        try {
-          if (!el) return false;
-          // display:none / 被折叠时 offsetParent 会是 null
-          if (el.offsetParent === null) return false;
-          const rect = el.getBoundingClientRect();
-          return rect && rect.width > 0 && rect.height > 0;
-        } catch {
-          return false;
-        }
-      };
-
-      const moveSidebarActiveIndicatorToEl = (li, options = {}) => {
-        if (!li) return;
-        const { animate = true } = options || {};
-        const ensured = ensureSidebarActiveIndicator();
-        if (!ensured || !ensured.el) return;
-        const indicator = ensured.el;
-        const newlyCreated = ensured.newlyCreated;
-
-        // 先清空上一条目的配色状态，避免出现“取消勾选/叉选后仍残留底色”
-        try {
-          indicator.classList.remove('is-good', 'is-bad', 'is-blue', 'is-orange');
-        } catch {
-          // ignore
-        }
-
-        // 只对论文条目启用（避免日期分组标题等）
-        if (!li.classList || !li.classList.contains('sidebar-paper-item')) return;
-        // 若该条目在折叠分组之下：隐藏高亮层，避免折叠后仍残留选中背景
-        try {
-          if (
-            li.closest &&
-            (li.closest('li.sidebar-day-collapsed') ||
-              li.closest('li.sidebar-conference-collapsed'))
-          ) {
-            hideSidebarActiveIndicator();
-            return;
-          }
-        } catch {
-          // ignore
-        }
-        if (!isSidebarItemVisible(li)) {
-          hideSidebarActiveIndicator();
-          return;
-        }
-
-        showSidebarActiveIndicator();
-
-        // 选中高亮层配色：根据 good/bad 状态切换（用于“已打勾/打叉”的选中底色）
-        try {
-          const isGood =
-            li.classList && li.classList.contains('sidebar-paper-good');
-          const isBad = li.classList && li.classList.contains('sidebar-paper-bad');
-          const isBlue =
-            li.classList && li.classList.contains('sidebar-paper-blue');
-          const isOrange =
-            li.classList && li.classList.contains('sidebar-paper-orange');
-
-          // 单选：如果同时存在（理论上不应发生），按优先级取第一个
-          const any = isGood || isBad || isBlue || isOrange;
-          indicator.classList.toggle('is-good', !!isGood && any && !isBad && !isBlue && !isOrange);
-          indicator.classList.toggle('is-bad', !!isBad && any && !isGood && !isBlue && !isOrange);
-          indicator.classList.toggle('is-blue', !!isBlue && any && !isGood && !isBad && !isOrange);
-          indicator.classList.toggle('is-orange', !!isOrange && any && !isGood && !isBad && !isBlue);
-        } catch {
-          // ignore
-        }
-
-        // 不能用 offsetTop/offsetLeft：
-        // 侧边栏是多层嵌套 li/ul，offset* 参照系会落在中间层，导致越往下选中偏移越明显。
-        // 统一使用相对 .sidebar-nav 的几何坐标，保证展开多天后仍准确对齐。
-        const nav = ensured.parent || (li.closest && li.closest('.sidebar-nav'));
-        const navRect = nav ? nav.getBoundingClientRect() : null;
-        const liRect = li.getBoundingClientRect();
-        const x = navRect ? liRect.left - navRect.left + (nav.scrollLeft || 0) : li.offsetLeft;
-        const y = navRect ? liRect.top - navRect.top + (nav.scrollTop || 0) : li.offsetTop;
-        const w = liRect.width || li.offsetWidth;
-        const h = liRect.height || li.offsetHeight;
-
-        // 新建/或要求不动画时：先关 transition，直接定位到最终位置，再恢复 transition
-        if (newlyCreated || !animate) {
-          indicator.style.transition = 'none';
-        }
-
-        indicator.style.width = `${w}px`;
-        indicator.style.height = `${h}px`;
-        indicator.style.transform = `translate3d(${x}px, ${y}px, 0)`;
-
-        if (newlyCreated || !animate) {
-          requestAnimationFrame(() => {
-            indicator.style.transition = '';
-          });
-        }
-      };
-
-      const moveSidebarActiveIndicatorToHref = (href, options = {}) => {
-        const targetHref = normalizeHref(href);
-        if (!targetHref) return;
-        const nav = document.querySelector('.sidebar-nav');
-        if (!nav) return;
-        const link = nav.querySelector(`a[href="${targetHref}"]`);
-        if (!link) return;
-        const li = link.closest('li');
-        moveSidebarActiveIndicatorToEl(li, options);
-      };
-
-      const syncSidebarActiveIndicator = (options = {}) => {
-        const { animate = false } = options || {};
-        const nav = document.querySelector('.sidebar-nav');
-        if (!nav) return;
-
-        // 1) 优先按“当前路由 href”精确匹配，避免 Docsify 多个 active 时命中错误项
-        const routeHref = DPR_NAV_STATE.currentHref || '';
-        if (routeHref) {
-          const links = Array.from(nav.querySelectorAll('a[href]'));
-          for (let i = 0; i < links.length; i += 1) {
-            const a = links[i];
-            const href = normalizeHref(a.getAttribute('href') || '');
-            if (href !== routeHref) continue;
-            const li = a.closest('li');
-            if (li && li.classList && li.classList.contains('sidebar-paper-item')) {
-              moveSidebarActiveIndicatorToEl(li, { animate });
-              return;
-            }
-          }
-        }
-
-        // 2) 兜底：如果存在多个 active，取最后一个（通常是更深层、当前真正选中项）
-        const activeLis = Array.from(
-          nav.querySelectorAll('li.active.sidebar-paper-item'),
-        );
-        if (activeLis.length > 0) {
-          moveSidebarActiveIndicatorToEl(activeLis[activeLis.length - 1], {
-            animate,
-          });
-          return;
-        }
-
-        hideSidebarActiveIndicator();
-      };
+      const syncSidebarActiveIndicator = () => {};
 
       // 暴露到全局，供 sidebar resize 时调用
       window.syncSidebarActiveIndicator = syncSidebarActiveIndicator;
@@ -3236,146 +1801,119 @@ window.$docsify = {
       };
 
       const collectPaperHrefsFromSidebar = () => {
-        const nav = document.querySelector('.sidebar-nav');
-        if (!nav) return [];
-        const links = Array.from(nav.querySelectorAll('a[href]'));
-        const out = [];
-        const seen = new Set();
-        links.forEach((a) => {
-          const href = a.getAttribute('href') || '';
-          if (!isPaperHref(href)) return;
-          const norm = normalizeHref(href);
-          if (seen.has(norm)) return;
-          seen.add(norm);
-          out.push(norm);
-        });
-        return out;
+        try {
+          if (
+            window.DPRSidebar &&
+            typeof window.DPRSidebar.getPaperHrefs === 'function'
+          ) {
+            const fromApi = window.DPRSidebar.getPaperHrefs();
+            if (Array.isArray(fromApi) && fromApi.length) {
+              return fromApi.map(normalizeHref).filter(Boolean);
+            }
+          }
+          const root = document.querySelector('#dpr-sidebar-v2');
+          if (!root) return [];
+          const sel = '#dpr-sidebar-v2 .dpr-sidebar-paper > a[href^="#/"]';
+          const out = [];
+          root.querySelectorAll(sel).forEach(a => {
+            const h = a.getAttribute('href');
+            if (h) out.push(h);
+          });
+          return out;
+        } catch (e) { return []; }
       };
 
       const collectReportHrefsFromSidebar = () => {
-        const links = [];
-        const nav = document.querySelector('.sidebar-nav');
-        if (nav) {
-          links.push(...Array.from(nav.querySelectorAll('a[href]')));
-        }
-        const main = document.querySelector('.markdown-section');
-        if (main) {
-          links.push(...Array.from(main.querySelectorAll('a[href]')));
-        }
-        const out = [];
+        try {
+          if (
+            window.DPRSidebar &&
+            typeof window.DPRSidebar.getReportHrefs === 'function'
+          ) {
+            const fromApi = window.DPRSidebar.getReportHrefs();
+            if (Array.isArray(fromApi) && fromApi.length) {
+              return fromApi.map(normalizeHref).filter(Boolean);
+            }
+          }
+          const root = document.querySelector('#dpr-sidebar-v2');
+          if (!root) return [];
+          const sel = '#dpr-sidebar-v2 .dpr-sidebar-report-link';
+          const out = [];
+          root.querySelectorAll(sel).forEach(a => {
+            const h = a.getAttribute('href');
+            if (h) out.push(h);
+          });
+          return out;
+        } catch (e) { return []; }
+      };
+
+      const dedupeHrefs = (hrefs) => {
         const seen = new Set();
-        links.forEach((a) => {
-          const href = a.getAttribute('href') || '';
-          if (!isReportHref(href)) return;
-          const norm = normalizeHref(href);
-          if (seen.has(norm)) return;
-          seen.add(norm);
-          out.push(norm);
+        const out = [];
+        (hrefs || []).forEach((href) => {
+          const h = normalizeHref(href);
+          if (!h || seen.has(h)) return;
+          seen.add(h);
+          out.push(h);
         });
         return out;
       };
 
+      const routeHrefFromLocation = () => {
+        const raw = String((window.location && window.location.hash) || '');
+        if (!raw) return '#/';
+        return normalizeHref(raw.split('?')[0]);
+      };
+
       const updateNavState = () => {
-        DPR_NAV_STATE.paperHrefs = collectPaperHrefsFromSidebar();
-        DPR_NAV_STATE.reportHrefs = collectReportHrefsFromSidebar();
-        const file = vm && vm.route ? vm.route.file : '';
-        if (file && isPaperRouteFile(file)) {
-          DPR_NAV_STATE.currentHref = normalizeHref('#/' + String(file).replace(/\.md$/i, ''));
-        } else {
-          DPR_NAV_STATE.currentHref = '';
-        }
-        if (file && isReportRouteFile(file)) {
-          DPR_NAV_STATE.currentReportHref = normalizeHref('#/' + String(file).replace(/\.md$/i, ''));
-        } else {
-          DPR_NAV_STATE.currentReportHref = '';
-        }
-      };
+        const paperHrefs = dedupeHrefs(collectPaperHrefsFromSidebar());
+        const reportHrefs = dedupeHrefs(collectReportHrefsFromSidebar());
+        const routeHref = routeHrefFromLocation();
 
-      const centerSidebarOnHref = (href) => {
-        const targetHref = normalizeHref(href);
-        if (!targetHref) return;
-        if (targetHref === DPR_SIDEBAR_CENTER_STATE.lastHref) return;
-        const nav = document.querySelector('.sidebar-nav');
-        if (!nav) return;
+        DPR_NAV_STATE.paperHrefs = paperHrefs;
+        DPR_NAV_STATE.reportHrefs = reportHrefs;
 
-        const link =
-          nav.querySelector(`a[href="${targetHref}"]`) ||
-          nav.querySelector(`a[href="${targetHref.replace(/^#\//, '#/')}"]`);
-        if (!link) return;
-
-        const item = link.closest('li') || link;
-        const scrollEl = getSidebarScrollEl();
-        if (!scrollEl || scrollEl.scrollHeight <= scrollEl.clientHeight + 4) {
-          DPR_SIDEBAR_CENTER_STATE.lastHref = targetHref;
-          return;
-        }
-
-        const scrollRect = scrollEl.getBoundingClientRect();
-        const itemRect = item.getBoundingClientRect();
-
-        const currentTop = scrollEl.scrollTop;
-        const deltaTop = itemRect.top - scrollRect.top;
-        const targetTop =
-          currentTop + deltaTop - (scrollRect.height / 2 - itemRect.height / 2);
-
-        const clamped = Math.max(
-          0,
-          Math.min(targetTop, scrollEl.scrollHeight - scrollEl.clientHeight),
-        );
-
-        DPR_SIDEBAR_CENTER_STATE.lastTs = Date.now();
-        DPR_SIDEBAR_CENTER_STATE.lastHref = targetHref;
-
-        // 居中时只需要“滚动”动画，不做额外高亮动画
-        const duration = prefersReducedMotion() ? 0 : DPR_TRANSITION_MS;
-        animateScrollTop(scrollEl, clamped, duration);
-      };
-
-      const centerSidebarOnCurrent = () => {
-        // 优先跟随 Docsify 的“active”状态（这才是你看到的选中项）
-        const nav = document.querySelector('.sidebar-nav');
-        if (nav) {
-          const activeLi = nav.querySelector('li.active');
-          const activeLink = nav.querySelector('a.active');
-          const el = activeLi || activeLink;
-          if (el) {
-            const href = (activeLink && activeLink.getAttribute('href')) || '';
-            // 如果拿得到 href，就走 href 去重；否则用一个稳定的占位 key
-            const key = href ? normalizeHref(href) : '__active__';
-            if (key && key === DPR_SIDEBAR_CENTER_STATE.lastHref) return;
-
-            const scrollEl = getSidebarScrollEl();
-            if (!scrollEl) return;
-
-            const scrollRect = scrollEl.getBoundingClientRect();
-            const itemRect = el.getBoundingClientRect();
-
-            const currentTop = scrollEl.scrollTop;
-            const deltaTop = itemRect.top - scrollRect.top;
-            const targetTop =
-              currentTop +
-              deltaTop -
-              (scrollRect.height / 2 - itemRect.height / 2);
-
-            const clamped = Math.max(
-              0,
-              Math.min(targetTop, scrollEl.scrollHeight - scrollEl.clientHeight),
-            );
-
-            DPR_SIDEBAR_CENTER_STATE.lastTs = Date.now();
-            DPR_SIDEBAR_CENTER_STATE.lastHref = key;
-
-            const duration = prefersReducedMotion() ? 0 : DPR_TRANSITION_MS;
-            animateScrollTop(scrollEl, clamped, duration);
-            return;
+        let currentHref = '';
+        let currentReportHref = '';
+        try {
+          if (
+            window.DPRSidebar &&
+            typeof window.DPRSidebar.getCurrentPaperHref === 'function'
+          ) {
+            currentHref = normalizeHref(window.DPRSidebar.getCurrentPaperHref());
           }
+          if (
+            window.DPRSidebar &&
+            typeof window.DPRSidebar.getCurrentReportHref === 'function'
+          ) {
+            currentReportHref = normalizeHref(window.DPRSidebar.getCurrentReportHref());
+          }
+        } catch {
+          currentHref = '';
+          currentReportHref = '';
         }
 
-        // 兜底：按当前路由 href 匹配
-        const href = DPR_NAV_STATE.currentHref || '';
-        if (!href) return;
-        centerSidebarOnHref(href);
+        if (!currentHref && paperHrefs.includes(routeHref)) {
+          currentHref = routeHref;
+        }
+        if (!currentReportHref && reportHrefs.includes(routeHref)) {
+          currentReportHref = routeHref;
+        }
+
+        DPR_NAV_STATE.currentHref = currentHref;
+        DPR_NAV_STATE.currentReportHref = currentReportHref;
+
+        try {
+          if (window.DPRSidebar && typeof window.DPRSidebar.syncActive === 'function') {
+            window.DPRSidebar.syncActive();
+          }
+        } catch {
+          // ignore
+        }
       };
+
+      const centerSidebarOnHref = () => {};
+
+      const centerSidebarOnCurrent = () => {};
 
       const shouldIgnoreKeyNav = (event) => {
         if (!event) return true;
@@ -3399,17 +1937,19 @@ window.$docsify = {
         const current = DPR_NAV_STATE.currentHref;
         const currentReport = DPR_NAV_STATE.currentReportHref;
         const isHome = !current && !currentReport;
-        const reportMode = isHome || !!currentReport;
+        const reportMode = !!currentReport;
         const list = reportMode ? reportList : paperList;
-        if (!list.length) return;
 
         // 首页：右键/左滑（delta=+1）跳到最新一天第一篇
         if (isHome) {
+          const firstTarget = paperList[0] || reportList[0];
           if (delta > 0) {
-            triggerPageNav(list[0], 'forward');
+            triggerPageNav(firstTarget, 'forward');
           }
           return;
         }
+
+        if (!list.length) return;
 
         const anchor = reportMode ? currentReport : current;
         const idx = list.indexOf(anchor);
@@ -3577,6 +2117,14 @@ window.$docsify = {
         if (window.__dprNavBound) return;
         window.__dprNavBound = true;
 
+        document.addEventListener('dpr-sidebar-updated', () => {
+          updateNavState();
+          prefetchAdjacent();
+        });
+        window.addEventListener('hashchange', () => {
+          updateNavState();
+        });
+
         // 禁用 Docsify 原生的标题锚点点击功能
         document.addEventListener('click', (e) => {
           try {
@@ -3611,17 +2159,15 @@ window.$docsify = {
           const cur = state[paperId];
           // 空格：在 good 与 read 之间切换
           if (cur === 'good') {
-            state[paperId] = 'read';
+            markPaperRead(paperId, 'read');
           } else {
-            state[paperId] = 'good';
+            markPaperRead(paperId, 'good');
           }
-	          saveReadState(state);
-	          markSidebarReadState(null);
-	          // 同步选中高亮层颜色（good <-> read 切换时避免残留绿色底）
-	          requestAnimationFrame(() => {
-	            syncSidebarActiveIndicator({ animate: false });
-	          });
-	        };
+          // 同步选中高亮层颜色（good <-> read 切换时避免残留绿色底）
+          requestAnimationFrame(() => {
+            syncSidebarActiveIndicator({ animate: false });
+          });
+        };
 
         // 通用书签切换函数：数字键 1234 对应 绿蓝紫红
         const toggleBookmarkForCurrent = (bookmarkType) => {
@@ -3635,12 +2181,10 @@ window.$docsify = {
           const cur = state[paperId];
           // 切换：如果当前已是该状态则取消（变为 read），否则设置为该状态
           if (cur === bookmarkType) {
-            state[paperId] = 'read';
+            markPaperRead(paperId, 'read');
           } else {
-            state[paperId] = bookmarkType;
+            markPaperRead(paperId, bookmarkType);
           }
-          saveReadState(state);
-          markSidebarReadState(null);
           requestAnimationFrame(() => {
             syncSidebarActiveIndicator({ animate: false });
           });
@@ -4460,8 +3004,9 @@ window.$docsify = {
         }
 
         // 生成论文页面 HTML + 正文
+        // ★ 保护正文中的 LaTeX 公式不被 marked 破坏
         const paperHtml = renderPaperFromMeta(meta);
-        return paperHtml + body;
+        return paperHtml + protectLatex(body);
       });
 
       const refreshDeferredPageEnhancements = () => {
@@ -4493,6 +3038,51 @@ window.$docsify = {
         'dpr-deferred-assets-ready',
         refreshDeferredPageEnhancements,
       );
+
+      // --- 阅读状态同步初始化 ---
+      // 用户解锁密钥后（mode=full），用 GitHub Token 获取用户名，初始化 Supabase 同步
+      const initReadStateSync = async () => {
+        try {
+          if (window.DPR_ACCESS_MODE !== 'full') return;
+          if (!window.DPRReadStateSync) return;
+          const secret = window.decoded_secret_private || {};
+          const token = (secret.github && secret.github.token) || '';
+          if (!token) return;
+          // 获取 GitHub 用户名
+          const resp = await fetch('https://api.github.com/user', {
+            headers: { Authorization: 'Bearer ' + token },
+          });
+          if (!resp.ok) return;
+          const user = await resp.json();
+          const username = (user && user.login) || '';
+          if (!username) return;
+          // 读取 Supabase 配置
+          const supabaseUrl = (window.$docsify && window.$docsify.supabaseUrl)
+            || (window.jsyaml ? '' : '')
+            || 'https://lyucdwgefyfbmaiopjbk.supabase.co';
+          const anonKey = 'sb_publishable_lX-oi64Uxyd7SIVv3_w2Uw_MTOojeKq';
+          await window.DPRReadStateSync.init(supabaseUrl, anonKey, username);
+          // 迁移 localStorage 已有数据
+          const localState = (() => {
+            try {
+              const raw = window.localStorage.getItem(READ_STORAGE_KEY);
+              return raw ? JSON.parse(raw) : null;
+            } catch { return null; }
+          })();
+          if (localState && Object.keys(localState).length) {
+            window.DPRReadStateSync.migrateFromLocalStorage(localState);
+          }
+          // 重新渲染 sidebar 状态
+          updateSidebarUnreadBadges();
+          markSidebarReadState(null);
+        } catch (e) {
+          console.warn('[DPR] ReadState init error:', e);
+        }
+      };
+      document.addEventListener('dpr-access-mode-changed', (e) => {
+        const mode = e && e.detail && e.detail.mode;
+        if (mode === 'full') initReadStateSync();
+      });
 
       // --- Docsify 生命周期钩子 ---
       hook.doneEach(function () {

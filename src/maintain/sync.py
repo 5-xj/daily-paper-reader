@@ -153,6 +153,20 @@ def resolve_default_raw_path(date_str: str, backend_key: str) -> str:
         prefix = "emnlp_papers"
     elif safe_backend == "aaai":
         prefix = "aaai_papers"
+    elif safe_backend == "cvpr":
+        prefix = "cvpr_papers"
+    elif safe_backend == "eccv":
+        prefix = "eccv_papers"
+    elif safe_backend == "ijcai":
+        prefix = "ijcai_papers"
+    elif safe_backend == "osdi":
+        prefix = "osdi_papers"
+    elif safe_backend == "sosp":
+        prefix = "sosp_papers"
+    elif safe_backend == "ieee_sp":
+        prefix = "ieee_sp_papers"
+    elif safe_backend == "ndss":
+        prefix = "ndss_papers"
     return os.path.join(ROOT_DIR, "archive", date_str, "raw", f"{prefix}_{date_str}.json")
 
 
@@ -400,7 +414,7 @@ def normalize_paper(x: Dict[str, Any]) -> Dict[str, Any] | None:
     pid = _norm(x.get("id"))
     if not pid:
         return None
-    return {
+    row = {
         "id": pid,
         "title": _norm(x.get("title")),
         "abstract": _norm(x.get("abstract")),
@@ -412,6 +426,10 @@ def normalize_paper(x: Dict[str, Any]) -> Dict[str, Any] | None:
         "source": _norm(x.get("source") or "supabase"),
         "updated_at": _now_iso(),
     }
+    pdf_url = _norm(x.get("pdf_url"))
+    if pdf_url:
+        row["pdf_url"] = pdf_url
+    return row
 
 
 def deduplicate_rows_by_id(rows: List[Dict[str, Any]]) -> tuple[List[Dict[str, Any]], int]:

@@ -493,6 +493,19 @@
     return results;
   }
 
+  async function readRepoOwnerJson() {
+    const candidates = ['.repo-owner.json', 'docs/.repo-owner.json', '/.repo-owner.json'];
+    for (const url of candidates) {
+      try {
+        const res = await fetch(url, { cache: 'no-store' });
+        if (!res.ok) continue;
+        const data = await res.json();
+        if (data && data.owner && data.repo) return data;
+      } catch { }
+    }
+    return null;
+  }
+
   // 使用 GitHub Token 推断目标仓库 owner/repo（与订阅面板保持一致的推断规则）
   async function detectGithubRepoFromToken(token) {
     const userRes = await fetch('https://api.github.com/user', {
@@ -518,35 +531,48 @@
       repoOwner = login;
       repoName = 'daily-paper-reader';
     } else {
-      const githubPagesMatch = currentUrl.match(
-        /https?:\/\/([^.]+)\.github\.io\/([^\/]+)/,
-      );
-      if (githubPagesMatch) {
-        repoOwner = githubPagesMatch[1];
-        repoName = githubPagesMatch[2];
-      } else {
-        // 其它域名：尝试从 config.yaml 中读取
-        try {
-          const res = await fetch('/config.yaml');
-          if (res.ok) {
-            const text = await res.text();
-            const yaml =
-              window.jsyaml || window.jsYaml || window.jsYAML || window.jsYml;
-            if (yaml && typeof yaml.load === 'function') {
-              const cfg = yaml.load(text) || {};
-              const githubCfg = (cfg && cfg.github) || {};
-              if (githubCfg && typeof githubCfg === 'object') {
-                if (githubCfg.owner) repoOwner = String(githubCfg.owner);
-                if (githubCfg.repo) repoName = String(githubCfg.repo);
-              }
-            }
-          }
-        } catch {
-          // 忽略 config.yaml 读取失败，后续用兜底逻辑
+      const repoMeta = await readRepoOwnerJson();
+      if (repoMeta) {
+        repoOwner = repoMeta.owner;
+        repoName = repoMeta.repo;
+        if (login && repoMeta.owner && login.toLowerCase() !== repoMeta.owner.toLowerCase()) {
+          throw new Error(
+            `Token 用户 ${login} 与站点所有者 ${repoMeta.owner} 不一致`,
+          );
         }
+      } else {
+        const githubPagesMatch = currentUrl.match(
+          /https?:\/\/([^.]+)\.github\.io\/([^\/]+)/,
+        );
+        if (githubPagesMatch) {
+          repoOwner = githubPagesMatch[1];
+          repoName = githubPagesMatch[2];
+        } else {
+          try {
+            const candidates = ['config.yaml', 'docs/config.yaml', '../config.yaml', '/config.yaml'];
+            for (const cfgUrl of candidates) {
+              try {
+                const res = await fetch(cfgUrl, { cache: 'no-store' });
+                if (!res.ok) continue;
+                const text = await res.text();
+                const yaml =
+                  window.jsyaml || window.jsYaml || window.jsYAML || window.jsYml;
+                if (yaml && typeof yaml.load === 'function') {
+                  const cfg = yaml.load(text) || {};
+                  const githubCfg = (cfg && cfg.github) || {};
+                  if (githubCfg && typeof githubCfg === 'object') {
+                    if (githubCfg.owner) repoOwner = String(githubCfg.owner);
+                    if (githubCfg.repo) repoName = String(githubCfg.repo);
+                    if (repoOwner || repoName) break;
+                  }
+                }
+              } catch { }
+            }
+          } catch { }
 
-        if (!repoOwner) {
-          repoOwner = login;
+          if (!repoOwner) {
+            repoOwner = login;
+          }
         }
       }
     }
@@ -1636,7 +1662,18 @@
             );
           }
           const userData = await res.json().catch(() => ({}));
-          githubStatusEl.innerHTML = `✅ 验证成功：用户 ${userData.login || ''}，权限：${scopeList.join(', ')}<br>Gist 分享：已开启。`;
+          const login = userData.login || '';
+          let repoInfo = '';
+          const repoMeta = await readRepoOwnerJson();
+          if (repoMeta) {
+            if (login && repoMeta.owner && login.toLowerCase() !== repoMeta.owner.toLowerCase()) {
+              throw new Error(
+                `Token 用户 ${login} 与站点所有者 ${repoMeta.owner} 不一致，请使用站点所有者的 Token。`,
+              );
+            }
+            repoInfo = `<br>仓库：${repoMeta.owner}/${repoMeta.repo}`;
+          }
+          githubStatusEl.innerHTML = `✅ 验证成功：用户 ${login}，权限：${scopeList.join(', ')}${repoInfo}<br>Gist 分享：已开启。`;
           githubStatusEl.style.color = '#28a745';
           githubOk = true;
         } catch (e) {
