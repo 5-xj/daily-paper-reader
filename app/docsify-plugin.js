@@ -2087,7 +2087,10 @@ window.$docsify = {
         if (prev && now - prev.ts < 5 * 60 * 1000) return; // 5 分钟内不重复拉取
         try {
           const res = await fetch(url, { cache: 'force-cache' });
-          if (!res.ok) return;
+          if (!res.ok) {
+            PREFETCH_STATE.cache.set(key, { ts: now, status: res.status || 0, missing: true });
+            return;
+          }
           // 读一下 body，确保写入浏览器缓存（同时做内存缓存兜底）
           const text = await res.text();
           PREFETCH_STATE.cache.set(key, { ts: now, len: text.length });

@@ -237,14 +237,17 @@ function testAxisTabsRenderUnreadCounts() {
     },
   });
 
-  assert.ok(html.includes('data-axis-key="20260624"'));
-  assert.ok(html.includes('data-axis-key="20260624" data-unread="1"'));
+  assert.ok(html.includes('class="dpr-sidebar-calendar'));
+  assert.ok(html.includes('data-calendar-date="20260624" data-unread="1"'));
+  assert.ok(html.includes('<span class="dpr-sidebar-calendar-day-total">2</span><span class="dpr-sidebar-calendar-day-unread">1</span>'));
+  assert.ok(html.includes('data-axis-tab="daily"'));
+  assert.ok(html.includes('data-axis-key="__all__"'));
+  assert.ok(html.includes('data-axis-key="rl"'));
   assert.ok(!html.includes('dpr-sidebar-axis-tab-dot'));
-  assert.ok(html.includes('<span class="dpr-sidebar-axis-tab-unread">1</span>/<span class="dpr-sidebar-axis-tab-total">2</span>'));
   assert.ok(html.includes('data-axis-key="neurips-2024"'));
   assert.ok(html.includes('data-axis-key="neurips-2024" data-unread="0"'));
   assert.ok(html.includes('<span class="dpr-sidebar-axis-tab-unread">0</span>/<span class="dpr-sidebar-axis-tab-total">1</span>'));
-  assert.ok(html.includes('data-axis-section-toggle="daily:date:20260624" aria-expanded="true" data-unread="1"'));
+  assert.ok(html.includes('data-axis-section-toggle="daily:tag:20260624:__all__" aria-expanded="false" data-unread="1"'));
   assert.ok(!html.includes('dpr-sidebar-axis-section-dot'));
 
   assert.equal(typeof tools.buildAxisViewForMode, 'function');
@@ -255,9 +258,12 @@ function testAxisTabsRenderUnreadCounts() {
     '202606/24/paper-a': 'read',
     '202606/24/paper-b': 'blue',
   });
-  const updatedDateTab = updatedDateView.tabs.find((tab) => tab.key === '20260624');
-  assert.equal(updatedDateTab.unreadCount, 0);
+  const updatedAllTab = updatedDateView.tabs.find((tab) => tab.key === '__all__');
+  assert.equal(updatedDateView.activeDateKey, '20260624');
+  assert.equal(updatedDateView.activeKey, '__all__');
+  assert.equal(updatedAllTab.unreadCount, 0);
   assert.equal(updatedDateView.groups[0].unreadCount, 0);
+  assert.equal(updatedDateView.calendar.days.find((day) => day.dateKey === '20260624').unreadCount, 0);
 
   const updatedConferenceView = tools.buildAxisViewForMode(model, 'conference', 'conf', {
     conferenceViewMode: 'conf',
@@ -268,6 +274,227 @@ function testAxisTabsRenderUnreadCounts() {
   const updatedConferenceTab = updatedConferenceView.tabs.find((tab) => tab.key === 'neurips-2024');
   assert.equal(updatedConferenceTab.unreadCount, 0);
   assert.equal(updatedConferenceView.groups[0].unreadCount, 0);
+}
+
+function testDailyCalendarViewUsesMonthGridAndActiveDateOnly() {
+  const sidebar = loadSidebarForTest('#/202606/24/paper-a');
+  const tools = sidebar.__test;
+  const model = tools.parseSidebar(sampleSidebar);
+  assert.equal(typeof tools.buildDailyCalendarView, 'function');
+
+  const calendar = tools.buildDailyCalendarView(model, '20260624', '202606', {
+    '202606/24/paper-a': 'read',
+  });
+
+  assert.equal(calendar.monthKey, '202606');
+  assert.equal(calendar.monthLabel, '2026年6月');
+  assert.equal(calendar.activeDateKey, '20260624');
+  assert.equal(calendar.prevMonthKey, '202605');
+  assert.equal(calendar.nextMonthKey, '202607');
+  assert.deepEqual(calendar.weekdays, ['一', '二', '三', '四', '五', '六', '日']);
+
+  const activeDay = calendar.days.find((day) => day.dateKey === '20260624');
+  assert.ok(activeDay, 'calendar should include active daily date');
+  assert.equal(activeDay.dayNumber, 24);
+  assert.equal(activeDay.totalCount, 2);
+  assert.equal(activeDay.unreadCount, 1);
+  assert.equal(activeDay.isActive, true);
+  assert.equal(activeDay.hasPapers, true);
+
+  const emptyDay = calendar.days.find((day) => day.dateKey === '20260622');
+  assert.ok(emptyDay, 'calendar should include empty dates in the current month');
+  assert.equal(emptyDay.totalCount, 0);
+  assert.equal(emptyDay.unreadCount, 0);
+  assert.equal(emptyDay.hasPapers, false);
+
+  const monthSelectedView = tools.buildDailyDateView(model, '20990101', {}, '202606');
+  assert.equal(monthSelectedView.activeKey, '20260624');
+  assert.deepEqual(monthSelectedView.groups.map((group) => group.label), ['2026-06-24']);
+
+  const mixedMonthModel = tools.parseSidebar(`
+* Daily Papers
+  * 2026-07-01 <!--dpr-date:20260701-->
+    * 精读区
+      * <a class="dpr-sidebar-item-link" href="#/202607/01/july" data-sidebar-item="{&quot;title&quot;:&quot;July Paper&quot;}">July Paper</a>
+  * 2026-06-24 <!--dpr-date:20260624-->
+    * 精读区
+      * <a class="dpr-sidebar-item-link" href="#/202606/24/june" data-sidebar-item="{&quot;title&quot;:&quot;June Paper&quot;}">June Paper</a>
+`);
+  const navMonthView = tools.buildDailyDateView(mixedMonthModel, '20260701', {}, '202606');
+  assert.equal(navMonthView.activeKey, '20260624');
+  assert.deepEqual(navMonthView.groups[0].papers.map((paper) => paper.title), ['June Paper']);
+
+  const html = tools.renderBodyHtml(model, {
+    expandedGroups: { conference: false, daily: true },
+    dailyViewMode: 'date',
+    activeDailyDate: '20260624',
+    activeDailyMonth: '202606',
+    readMap: {
+      '202606/24/paper-a': 'read',
+    },
+  });
+
+  assert.ok(html.includes('data-calendar-month="202606"'));
+  assert.ok(html.includes('data-calendar-nav="202605"'));
+  assert.ok(html.includes('data-calendar-nav="202607"'));
+  assert.ok(html.includes('data-calendar-date="20260624" data-unread="1"'));
+  assert.ok(html.includes('data-calendar-date="20260623" data-unread="1"'));
+  assert.ok(html.includes('Paper A'));
+  assert.ok(html.includes('Paper B'));
+  assert.ok(!html.includes('Paper D'), 'inactive daily dates should not render their paper rows');
+}
+
+function testDailyCalendarTagViewFiltersActiveDateByKeyword() {
+  const sidebar = loadSidebarForTest('#/202606/24/paper-a');
+  const tools = sidebar.__test;
+  const model = tools.parseSidebar(sampleSidebar);
+  assert.equal(typeof tools.buildDailyCalendarTagView, 'function');
+
+  const allView = tools.buildDailyCalendarTagView(model, '20260624', '__all__', {}, '202606');
+  assert.equal(allView.activeDateKey, '20260624');
+  assert.equal(allView.activeKey, '__all__');
+  assert.deepEqual(allView.tabs.map((tab) => tab.key), ['__all__', 'rl', '未标注']);
+  assert.deepEqual(allView.groups[0].papers.map((paper) => paper.title), ['Paper A', 'Paper B']);
+
+  const tagView = tools.buildDailyCalendarTagView(model, '20260624', 'rl', {}, '202606');
+  assert.equal(tagView.activeDateKey, '20260624');
+  assert.equal(tagView.activeKey, 'rl');
+  assert.deepEqual(tagView.groups[0].papers.map((paper) => paper.title), ['Paper A']);
+  assert.equal(tagView.calendar.days.find((day) => day.dateKey === '20260624').totalCount, 1);
+  assert.equal(tagView.calendar.days.find((day) => day.dateKey === '20260623').totalCount, 1);
+
+  const fallbackView = tools.buildDailyCalendarTagView(model, '20260624', 'missing-tag', {}, '202606');
+  assert.equal(fallbackView.activeKey, '__all__');
+  assert.deepEqual(fallbackView.groups[0].papers.map((paper) => paper.title), ['Paper A', 'Paper B']);
+}
+
+function testDailyCalendarPlacementToggleKeepsControlRowFixedAboveLayers() {
+  const sidebar = loadSidebarForTest('#/202606/24/paper-a');
+  const tools = sidebar.__test;
+  const model = tools.parseSidebar(sampleSidebar);
+
+  const topHtml = tools.renderBodyHtml(model, {
+    expandedGroups: { conference: false, daily: true },
+    dailyViewMode: 'date',
+    dailyCalendarPlacement: 'top',
+    activeDailyDate: '20260624',
+  });
+  const bottomHtml = tools.renderBodyHtml(model, {
+    expandedGroups: { conference: false, daily: true },
+    dailyViewMode: 'date',
+    dailyCalendarPlacement: 'bottom',
+    activeDailyDate: '20260624',
+  });
+
+  const topToggleIndex = topHtml.indexOf('data-axis-toggle="daily"');
+  const topCalendarIndex = topHtml.indexOf('class="dpr-sidebar-calendar');
+  const topTabsIndex = topHtml.indexOf('data-axis-tab="daily"');
+  const bottomToggleIndex = bottomHtml.indexOf('data-axis-toggle="daily"');
+  const bottomCalendarIndex = bottomHtml.indexOf('class="dpr-sidebar-calendar');
+  const bottomTabsIndex = bottomHtml.indexOf('data-axis-tab="daily"');
+  const dailyHeaderStart = topHtml.indexOf('dpr-sidebar-panel-header-daily');
+  const dailyHeaderEnd = topHtml.indexOf('<div class="dpr-sidebar-panel-content">', dailyHeaderStart);
+  const dailyHeader = topHtml.slice(dailyHeaderStart, dailyHeaderEnd);
+
+  assert.ok(topToggleIndex < topCalendarIndex);
+  assert.ok(topToggleIndex < topTabsIndex);
+  assert.ok(bottomToggleIndex < bottomCalendarIndex);
+  assert.ok(bottomToggleIndex < bottomTabsIndex);
+  assert.ok(topCalendarIndex < topTabsIndex);
+  assert.ok(bottomTabsIndex < bottomCalendarIndex);
+  assert.ok(topHtml.includes('data-calendar-date="20260624"'));
+  assert.ok(bottomHtml.includes('data-calendar-date="20260624"'));
+  assert.ok(topHtml.includes('title="标签上置"'));
+  assert.ok(bottomHtml.includes('title="日历上置"'));
+  assert.ok(dailyHeader.includes('data-panel-toggle="daily"'));
+  assert.ok(dailyHeader.includes('data-axis-toggle="daily"'));
+  assert.ok(!topHtml.includes('dpr-sidebar-daily-control-row'));
+  assert.ok(!bottomHtml.includes('dpr-sidebar-daily-control-row'));
+  assert.equal((topHtml.match(/data-axis-toggle="daily"/g) || []).length, 1);
+}
+
+function testConferenceAndDailyAxisTogglesRenderBesidePanelTitles() {
+  const sidebar = loadSidebarForTest('#/conference/neurips-2024/paper-c');
+  const tools = sidebar.__test;
+  const model = tools.parseSidebar(sampleSidebar);
+
+  const html = tools.renderBodyHtml(model, {
+    expandedGroups: { conference: true, daily: true },
+    conferenceViewMode: 'conf',
+    dailyViewMode: 'date',
+    activeConference: 'neurips-2024',
+    activeDailyDate: '20260624',
+  });
+  const confHeaderStart = html.indexOf('dpr-sidebar-panel-header-conference');
+  const confHeaderEnd = html.indexOf('<div class="dpr-sidebar-panel-content">', confHeaderStart);
+  const confHeader = html.slice(confHeaderStart, confHeaderEnd);
+  const dailyHeaderStart = html.indexOf('dpr-sidebar-panel-header-daily');
+  const dailyHeaderEnd = html.indexOf('<div class="dpr-sidebar-panel-content">', dailyHeaderStart);
+  const dailyHeader = html.slice(dailyHeaderStart, dailyHeaderEnd);
+
+  assert.ok(confHeader.includes('data-panel-toggle="conference"'));
+  assert.ok(confHeader.includes('data-axis-toggle="conference"'));
+  assert.ok(confHeader.indexOf('dpr-sidebar-panel-title') < confHeader.indexOf('data-axis-toggle="conference"'));
+  assert.ok(confHeader.indexOf('data-axis-toggle="conference"') < confHeader.indexOf('dpr-sidebar-day-counts'));
+  assert.ok(dailyHeader.indexOf('dpr-sidebar-panel-title') < dailyHeader.indexOf('data-axis-toggle="daily"'));
+  assert.ok(dailyHeader.indexOf('data-axis-toggle="daily"') < dailyHeader.indexOf('dpr-sidebar-day-counts'));
+  assert.equal((html.match(/data-axis-toggle="conference"/g) || []).length, 1);
+  assert.equal((html.match(/data-axis-toggle="daily"/g) || []).length, 1);
+}
+
+function testDailyCalendarInPlaceRefreshUsesActiveDailyTag() {
+  const js = fs.readFileSync('app/dpr-sidebar.js', 'utf8');
+  const start = js.indexOf('function updateDailyCalendarUnreadMarks(readMap)');
+  const end = js.indexOf('function syncResolvedAxisState()', start);
+  assert.ok(start > 0 && end > start, 'updateDailyCalendarUnreadMarks should be present');
+  const block = js.slice(start, end);
+
+  assert.ok(block.includes('buildDailyCalendarTagView'));
+  assert.ok(block.includes('state.activeDailyTag'));
+  assert.ok(block.includes('view.activeDateKey'));
+  assert.ok(!block.includes('buildDailyDateView'));
+}
+
+function testDailyAxisSectionKeyFollowsActiveDateAndTag() {
+  const sidebar = loadSidebarForTest('#/202606/24/paper-a');
+  const tools = sidebar.__test;
+  const model = tools.parseSidebar(sampleSidebar);
+  assert.equal(typeof tools.resolveDailyAxisSectionStateKey, 'function');
+
+  assert.equal(
+    tools.resolveDailyAxisSectionStateKey(model, {
+      activeDailyDate: '20260624',
+      activeDailyTag: '__all__',
+      activeDailyMonth: '202606',
+    }, {}),
+    'daily:tag:20260624:__all__',
+  );
+  assert.equal(
+    tools.resolveDailyAxisSectionStateKey(model, {
+      activeDailyDate: '20260624',
+      activeDailyTag: 'rl',
+      activeDailyMonth: '202606',
+    }, {}),
+    'daily:tag:20260624:rl',
+  );
+}
+
+function testDailyDateAndTagClicksExpandCurrentSectionOnlyForDaily() {
+  const js = fs.readFileSync('app/dpr-sidebar.js', 'utf8');
+  const calendarStart = js.indexOf("var calendarDay = e.target.closest('.dpr-sidebar-calendar-day[data-calendar-date]');");
+  const calendarEnd = js.indexOf("var axisTab = e.target.closest('.dpr-sidebar-axis-tab');", calendarStart);
+  assert.ok(calendarStart > 0 && calendarEnd > calendarStart, 'calendar day handler should be present');
+  const calendarBlock = js.slice(calendarStart, calendarEnd);
+  assert.ok(calendarBlock.includes('expandCurrentDailyAxisSection('));
+
+  const tabStart = js.indexOf("if (tabGroup === 'daily') {");
+  const tabEnd = js.indexOf('rerenderSidebarBody(rerenderOptionsForAxisControlClick());', tabStart);
+  assert.ok(tabStart > 0 && tabEnd > tabStart, 'axis tab handler should be present');
+  const dailyTabBlock = js.slice(tabStart, tabEnd);
+  assert.ok(dailyTabBlock.includes('expandCurrentDailyAxisSection('));
+
+  const conferenceBlock = js.slice(js.indexOf("} else if (tabGroup === 'conference')", tabStart), tabEnd);
+  assert.ok(!conferenceBlock.includes('expandCurrentDailyAxisSection('));
 }
 
 function testPaperEvidenceAndActionButtonsRender() {
@@ -523,6 +750,14 @@ function testSidebarUtilityHelpers() {
     syncActive: false,
     scrollPanel: 'daily',
   });
+  assert.equal(typeof tools.rerenderOptionsForAxisControlClick, 'function');
+  assert.deepEqual(tools.rerenderOptionsForAxisControlClick(), {
+    syncActive: false,
+    centerActive: false,
+    autoMark: false,
+    preserveScroll: true,
+    dispatchUpdated: false,
+  });
 
   assert.equal(typeof tools.updatePaperTitleOverflowMarks, 'function');
   function fakePaper(scrollWidth, clientWidth) {
@@ -561,7 +796,10 @@ function testEvidenceCssIsPersistent() {
 
 function testSidebarPaperVisualStateCssContract() {
   const css = fs.readFileSync('app/app.css', 'utf8');
+  const paperRule = cssRule(css, '.dpr-sidebar-paper');
+  const scopedPaperRule = cssRule(css, '#dpr-sidebar-v2 .dpr-sidebar-paper');
   assert.ok(/\.dpr-sidebar-paper\s*{[^}]*background:\s*#ffffff/i.test(css));
+  assert.ok(/margin:\s*8px 8px/i.test(paperRule));
   assert.ok(/\.dpr-sidebar-paper\s*{[^}]*min-height:\s*68px/i.test(css));
   assert.ok(/\.dpr-sidebar-paper\.is-active\s*{[^}]*background:\s*#e5e7eb/i.test(css));
   assert.ok(/body\.dpr-dark \.dpr-sidebar-paper\.is-active\s*{[^}]*background:\s*#334155/i.test(css));
@@ -569,6 +807,7 @@ function testSidebarPaperVisualStateCssContract() {
   assert.ok(!css.includes('dpr-sidebar-axis-tab-dot'));
   assert.ok(!css.includes('dpr-sidebar-axis-section-dot'));
   assert.ok(/#dpr-sidebar-v2\s+\.dpr-sidebar-paper\s*{[^}]*position:\s*relative\s*!important/i.test(css));
+  assert.ok(/margin:\s*8px 8px/i.test(scopedPaperRule));
   assert.ok(!/#dpr-sidebar-v2\s+\.dpr-sidebar-paper\s*{[^}]*margin:\s*2px 8px\s*!important/i.test(css));
   assert.ok(/\.dpr-sidebar-paper\[data-read="0"\]::after\s*{[^}]*content:\s*""/i.test(css));
   assert.ok(/\.dpr-sidebar-paper\[data-read="0"\]::after\s*{[^}]*background:\s*#ef4444/i.test(css));
@@ -601,6 +840,7 @@ function testSidebarPaperVisualStateCssContract() {
   assert.ok(/white-space:\s*nowrap/i.test(titleRule));
   assert.ok(/overflow:\s*hidden/i.test(titleRule));
   assert.ok(/text-overflow:\s*clip/i.test(titleRule));
+  assert.ok(/width:\s*calc\(100%\s*-\s*2ch\)/i.test(titleRule));
   assert.ok(/padding-right:\s*calc\(20px \+ 1ch\)/i.test(titleRule));
   assert.ok(/box-sizing:\s*border-box/i.test(titleRule));
   assert.ok(!/-webkit-line-clamp/i.test(titleRule));
@@ -632,8 +872,13 @@ function testSidebarPaperVisualStateCssContract() {
   assert.ok(/\.dpr-sidebar-paper:hover \.dpr-sidebar-paper-evidence,\s*\.dpr-sidebar-paper:focus-within \.dpr-sidebar-paper-evidence,\s*\.dpr-sidebar-paper:hover \.dpr-sidebar-paper-meta,\s*\.dpr-sidebar-paper:focus-within \.dpr-sidebar-paper-meta\s*{[^}]*padding-right:\s*var\(--dpr-sidebar-paper-action-reserve\)/i.test(css));
 
   const sectionLabelRule = cssRule(css, '.dpr-sidebar-axis-section-label');
-  assert.ok(/font-size:\s*12px/i.test(sectionLabelRule));
+  assert.ok(/font-size:\s*13px/i.test(sectionLabelRule));
+  assert.ok(/line-height:\s*1\.25/i.test(sectionLabelRule));
+  assert.ok(/padding:\s*7px 14px 6px 0/i.test(sectionLabelRule));
+  assert.ok(/box-sizing:\s*border-box/i.test(sectionLabelRule));
   assert.ok(/(?:^|\n)\.dpr-sidebar-day-counts\s*{[^}]*font-size:\s*12px/i.test(css));
+  const sectionCountRule = cssRule(css, '.dpr-sidebar-axis-section-label > .dpr-sidebar-day-counts');
+  assert.ok(/font-size:\s*12\.5px/i.test(sectionCountRule));
   const metaRule = cssRule(css, '.dpr-sidebar-paper-meta');
   assert.ok(/font-size:\s*12px/i.test(metaRule));
   const starsRule = cssRule(css, '.dpr-sidebar-paper-stars');
@@ -651,10 +896,18 @@ function testSidebarPaperVisualStateCssContract() {
   assert.ok(/\.dpr-sidebar-paper\[data-read-status="blue"\]\s*{[^}]*background:\s*#eff6ff/i.test(css));
   assert.ok(/\.dpr-sidebar-paper\[data-read-status="orange"\]\s*{[^}]*background:\s*#faf5ff/i.test(css));
 
-  assert.ok(/\.dpr-sidebar-paper-status-good\.is-active\s*{[^}]*background:\s*#22c55e/i.test(css));
-  assert.ok(/\.dpr-sidebar-paper-status-blue\.is-active\s*{[^}]*background:\s*#3b82f6/i.test(css));
-  assert.ok(/\.dpr-sidebar-paper-status-orange\.is-active\s*{[^}]*background:\s*#8b5cf6/i.test(css));
-  assert.ok(/\.dpr-sidebar-paper-status-bad\.is-active\s*{[^}]*background:\s*#ef4444/i.test(css));
+  const activeGoodRule = cssRule(css, '.dpr-sidebar-paper-status-good.is-active');
+  const activeBlueRule = cssRule(css, '.dpr-sidebar-paper-status-blue.is-active');
+  const activeOrangeRule = cssRule(css, '.dpr-sidebar-paper-status-orange.is-active');
+  const activeBadRule = cssRule(css, '.dpr-sidebar-paper-status-bad.is-active');
+  assert.ok(/background:\s*#86efac/i.test(activeGoodRule));
+  assert.ok(/color:\s*#16a34a/i.test(activeGoodRule));
+  assert.ok(/background:\s*#93c5fd/i.test(activeBlueRule));
+  assert.ok(/color:\s*#2563eb/i.test(activeBlueRule));
+  assert.ok(/background:\s*#c4b5fd/i.test(activeOrangeRule));
+  assert.ok(/color:\s*#7c3aed/i.test(activeOrangeRule));
+  assert.ok(/background:\s*#fca5a5/i.test(activeBadRule));
+  assert.ok(/color:\s*#dc2626/i.test(activeBadRule));
 }
 
 function testSidebarStickyHierarchyCssContract() {
@@ -666,7 +919,7 @@ function testSidebarStickyHierarchyCssContract() {
   assert.ok(/--dpr-sidebar-sticky-mask-bleed:\s*8px/i.test(rootRule));
   assert.ok(/--dpr-sidebar-sticky-panel-top:\s*0px/i.test(rootRule));
   assert.ok(/--dpr-sidebar-sticky-axis-top:\s*36px/i.test(rootRule));
-  assert.ok(/--dpr-sidebar-sticky-section-top:\s*74px/i.test(rootRule));
+  assert.ok(/--dpr-sidebar-sticky-section-top:\s*86px/i.test(rootRule));
 
   const panelHeaderBaseRule = cssRule(css, '.dpr-sidebar-panel-header');
   assert.ok(/padding:\s*8px 14px/i.test(panelHeaderBaseRule));
@@ -685,6 +938,10 @@ function testSidebarStickyHierarchyCssContract() {
   assert.ok(/isolation:\s*isolate/i.test(axisRowRule));
   assert.ok(/background:\s*var\(--dpr-sidebar-sticky-mask-bg\)/i.test(axisRowRule));
 
+  const axisRowBaseRule = cssRule(css, '.dpr-sidebar-axis-row');
+  assert.ok(/min-height:\s*46px/i.test(axisRowBaseRule));
+  assert.ok(/box-sizing:\s*border-box/i.test(axisRowBaseRule));
+
   const axisToggleRule = cssRule(css, '.dpr-sidebar-axis-toggle');
   assert.ok(/display:\s*inline-flex/i.test(axisToggleRule));
   assert.ok(/align-items:\s*center/i.test(axisToggleRule));
@@ -695,6 +952,36 @@ function testSidebarStickyHierarchyCssContract() {
   const axisTabsRule = cssRule(css, '.dpr-sidebar-axis-tabs');
   assert.ok(/padding-top:\s*2px/i.test(axisTabsRule));
   assert.ok(!/margin-top:\s*-/i.test(axisTabsRule));
+
+  const calendarRule = cssRule(css, '.dpr-sidebar-calendar');
+  assert.ok(/background:\s*var\(--dpr-sidebar-surface\)/i.test(calendarRule));
+  assert.ok(/border-radius:\s*8px/i.test(calendarRule));
+  assert.ok(/--dpr-sidebar-calendar-notch:\s*10px/i.test(calendarRule));
+  assert.ok(/clip-path:\s*polygon\(/i.test(calendarRule));
+  const calendarHeaderRule = cssRule(css, '.dpr-sidebar-calendar-header');
+  assert.ok(/padding:\s*0 8px/i.test(calendarHeaderRule));
+  const calendarGridRule = cssRule(css, '.dpr-sidebar-calendar-grid');
+  assert.ok(/display:\s*grid/i.test(calendarGridRule));
+  assert.ok(/grid-template-columns:\s*repeat\(7,\s*minmax\(0,\s*1fr\)\)/i.test(calendarGridRule));
+  const calendarDayRule = cssRule(css, '.dpr-sidebar-calendar-day');
+  assert.ok(/min-height:\s*42px/i.test(calendarDayRule));
+  assert.ok(/position:\s*relative/i.test(calendarDayRule));
+  assert.ok(/\.dpr-sidebar-calendar-day\s*{[\s\S]*flex-direction:\s*column/i.test(css));
+  const calendarDayCountsRule = cssRule(css, '.dpr-sidebar-calendar-day-counts');
+  assert.ok(/position:\s*absolute/i.test(calendarDayCountsRule));
+  assert.ok(/left:\s*6px/i.test(calendarDayCountsRule));
+  assert.ok(/right:\s*6px/i.test(calendarDayCountsRule));
+  assert.ok(/bottom:\s*5px/i.test(calendarDayCountsRule));
+  assert.ok(/display:\s*block/i.test(calendarDayCountsRule));
+  const calendarDayTotalRule = cssRule(css, '.dpr-sidebar-calendar-day-total');
+  assert.ok(/position:\s*absolute/i.test(calendarDayTotalRule));
+  assert.ok(/right:\s*0/i.test(calendarDayTotalRule));
+  assert.ok(/bottom:\s*0/i.test(calendarDayTotalRule));
+  assert.ok(/color:\s*#94a3b8/i.test(calendarDayTotalRule));
+  const calendarDayUnreadRule = cssRule(css, '.dpr-sidebar-calendar-day-unread');
+  assert.ok(/position:\s*absolute/i.test(calendarDayUnreadRule));
+  assert.ok(/left:\s*0/i.test(calendarDayUnreadRule));
+  assert.ok(/bottom:\s*0/i.test(calendarDayUnreadRule));
 
   const sectionHeaderRule = cssRule(css, '.dpr-sidebar-panel.is-expanded .dpr-sidebar-axis-section-header');
   assert.ok(/position:\s*sticky/i.test(sectionHeaderRule));
@@ -741,7 +1028,50 @@ function testRenderBodyPutsConferenceAboveDaily() {
   assert.ok(html.includes('data-axis-group="conference"'));
   assert.ok(html.includes('data-axis-group="daily"'));
   assert.ok(html.includes('data-axis-mode="conf"'));
-  assert.ok(html.includes('data-axis-mode="date"'));
+  assert.ok(html.includes('data-axis-mode="tag"'));
+  assert.ok(html.includes('class="dpr-sidebar-calendar'));
+}
+
+function testTopLevelPanelsDefaultExpanded() {
+  const sidebar = loadSidebarForTest('#/conference/neurips-2024/paper-c');
+  const tools = sidebar.__test;
+  const model = tools.parseSidebar(sampleSidebar);
+  const html = tools.renderBodyHtml(model, {});
+
+  assert.ok(/data-panel="conference"/.test(html));
+  assert.ok(/data-panel="daily"/.test(html));
+  assert.ok(/dpr-sidebar-group-conference[^"]*is-expanded/.test(html));
+  assert.ok(/dpr-sidebar-group-daily[^"]*is-expanded/.test(html));
+  assert.ok(/data-panel-toggle="conference" aria-expanded="true"/.test(html));
+  assert.ok(/data-panel-toggle="daily" aria-expanded="true"/.test(html));
+}
+
+function testActivePaperCanForceOpenTopLevelPanel() {
+  const js = fs.readFileSync('app/dpr-sidebar.js', 'utf8');
+  const start = js.indexOf('function syncAxisStateToHref(href)');
+  const end = js.indexOf('function buildDailyCalendarView', start);
+  assert.ok(start > 0 && end > start, 'syncAxisStateToHref should be present');
+  const block = js.slice(start, end);
+
+  assert.ok(block.includes('state.expandedGroups.daily = true'));
+  assert.ok(block.includes('state.expandedGroups.conference = true'));
+  assert.ok(block.includes("state.activeDailyTag = '__all__';"));
+}
+
+function testPanelHeaderClickOnlyChangesSidebarViewState() {
+  const js = fs.readFileSync('app/dpr-sidebar.js', 'utf8');
+  const axisStart = js.indexOf("var axisToggle = e.target.closest('.dpr-sidebar-axis-toggle');");
+  const start = js.indexOf("var panelHeader = e.target.closest('[data-panel-toggle]');");
+  const end = js.indexOf("var calendarNav = e.target.closest('.dpr-sidebar-calendar-nav');", start);
+  assert.ok(start > 0 && end > start, 'panel header click handler should be present');
+  assert.ok(axisStart > 0 && axisStart < start, 'axis toggle should be handled before panel header buttons');
+  const block = js.slice(start, end);
+
+  assert.ok(block.includes("var panel = panelHeader.getAttribute('data-panel-toggle');"));
+  assert.ok(block.includes('state.expandedGroups[panel] = !state.expandedGroups[panel];'));
+  assert.ok(block.includes('rerenderSidebarBody(rerenderOptionsForPanelToggle(panel));'));
+  assert.ok(!block.includes('state.expandedGroups.daily ='));
+  assert.ok(!block.includes('state.expandedGroups.conference ='));
 }
 
 function testAxisSectionsAreExpandable() {
@@ -751,29 +1081,29 @@ function testAxisSectionsAreExpandable() {
   assert.equal(typeof tools.axisSectionStateKey, 'function');
 
   const sectionKey = tools.axisSectionStateKey('conference', 'conf', 'neurips-2024:rl');
-  const expandedHtml = tools.renderBodyHtml(model, {
-    expandedGroups: { conference: true, daily: true },
-    conferenceViewMode: 'conf',
-    dailyViewMode: 'date',
-    activeConference: 'neurips-2024',
-    activeDailyDate: '20260624',
-  });
-
-  assert.ok(/class="[^"]*dpr-sidebar-axis-section-conference[^"]*is-expanded[^"]*"/.test(expandedHtml));
-  assert.ok(expandedHtml.includes(`data-axis-section-toggle="${sectionKey}"`));
-  assert.ok(expandedHtml.includes('aria-expanded="true"'));
-
   const collapsedHtml = tools.renderBodyHtml(model, {
     expandedGroups: { conference: true, daily: true },
     conferenceViewMode: 'conf',
     dailyViewMode: 'date',
     activeConference: 'neurips-2024',
     activeDailyDate: '20260624',
-    collapsedAxisSections: new Set([sectionKey]),
   });
 
-  assert.ok(collapsedHtml.includes('data-axis-section-toggle="' + sectionKey + '" aria-expanded="false"'));
-  assert.ok(!collapsedHtml.includes('dpr-sidebar-axis-section-conference is-expanded" data-axis-section="neurips-2024:rl"'));
+  assert.ok(!/class="[^"]*dpr-sidebar-axis-section-conference[^"]*is-expanded[^"]*"/.test(collapsedHtml));
+  assert.ok(collapsedHtml.includes(`data-axis-section-toggle="${sectionKey}"`));
+  assert.ok(collapsedHtml.includes('aria-expanded="false"'));
+
+  const expandedHtml = tools.renderBodyHtml(model, {
+    expandedGroups: { conference: true, daily: true },
+    conferenceViewMode: 'conf',
+    dailyViewMode: 'date',
+    activeConference: 'neurips-2024',
+    activeDailyDate: '20260624',
+    expandedAxisSections: new Set([sectionKey]),
+  });
+
+  assert.ok(expandedHtml.includes('data-axis-section-toggle="' + sectionKey + '" aria-expanded="true"'));
+  assert.ok(/class="[^"]*dpr-sidebar-axis-section-conference[^"]*is-expanded[^"]*"/.test(expandedHtml));
 }
 
 function testPanelCountsUseFullModel() {
@@ -878,6 +1208,67 @@ function testUnreadResultsComeFromFullModel() {
   assert.deepEqual(view.groups[0].papers.map((paper) => paper.title), ['Paper D']);
 }
 
+function testUnreadFilterReusesNormalSidebarViews() {
+  const sidebar = loadSidebarForTest('#/202606/24/paper-b');
+  const tools = sidebar.__test;
+  const model = tools.parseSidebar(sampleSidebar);
+
+  const readMap = {
+    '202606/24/paper-a': 'read',
+    'conference/iclr-2025/paper-e': 'read',
+  };
+  const html = tools.renderBodyHtml(model, {
+    expandedGroups: { conference: true, daily: true },
+    conferenceViewMode: 'conf',
+    dailyViewMode: 'date',
+    activeConference: 'neurips-2024',
+    activeDailyDate: '20260624',
+    filter: 'unread',
+    readMap: readMap,
+  });
+
+  assert.ok(html.includes('data-axis-group="conference"'));
+  assert.ok(html.includes('data-axis-mode="conf"'));
+  assert.ok(html.includes('data-axis-key="neurips-2024"'));
+  assert.ok(!html.includes('data-axis-key="__results__"'));
+  assert.ok(!html.includes('dpr-sidebar-axis-row-results'));
+  assert.ok(!html.includes('未读搜索'));
+  assert.ok(!html.includes('>未读<'));
+
+  assert.ok(html.includes('class="dpr-sidebar-calendar'));
+  assert.ok(html.includes('data-calendar-date="20260624"'));
+  assert.ok(html.includes('data-calendar-date="20260623"'));
+  assert.ok(html.includes('data-axis-tab="daily"'));
+  assert.ok(html.includes('data-axis-key="__all__"'));
+  assert.ok(html.includes('title="标签上置"'));
+
+  assert.ok(!html.includes('Paper A'));
+  assert.ok(html.includes('Paper B'));
+  assert.ok(html.includes('Paper C'));
+  assert.ok(!html.includes('Paper E'));
+
+  const dailyView = tools.buildAxisViewForMode(model, 'daily', 'date', {
+    dailyViewMode: 'date',
+    activeDailyDate: '20260624',
+    filter: 'unread',
+    readMap: readMap,
+  }, readMap);
+  assert.equal(dailyView.resultMode, undefined);
+  assert.equal(dailyView.activeDateKey, '20260624');
+  assert.equal(dailyView.activeKey, '__all__');
+  assert.deepEqual(dailyView.groups[0].papers.map((paper) => paper.title), ['Paper B']);
+
+  const confView = tools.buildAxisViewForMode(model, 'conference', 'conf', {
+    conferenceViewMode: 'conf',
+    activeConference: 'neurips-2024',
+    filter: 'unread',
+    readMap: readMap,
+  }, readMap);
+  assert.equal(confView.resultMode, undefined);
+  assert.deepEqual(confView.tabs.map((tab) => tab.key), ['neurips-2024']);
+  assert.deepEqual(confView.groups[0].papers.map((paper) => paper.title), ['Paper C']);
+}
+
 function testUnreadResultsKeepCurrentReadPaperVisible() {
   const sidebar = loadSidebarForTest('#/202606/24/paper-a');
   const tools = sidebar.__test;
@@ -953,10 +1344,26 @@ function testUnreadSessionSnapshotKeepsSeenRowsVisibleUntilReload() {
   assert.ok(html.includes('Paper A'));
   assert.ok(html.includes('Paper B'));
   assert.ok(html.includes('Paper C'));
-  assert.ok(html.includes('Paper E'));
+  assert.ok(html.includes('data-axis-key="iclr-2025"'));
+  assert.ok(!html.includes('Paper E'));
   assert.ok(!html.includes('Paper D'));
-  assert.equal((html.match(/data-read="1"/g) || []).length, 4);
+  assert.equal((html.match(/data-read="1"/g) || []).length, 3);
   assert.equal((html.match(/data-read="0"/g) || []).length, 0);
+
+  const iclrView = tools.buildAxisViewForMode(model, 'conference', 'conf', {
+    conferenceViewMode: 'conf',
+    activeConference: 'iclr-2025',
+    filter: 'unread',
+    unreadResultPaperIds: snapshot,
+    readMap: {
+      '202606/24/paper-a': 'read',
+      '202606/24/paper-b': 'read',
+      '202606/23/paper-d': 'read',
+      'conference/iclr-2025/paper-e': 'read',
+      'conference/neurips-2024/paper-c': 'read',
+    },
+  });
+  assert.deepEqual(iclrView.groups[0].papers.map((paper) => paper.title), ['Paper E']);
 }
 
 function testUnreadClickPendingHrefKeepsClickedPaperVisibleBeforeHashUpdates() {
@@ -1008,6 +1415,39 @@ function testStatusClickKeepsPaperRowInPlace() {
   assert.ok(!block.includes('.blur('));
 }
 
+function testAxisControlClicksKeepSidebarScrollInPlace() {
+  const js = fs.readFileSync('app/dpr-sidebar.js', 'utf8');
+  const start = js.indexOf("var axisToggle = e.target.closest('.dpr-sidebar-axis-toggle');");
+  const end = js.indexOf("var statusButton = e.target.closest('.dpr-sidebar-paper-status-btn');", start);
+  assert.ok(start > 0 && end > start, 'axis control click handlers should be present');
+  const block = js.slice(start, end);
+  assert.ok(block.includes('rerenderSidebarBody(rerenderOptionsForAxisControlClick())'));
+  assert.ok(!block.includes('rerenderOptionsForAxisInteraction(axisGroup)'));
+  assert.ok(!block.includes("rerenderOptionsForAxisInteraction('daily')"));
+  assert.ok(!block.includes('rerenderOptionsForAxisInteraction(tabGroup)'));
+}
+
+function testAxisToggleCollapsesOnlyItsOwnPanel() {
+  const js = fs.readFileSync('app/dpr-sidebar.js', 'utf8');
+  const start = js.indexOf("var axisToggle = e.target.closest('.dpr-sidebar-axis-toggle');");
+  const end = js.indexOf("var calendarNav = e.target.closest('.dpr-sidebar-calendar-nav');", start);
+  assert.ok(start > 0 && end > start, 'axis toggle click handler should be present');
+  const block = js.slice(start, end);
+
+  assert.ok(block.includes('collapseAxisSectionsForGroup(axisGroup);'));
+  assert.ok(block.includes('persistCollapse();'));
+  assert.ok(!block.includes('state.expandedGroups[axisGroup] = false;'));
+  assert.ok(!block.includes('state.expandedGroups.daily = false;'));
+  assert.ok(!block.includes('state.expandedGroups.conference = false;'));
+}
+
+function testExpandedAxisSectionSetSerializesCorrectly() {
+  const js = fs.readFileSync('app/dpr-sidebar.js', 'utf8');
+  assert.ok(js.includes('Array.from(state.expandedAxisSections).forEach(function (key)'));
+  assert.ok(js.includes('sections: state.expandedAxisSections ? Array.from(state.expandedAxisSections) : []'));
+  assert.ok(!js.includes('Array.prototype.slice.call(state.expandedAxisSections)'));
+}
+
 function testReadStatusNormalization() {
   const sidebar = loadSidebarForTest('#/202606/24/paper-a');
   const tools = sidebar.__test;
@@ -1026,6 +1466,13 @@ testSidebarNavigationContract();
 testAxisViewsForDailyAndConference();
 testHyphenatedConferenceMarkerParsing();
 testAxisTabsRenderUnreadCounts();
+testDailyCalendarViewUsesMonthGridAndActiveDateOnly();
+testDailyCalendarTagViewFiltersActiveDateByKeyword();
+testDailyCalendarPlacementToggleKeepsControlRowFixedAboveLayers();
+testConferenceAndDailyAxisTogglesRenderBesidePanelTitles();
+testDailyCalendarInPlaceRefreshUsesActiveDailyTag();
+testDailyAxisSectionKeyFollowsActiveDateAndTag();
+testDailyDateAndTagClicksExpandCurrentSectionOnlyForDaily();
 testPaperEvidenceAndActionButtonsRender();
 testPaperMetaOrderKeepsEvidenceBetweenTitleAndStars();
 testQuickLinksCenterTextAndDetachIcon();
@@ -1038,16 +1485,23 @@ testEvidenceCssIsPersistent();
 testSidebarPaperVisualStateCssContract();
 testSidebarStickyHierarchyCssContract();
 testRenderBodyPutsConferenceAboveDaily();
+testTopLevelPanelsDefaultExpanded();
+testActivePaperCanForceOpenTopLevelPanel();
+testPanelHeaderClickOnlyChangesSidebarViewState();
 testAxisSectionsAreExpandable();
 testPanelCountsUseFullModel();
 testSearchResultsComeFromFullModel();
 testSearchNoResultsShowsEmptyState();
 testUnreadResultsComeFromFullModel();
+testUnreadFilterReusesNormalSidebarViews();
 testUnreadResultsKeepCurrentReadPaperVisible();
 testUnreadSessionSnapshotKeepsSeenRowsVisibleUntilReload();
 testUnreadClickPendingHrefKeepsClickedPaperVisibleBeforeHashUpdates();
 testPaperLinkClickStoresPendingHrefBeforeRouteChange();
 testStatusClickKeepsPaperRowInPlace();
+testAxisControlClicksKeepSidebarScrollInPlace();
+testAxisToggleCollapsesOnlyItsOwnPanel();
+testExpandedAxisSectionSetSerializesCorrectly();
 testReadStatusNormalization();
 
 console.log('dpr sidebar v2 tests passed');
