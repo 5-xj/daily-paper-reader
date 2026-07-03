@@ -21,7 +21,7 @@
   var FILTER_KEY = 'dpr_sidebar_filter_v2';
   var COLLAPSE_KEY = 'dpr_sidebar_collapse_v4';
   var WIDTH_KEY = 'dpr_sidebar_width_v2';
-  var DEFAULT_SIDEBAR_WIDTH = 280;
+  var DEFAULT_SIDEBAR_WIDTH = 373;
   var MIN_SIDEBAR_WIDTH = 240;
   var MAX_SIDEBAR_WIDTH = 520;
   var OVERLAY_SIDEBAR_QUERY = '(max-width: 1023px)';

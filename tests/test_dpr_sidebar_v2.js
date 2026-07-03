@@ -591,7 +591,7 @@ function testSidebarFooterControlsReplaceRefresh() {
   const bodyRule = cssRule(css, 'body.dpr-sidebar-v2');
   assert.ok(/--dpr-sidebar-collapsed-width:\s*0px/i.test(bodyRule));
   const contentRule = cssRule(css, 'body.dpr-sidebar-v2 .content');
-  assert.ok(/left:\s*var\(--dpr-sidebar-width,\s*280px\)\s*!important/i.test(contentRule));
+  assert.ok(/left:\s*var\(--dpr-sidebar-width,\s*373px\)\s*!important/i.test(contentRule));
   assert.ok(/transition:\s*left \.24s ease,\s*width \.24s ease/i.test(contentRule));
   const footerRule = cssRule(css, '.dpr-sidebar-footer');
   assert.ok(/display:\s*flex/i.test(footerRule));
@@ -636,8 +636,8 @@ function testSidebarFooterControlsReplaceRefresh() {
 function testCollapsedSidebarRecentersChatSurface() {
   const css = fs.readFileSync('app/app.css', 'utf8');
   const v2InputRule = cssRule(css, 'body.dpr-sidebar-v2 #paper-chat-container .input-area');
-  assert.ok(/left:\s*calc\(\s*var\(--dpr-sidebar-width,\s*280px\)\s*\+\s*\(100%\s*-\s*var\(--dpr-sidebar-width,\s*280px\)\)\s*\/\s*2\s*\)/i.test(v2InputRule));
-  assert.ok(/max-width:\s*min\(var\(--dpr-paper-content-max-width\),\s*calc\(100%\s*-\s*var\(--dpr-sidebar-width,\s*280px\)\s*-\s*40px\)\)/i.test(v2InputRule));
+  assert.ok(/left:\s*calc\(\s*var\(--dpr-sidebar-width,\s*373px\)\s*\+\s*\(100%\s*-\s*var\(--dpr-sidebar-width,\s*373px\)\)\s*\/\s*2\s*\)/i.test(v2InputRule));
+  assert.ok(/max-width:\s*min\(var\(--dpr-paper-content-max-width\),\s*calc\(100%\s*-\s*var\(--dpr-sidebar-width,\s*373px\)\s*-\s*40px\)\)/i.test(v2InputRule));
 
   const collapsedInputRule = cssRule(css, 'body.dpr-sidebar-v2.dpr-sidebar-v2-collapsed #paper-chat-container .input-area');
   assert.ok(/left:\s*50%/i.test(collapsedInputRule));
@@ -720,6 +720,7 @@ function testSidebarUtilityHelpers() {
   assert.equal(tools.shouldAutoMarkRead('good'), false);
 
   assert.equal(typeof tools.clampSidebarWidth, 'function');
+  assert.equal(tools.clampSidebarWidth(undefined), 373);
   assert.equal(tools.clampSidebarWidth(180), 240);
   assert.equal(tools.clampSidebarWidth(360), 360);
   assert.equal(tools.clampSidebarWidth(720), 520);
@@ -920,6 +921,7 @@ function testSidebarStickyHierarchyCssContract() {
   assert.ok(/--dpr-sidebar-sticky-panel-top:\s*0px/i.test(rootRule));
   assert.ok(/--dpr-sidebar-sticky-axis-top:\s*36px/i.test(rootRule));
   assert.ok(/--dpr-sidebar-sticky-section-top:\s*86px/i.test(rootRule));
+  assert.ok(/width:\s*var\(--dpr-sidebar-width,\s*373px\)/i.test(rootRule));
 
   const panelHeaderBaseRule = cssRule(css, '.dpr-sidebar-panel-header');
   assert.ok(/padding:\s*8px 14px/i.test(panelHeaderBaseRule));
@@ -969,19 +971,19 @@ function testSidebarStickyHierarchyCssContract() {
   assert.ok(/\.dpr-sidebar-calendar-day\s*{[\s\S]*flex-direction:\s*column/i.test(css));
   const calendarDayCountsRule = cssRule(css, '.dpr-sidebar-calendar-day-counts');
   assert.ok(/position:\s*absolute/i.test(calendarDayCountsRule));
-  assert.ok(/left:\s*6px/i.test(calendarDayCountsRule));
-  assert.ok(/right:\s*6px/i.test(calendarDayCountsRule));
+  assert.ok(/left:\s*4px/i.test(calendarDayCountsRule));
+  assert.ok(/right:\s*4px/i.test(calendarDayCountsRule));
   assert.ok(/bottom:\s*5px/i.test(calendarDayCountsRule));
-  assert.ok(/display:\s*block/i.test(calendarDayCountsRule));
+  assert.ok(/display:\s*grid/i.test(calendarDayCountsRule));
+  assert.ok(/grid-template-columns:\s*minmax\(0,\s*1fr\)\s+minmax\(0,\s*1fr\)/i.test(calendarDayCountsRule));
+  assert.ok(/column-gap:\s*4px/i.test(calendarDayCountsRule));
   const calendarDayTotalRule = cssRule(css, '.dpr-sidebar-calendar-day-total');
-  assert.ok(/position:\s*absolute/i.test(calendarDayTotalRule));
-  assert.ok(/right:\s*0/i.test(calendarDayTotalRule));
-  assert.ok(/bottom:\s*0/i.test(calendarDayTotalRule));
+  assert.ok(/min-width:\s*0/i.test(calendarDayTotalRule));
+  assert.ok(/text-align:\s*right/i.test(calendarDayTotalRule));
   assert.ok(/color:\s*#94a3b8/i.test(calendarDayTotalRule));
   const calendarDayUnreadRule = cssRule(css, '.dpr-sidebar-calendar-day-unread');
-  assert.ok(/position:\s*absolute/i.test(calendarDayUnreadRule));
-  assert.ok(/left:\s*0/i.test(calendarDayUnreadRule));
-  assert.ok(/bottom:\s*0/i.test(calendarDayUnreadRule));
+  assert.ok(/min-width:\s*0/i.test(calendarDayUnreadRule));
+  assert.ok(/text-align:\s*left/i.test(calendarDayUnreadRule));
 
   const sectionHeaderRule = cssRule(css, '.dpr-sidebar-panel.is-expanded .dpr-sidebar-axis-section-header');
   assert.ok(/position:\s*sticky/i.test(sectionHeaderRule));
