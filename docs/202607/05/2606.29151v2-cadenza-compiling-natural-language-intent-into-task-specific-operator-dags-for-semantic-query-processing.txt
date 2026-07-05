@@ -1,0 +1,2003 @@
+Title: CADENZA: Compiling Natural-Language Intent into Task-Specific Operator DAGs for Semantic Query Processing
+
+URL Source: https://arxiv.org/pdf/2606.29151v2
+
+Published Time: Thu, 02 Jul 2026 00:18:40 GMT
+
+Number of Pages: 27
+
+Markdown Content:
+# CADENZA: Compiling Natural-Language Intent into Task-Specific Operator DAGs for Semantic Query Processing 
+
+# Jaehyun Ha 
+
+jhha@dblab.postech.ac.kr GSAI, POSTECH Pohang, Korea 
+
+# Yongjoo Park 
+
+yongjoo@illinois.edu Univ. of Illinois Urbana-Champaign Urbana, USA 
+
+# Wook-Shin Han ∗
+
+wshan@dblab.postech.ac.kr GSAI, POSTECH Pohang, Korea 
+
+## Abstract 
+
+Semantic query processing engines (SQPEs) extend relational query processing with semantic operators that are executed via model infer-ence over unstructured data. Optimizing such queries is inherently multi-objective: model inference dominates latency and monetary cost, and outputs are stochastic and backend-dependent, so quality must be optimized alongside efficiency. Existing SQPE optimizers do not expose each semantic operator instance’s intermediate task out-puts as a relational optimization object, leaving optimization unable to filter, reorder, route, threshold, or jointly tune them. We present 
+
+CADENZA , which compiles each semantic operator instance —a tem-plate bound to a natural-language intent —into an intent-specific plan space of typed task DAGs and selects an executable plan under user-specified quality–latency–cost trade-offs. CADENZA introduces 
+
+task-extended relational algebra (TxRA ), a conservative extension of relational algebra with task-specific operators. The logical plan-ner synthesizes seed TxRA plans, applies structural rewrites whose safety conditions are checked from operator dependencies, and enu-merates semantics-guided alternatives from alternative-generation templates. The physical planner compiles each task-specific oper-ator into a router over heterogeneous backends and jointly tunes routing cutpoints, backend parameters, and relational thresholds with Bayesian optimization. On SemBench, CADENZA improves the scenario-level averages of quality, latency, and cost by up to +0.49, 165.7 ×, and 310.3 ×, respectively, relative to state-of-the-art. 
+
+## Keywords 
+
+Semantic Operators, Large Language Models, Query Optimization, Multi-Objective Optimization, Task-Specific Operators 
+
+ACM Reference Format: 
+
+Jaehyun Ha, Yongjoo Park, and Wook-Shin Han. 2018. CADENZA: Compil-ing Natural-Language Intent into Task-Specific Operator DAGs for Semantic Query Processing. In Proceedings of (SIGMOD ’27). ACM, New York, NY, USA, 27 pages. https://doi.org/XXXXXXX.XXXXXXX  
+
+> ∗Corresponding author. Permission to make digital or hard copies of all or part of this work for personal or classroom use is granted without fee provided that copies are not made or distributed for profit or commercial advantage and that copies bear this notice and the full citation on the first page. Copyrights for components of this work owned by others than the author(s) must be honored. Abstracting with credit is permitted. To copy otherwise, or republish, to post on servers or to redistribute to lists, requires prior specific permission and/or a fee. Request permissions from permissions@acm.org.
+> SIGMOD ’27, Woodstock, NY
+> ©2018 Copyright held by the owner/author(s). Publication rights licensed to ACM. ACM ISBN 978-1-4503-XXXX-X/2018/06 https://doi.org/XXXXXXX.XXXXXXX
+
+SELECT b.BrandName, COUNT(*) AS NumFlagged FROM Products p JOIN Brands b ON p.BrandId = b.BrandId WHERE p.Category IN ( 'Supplements ','Cosmetics ')AND SemFilter ('Compliance-sensitive claims (e.g., "FDA approved") appear on the package labels in {p.Image}. ')GROUP BY b.BrandName; 
+
+Figure 1: A semantic operator instance embedded in SQL. 
+
+## 1 Introduction 
+
+With the advent of Large Language Models (LLMs), a new class of 
+
+semantic query processing engines (SQPEs) has emerged [ 1, 7, 19 , 21 ,24 , 29 , 31 ]. SQPEs extend relational query processing with semantic operators whose behavior is specified in natural language and exe-cuted via model inference over unstructured table data (e.g., text, images, audio). These operators mirror core relational operators (e.g., SemFilter , SemJoin , SemMap ) while replacing hand-written UDF pipelines with prompt-driven matching, extraction, and rea-soning as first-class operators. We distinguish a semantic operator template (a fixed algebraic operator such as SemFilter ) from an instance, which binds the template to concrete inputs and an in-tent —a natural-language specification of the operator’s semantic goal. Figure 1 shows a representative query where SemFilter acts as a predicate over product images, flagging items whose package labels appear to contain compliance-sensitive claims. Because semantic operators invoke expensive and inherently un-certain inference, SQPEs face a multi-objective optimization prob-lem [ 24 ]. Model-backed steps can dominate end-to-end latency and monetary cost [ 12 , 21 , 24 ], while semantic outputs are non-deterministic and backend-dependent. Semantic query optimization is thus best viewed as selecting plans that balance quality, latency, and cost rather than minimizing a single metric. Existing SQPE optimizers [ 7, 19 , 21 , 24 , 27 , 29 , 31 ] do not expose each semantic operator instance’s internal task structure as a re-lational optimization object, leaving optimization unable to filter, reorder, route across heterogeneous backends, threshold, or jointly tune its intermediate task outputs. Figure 2 illustrates four such patterns. Direct LLM is a monolithic LLM call per row, the simplest supported execution pattern. Proxy Cascade represents LOTUS-style [ 21 ] proxy execution, where a cheaper model or embedding score decides which tuples escalate to the LLM. Reduced Context 
+
+represents Palimpzest/Abacus-style [ 19 , 24 ] reduced-context ex-ecution, where the input is chunked and only the top-𝑘 chunks are fed to the LLM. Pipeline Rewrite represents DocETL-style [ 27 ]pipeline-level decomposition. None of these expose intermediate task outputs to relational optimization. Our key insight is that an intent-specific decomposition of a se-mantic operator instance into a DAG of typed sub-operators turns  
+
+> arXiv:2606.29151v2 [cs.DB] 1 Jul 2026 SIGMOD ’27, June 03–05, 2018, Woodstock, NY Jaehyun Ha, Yongjoo Park, and Wook-Shin Han
+
+its intermediate task outputs into relational attributes that opti-mization can filter, reorder, route across heterogeneous backends, threshold, and jointly tune. For example, the filter in Figure 1 can be achieved by an OCR step that extracts text from each label, fol-lowed by a TxtQA step that checks whether the text contains a compliance-sensitive claim, where each step is served by a model whose capacity matches its difficulty. However, achieving this goal raises three challenges (C), each motivating a desideratum (D). (C1) Intent is given in open-ended natural language with no algebraic form, so the optimizer must (D1) synthesize an intent-specific DAG of typed sub-operators. (C2) The right backend for a sub-operator is input-dependent: some tuples are best handled by deterministic rules, others by specialized mod-els, and the residual hard cases require LLMs—a heterogeneity that requires (D2) per-tuple dispatch over heterogeneous backends. (C3) The plan space is multi-objective and plan evaluation is expensive, so (D3) search must be sample-efficient and budget-bounded. We present CADENZA 1, a semantic operator optimizer that ad-dresses these three desiderata. Given an instance with its intent and a user-specified preference (𝑤 𝑞 , 𝑤 𝑙 , 𝑤 𝑐 ) over quality, latency, and cost, the logical planner synthesizes an intent-dependent plan space of sub-operator DAGs (D1), and the physical planner compiles each sub-operator into tailored implementations (D2) and tunes via Bayesian optimization (D3). CADENZA focuses on optimizing individ-ual semantic operator instances. Joint optimization across multiple operators is orthogonal to our focus. Crucially, our results show that strong per-operator optimization already captures most gains: even for queries with multiple semantic operators, simply compos-ing locally optimized instances substantially outperforms state-of-the-art baselines (§7.2). Unlike dynamic-programming (DP)-style optimization or interleaved search that prunes plans via partial evaluation, our staged design is necessary because synthesized plans are open-ended and can violate DP’s optimal-substructure as-sumption: intermediate outputs (e.g., noisy OCR) may be corrected downstream, so early pruning may discard the eventual winner. We formalize such sub-operators in task-extended relational al-gebra (TxRA ), a conservative extension of relational algebra. TxRA 
+
+keeps relational operators (e.g., 𝜎, 𝜋, ⊲⊳ ) for deterministic schema and dataflow manipulation, but adds task-specific operators that invoke inference over unstructured attributes and return structured relations (e.g., OCR produces text, while TxtQA /VQA produce an answer with a confidence score for given input text/image). The logical planner translates a semantic operator instance into a TxRA DAG (i.e., a logical plan). Unlike traditional DBMSs, where the query explicitly determines the logical plan structure (e.g., SQL), its intent is given as open-ended natural language with no al-gebraic form. To address D1, the planner thus (i) synthesizes a small set of seed plans via an iterative draft–refine loop under a fixed LLM budget, and (ii) expands them with two mechanisms: 
+
+correctness-preserving structural rewrites and semantics-guided al-ternative generation . Structural rewrites are dependency-based al-gebraic rewrites whose preconditions are checked from schemas   
+
+> 1In music, a cadenza is a structured yet improvisational passage that adapts the per-formance to the specific piece; analogously, CADENZA synthesizes and tunes a bespoke execution plan for each intent instance.
+
+and dataflow. In contrast, semantic alternatives such as decompo-sition and proxy substitution are not assumed to be equivalence-preserving; they enlarge the candidate plan space and are selected empirically using the validation/teacher signals used by the physi-cal optimizer. For example, Figure 1’s query yields a seed plan such as Products → VQA (Image , 𝑞 ) → 𝜎 Answer =Yes ∧Score ≥𝜆 , for which de-composition produces an alternative Products → OCR (Image ) → 
+
+TxtQA (txt , 𝑞 ) → 𝜎 Answer =Yes ∧Score ≥𝜆 , where 𝑞 is the predicate. Cru-cially, LLM usage is confined to budgeted seed-plan generation; most exploration comes from the mechanisms. The physical planner takes the candidate logical plans produced by the logical planner, finds the best physical plan for each logical plan, and selects the overall winner under the user’s quality, latency, and cost preferences. To address D2, the planner synthesizes a data-aware router per task-specific operator: per tuple, it scores input difficulty and dispatches the tuple to one of heterogeneous backend families— symbolic (deterministic rules), specialized (compact task-tuned models), general-purpose (foundation models), and composite 
+
+(multi-stage pipelines)—via tunable cutpoints. For instance, an OCR 
+
+router may dispatch easy labels to a distilled OCR model and es-calate difficult images to a vision LLM. To address D3, the planner jointly tunes the physical plan’s parameter space Θ—consisting of the router’s cutpoints, per-backend knobs, and parameters of rela-tional operators (e.g., score thresholds 𝜆 )—with Bayesian optimiza-tion under a fixed evaluation budget. While the data-aware router is not an isolated model-selection technique, our contribution is its placement and joint tuning: routing is attached to each task-specific operator and its cutpoints are tuned together with backend and relational parameters as one SQPE physical optimization problem. For deployment, we select a single Pareto-optimal plan by maximiz-ing a user-weighted utility; to approximate the Pareto frontier, we instead optimize hypervolume. To ensure practicality, the planner also enforces runtime safety and manages optimization overhead. 
+
+CADENZA is explicitly budget-aware and anytime : it searches over candidate logical and physical plans under fixed evaluation budgets, returning the best plan found so far and improving monotonically with additional search. This is a deliberate design choice aligned with real deployments, where each additional candidate incurs model inference and evaluation cost. To control backend stochastic-ity without inflating evaluation cost, we run a single evaluation per BO trial and treat it as a noisy observation in the surrogate, then re-evaluate only the final top-𝐾 physical plans for robust selection. 
+
+Contributions. This work makes the following contributions: 
+
+• We present CADENZA , an SQPE-level optimizer that compiles a semantic operator instance into TxRA plans and selects an executable plan under quality–latency–cost preferences. 
+
+• We introduce task-extended relational algebra, which adds task-specific operators to relational operators, enabling semantic processing to be expressed and optimized as an operator DAG. 
+
+• We develop a logical planner that synthesizes seed TxRA plans, applies structural rewrites, and enumerates semantics-guided alternatives from alternative-generation templates. 
+
+• We propose a physical planner that compiles logical plans into physical plans with a data-aware router over family-specific implementations and tunes them with Bayesian optimization. CADENZA: Compiling Natural-Language Intent into Task-Specific Operator DAGs for Semantic Query Processing SIGMOD ’27, June 03–05, 2018, Woodstock, NY 
+
+• We evaluate CADENZA on SemBench [ 16 ] and show up to +0.49 quality and 165.7 ×/310.3 × latency/cost improvements in scenario-level averages over state-of-the-art baselines. Section 2 provides an overview of CADENZA and formalizes the optimization problem; Sections 4–5 present the logical and physical planners; Sections 6–7 describe implementation and evaluation; Section 8 discusses related work; and Section 9 concludes. 
+
+## 2 An Overview of CADENZA 
+
+This section overviews CADENZA . We first formalize the semantic operator optimization problem and objectives (§2.1), then present the system architecture through a motivating example (§2.2)). 
+
+## 2.1 Semantic Operator Optimization Problem 
+
+We formalize the optimization problem as finding a Pareto-optimal plan over quality, cost, and latency. For deployment, we select one Pareto-optimal plan which maximizes a user-weighted utility 𝑈 .
+
+• Semantic Operator Instance ( SO I ): An instantiation of a semantic operator template with a natural-language intent I
+
+that specifies the operator’s semantic goal. It denotes an intended transformation SO I : Rel in → Rel out .
+
+• Logical Plan ( L): A DAG of typed logical operators specifying 
+
+what computation performs SO I . We denote the set of valid logical plans as L(SO I ).
+
+• Physical Plan ( P): A concrete, executable realization of a logi-cal plan, where each operator is bound to a specific implemen-tation and parameters (some tunable). The search space is the union of all such realizations: 
+
+S(SO I ) =
+
+Ø 
+
+> L ∈ L(SO I)
+
+P(L) .
+
+Optimization Goal. Given a semantic operator instance, we opti-mize over the plan space S under three competing objectives: max-imize quality 𝑄 (P) while minimizing latency 𝐿 (P) and monetary cost 𝐶 (P) . For deployment, we select a single plan by maximizing a user-weighted scalar utility 𝑈 (P) = 𝑤 𝑞 𝑄 (P) − 𝑤 𝑙 ˆ𝐿 (P) − 𝑤 𝑐 ˆ𝐶 (P) 
+
+for weights 𝑤 𝑞 , 𝑤 𝑙 , 𝑤 𝑐 ≥ 0 (at least one positive; setting a weight to 
+
+0 omits that metric), where ˆ𝐿 (P) and ˆ𝐶 (P) denote normalized la-tency and cost, respectively. With all positive weights, the selected plan is Pareto-optimal in the (𝑄, 𝐿, 𝐶 ) trade-off space. 
+
+Pareto Optimality of Utility Maximization. Suppose P★ is not Pareto-optimal. Then there exists P′ ∈ S such that 𝑄 (P ′) ≥ 
+
+𝑄 (P ★), ˆ𝐿 (P ′) ≤ ˆ𝐿 (P ★), and ˆ𝐶 (P ′) ≤ ˆ𝐶 (P ★), with at least one inequality strict. Because 𝑤 𝑞 , 𝑤 𝑙 , 𝑤 𝑐 > 0, we have 𝑈 (P ′) − 𝑈 (P ★) =
+
+𝑤 𝑞 
+
+ 𝑄 (P ′) − 𝑄 (P ★) +𝑤 𝑙 
+
+  ˆ𝐿 (P ★) − ˆ𝐿 (P ′) +𝑤 𝑐 
+
+  ˆ𝐶 (P ★) − ˆ𝐶 (P ′) > 0,which contradicts the optimality of P★. □
+
+Constrained Optimization. Constrained-optimization formula-tions (e.g., max 𝑄 subject to 𝐿 ≤ 𝐿 max ) are also supported by modify-ing the BO procedure, e.g., by adding budget-violation penalties to the BO scoring objective (Appendix H); the utility-based interface is our default for its simplicity. 
+
+## 2.2 System Architecture 
+
+CADENZA takes as input (i) a semantic operator instance, (ii) the in-put relation(s) containing unstructured attributes, (iii) an optional validation set, and (iv) an optional user-specified preference over quality, latency, and cost. It outputs an executable physical opera-tor DAG—a fully bound plan with concrete implementations and tuned parameters. As illustrated in Figure 2 (light gray boxes), the architecture consists of three main components: 
+
+Catalog Manager Maintains the operator catalog, which enumer-ates relational and task-specific operators and implementations. 
+
+Logical Planner (§4) Determines what to compute by decompos-ing the user’s intent into a DAG of typed logical operators. 
+
+Physical Planner (§5) Determines how to compute it by compil-ing the logical plan into a physical plan with tunable parameters and tunes them via Bayesian Optimization. 
+
+User-Specified Preference. The preference is implemented as weights (𝑤 𝑞 , 𝑤 𝑙 , 𝑤 𝑐 ) ≥ 0 over quality, latency, and cost (a 0 weight omits that metric). This weighted-utility formulation is a prag-matic deployment interface that provides a simple soft-preference mechanism for top-𝑘 plan selection, consistent with prior work on rank-aware query optimization [ 11 , 18 ]. Fine-grained weights offer maximum flexibility, but for non-expert users we provide a discrete preset that maps to predefined weights— quality-first (1, 0.1, 0.1),
+
+balanced (1, 0.4, 0.3) (default), and efficiency-first (0.1, 1, 1).
+
+Validation Set. Following prior work [ 21 , 24 ], we estimate a plan’s quality, latency, and cost on a small labeled validation set. If not provided, we sample tuples and label them once with a configurable teacher model; this one-time cost is included in optimization over-head and the labels are reused across all candidates. Our goal is not to predict exact accuracy but to rank candidate plans correctly. Em-pirically, this ranking remains stable even with moderate teacher noise (e.g., 10–20% errors on hard samples), since bad plans (e.g., overly aggressive symbolic filters) fail on easy cases the teacher gets right, while good plans correlate well with the teacher’s decisions (See §G). Final evaluations are performed separately. 
+
+Logical Plan Exploration (Figure 2, Top). The logical planner explores different strategies to realize the intent. First, it generates a small set of initial seed plans. under a fixed LLM budget. It then expands these seeds using two mechanisms: dependency-checked structural rewrites and semantics-guided alternative generation. In our running example: 
+
+• Plan A uses a heavy Visual Question Answering (VQA) model to directly query the image. While accurate, this approach can be slow and expensive. 
+
+• Plan B projects image regions and the text query into a shared embedding space for similarity-based filtering, which is cheaper but can be less precise for subtle, intent-specific textual claims. Subsequently, Plan Exploration proposes Plan A ′, which replaces the monolithic VQA operator with an OCR → TxtQA alternative (highlighted in red in Figure 2). This alternative is not assumed to be equivalent a priori; it is compiled, tuned, and ranked under the same quality–latency–cost objective. 
+
+Physical Plan Construction (Figure 2, Bottom). For each dis-covered logical plan, the physical planner compiles it into a physical plan with tunable parameters by binding each logical operator to a concrete physical implementation. SIGMOD ’27, June 03–05, 2018, Woodstock, NY Jaehyun Ha, Yongjoo Park, and Wook-Shin Han User Query     
+
+> SemFilter (products ( 𝑅 !"#$ (pid ,
+> Image )), q = “Compliance -
+> sensitive claims (e.g., ‘FDA
+> approved’) appear on the
+> package labels.”, preference =
+> Balanced (1, 0.4, 0.3) )
+
+# Logical Planner 
+
+# Physical Planner 
+
+Samples 
+
+Seed Plan Synthesis Plan Exploration 
+
+B
+
+A
+
+A` Physical Plan Construction 
+
+A` B
+
+Task -Specific Operator 
+
+Relational Operator Physical Plan 
+
+Relational 
+
+Physical 
+
+Operators 
+
+Bound 
+
+Physical 
+
+Operators 
+
+Bind                                                                   
+
+> …
+> def OpTxtQA (D,θ!,θ",θ#):
+> D$=r∈Dlen r<θ!0
+> D"={r∈D|θ!0≤len (r)<θ![1]}
+> D%={r∈D|θ!1≤len (r)<θ![2]}
+> D#={r∈D|len (r)≥θ![2]
+> S$=PatternQAMatcher (D$)
+> S"=DistillBert QAModel (D",θ")
+> S%=GPT4 QA (D%)
+> S#=RAGGPT4QA (D#,θ#)
+> return Union (S$,S",S%,S#)
+> …
+> def FilterByScore (D,λ&'( ):
+> return {r∈D|r.score >λ&'( }
+> …
+> Symbolic (e.g., Keyword )|θ$
+> Specialized (e.g., BERT )|θ"
+
+Multi -Objective 
+
+Tuning 
+
+Final Plan 
+
+Selection                                 
+
+> Plan Score
+> Plan A 0.3
+> Plan A`
+> Winner
+> 0.7
+> Plan B 0.1
+> Score =𝑤 %#Q−𝑤 &#&L−𝑤 '#&C
+> Bayesian
+> Optimization Evaluation
+> OpTxtQA :θ!=10 ,20 ,30 ,θ"=
+> [0.2],θ#=[0.1]
+> FilterByScore :τ=0.6…
+> •Quality = 0.9
+> •Latency = 2 sec
+> •Cost = 0.2$
+
+Catalog Manager 
+
+A
+
+𝑅 RSTU 
+
+OpImgObj (Image) 
+
+σVWXYZ [\)*+ 
+
+OpImgVQA (BBox , q) 
+
+σ]^_`ZY abZ_ ∧ VWXYZ [\,-. 
+
+γdYXefg , WXh^i (∗) ]V W^i 
+
+σW^i kl
+
+𝑅 RSTU 
+
+OpImgRegion (Image) 
+
+σ_mn (oZW /01 oZW 2)[\345 
+
+OpImgEmbed (Region) 
+
+γdYXefg , npq (_mn ) ]V n_mn 
+
+σn_mn k\5.6 
+
+𝑅 RSTU 
+
+OpImgObj (Image) 
+
+σVWXYZ [\)*+ 
+
+OpImgOCR (BBox )
+
+σ]^_`ZY abZ_ ∧ VWXYZ [\,-. 
+
+γdYXefg , WXh^i (∗) ]V W^i 
+
+σW^i kl
+
+OpTxtQA (OCRTxt , q) 
+
+OpTxtEmbed (q)      
+
+> Data -
+> Aware
+> Router
+> |θ(
+> General -Purpose (e.g., GPT ) | θ%
+> Composite (e.g., BERT+GPT ) | θ#
+
+OpImgObj (Image) 
+
+σVWXYZ [\)*+ 
+
+OpImgOCR (BBox )
+
+σ]^_`ZY abZ_ ∧ VWXYZ [\,-. 
+
+γdYXefg , WXh^i (∗) ]V W^i 
+
+σW^i kl
+
+OpTxtQA (OCRTxt , q)             
+
+> (𝑤 7,𝑤 8,𝑤 9)=(1,0.4,0.3)
+> (𝐿 :;< ,𝐶 :;< )=(10 ,1)
+
+vs. 
+
+# Baseline Plans 
+
+SemFilter 
+
+Direct LLM 
+
+SemFilter                                                    
+
+> def DirectLLM (D,q,
+> LLM ):
+> return [LLM (f" {q}:sa
+> tis>ies ?",r)==True
+> for rin D]
+> def ProxyCascade (D,q,LLM ,proxy ):
+> s=score _proxy (D,q,proxy )
+> τ!,τ"=learn _thresholds sample D,q,LLM ,s
+> return [True if s#≥τ"else False if s#≤τ!
+> else LLM (f" {q}:satis>ies ?",r)=True for r,s#in (D,s)]
+
+Proxy Cascade 
+
+Pipeline Rewrite 
+
+SemFilter Split Reduce 
+
+ReducedContext 
+
+SemFilter               
+
+> def ReducedCxt (D,q,LLM ,k):
+> return [LLM (f" {q}:satis>ies ?",
+> top _k(chunk (r),lambda c:
+> cos (emb (c),emb (q)),k))
+> for rin D]
+
+Figure 2: Overview of the CADENZA architecture illustrating an end-to-end workflow example with representative baseline plans. For clarity, implementation-level optimizations that apply uniformly across plans (e.g., LLM batching) are not shown. 
+
+• Relational Operators: Predicates such as 𝜎 Score ≥𝜆 are compiled into standard filters with a tunable parameter 𝜆 .
+
+• Task-Specific Operators: Complex operators are compiled into an implementation that incorporates a data-aware router to dispatch tuples to family-specific implementations. For ex-ample, OpTxtQA in Plan A ′ dispatches tuples across various implementations (symbolic matching, a distilled QA model, a strong general-purpose LLM, and a composite RAG-style), using cheap input features such as text length with a tunable threshold 
+
+𝜃 𝑅 , together with per-family parameters such as a confidence threshold ( 𝜃 2) and a similarity threshold ( 𝜃 4) (see “Physical Plan” in Figure 2). When available, the compiler reuses the cataloged implementation for each family; otherwise, it generates the miss-ing family-specific implementations and synthesizes the router. 
+
+Multi-Objective Tuning. For each candidate logical plan, CADENZA 
+
+tunes the parameters of its compiled physical plan using Bayesian optimization on the validation set. The optimizer maximizes a scalar utility that trades off Quality ( 𝑄 ), Latency ( 𝐿 ), and Cost ( 𝐶 ). We estimate 𝐿 max and 𝐶 max via an LLM-only execution on the validation set. For stability, we use logarithmic scaling (details in §5). 
+
+Final Plan Selection. After tuning each candidate logical plan, 
+
+CADENZA compares the resulting best tuned physical plans and se-lects the overall winner by the same scalar utility. As shown in the “Final Plan Selection” table, plan A ′ is selected because its tuned physical plan preserves high accuracy via the OCR–TxtQA pipeline while reducing cost relative to the VQA approach (Plan A). 
+
+Stability under Stochastic Planning. Model inferences can be stochastic, so repeated optimization runs may follow different tra-jectories and select a different final best plan for the same query. We therefore focus on stability at the level of outcome metrics 
+
+(𝑄, 𝐿, 𝐶 ) (or a scalar utility) rather than exact plan identity. To reduce run-to-run variance, we (i) control avoidable randomness using deterministic decoding when available, (ii) treat each BO trial as a noisy observation and (iii) smooth residual noise by re-evaluating the final top-𝐾 candidates multiple times and selecting via an aggregated score (e.g., median/mean), optionally requiring an improvement margin 𝜖 before replacing the incumbent. 
+
+## 3 Task-Extended Relational Algebra 
+
+Semantic operator instances are specified by open-ended natural-language intents and executed via costly, uncertain inference over unstructured data. Treating an instance as a black-box UDF hides intermediate signals and blocks classical transformations such as pushdown and commutation. Meanwhile, classical relational al-gebra cannot express semantics-dependent predicates over such modalities. We therefore introduce task-extended relational algebra 
+
+(TxRA ), a conservative extension that encapsulates inference be-hind typed tasks and exposes their outputs as relational attributes, enabling semantic processing to be optimized as an operator DAG. As in relational algebra (RA), TxRA separates the logical specifi-cation of an operator from its physical realization: a task-specific operator declares what task to perform (e.g., OCR , extracting text from an image, with output schema (txt :Text )), independent of 
+
+how it is implemented (e.g., for OCR , a vision LLM vs. Tesseract CADENZA: Compiling Natural-Language Intent into Task-Specific Operator DAGs for Semantic Query Processing SIGMOD ’27, June 03–05, 2018, Woodstock, NY 
+
+vs. a distilled OCR model). A TxRA query thus forms an operator DAG amenable to two kinds of plan exploration. Structural rewrites, derived from schema and dependency contracts, follow classical RA transformations such as pushdown and commutation. Semantic 
+
+alternatives, such as VQA to OCR → TextQA , are not assumed to be equivalence-preserving by default. §4.3 details both mechanisms. 
+
+Types, Domains, and Carrier Set. Let T be a type universe, where each 𝜏 ∈ T has a carrier domain D𝜏 . Let D = {D 𝜏 | 𝜏 ∈ T} be the set of such domains, partitioned as D = Dsyn ∪ Dsem where Dsyn 
+
+contains structured domains supporting deterministic comparisons (e.g., Int , Float ), and Dsem contains domains of semantic objects (e.g., Text , Image ). We write Rel T for the set of typed relations whose attributes have types in T (equivalently, range over domains in D). For example, in a product relation 𝑟 (pid:Int , img:Image ),
+
+pid is in Dsyn and img is in Dsem . Values in Dsem support identity equality and syntactic predicates (e.g., on file size or hash for img ), while latent semantics-dependent predicates (e.g., on its label text or depicted brand) are expressed via task-specific operators. 
+
+Algebra Definition. We define TxRA = (Rel T, Ωrel ∪ Ωtask ), where 
+
+Ωrel denotes relational operators and Ωtask denotes task-specific operators. All operators are closed over Rel T.
+
+Relational Operators ( Ωrel ). Ωrel comprises standard relational operators (e.g., 𝜎, 𝜋, ⊲⊳ , 𝛾 ) with well-typed deterministic predicates over Dsyn . For Dsem , we permit only deterministic predicates over raw content or metadata (e.g., exact match/regex/length for Text ,and IDs/hashes/basic metadata for Image ); thus, joins are keyed only by Dsyn attributes or deterministic identifiers from Dsem , while meaning-based matching is expressed via Ωtask . Schema and cardi-nality semantics follow classical relational algebra. 
+
+Task-Specific Operators ( Ωtask ). Let T be a task space. A task 
+
+𝑡 ∈ T is a typed (possibly stochastic) computation with signature 
+
+sig (𝑡 ) : (𝜏 1, . . . , 𝜏 𝑚 ) → Rel T,
+
+where inputs may include semantic types (e.g., Text , Image ). For example, OCR : Image → ( txt :Text ) extracts text from an image, 
+
+TxtQA 𝜑 : Text → ( answer :Text , Score :Float ) answers a parame-terized question 𝜑 over text, and ImgCls : Image → ( label :Text )
+
+classifies an image. Since tasks may be stochastic, J𝑡 K induces a distribution over output relations Δ(Rel T); we accordingly define plan equivalence in distribution to state transformation correctness. A task-specific operator correlates 𝑡 with each tuple of an input relation 𝑟 by binding 𝑡 to attributes ¯𝐵 , in the table-valued LATER-AL/ Apply (CROSS APPLY) style: 
+
+Apply 𝑡 ( ¯𝐵 ) (𝑟 ) =
+
+Ú  
+
+> 𝑥 ∈occ (𝑟 )
+
+{𝑥 } × 𝑡 (𝑥 [ ¯𝐵 ]) .
+
+For example, Apply OCR (img ) (𝑟 ) extracts text from each img and ap-pends it as a new attribute txt , yielding a relation with schema 
+
+(pid :Int , img :Image , txt :Text ). For readability, we depict this in pipeline form (e.g., 𝑟 → Op ) as shorthand for Apply 𝑡 ( ¯𝐵 ) (𝑟 ) with the declared bindings. Semantics-dependent predicates are expressed by composing with relational operators, e.g., 𝜎 𝜓 
+
+
+
+Apply 𝑡 ( ¯𝐵 ) (𝑟 )
+
+
+
+, where 
+
+𝜓 is a well-typed predicate over Dsyn output attributes. 
+
+Example (Decomposing an Image Claim Filter). Let 𝑟 (pid :
+
+Int , img : Image ) be a relation of products. Consider an intent   
+
+> Caller Logical Planner LLM
+> Seed Plan Synthesis
+> Plan Exploration
+> intent + I/O schemas
+> intent + operator catalog
+> draft seed plan(s)
+> critique & refine prompt
+> refined seed plan(s)
+> structural rewrites
+> semantic alternatives logical plans
+
+Figure 3: The workflow of CADENZA ’s logical planner: seed synthesis (gray) and plan exploration (green). 
+
+I: “Flag products whose package label contains compliance-sensitive claims (e.g., ‘FDA approved’).” We realize this intent by composing 
+
+OCR and TxtQA 𝜑 introduced above, with 𝜑 asking whether the extracted text contains a compliance claim. A TxRA plan for the semantic filter is (omitting a final projection): 
+
+𝜎 answer =“yes” ∧Score ≥𝜆 
+
+
+
+Apply TxtQA 𝜑 (txt )
+
+ Apply OCR (img ) (𝑟 )
+
+.
+
+Here, the intermediate OCR outputs become ordinary attributes that are passed to TxtQA 𝜑 , while the final decision is expressed as a standard relational filter over (answer , Score ).
+
+Conservativity. If we restrict Dsem = ∅ and Ωtask = ∅, then TxRA 
+
+reduces to classical relational algebra over Dsyn .
+
+Algebraic Properties and Reorderability. We model tasks as side-effect-free, tuple-wise computations that append attributes via 
+
+Apply . A sufficient condition to reorder two task-specific operators 
+
+𝑂𝑝 1 and 𝑂𝑝 2 is that neither consumes attributes produced by the other. Let Attr (𝑂𝑝 ) be attributes generated by 𝑂𝑝 and Free (𝑂𝑝 ) be required input attributes; then a safe commutativity condition is: 
+
+Free (𝑂𝑝 1) ∩ Attr (𝑂𝑝 2) = ∅ ∧ Free (𝑂𝑝 2) ∩ Attr (𝑂𝑝 1) = ∅.
+
+Similarly, a filter 𝜎 𝜓 can be pushed below Apply whenever 𝜓 does not reference attributes produced by the task. For example, Apply OCR (img ) and Apply TxtQA 𝜑 (txt ) cannot be re-ordered since Free (TxtQA ) ∩ Attr (OCR ) = {txt }, whereas an in-dependent Apply ImgCls (img ) shares no attribute dependency and swaps freely. Likewise, 𝜎 answer =“yes” ∧Score ≥𝜆 cannot be pushed below 
+
+Apply TxtQA 𝜑 as it references its outputs, but a syntactic 𝜎 filesize (img )>𝑋 
+
+pushes below all Apply ’s. 
+
+## 4 Logical Planner 
+
+In this section, we present the logical planner. We first describe our task-specific logical operators (§4.1), then present seed plan synthesis (§4.2), and finally describe plan exploration via structural rewrites and semantics-guided alternative generation (§4.3). Fig-ure 3 summarizes the workflow. We tested the logical planner on TPC-H queries specified as intents with I/O schemas, and found that it recovers the required relational structure—including multi-way joins—without introducing unnecessary operators. 
+
+## 4.1 Task-Specific Logical Operators 
+
+Task-specific operators map unstructured inputs to structured re-lations that can be processed by relational operators. We address SIGMOD ’27, June 03–05, 2018, Woodstock, NY Jaehyun Ha, Yongjoo Park, and Wook-Shin Han 
+
+Table 1: Currently supported task-specific logical operators for text and image. 
+
+Modality Category Operator Output Schema Description Text Structural OpTxtSplit 𝑅 𝑆𝑝𝑙 (SegIdx , Content ) Segments text into ordered units (e.g., sentences) for indexing. 
+
+OpTxtOutline 𝑅 𝑂𝑢𝑡 (SecIdx , ParentIdx , Level , Title , Content ) Extracts hierarchical sections and their logical structure. 
+
+OpTxtTable 𝑅 𝑇 𝑎𝑏 (TabIdx , RowIdx , ColName , CellValue ) Deconstructs embedded tables into relational rows and columns. 
+
+Attributive OpTxtNER 𝑅 𝑁 𝐸𝑅 (Entity , Score , Word ) Identifies and classifies entity spans. 
+
+OpTxtCls 𝑅 𝐶𝑙𝑠 (Label , Score ) Predicts labels for a text from a given label set with scores. 
+
+OpTxtSenti 𝑅 𝑆𝑛𝑡 (Polarity , Score ) Identifies sentiment polarity per aspect. 
+
+OpTxtQA 𝑅 𝑄𝐴 (Answer , Score ) Extracts the answer value with its confidence score 
+
+OpTxtClaim 𝑅 𝐶𝑙𝑚 (ClaimSpan , Verdict , EvdSpan , Score ) Identifies claim spans and validates factuality with evidence. 
+
+Associative OpTxtRel 𝑅 𝑅𝑒𝑙 (Subject , Predicate , Object , Score ) Extracts semantic triples representing factual relationships. 
+
+OpTxtEvent 𝑅 𝐸𝑣𝑡 (EvtIdx , Type , Role , Argument , Score ) Extracts event frames as role–argument bindings. 
+
+OpTxtNLI 𝑅 𝑁 𝐿𝐼 (Label , Score ) Determines the logical inference relationship between two texts. 
+
+OpTxtCoref 𝑅 𝑅𝑒 𝑓 (ClusterIdx , Span , Mention ) Groups mentions referencing the same entity into clusters. 
+
+OpTxtPairScore 𝑅 𝑆𝑖𝑚 (Score ) Quantifies semantic similarity or relevance between a text pair. 
+
+Generative OpTxtSum 𝑅 𝑆𝑢𝑚 (Summary ) Condenses the input text into a concise summary. 
+
+OpTxtTrans 𝑅 𝑇 𝑟𝑛 (Translation ) Converts the input text into a specified target language. 
+
+OpTxtRewrite 𝑅 𝑅𝑒𝑤 (Content ) Paraphrases or modifies text style while preserving meaning. 
+
+Latent OpTxtEmbed 𝑅 𝑉 𝑒𝑐 (Vector ) Encodes text into a vector representation. 
+
+Image Structural OpImgRegion 𝑅 𝑅𝑒𝑔 (RegIdx , BBox , Mask ) Segments the image into indexed regions (boxes or masks). 
+
+OpImgOCR 𝑅 𝑂𝐶𝑅 (Text , Score ) Extracts text content with spatial coordinates. 
+
+Attributive OpImgCls 𝑅 𝐶𝑙𝑠 (Label , Score ) Classifies the entire image into categories. 
+
+OpImgObj 𝑅 𝑂𝑏 𝑗 (BBox , Label , Score ) Detects objects with bounding boxes and class labels. 
+
+OpImgKeypt 𝑅 𝐾𝑝𝑡 (KptIdx , Point , Label ) Identifies semantic keypoints (e.g., joints, landmarks). 
+
+OpImgVQA 𝑅 𝑉 𝑄𝐴 (Answer , Score ) Answers natural language questions about the image. 
+
+Associative OpImgSceneRel 𝑅 𝑆𝐺𝐺 (Subject , Predicate , Object , Score ) Extracts visual relationships (scene graph triples). 
+
+OpImgPairScore 𝑅 𝑆𝑖𝑚 (Score ) Quantifies visual similarity between an image pair. 
+
+Generative OpImgCap 𝑅 𝐶𝑎𝑝 (Caption ) Generates a descriptive caption for the image. 
+
+OpImgEdit 𝑅 𝐸𝑑𝑖𝑡 (Image ) Generates a modified image based on constraints. 
+
+Latent OpImgEmbed 𝑅 𝑉 𝑒𝑐 (Vector ) Encodes the image into a dense vector representation. 
+
+two design questions: (i) the granularity of task-specific operators, and (ii) how to organize the operator set in a database-centric way. 
+
+Granularity. We define each task-specific logical operator at the level of a common task formulation in standard ML model ecosys-tems (e.g., Hugging Face): a reusable computation with a typed signature and a stable output schema independent of any back-end. The catalog is task-family based rather than workload-specific. Each operator corresponds to a common ML task formulation in standard model ecosystems such as Hugging Face Tasks. For ex-ample, OpTxtSenti specializes text classification with a sentiment label space, rather than encoding a Movie scenario–specific rule. 
+
+Task Categories. We group task-specific operators by the data-base role of their outputs into five categories: Structural (indexes substructures such as segments/regions), Attributive (unary descrip-tors such as labels/answers), Associative (relations over elements or pairs, e.g., triples/NLI), Generative (derived artifacts as new seman-tic objects), and Latent (vectors for similarity-based retrieval). 
+
+Current Operator Set and Extensibility. Table 1 lists the sup-ported text and image operators. New operators are added by regis-tering a task signature and assigning a category. 
+
+## 4.2 Seed Plan Synthesis 
+
+Given a semantic operator instance, the planner performs up to 
+
+𝐵 𝑙𝑜𝑔 synthesis attempts; each attempt runs draft plan synthesis fol-lowed by plan refinement and yields at most one seed plan. To keep LLM usage budgeted, refinement is capped by 𝑏 ref LLM-invoking verification/repair rounds, while deterministic checks do not count. 
+
+4.2.1 Draft Plan Synthesis. Each attempt begins by generating a 
+
+draft seed plan that outlines a plausible sequence of reasoning steps for the instance. The planner prompts an LLM with the intent, input/output schemas, the operator catalog, and a short history of previous plans to discourage repetition and encourage struc-tural diversity (e.g., after a VQA-centric draft, a later attempt may explore an embedding-based alternative). Here, extensibility is a core design principle of CADENZA ; since the planner uses in-context learning over the prompt-provided operator catalog, adding a new modality (e.g., video) or a domain-specific operator typically only requires registering its signature and description in the catalog, without fine-tuning or retraining. While the catalog provides the primary vocabulary, drafts may include non-catalog placeholders when needed; each placeholder must declare a typed signature and explicit output schema to remain type-checkable. CADENZA: Compiling Natural-Language Intent into Task-Specific Operator DAGs for Semantic Query Processing SIGMOD ’27, June 03–05, 2018, Woodstock, NY 
+
+4.2.2 Plan Refinement. Drafts may be ill-formed (e.g., unsupported operators, invalid wiring, or schema mismatches). The planner re-fines each draft via a compile-time fix loop: it runs a deterministic verifier to collect all errors and return a concrete report, prompts an LLM to revise the draft to satisfy the report, and repeats until the verifier passes or the refinement budget is exhausted. Once verifier-clean, the planner performs catalog grounding , rewriting non-catalog placeholders or composite steps into equivalent sub-graphs of catalog primitives when possible. For example, if a filter predicate references a non-existent attribute ( Ans ), the verifier re-ports the missing field and the revision updates the predicate to use the correct upstream output attribute. Similarly, the placeholder 
+
+OpTxtImgSim is grounded into OpImgEmbed →OpTxtEmbed .
+
+## 4.3 Plan Exploration 
+
+Plan exploration expands each seed plan via two mechanisms. Struc-tural rewrites follow the classical optimizer model: correctness-preserving transformations whose preconditions are checked from plan wiring, I/O bindings, and operator contracts. Semantic alter-natives exploit task-level knowledge (e.g., partitionability, modality conversion) to propose additional plans without assuming equiva-lence, and are retained only if their compiled physical plans improve the quality–latency–cost trade-off on the validation/teacher signal. 
+
+4.3.1 Structural Rewrites. Structural rewrites are the only plan-exploration steps that we treat as correctness-preserving algebraic rewrites. They require only (i) data dependencies (I/O bindings) and (ii) an operator contract over schema and cardinality. In TxRA ,each task-specific operator is a per-tuple Apply that appends a known output schema, thus we apply classical transformations whenever the dependency conditions from §3 hold. Concretely, two operators commute (and can be reordered) whenever Free (𝑂𝑝 1) ∩ 
+
+Attr (𝑂𝑝 2) = ∅ and Free (𝑂𝑝 2) ∩ Attr (𝑂𝑝 1) = ∅. A filter 𝜎 𝜓 can be pushed below an Apply when 𝜓 does not reference task-produced attributes. Our prototype implements two rules: FilterPushdown 
+
+and CommutativeReordering .
+
+4.3.2 Semantics-Guided Alternative Generation. Beyond structural rewrites, useful alternatives often require task-level properties that are not implied by schema or cardinality contracts. We therefore do not present semantic alternatives as equivalence rules. Instead, each semantic alternative is generated by an alternative-generation template: it proposes a new typed DAG that may be cheaper or more accurate for a particular intent/data distribution, and the opti-mizer decides whether to keep it through validation/teacher-based plan ranking. Some templates can be equivalence-preserving under additional task-specific assumptions, such as lossless partitioning, but CADENZA does not rely on that assumption for correctness; it treats the generated plan as an alternative. Our prototype uses two high-impact templates for unstructured workloads. 
+
+Template 1: Partitioned Extraction. Some task-specific oper-ators admit useful partitioned alternatives: the input is split into subrelations by a partitioner 𝑃 , the task is applied to each parti-tion, and the outputs are normalized and unioned. This template is equivalence-preserving only when the task is partition-local and the normalizer preserves all cross-partition identifiers needed by downstream operators. Otherwise, it is an approximate alternative that trades possible context loss for lower latency/cost: 
+
+Apply 𝑡 (𝑟 ) { Norm ©«Ú   
+
+> 𝑠 ∈𝑃 (𝑟 )
+
+Apply 𝑡 (𝑠 )ª®¬
+
+. (1) 
+
+Example. For entity extraction over a long PDF, the planner splits into pages, runs extraction per page in parallel, and normalizes span offsets before unioning results. Benefit. Enables intra-operator paral-lelism and mitigates context-window limits. Validation role. Because cross-partition context may matter, the resulting plan competes with non-partitioned plans and is selected only when it improves the measured quality–latency–cost trade-off. 
+
+Template 2: Cross-Modal Proxying. Some tasks admit cheaper alternatives by converting modalities through a conversion operator 
+
+𝑐 , and then applying the task in the converted modality: 
+
+Apply 𝑡 img (𝑟 ) { Apply 𝑡 txt 
+
+ Apply 𝑐 (𝑟 ) . (2) This alternative is not assumed to be semantically equivalent to the original image task; it is a proxy whose usefulness depends on the intent and data distribution. Example. To filter images con-taining a specific phrase, the planner applies OCR and then runs text filtering/classification over the extracted strings, instead of invoking a heavy vision model. Benefit. Enables modality switching and cheaper proxy execution when high-fidelity models are costly or unavailable. Safeguard. Because conversion can fail, CADENZA can compile this template with a physical fallback, e.g., routing empty or low-confidence OCR outputs to a stronger vision backend. The final decision is made by the same validation/teacher-based plan ranking used for other alternatives. 
+
+## 5 Physical Planner 
+
+In this section, we present the physical planner. We first describe the physical plan construction (§5.1), focusing on task-specific op-erators that compose family-specific implementations with a data-aware router. We then describe multi-objective tuning (§5.2), where Bayesian optimization tunes parameters on a validation set. 
+
+## 5.1 Physical Plan Construction 
+
+Algorithm 1 constructs a physical plan P and its tunable parameter space Θ from a logical plan L. It initializes an empty plan and pa-rameter space (Line 1) and traverses operators in topological order (Line 2). For each task-specific operator (Line 4), the compiler con-siders each synthesis directive 𝑑 ∈ D (Line 6). The implementation catalog indexes entries by both the operator 𝑙 and the directive 𝑑 
+
+(i.e., backend family/style), so lookups are keyed by (𝑑, 𝑙 ) (Line 7); otherwise, it synthesizes the missing implementation using the directive and the backend registry, which records available model-serving resources for task-specific inference and their instantiation interfaces (Line 9). It collects candidate implementations and their exposed parameters (Lines 12–13), then synthesizes a data-aware router (Line 16) and forms a composite operator (Line 18). For each relational operator (Line 19), it binds a concrete implementation from the catalog and exposes its tunable parameters (Line 20). Each bound operator is added to P (Line 22) and its parameters are ag-gregated into Θ (Line 23). Finally, the compiler copies the dataflow edges from L to P (Line 25) and returns P and Θ (Line 26). SIGMOD ’27, June 03–05, 2018, Woodstock, NY Jaehyun Ha, Yongjoo Park, and Wook-Shin Han 
+
+Algorithm 1 Physical Plan Construction 
+
+Input: L (logical plan DAG), C (implementation catalog), D
+
+(synthesis directives), R (backend registry) 
+
+Output: P (physical plan), Θ (tunable parameter space)  
+
+> 1:
+
+P ← EmptyDAG () ; Θ ← ∅  
+
+> 2:
+
+for each 𝑙 ∈ TopologicalSort (L) do  
+
+> 3:
+
+Θ𝑙 ← ∅  
+
+> 4:
+
+if IsTaskSpecific (𝑙 ) then  
+
+> 5:
+
+K ← ∅  
+
+> 6:
+
+for each 𝑑 ∈ D do  
+
+> 7:
+
+𝐼 ← LookupCatalog (C , 𝑑, 𝑙 ) 
+
+> 8:
+
+if 𝐼 = ∅ then  
+
+> 9:
+
+𝐼 ← SynthesizeImpl (𝑑, 𝑙, R)  
+
+> 10:
+
+end if  
+
+> 11:
+
+if 𝐼 ≠ ∅ then  
+
+> 12:
+
+K ← K ∪ { 𝐼 } 
+
+> 13:
+
+Θ𝑙 ← Θ𝑙 ∪ Params (𝐼 ) 
+
+> 14:
+
+end if  
+
+> 15:
+
+end for  
+
+> 16:
+
+𝑟 ← SynthesizeRouter (K)  
+
+> 17:
+
+Θ𝑙 ← Θ𝑙 ∪ Params (𝑟 ) 
+
+> 18:
+
+𝑝 spcf ← ( 𝑟, K) ; 𝑝 ← 𝑝 spcf  
+
+> 19:
+
+else  
+
+> 20:
+
+(𝑝 agn , Θ𝑙 ) ← BindRelationalOp (C , 𝑙 ); 𝑝 ← 𝑝 agn  
+
+> 21:
+
+end if  
+
+> 22:
+
+P.AddNode (𝑝 ) 
+
+> 23:
+
+Θ ← Θ ∪ Θ𝑙  
+
+> 24:
+
+end for  
+
+> 25:
+
+P.LinkEdgesFrom (L)  
+
+> 26:
+
+return P, Θ
+
+SynthesizeImpl (Line 9). It materializes a concrete physical implementation for a task-specific logical operator 𝑙 . It takes a syn-thesis directive 𝑑 ∈ D —a prompt template that targets a backend family (symbolic, specialized, general-purpose, or composite) and encodes the intended implementation style (e.g., “use only founda-tion models” or “compose a multi-step pipeline”). Concretely, the planner instantiates this template with (𝑑, 𝑙, R) —the directive 𝑑 , the operator specification of 𝑙 (typed signature, input bindings, and output schema), and the backend registry R, including only entries applicable to 𝑑 and 𝑙 to keep prompts compact. The LLM returns a callable implementation that satisfies the operator contract and declares its tunable parameters (e.g., confidence thresholds, top-
+
+𝑘 ), which are added to the plan’s parameter space for tuning. For example, consider OpTxtQA . The planner synthesizes one candi-date per backend family—a symbolic regex filter (no parameters), a specialized DistillBERT_QA variant with threshold 𝜃 qa , a GPT4 -based variant (no parameters), and a composite that prefilters with 
+
+CLIPSim and escalates to GPT4 with thresholds 𝜃 sim and 𝜃 gpt . Since synthesis may fail, SynthesizeImpl is paired with §6.3. 
+
+SynthesizeRouter (Line 16). Given candidate implementa-tions K = {𝐼 1, . . . , 𝐼 𝑁 }, SynthesizeRouter constructs a data-aware router 𝑟 that dispatches each input to an implementation based on its estimated difficulty. The router consists of: (i) lightweight input-feature extraction code, (ii) scoring code that maps these features to a scalar difficulty score 𝑠 ∈ [ 0, 1] (higher means “needs more semantic capability”), and (iii) partitioning/dispatching code. (i) and (ii) are synthesized by prompting an LLM with the operator specifi-cation, the ordered implementation set K, and a router generation prompt. (iii) is then generated by instantiating a fixed bucketing-and-dispatch template which uses the scorer and 𝑁 − 1 tunable cutpoints to assign each row to one of 𝑁 buckets and invoke the corresponding 𝐼 𝑖 . The features are cheap, non-inferential signals (e.g., text length/format; image resolution/aspect ratio, and simple pixel statistics). SynthesizeRouter is also paired with §6.3. 
+
+Percentile Bucketing with Softmax-Parameterized Masses. In practice, we bucket by percentiles rather than raw score thresholds, making routing depend on the relative ordering rather than abso-lute score values, which makes it less sensitive to score-distribution shifts. Concretely, we convert scores to rank-based percentiles 
+
+𝑢 ∈ ( 0, 1] and assign buckets using 𝑁 − 1 increasing percentile cutpoints 𝜏 via 𝑘 = digitize (𝑢 ; 𝜏 ). To avoid ordered constraints on 𝜏 , we parameterize bucket masses with logits 𝛼 ∈ R𝑁 , define 
+
+𝜋 = softmax (𝛼 ) ∈ Δ𝑁 −1, and set cutpoints by the CDF 𝜏 𝑘 = Í𝑘 𝑖 =1 𝜋 𝑖 
+
+for 𝑘 = 1, . . . , 𝑁 − 1.
+
+Precompilation. For the operators in Table 1, we precompile phys-ical implementations offline as a caching mechanism for efficiency, except symbolic ones that require query-specific knowledge and are instantiated on demand. If an implementation is missing or the backend set changes, CADENZA synthesizes it at runtime. 
+
+## 5.2 Multi-Objective Tuning 
+
+Given a compiled physical plan P with tunable parameters Θ and a validation set E, the physical planner tunes P under a fixed evaluation budget 𝐵 tune , defined in terms of optimization trials (i.e., maximum plan executions) using Bayesian optimization. For 
+
+𝑏 = 1, . . . , 𝐵 tune , BO proposes 𝜃 𝑏 ∈ Θ; we execute P ( 𝜃 𝑏 ) on E and measure quality, latency, and cost. This tunes both router param-eters and per-implementation parameters. As defined in §2.1, we select the final plan by maximizing 𝑈 (P) with normalized latency and cost. We use log normalization since latency and cost span or-ders of magnitude: it compresses extremes and reduces sensitivity to outliers, budget caps, and cap choices. 
+
+Tuning Practicalities. Handling high-dimensional mixed discrete– continuous search spaces is orthogonal to our contributions [ 5, 6]. For efficiency, we cap each plan at 15 continuous parameters. To reduce sensitivity to initial random trials, we warm-start with a few hand-designed configurations spanning distinct backend regimes. 
+
+## 6 Implementation 
+
+In this section, we describe CADENZA ’s implementation and deploy-ment details. CADENZA is implemented in Python ( ∼20K LoC) and currently supports text, image, and audio modalities. 
+
+## 6.1 System Environment & Stack 
+
+Core. CADENZA is implemented in Python (3.10+) and uses PyTorch (2.6+). For BO, we use BoTorch via Optuna’s BoTorch integration. CADENZA: Compiling Natural-Language Intent into Task-Specific Operator DAGs for Semantic Query Processing SIGMOD ’27, June 03–05, 2018, Woodstock, NY 
+
+Integration. CADENZA is a standalone optimizer/executor with its own CLI: it can run through its own CLI without depending on any host SQPE. To interoperate with existing SQPEs, the host SQPE implements a small adapter: (i) a dispatch hook forwards the host’s semantic operator calls to CADENZA , (ii) I/O adapters ex-change relations as pandas.DataFrame , and (iii) an LM adapter 
+
+routes CADENZA ’s LM calls through the host’s LM client; CADENZA it-self remains unchanged. Our experiments use a LOTUS integration; the same pattern applies to other SQPEs. 
+
+Data Model. Operator inputs/outputs are passed through the adapter as Pandas DataFrames (Arrow-compatible when applicable), en-abling vectorized execution and efficient batch inference (e.g., batch-ing LLM or local model calls) rather than per-tuple invocation. 
+
+## 6.2 Optimization Overhead Management 
+
+Plan Caching. To amortize optimization cost, CADENZA caches optimized physical plans keyed by an intent signature that captures the intent-defining configuration. On a cache hit, CADENZA reuses the cached physical plan without re-optimizing. To handle data distribution drift, which can degrade synthesized symbolic rules and routers, we use two strategies. First, percentile bucketing relies on relative ranks and is thus less sensitive to minor score shifts. Second, cached plans are considered as valid only for a specific data profile. In production, we recommend periodic re-optimization to regenerate symbolic rules and re-tune parameters on fresh samples. 
+
+Adaptive Bypass. For small inputs where optimization overhead can dominate, CADENZA bypasses optimization and runs a default LLM-only execution. We use a simple cardinality heuristic 𝑁 ≤ 𝜏 .We set 𝜏 =300 from profiling the crossover between LLM-only and 
+
+CADENZA execution; near this scale, only 16/55 queries favored LLM-only, so bypassing is a conservative guardrail and 𝜏 is configurable. 
+
+## 6.3 Robustness 
+
+Code Safety. LLM-synthesized code includes a small test wrapper (expected signature and required columns) and is smoke-tested on mock inputs. It then runs in an isolated runtime with static checks and timeouts to prevent unsafe operations and bound resource us-age. If synthesized code fails the smoke test, CADENZA re-synthesizes it under a bounded timeout/attempt budget until it passes. 
+
+Error Recovery. At runtime, CADENZA handles transient failures with bounded retries and safe-mode fallback. If a synthesized code raises an exception or returns a confidence score below a safety margin (when available), we fall back to a default LLM to ensure completion even in the presence of synthesized code fragility. 
+
+## 7 Experiments 
+
+We seek to answer the following research questions about CADENZA :
+
+RQ1. Does CADENZA achieve better end-to-end quality/latency/cost trade-offs than prior SQPE optimizers? (§7.2) 
+
+RQ2. How sensitive is CADENZA to its configurations? (§7.3) 
+
+RQ3. Which techniques of CADENZA account for its performance gains, and by how much? (§7.4) 
+
+RQ4. How does CADENZA ’s performance scale with data size? (§A) 
+
+RQ5. How important is intent-specific synthesis? (§C) 
+
+RQ6. Does CADENZA outperform baselines under the same utility function across varied weights? (§D) 
+
+RQ7. Can CADENZA approximate the Pareto frontier? (§E) 
+
+## 7.1 Experimental Setup 
+
+7.1.1 Benchmark. We evaluate on SemBench [ 16 ], a benchmark for SQPEs that features diverse semantic operators over text, image, and audio data. 2 We enforce a uniform 24-hour per-query timeout. Table 2 summarizes dataset properties. 
+
+Movie. This scenario evaluates sentiment-aware analytics over movie text reviews. It contains 10 semantic queries (Q1–Q4: filters; Q5–Q7: joins; Q8: classification; Q9–Q10: rankings). 
+
+Wildlife. This scenario studies species presence and co-occurrence in camera-trap images and animal sound audio captures from Kag-gle datasets, with species labels available as ground truth. It contains 10 semantic queries: Q1/Q3/Q7/Q10 are image filters over species (with downstream aggregations), Q2/Q4/Q8 are audio filters, and Q5/Q6/Q9 are multi-modal queries combining image and audio. 
+
+MMQA. This scenario evaluates question answering over hetero-geneous tables, text, and images. It contains 11 semantic queries: Q1/Q3a/Q3f/Q4/Q5 and Q6a–Q6c are text filters/maps, Q7 is a text →image join, and Q2a–Q2b are image joins with an extraction. 
+
+Cars. This scenario combines vehicle metadata, NHTSA complaints, vehicle damage images, and engine-diagnostic audio. It contains 10 semantic queries: Q1/Q4/Q10 are text filters/maps, Q3/Q7/Q8 are image filters, Q2 is an audio filter, and Q5/Q6/Q9 are multi-modal queries combining text/image/audio. 
+
+E-Commerce. This scenario uses an online fashion retail dataset with structured product attributes, text descriptions, and images. It contains 14 semantic queries: Q1–Q2 are filters, Q3–Q4 maps, Q5– Q6 classifications, Q7–Q9 joins, Q10–Q11 are multi-stage 3-/4-way joins, Q12 a structured extraction, Q13 a cross-modal filter–join, and Q14 a filter with top-𝑘 ranking. 
+
+7.1.2 Measure. We measure efficiency by latency (seconds) and monetary cost (USD), and measure quality in [0, 1] against ground truth: relative error (aggregation), F1 (retrieval), Spearman’s 𝜌 (rank-ing), and ARI (grouping/classification). We repeat each experiment three times and report geometric means. For brevity, we denote Q
+
+as quality ( ↑), L as latency ( ↓), and C as monetary cost ( ↓). 
+
+7.1.3 Environment. All experiments ran on a machine with 2 ×
+
+RTX 3090 (24 GB each), a 64-core Intel Xeon CPU, and 512 GB RAM. We accessed LLMs via Azure AI Foundry (no local GPUs) and report cost as Azure API charges plus estimated GPU cost for local models from runtime, using $0.71/hour (NCasT4_v3) as a proxy. We used Global Standard, disabled content filters, and set temperature to 0. 
+
+7.1.4 CADENZA Settings. We use GPT-4.1 for planning (parallelism 20); for fair comparison, adaptive bypass uses GPT-4.1-mini (for audio inputs, gpt-audio-mini ) and disable plan caching. Unless otherwise noted, we use a 50-sample validation set, 𝐵 𝑙𝑜𝑔 = 3, 20 BO trials, and set 𝑤 q=1.0, 𝑤 l=0.4, 𝑤 c=0.3. 
+
+> 2The Medical scenario was removed from SemBench due to licensing issues [26]. SIGMOD ’27, June 03–05, 2018, Woodstock, NY Jaehyun Ha, Yongjoo Park, and Wook-Shin Han
+
+Table 2: Overview of datasets used in each scenario. Scenario SF Table #Rows Unstructured Columns Used 
+
+Movie 20000 Reviews 20000 ReviewText TEXT 
+
+Wildlife 4000 ImageData AudioData 4000 650 Image IMAGE , City TEXT , StationID TEXT 
+
+Audio AUDIO , City TEXT , StationID TEXT 
+
+MMQA 300 LizzyCaplanText BenPiazzaText TampaInternationalAirport Images 300 300 300 300 Title TEXT , Text TEXT 
+
+Text TEXT 
+
+Airlines TEXT , Destinations TEXT 
+
+Image IMAGE 
+
+Cars 100000 CarComplaint CarImage CarAudio 99929 19156 871 Summary TEXT 
+
+Image IMAGE 
+
+Audio AUDIO 
+
+E-Commerce 5000 StyleDetails 5000 ProductDisplayName TEXT , ProductDescriptors TEXT , Images IMAGE Table 3: End-to-end average improvement of CADENZA over each baseline. Δ for Q is the arithmetic mean of 𝑄 CADENZA −
+
+𝑄 baseline ; × for L/C is the geometric mean of baseline /CADENZA .Queries unsupported or failed by a baseline are excluded; per-scenario raw values in Tables 7–11. System 𝚫 Q × L × C
+
+LOTUS +0.10 3.80 × 4.88 ×
+
+Palimpzest +0.11 4.42 × 21.83 ×
+
+ThalamusDB +0.28 4.33 × 1.51 ×
+
+DocETL +0.08 13.19 × 8.62 ×
+
+Extended AFlow +0.26 1.40 × 1.96 ×
+
+Extended DyFlow +0.21 1.07 × 1.40 ×
+
+Table 4: Fraction of total latency/cost spent in optimization (summing over optimization-enabled queries), and an amor-tized variant that reuses cached plans per scenario.                         
+
+> Scenario Overh. 𝐿 %Amort. 𝐿 %Overh. 𝐶 %Amort. 𝐶 %
+> Movie 23.7 9.4 17.0 6.4 Wildlife 23.8 9.4 19.8 7.6 MMQA 20.1 7.7 15.2 5.6 Cars 17.2 5.9 15.3 4.5 E-Comm 16.1 6.0 15.8 5.9
+
+7.1.5 Competitors. We compare against SQPEs with semantic oper-ator optimization: Palimpzest [ 19 ] (with Abacus [ 24 ]), LOTUS [ 21 ], ThalamusDB [ 12 ], and DocETL [ 27 ]. We also extend and evaluate AFlow [ 37 ] and DyFlow [ 33 ]. For all applicable systems, we set par-allelism to 20. Following [ 16 ], we exclude AOP [ 31 ], CAESURA [ 28 ], and Unify [ 29 ], which require natural-language inputs. We use a controlled setting where all systems share the same pool of founda-tion models and, where supported, specialized backends. For audio inputs, every baseline uses gpt-audio-mini .
+
+LOTUS. LOTUS [ 21 ] optimizes semantic operators by approximat-ing an oracle LLM-based algorithm using proxy models. We use LO-TUS v1.1.4 and set the oracle LLM to GPT-4.1-mini (GPT-4.1 was too slow for some queries). For semantic filters, we use GPT-4.1-nano 
+
+as the proxy; for semantic joins, we use e5-base-v2 (text) and 
+
+clip-ViT-B-32 (image) embeddings as proxies following [ 16 ]. For fair comparison on top-𝑘 queries, we extend LOTUS with a Volcano-style pull executor that streams rows through semantic operators and cancels in-flight LLM calls once 𝑘 outputs are produced. 
+
+Palimpzest. Palimpzest [ 19 ] integrates the Abacus, a cost-based op-timizer [ 24 ], which compares physical operators under a chosen ob-jective and constraints with an LLM judge. We use Palimpzest v1.1.1 with Abacus enabled and set MaxQualityAtFixedCost with a $10 constraint. 3 We provide GPT-4.1-nano , GPT-4.1-mini , GPT-4.1 ,and Text-Embedding-3-Small as candidates, with GPT-4.1 judge. 
+
+ThalamusDB. ThalamusDB [ 12 ] employs approximate query pro-cessing (AQP) with user-defined termination conditions (e.g., error bounds and token budgets), trading quality for efficiency via early stopping. Because our evaluation targets near-exact outputs, en-abling AQP termination can stop execution before meeting the required quality. We therefore run ThalamusDB by setting the target error to zero and removing the token budget cap. We use ThalamusDB v0.1.15 and fix the LLM to GPT-4.1-mini .
+
+DocETL. DocETL [ 27 ] rewrites a semantic operator pipeline with LLMs to improve quality only. We include DocETL v0.2.6 as a quality-oriented baseline, using GPT-4.1-mini as the default model and Text-Embedding-3-Small for embeddings, and run via its Python API with optimization enabled. Since DocETL currently supports only text inputs, we evaluate it only on text-only queries and disable result caching for fairness. DocETL frequently fails at runtime [21]; we report the average over three successful runs. 
+
+Extended AFlow. AFlow [ 37 ] is a state-of-the-art agentic workflow framework that searches over code-represented workflows using MCTS with validation-set execution feedback. We extend it with specialized-model nodes and a cost/latency-aware objective, and follow [ 37 ] by running 20 MCTS iterations with GPT-4.1 as the optimizer and the same validation set size as CADENZA .
+
+Extended DyFlow. DyFlow [ 33 ] is an agentic workflow framework that iteratively designs workflows stage-by-stage with an LLM          
+
+> 3Abacus supports multiple objectives, including MaxQuality ,MinCost ,MinLatency ,
+> MaxQualityAtFixedCost ,MaxQualityAtFixedTime ,MinCostAtFixedQuality , and
+> MinTimeAtFixedQuality . Without an explicit budget constraint, MaxQuality can select prohibitively expensive plans (e.g., >$1000), which exceed our budget. CADENZA: Compiling Natural-Language Intent into Task-Specific Operator DAGs for Semantic Query Processing SIGMOD ’27, June 03–05, 2018, Woodstock, NY
+
+guided by validation-set feedback. We extend it with the same specialized-model nodes and cost/latency-aware objective, using 
+
+GPT-4.1 as the driver and the same validation set size as CADENZA .
+
+7.1.6 Validation Set Setup. For fair comparison, all systems that consume a validation set— CADENZA , LOTUS, Palimpzest, DocETL, AFlow, and DyFlow—operate without human ground-truth labels: each uses an oracle LLM for proxy signals on unlabeled tuples. 
+
+## 7.2 End-to-End Query Performance 
+
+Table 3 summarizes CADENZA ’s average relative performance across scenarios. Figure 4 visualizes per-query Q/L/C across systems. ( ×)denotes failures. (*) marks latency/cost extrapolated from timed-out runs by rerunning at a smaller scale (E-Comm, SF500) and scaling by the input-cardinality ratio (quality from the smaller run). Hatched bar segments indicate the optimization overhead fraction of the total, including optimization and execution. Overall, CADENZA 
+
+achieves consistently strong quality–latency–cost trade-offs—even on multi-operator queries (e.g., Q7 in Wildlife, Q10–12 in E-Comm). 
+
+Movie (Figure 4(a)). On scenario-level averages, CADENZA im-proves Q by +0.15 (vs. DyFlow), L 21.0 × / C 120.1 × (vs. Palimpzest). For Q5, Q6, and Q7, CADENZA selects an OpTextSenti -based plan that requires far fewer LLM calls, resulting in low latency and cost. In contrast, LOTUS and DocETL use embedding similarity as a proxy, which is ill-suited for sentiment-based joins and leads to a notable drop in quality. Palimpzest executes LLM-based plans under a cost constraint by cascading from cheaper to more expen-sive models, improving quality over LOTUS but at a substantially higher cost. Palimpzest is slow and costly on Q8 and Q10 because it selects a Mixture-of-Agents [ 30 ] plan, yet achieves only similar quality. AFlow and DyFlow remain competitive on easier cases but plateau on harder sentiment joins (e.g., Q7 F1 = 0.31); their search procedures tend to settle on parameter tweaks rather than discover better structures within the budget, yielding high cross-query vari-ance. ThalamusDB skips Q9, Q10 (no ranking support). As shown in Table 4, CADENZA incurs about 24% latency and 17% cost overhead, amortizing to ∼9% and ∼6% .
+
+Wildlife (Figure 4(b)). On scenario-level averages, CADENZA im-proves Q by +0.48 (vs. ThalamusDB), L 20.8 × / C 8.1 × (vs. LOTUS). LOTUS’s latency is dominated by upfront prompt materialization: it eagerly constructs per-row prompts for the entire input, which can take nearly 30 minutes. Palimpzest avoids this upfront cost, but it often executes semantic filters with GPT-4.1 , making inference ex-pensive; moreover, its optimization alone can cost over $1 while of-fering little quality improvement over LOTUS. In contrast, CADENZA 
+
+selects plans with OpImgCls and tunes it to process data mostly by specialized backends, avoiding expensive LLM invocations and yielding faster, cheaper execution. AFlow shows high quality vari-ance (Q7), and MCTS overhead increases latency and cost overall. As shown in Table 4, CADENZA adds ∼24% latency and ∼20% cost overhead, amortizing to ∼9% and ∼8% . In Q3 and Q10, ThalamusDB is fast but inaccurate: its early stopping checks whether the answer is stable under both extreme completions ( default=0/1 ), which for aggregation/ranking only indicates stability at the extremes and misses true-label concentrations that flip the top-1. 
+
+MMQA (Figure 4(c)). Most queries operate on inputs small enough to fall under CADENZA ’s bypass threshold. On the image–text logo joins (Q2a, Q2b), LOTUS, Palimpzest, and DyFlow apply a brute-force LLM oracle to every (image, text) pair, mistaking visually similar but distinct logos for matches and collapsing F1 to roughly 0.05–0.07. CADENZA instead chooses an OpImgCls -based join that scores pairs from visual representations and only escalates uncer-tain cases to an LLM verifier, lifting F1 to 0.59 / 0.50, on par with AFlow’s specialized-model plan but without its MCTS overhead. On the large-scale join (Q7), LOTUS, ThalamusDB, and DocETL fail to complete, and Palimpzest’s cost-driven cascade still enumerates every pair, while CADENZA , AFlow, and DyFlow all reach F1 0.91 by pruning pairs with cheap symbolic/specialized cues before any LLM call. ThalamusDB and DocETL lack operators required by several queries (map and image input queries, respectively). 
+
+Cars (Figure 4(d)). Cars is the most modality-rich scenario—each car may carry text, image, and audio modalities on top of structured fields (transmission, crash, fuel_type)—so the right plan typically gates an expensive modality operator behind a cheap structured filter. CADENZA picks exactly such plans: Q1 (“cars in a crash”) an-swers via the structured crash field alone (F1 0.89), and Q3 (“manual transmission, damaged in images”) prunes by transmission before running OpImgCls on survivors (F1 1.00). AFlow and DyFlow stick with image-classifier plans and miss the cheap structured filters, degrading to F1 0.19 / 0.44 on Q1 and 0.70 / 0.50 on Q3 at no cost benefit; Q6 and Q7 show the same single-modality over-commit. Palimpzest cascades over the whole input rather than after a struc-tured prefilter, spending $15–$33 on multi-modal queries to reach the F1 CADENZA hits at $6–$14. Q8 (“punctures and paint scratches on images”) is the clearest CADENZA win: every baseline conflates the two damage types under a single LLM oracle (F1 0.08–0.35; LOTUS asks the LLM to verify both per image and collapses to F1 0.08), while CADENZA stages a coarse OpImgCls scan followed by a selective LLM verifier on positives only, lifting F1 to 0.56. LOTUS, DocETL, and ThalamusDB cover only subsets of queries. 
+
+E-Commerce (Figure 4(e)). On scenario-level averages, CADENZA 
+
+improves Q by +0.24 (vs. DyFlow), L 165.7 × / C 310.3 × (vs. Do-cETL). For Q1 (Reebok backpack filtering), we answer via simple keyword filtering over product name/description even without task-specific operators; for Q4 we use OpImgCls mainly with CLIP [ 23 ]. For Q3 and Q5 (text brand/category extraction), we use OpTxtQA 
+
+and process it with lightweight keyword-based and BART [ 17 ]zero-shot-based implementations for most inputs, routing only cue-missing or hard cases to an LLM backend. For Q6 (image category extraction), we use OpImgCls with cropping-based decomposition. Across these queries, the cheaper backends handle up to 91% of in-puts. For join-heavy queries (Q7–Q9), we adopt a similar pair-level strategy: prune pairs using cheap brand/category/color cues and then apply selective LLM filtering to avoid quadratic blowups; for Q8, we instead rely on OpTextPairScore paired with OpImgCap . In contrast, baselines are overly reliant on LLMs or ill-suited proxies (e.g., embedding similarity), and LOTUS further loses quality on Q8 due to lack of multi-key joins. Q8 is particularly challenging due to its large join input (28 texts and 4,993 images), causing most base-lines to exceed the 24-hour timeout. For Palimpzest, we disabled SIGMOD ’27, June 03–05, 2018, Woodstock, NY Jaehyun Ha, Yongjoo Park, and Wook-Shin Han 0.0 
+
+> 0.5
+> 1.0
+> Quality
+
+(a) Movie          
+
+> 10
+> 1k
+> Latency (s)
+> Q1 Q2 Q3 Q4 Q5 Q6 Q7 Q8 Q9 Q10
+> 0.01
+> 1
+> 100
+> Cost ($)
+> 0.0
+> 0.5
+> 1.0
+
+(b) Wildlife          
+
+> 100
+> 1k
+> 10k
+> Q1 Q2 Q3 Q4 Q5 Q6 Q7 Q8 Q9 Q10
+> 0.10
+> 1
+> 10
+> 0.0
+> 0.5
+> 1.0
+> Quality
+
+(c) MMQA           
+
+> 100
+> 10k
+> Latency (s)
+> Q1 Q2a Q2b Q3a Q3f Q4 Q5 Q6a Q6b Q6c Q7
+> 0.10
+> 10
+> Cost ($)
+> 0.0
+> 0.5
+> 1.0
+
+(d) Cars            
+
+> 1k
+> 100k *
+> Q1 Q2 Q3 Q4 Q5 Q6 Q7 Q8 Q9 Q10
+> 0.10
+> 1
+> 10 *
+> 0.0
+> 0.5
+> 1.0
+> Quality
+
+(e) E-Commerce                         
+
+> 1k
+> 10k
+> 100k
+> Latency (s)
+> *****
+> Q1 Q2 Q3 Q4 Q5 Q6 Q7 Q8 Q9 Q10 Q11 Q12 Q13 Q14
+> 1
+> 10
+> 100
+> Cost ($)
+> *****
+> CADENZA LOTUS Palimpzest ThalamusDB DocETL AFlow DyFlow Opt. Overhead Ratio
+
+Figure 4: End-to-end per-query Q/L/C across systems for each scenario. 
+
+Abacus on join-heavy queries because the optimization input ex-ceeded the embedding model’s maximum sequence length. AFlow also uses specialized models (e.g., CLIP and BART), but it largely sticks to its initial plan and makes only minor tweaks, so quality improves little; meanwhile, MCTS overhead makes it slower and more expensive. ThalamusDB lacks a map and thus skips Q3–Q6. 
+
+Takeaway. Current SQPEs do not expose a semantic operator instance’s intermediate task outputs as a physical optimization object, and often over-spend on easy inputs. 
+
+## 7.3 Sensitivity Analysis 
+
+To study sensitivity, we run analyses on the Movie scenario and report end-to-end performance as the geometric mean over queries where optimization is not skipped. 
+
+7.3.1 Impact of Utility Weights. Table 5 reports sensitivity to the utility weights. Quality-centric weights (1.0, 0.1, 0.1) favor LLM-heavy plans, achieving the highest quality but also the largest 
+
+Table 5: Sensitivity to utility weights. 
+
+(𝑤 q, 𝑤 l, 𝑤 c ) Q↑ L (s) ↓ C ($) ↓(1.0, 0.1, 0.1) 0.78 4251 4.82 
+
+(0.1, 1.0, 1.0) 0.41 104 0.08 
+
+(1.0, 0.4, 0.3) 0.65 355 0.30 
+
+(1.0, 0.9, 0.1) 0.52 143 0.09 
+
+(1.0, 0.1, 0.9) 0.59 181 0.09 
+
+latency and cost; BO can also slow down since many candidates remain LLM-intensive. Latency/cost-centric weights (0.1, 1.0, 1.0)
+
+largely avoids LLM calls and instead uses specialized or symbolic backends, reducing latency and cost at the expense of quality; the remaining cost mainly comes from early BO trials that still ex-plore some LLM-including candidates. For intermediate settings with 𝑤 𝑞 =1.0, increasing the latency weight (and lowering the cost weight) favors specialized/symbolic choices, yielding lower latency and low cost but reduced quality. Shifting weight from latency CADENZA: Compiling Natural-Language Intent into Task-Specific Operator DAGs for Semantic Query Processing SIGMOD ’27, June 03–05, 2018, Woodstock, NY 
+
+to cost (from (1.0, 0.9, 0.1) to (1.0, 0.1, 0.9)) keeps cost low but in-creases latency and quality, suggesting more reliance on specialized backends than symbolic ones while avoiding expensive LLM calls. We use (1.0, 0.4, 0.3) by default as a stable middle ground. 250            
+
+> 500
+> 750
+> 1000
+> Latency (s)
+> 510 20 40 80
+> BO trials
+> 0.00
+> 0.25
+> Cost ($)
+> 0.27 0.29 0.30 0.33 0.34 0.5
+> 0.6
+> 0.7
+> 0.8
+> Quality
+> Latency (s) Quality Cost ($)
+
+Figure 5: Sensitivity to Bayesian optimization trials. 
+
+7.3.2 Impact of BO Trials. Figure 5 reports sensitivity to the BO trial budget. With our warm-start initialization, BO shows limited randomness, but with only 5 trials it may select a plan before re-vealing each candidate’s full potential. As a result, it can choose a plan using OpTxtCls , which yields slightly higher quality (e.g., 0.68) but higher latency due to a larger model, while the OpTxtSenti -based plan is not tuned enough to expose its latency advantage. With 10 trials, BO typically uncovers the latency potential of Op-TxtSenti -based plan, leading to a large latency drop and making it the preferred choice despite a small quality loss. With 20 trials, additional tuning slightly improves quality (e.g., 0.63 →0.65) with router threshold tunings at the cost of extra tuning-time latency and cost, and beyond that further trials mainly increase tuning cost (dominated by LLM calls) without materially improving the final plan. In practice, the BO trial budget should depend on user intent and the size of the parameter space, which we leave for future work. 
+
+Takeaway. Plan selection responds predictably to the utility weights, so users can dial the Q/L/C trade-off without per-query tuning, and Bayesian optimization converges within a moderate trial budget. 
+
+## 7.4 Ablation Study 
+
+Table 6 reports a unified ablation that mixes additive build-up of the logical planning (rows 1–4, full physical) with leave-one-out on physical planning from Full CADENZA (rows 5–10). The ablation runs on SemBench together with BioDEX (end-to-end BioDEX results in Table 12, Appendix B); queries handled by CADENZA ’s adaptive bypass are excluded from the aggregation. BE (Backends) 
+
+∈ {All, SYM, SP, GP, COM}: All = full pool, SYM = symbolic only, SP = specialized only, GP = general-purpose LLM only, COM =
+
+composite cascade. Router operates only over the All pool. 
+
+Table 6: Ablation study. Row 4 is Full CADENZA .                                                                                        
+
+> ##Seed Expl BO Router BE Q↑L (s) ↓C ($) ↓
+> 1————GP 0.64 9,086 29.2 21×✓✓All 0.48 5,164 5.7 33×✓✓All 0.67 2,743 2.7 43✓✓✓All 0.71 2,975 3.0 53✓×✓All 0.62 5,847 7.9 63✓✓×All 0.63 6,896 16.6 73✓✓—SYM 0.30 237 0.04 83✓✓—SP 0.50 1,448 0.21 93✓✓—GP 0.65 7,800 23.5 10 3✓✓—COM 0.55 7,318 7.8
+
+The logical build-up (rows 1–3) carries most of the Q gain. At seed=1 (row 2), Q drops because a single plan often turns out struc-turally weak—operators may be miswired or backends mismatched— and full physical cannot rescue a broken plan. Multi-seed (row 3) is the dominant single jump: candidate diversity gives BO/Router something to exploit. Adding Expl (row 4) further raises Q on queries needing operator decomposition or modality switching, though the gain is amortized by queries already well-served. On the physical side, removing BO (row 5) is the most damaging: with the threshold tuner gone, Router defaults to erratic routing— easy cases escalate to GP and hard ones go to SYM. Removing Router (row 6) primarily inflates cost: BO can still pick the best backend per operator, but without per-tuple dispatch every input pays the same expensive tariff. Single-backend variants (rows 7–10) never recover Full’s trade-off: GP reaches comparable Q at 8× the cost; SYM is essentially free but only covers cue-rich queries. 
+
+Takeaway. Logical planning expands the achievable trade-off space; physical optimization—routing, backend-family choice, and BO-based tuning—determines which trade-off is realized. 
+
+## 8 Related Work 
+
+Semantic Operator Optimization. LOTUS [ 21 ] approximates a reference LLM-based algorithm using proxy models. Palimpzest [ 19 ]integrates Abacus [ 24 ], a cost-based optimizer over a user-specified program whose semantic operators are each bound to a single logical operator, searching over transformations and implementa-tions for that fixed structure. ThalamusDB [ 12 ] targets AQP via partial results and early termination, again on a single logical op-erator binding. AOP [ 31 ] and Unify [ 29 ] pre-register both general-purpose and symbolic backend implementations, using symbolic when applicable. DocETL [ 27 ] performs pipeline-level rewrites over document-processing operators (map, filter, reduce, split, gather, resolve, equijoin); the distinction is not whether a system can de-compose, but what the decomposition exposes to the optimizer. DocETL does not expose decomposed task outputs as a relational physical optimization object, and its optimizer targets quality only. 
+
+CADENZA instead compiles a semantic operator instance embedded in a relational query into a typed TxRA DAG, exposing intermediate task outputs as relational attributes that physical search can filter, threshold, reorder, bind per-task to symbolic, specialized, general-purpose, or composite backends, and jointly tune for Q/L/C. 
+
+LLM-based Query Planning. LLMs are widely used to construct multi-step plans, either by decomposing tasks into sub-steps (e.g., DECOMP [ 15 ]) or by interleaving reasoning with tool use (e.g., ReAct [ 35 ], ADAPT [ 22 ], Dart-LLM [ 32 ]). These approaches pri-marily target feasibility and typically lack transformation rules or explicit quality–cost optimization. Related systems refine programs or pipelines to improve end-task performance (e.g., MLE-STAR [ 20 ], Data-Interpreter [ 8], ADAS [ 9]). Closer to optimization, Archon [ 25 ]applies Bayesian optimization, AFlow [ 37 ] uses Monte Carlo Tree Search, and DyFlow [ 33 ] uses an LLM-driven dynamic redesign loop, but their search spaces are largely limited to code-represented SIGMOD ’27, June 03–05, 2018, Woodstock, NY Jaehyun Ha, Yongjoo Park, and Wook-Shin Han 
+
+LLM-call workflows and do not incorporate relational-style op-timization or heterogeneous backends. In contrast, CADENZA op-timizes over heterogeneous backends in an extended relational algebra under an explicit quality–latency–cost objective. 
+
+UDF Optimization. Several systems extend SQL engines with ML/LLM capabilities by treating semantic processing as expen-sive UDFs that encapsulate model calls, e.g., Caesura [ 28 ], Amazon Redshift ML [ 1], BigQuery [ 7], EVA [ 13 ], VOCAL-UDF [ 36 ], and Aero [ 14 ]. They typically optimize a fixed logical plan and treat UDFs as black boxes, focusing on efficient execution; for example, Aero [ 14 ] uses adaptive execution to choose evaluation orders for black-box UDFs. In contrast, CADENZA exposes semantic processing via task-extended relational algebra, enabling intent-dependent de-composition and optimization rather than a monolithic UDF. Prior work on opening black-box UDFs (e.g., SQL inlining [ 2 , 3 ], control-flow graph decomposition [ 34 ], and reorderability analysis [ 10 ]) is not designed for model-backed, task-specific operators and does not address intent-dependent plan synthesis or multi-objective tuning. 
+
+## 9 Conclusion 
+
+We presented CADENZA , a semantic operator optimizer that compiles each instance into a typed TxRA DAG, exposing intermediate task outputs as relational attributes for routing across heterogeneous backends and joint tuning via Bayesian optimization. CADENZA 
+
+achieves up to +0.49 quality and 165.7 ×/310.3 × latency/cost im-provements on SemBench scenarios. 
+
+## References 
+
+[1] 2025. Amazon Redshift ML. https://aws.amazon.com/ko/redshift/features/ redshift-ml/. accessed: 2025-09-28. [2] Samuel Arch, Yuchen Liu, Todd C Mowry, Jignesh M Patel, and Andrew Pavlo. 2024. The key to effective udf optimization: Before inlining, first perform outlin-ing. Proceedings of the VLDB Endowment 18, 1 (2024), 1–13. [3] Konstantinos Chasialis, Yannis Foufoulas, Alkis Simitsis, and Yannis Ioannidis. 2025. Optimizing UDF Queries in SQL Data Engines. (2025). [4] Karel D’Oosterlinck, François Remy, Johannes Deleu, Thomas Demeester, Chris Develder, Klim Zaporojets, Aneiss Ghodsi, Simon Ellershaw, Jack Collins, and Christopher Potts. 2023. BioDEX: Large-scale biomedical adverse drug event extraction for real-world pharmacovigilance. In Findings of the association for computational linguistics: EMNLP 2023 . 13425–13454. [5] David Eriksson and Martin Jankowiak. 2021. High-dimensional Bayesian opti-mization with sparse axis-aligned subspaces. In Uncertainty in Artificial Intelli-gence . PMLR, 493–503. [6] David Eriksson, Michael Pearce, Jacob Gardner, Ryan D Turner, and Matthias Poloczek. 2019. Scalable global optimization via local Bayesian optimization. 
+
+Advances in neural information processing systems 32 (2019). [7] Google. 2025. BigQuery ML. https://cloud.google.com/bigquery-ml/docs. [On-line; accessed 03-November-2025]. [8] Sirui Hong, Yizhang Lin, Bang Liu, Bangbang Liu, Binhao Wu, Ceyao Zhang, Danyang Li, Jiaqi Chen, Jiayi Zhang, Jinlin Wang, et al . 2025. Data interpreter: An llm agent for data science. In Findings of the Association for Computational Linguistics: ACL 2025 . 19796–19821. [9] Shengran Hu, Cong Lu, and Jeff Clune. [n. d.]. Automated Design of Agentic Systems. In The Thirteenth International Conference on Learning Representations .[10] Fabian Hueske, Mathias Peters, Matthias J Sax, Astrid Rheinländer, Rico Bergmann, Aljoscha Krettek, and Kostas Tzoumas. 2012. Opening the Black Boxes in Data Flow Optimization. Proceedings of the VLDB Endowment 5, 11 (2012). [11] Ihab F. Ilyas, Rahul Shah, Walid G. Aref, Jeffrey Scott Vitter, and Ahmed K. Elmagarmid. 2004. Rank-aware Query Optimization. In Proceedings of the 2004 ACM SIGMOD International Conference on Management of Data (SIGMOD ’04) .ACM, New York, NY, USA. doi:10.1145/1007568.1007593 [12] Saehan Jo and Immanuel Trummer. 2024. Thalamusdb: Approximate query processing on multi-modal data. Proceedings of the ACM on Management of Data 
+
+2, 3 (2024), 1–26. [13] Gaurav Tarlok Kakkar, Jiashen Cao, Pramod Chunduri, Zhuangdi Xu, Sury-atej Reddy Vyalla, Prashanth Dintyala, Anirudh Prabakaran, Jaeho Bang, Aubhro Sengupta, Kaushik Ravichandran, et al . 2023. Eva: An end-to-end exploratory video analytics system. In Proceedings of the Seventh Workshop on Data Manage-ment for End-to-End Machine Learning . 1–5. [14] Gaurav Tarlok Kakkar, Jiashen Cao, Aubhro Sengupta, Joy Arulraj, and Hyesoon Kim. 2025. Aero: Adaptive Query Processing of ML Queries. Proceedings of the ACM on Management of Data 3, 3 (2025), 1–27. [15] Tushar Khot, Harsh Trivedi, Matthew Finlayson, Yao Fu, Kyle Richardson, Peter Clark, and Ashish Sabharwal. [n. d.]. Decomposed Prompting: A Modular Ap-proach for Solving Complex Tasks. In The Eleventh International Conference on Learning Representations .[16] Jiale Lao, Andreas Zimmerer, Olga Ovcharenko, Tianji Cong, Matthew Russo, Gerardo Vitagliano, Michael Cochez, Fatma Özcan, Gautam Gupta, Thibaud Hottelier, et al . 2025. SemBench: A Benchmark for Semantic Query Processing Engines. arXiv preprint arXiv:2511.01716 (2025). [17] Mike Lewis, Yinhan Liu, Naman Goyal, Marjan Ghazvininejad, Abdelrahman Mohamed, Omer Levy, Veselin Stoyanov, and Luke Zettlemoyer. 2020. BART: Denoising sequence-to-sequence pre-training for natural language generation, translation, and comprehension. In Proceedings of the 58th annual meeting of the association for computational linguistics . 7871–7880. [18] Chengkai Li, Kevin Chen-Chuan Chang, Ihab F. Ilyas, and Sumin Song. 2005. RankSQL: Query Algebra and Optimization for Relational Top-𝑘 Queries. In 
+
+Proceedings of the 2005 ACM SIGMOD International Conference on Management of Data (SIGMOD ’05) . ACM, New York, NY, USA, 131–142. doi:10.1145/1066157. 1066173 [19] Chunwei Liu, Matthew Russo, Michael Cafarella, Lei Cao, Peter Baile Chen, Zui Chen, Michael Franklin, Tim Kraska, Samuel Madden, Rana Shahout, et al . 2025. Palimpzest: Optimizing ai-powered analytics with declarative query processing. In Proceedings of the Conference on Innovative Database Research (CIDR) . 2. [20] Jaehyun Nam, Jinsung Yoon, Jiefeng Chen, Jinwoo Shin, Sercan Ö Arık, and Tomas Pfister. 2025. MLE-STAR: Machine Learning Engineering Agent via Search and Targeted Refinement. arXiv preprint arXiv:2506.15692 (2025). [21] Liana Patel, Siddharth Jha, Melissa Pan, Harshit Gupta, Parth Asawa, Carlos Guestrin, and Matei Zaharia. 2025. Semantic Operators and Their Optimization: Enabling LLM-Based Data Processing with Accuracy Guarantees in LOTUS. 
+
+Proceedings of the VLDB Endowment 18, 11 (2025), 4171–4184. [22] Archiki Prasad, Alexander Koller, Mareike Hartmann, Peter Clark, Ashish Sabhar-wal, Mohit Bansal, and Tushar Khot. 2024. Adapt: As-needed decomposition and planning with language models. In Findings of the Association for Computational Linguistics: NAACL 2024 . 4226–4252. [23] Alec Radford, Jong Wook Kim, Chris Hallacy, Aditya Ramesh, Gabriel Goh, Sandhini Agarwal, Girish Sastry, Amanda Askell, Pamela Mishkin, Jack Clark, et al . 2021. Learning transferable visual models from natural language supervision. In International conference on machine learning . PmLR, 8748–8763. [24] Matthew Russo, Sivaprasad Sudhir, Gerardo Vitagliano, Chunwei Liu, Tim Kraska, Samuel Madden, and Michael Cafarella. 2025. Abacus: A Cost-Based Optimizer for Semantic Operator Systems. arXiv preprint arXiv:2505.14661 (2025). [25] Jon Saad-Falcon, Adrian Gamarra Lafuente, Shlok Natarajan, Nahum Maru, Hristo Todorov, Etash Kumar Guha, E Kelly Buchanan, Mayee F Chen, Neel Guha, Christopher Re, et al . [n. d.]. An Architecture Search Framework for Inference-Time Techniques. In Forty-second International Conference on Machine Learning .[26] SemBench Maintainers. 2025. Medical scenario removed due to licensing issues. https://github.com/SemBench/SemBench/issues/16. GitHub Issue #16. [27] Shreya Shankar, Tristan Chambers, Tarak Shah, Aditya G. Parameswaran, and Eugene Wu. 2025. DocETL: Agentic Query Rewriting and Evaluation for Complex Document Processing. Proc. VLDB Endow. 18, 9 (May 2025), 3035–3048. doi:10. 14778/3746405.3746426 [28] Matthias Urban and Carsten Binnig. 2024. CAESURA: language models as multi-modal query planners. CIDR (2024). [29] Jiayi Wang and Jianhua Feng. 2025. Unify: An unstructured data analytics system. In 2025 IEEE 41st International Conference on Data Engineering (ICDE) . IEEE Computer Society, 4662–4674. [30] Junlin Wang, WANG Jue, Ben Athiwaratkun, Ce Zhang, and James Zou. [n. d.]. Mixture-of-Agents Enhances Large Language Model Capabilities. In The Thir-teenth International Conference on Learning Representations .[31] Jiayi Wang and Guoliang Li. 2025. Aop: Automated and interactive llm pipeline orchestration for answering complex queries. CIDR. [32] Yongdong Wang, Runze Xiao, Jun Younes Louhi Kasahara, Ryosuke Yajima, Keiji Nagatani, Atsushi Yamashita, and Hajime Asama. 2024. Dart-llm: Dependency-aware multi-robot task decomposition and execution using large language models. 
+
+arXiv preprint arXiv:2411.09022 (2024). [33] Yanbo Wang, Zixiang Xu, Yue Huang, Xiangqi Wang, Zirui Song, Lang Gao, Chenxi Wang, Xiangru Tang, Yue Zhao, Arman Cohan, et al . 2025. DyFlow: Dynamic Workflow Framework for Agentic Reasoning. In Advances in Neural Information Processing Systems .[34] Johannes Wehrstein, Tiemo Bang, Roman Heinrich, and Carsten Binnig. 2025. GRACEFUL: A Learned Cost Estimator for UDFs. In 2025 IEEE 41st International CADENZA: Compiling Natural-Language Intent into Task-Specific Operator DAGs for Semantic Query Processing SIGMOD ’27, June 03–05, 2018, Woodstock, NY 
+
+Conference on Data Engineering (ICDE) . IEEE Computer Society, 2450–2463. [35] Shunyu Yao, Jeffrey Zhao, Dian Yu, Nan Du, Izhak Shafran, Karthik Narasimhan, and Yuan Cao. 2023. React: Synergizing reasoning and acting in language models. In International Conference on Learning Representations (ICLR) .[36] Enhao Zhang, Nicole Sullivan, Brandon Haynes, Ranjay Krishna, and Magdalena Balazinska. 2025. Self-Enhancing Video Data Management System for Com-positional Events with Large Language Models. Proceedings of the ACM on Management of Data 3, 3 (2025), 1–29. [37] Jiayi Zhang, Jinyu Xiang, Zhaoyang Yu, Fengwei Teng, Xiong-Hui Chen, Jiaqi Chen, Mingchen Zhuge, Xin Cheng, Sirui Hong, Jinlin Wang, et al . [n. d.]. AFlow: Automating Agentic Workflow Generation. In The Thirteenth International Con-ference on Learning Representations .SIGMOD ’27, June 03–05, 2018, Woodstock, NY Jaehyun Ha, Yongjoo Park, and Wook-Shin Han 
+
+## A Scaling with Data Size 
+
+To study scaling, we vary data size in the Movie with all other settings fixed, and report end-to-end metrics as the geometric mean over queries where optimization is not skipped. In Figure 6, optimization dominates at small scales (SF=10K: ∼52% of total latency/cost) but drops for SF ≥20K, since it runs on a fixed-size validation set under a fixed BO budget and is thus largely scale-independent. In contrast, latency/cost increase with data size and can be superlinear for join queries due to growing intermediate cardinalities. This implies that the optimization overhead is largely scale-independent and amortizes as data grows; plan caching and adaptive bypass further reduce overhead for repeated intents and small inputs. 0.650       
+
+> 0.675
+> Q
+> 0
+> 500
+> 1000
+> 1500
+> 2000
+> L (s)
+> 5K 10K 20K 40K 80K
+> Scale Factor (SF)
+> 0.0
+> 0.4
+> 0.8
+> 1.2
+> 1.6
+> C ($)
+> Quality Optimization Execution
+
+Figure 6: End-to-end scaling with data size. 
+
+## B Per-Scenario and BioDEX End-to-End Results 
+
+Tables 7–11 report the per-scenario raw values summarized in Table 3. Each cell is formatted as Competitor / CADENZA , with CADENZA ’s statistics computed over the intersection of queries handled by that competitor for fair comparison ( CADENZA itself is a standalone optimizer/executor; see §6.1). Bold per cell marks the better value (higher Quality, lower Latency/Cost); ties (within 0.005 quality and 0.5 s/$) are unmarked. Table 12 additionally reports results on the BioDEX benchmark [ 4 ], an extreme multi-label classification task that identifies adverse drug reactions from medical articles, modeled as a Join between articles and reactions [ 21 ]. We use a sampled subset of 1,000 articles and 100 reactions, with each article constructed from its title, abstract, and relevant sections; quality is measured by Rank Precision@K (RP@K) with 
+
+𝐾 = 5 [21, 24]. Cell format and bolding follow the per-scenario tables. 
+
+Table 7: Movie scenario. System Q↑ L (s) ↓ C ($) ↓
+
+LOTUS 0.72 / 0.82 17 / 10 0.02 / 0.01 
+
+Palimpzest 0.76 / 0.82 636 / 10 0.53 / 0.01 
+
+ThalamusDB 0.74 / 0.89 20 / 7 0.00 / 0.01 DocETL 0.67 / 0.82 88 / 10 0.02 / 0.01 
+
+Extended AFlow 0.68 / 0.82 24 / 10 0.05 / 0.01 
+
+Extended DyFlow 0.67 / 0.82 19 / 10 0.04 / 0.01 Table 8: Wildlife scenario. System Q↑ L (s) ↓ C ($) ↓
+
+LOTUS 0.96 / 0.97 4,022 / 156 4.64 / 0.51 
+
+Palimpzest 0.77 / 0.99 727 / 326 4.30 / 0.62 
+
+ThalamusDB 0.51 / 0.99 154 / 326 0.17 / 0.62 DocETL — — —Extended AFlow 0.72 / 0.99 703 / 326 1.06 / 0.62 
+
+Extended DyFlow 0.84 / 0.99 527 / 326 0.38 / 0.62 
+
+Table 9: MMQA scenario. System Q↑ L (s) ↓ C ($) ↓
+
+LOTUS 0.72 / 0.84 22 / 21 0.04 / 0.02 
+
+Palimpzest 0.67 / 0.84 348 / 29 0.28 / 0.03 
+
+ThalamusDB 0.41 / 0.90 30 / 13 0.02 / 0.02 
+
+DocETL 0.90 / 0.91 23 / 8 0.02 / 0.01 
+
+Extended AFlow 0.45 / 0.84 169 / 29 0.15 / 0.03 
+
+Extended DyFlow 0.60 / 0.84 126 / 29 0.19 / 0.03 Table 10: Cars scenario. System Q↑ L (s) ↓ C ($) ↓
+
+LOTUS 0.65 / 0.79 2,402 / 3,467 1.23 / 1.63 Palimpzest 0.57 / 0.61 1,547 / 1,209 3.40 / 1.57 
+
+ThalamusDB 0.51 / 0.57 5,235 / 1,019 1.93 / 2.66 DocETL 0.72 / 0.80 17,217 / 6,415 17.15 / 8.50 
+
+Extended AFlow 0.34 / 0.61 2,030 / 1,209 1.76 / 1.57 
+
+Extended DyFlow 0.34 / 0.61 1,730 / 1,209 2.34 / 1.57 CADENZA: Compiling Natural-Language Intent into Task-Specific Operator DAGs for Semantic Query Processing SIGMOD ’27, June 03–05, 2018, Woodstock, NY 
+
+Table 11: E-Commerce scenario. System Q↑ L (s) ↓ C ($) ↓
+
+LOTUS 0.49 / 0.64 6,164 / 829 10.18 / 1.05 
+
+Palimpzest 0.59 / 0.65 3,940 / 792 18.44 / 0.91 
+
+ThalamusDB 0.44 / 0.66 17,767 / 555 12.42 / 0.91 
+
+DocETL 0.83 / 0.89 3,803 / 85 0.55 / 0.17 
+
+Extended AFlow 0.41 / 0.64 2,125 / 829 2.28 / 1.05 
+
+Extended DyFlow 0.39 / 0.64 1,335 / 829 2.98 / 1.05 Table 12: BioDEX (Q = RP@5). System Q↑ L (s) ↓ C ($) ↓
+
+LOTUS 0.16 / 0.31 4,111 / 3,925 61.74 / 4.62 
+
+Palimpzest 0.20 / 0.31 10,216 / 3,925 84.45 / 4.62 
+
+ThalamusDB 0.03 / 0.31 5,948 / 3,925 5.82 / 4.62 
+
+DocETL 0.27 / 0.31 16,751 / 3,925 23.83 / 4.62 
+
+Extended AFlow 0.17 / 0.31 4,256 / 3,925 0.43 / 4.62 Extended DyFlow 0.22 / 0.31 3,492 / 3,925 0.72 / 4.62 
+
+## C Importance of Intent-specific Synthesis 
+
+Tables 13–17 compare CADENZA against Coarse , a baseline that pre-declares one logical/physical plan per preference profile and routes each row between a strong LLM and a cheaper helper—an embedding cascade for filter/join, a nano LLM for map—at a fixed LLM share (90%/50%/10% for Quality-first/Balanced/Efficiency-first); Coarse exposes the same preference interface as CADENZA but skips planning. Queries handled by CADENZA ’s adaptive bypass are excluded; Q is an arithmetic mean across queries, while L and C are geometric means. Cells are Coarse / CADENZA ; bold marks the better metric. CADENZA dominates Coarse on every metric in every (scenario, preference) cell. The gap traces to three missing ingredients: (i) no tuned routing —Coarse applies a fixed plan per preference uniformly across queries (even LOTUS tunes a per-query cascade threshold), so easy queries pay the LLM tariff while hard ones are starved of evidence; (ii) no operator decomposition —the single template →operator binding cannot rewrite into intent-specific DAGs (e.g., a structured prefilter before image inference, or a coarse classifier followed by an LLM verifier); (iii) no backend diversity —pooling choices into one strong LLM and one cheap helper forgoes the symbolic/specialized/general/composite mix that CADENZA dispatches per tuple. Intent-specific synthesis, not the preference interface, drives the gain. 
+
+Table 13: Movie scenario. Preference Q↑ L (s) ↓ C ($) ↓
+
+Quality-first 0.514 / 0.559 3,077 / 1,935 $3.29 / $0.85 
+
+Balanced 0.425 / 0.544 3,594 / 266 $2.01 / $0.30 
+
+Efficiency-first 0.201 / 0.447 1,743 / 198 $0.72 / $0.15 Table 14: Wildlife scenario. Preference Q↑ L (s) ↓ C ($) ↓
+
+Quality-first 0.711 / 0.963 814 / 384 $1.85 / $0.77 
+
+Balanced 0.617 / 0.986 554 / 326 $1.23 / $0.62 
+
+Efficiency-first 0.392 / 0.908 342 / 212 $0.80 / $0.34 Table 15: MMQA scenario. Preference Q↑ L (s) ↓ C ($) ↓
+
+Quality-first 0.206 / 0.692 1,950 / 920 $0.81 / $0.34 
+
+Balanced 0.170 / 0.666 1,326 / 780 $0.54 / $0.27 
+
+Efficiency-first 0.111 / 0.613 819 / 507 $0.35 / $0.15 Table 16: Cars scenario. Preference Q↑ L (s) ↓ C ($) ↓
+
+Quality-first 0.445 / 0.619 3,023 / 1,427 $4.70 / $1.96 
+
+Balanced 0.390 / 0.609 2,056 / 1,209 $3.13 / $1.57 
+
+Efficiency-first 0.244 / 0.560 1,270 / 786 $2.04 / $0.86 Table 17: E-Commerce scenario. Preference Q↑ L (s) ↓ C ($) ↓
+
+Quality-first 0.504 / 0.658 2,072 / 978 $3.15 / $1.31 
+
+Balanced 0.442 / 0.639 1,409 / 829 $2.10 / $1.05 
+
+Efficiency-first 0.270 / 0.587 870 / 539 $1.36 / $0.58 
+
+## D Cross-System Utility-Weight Sweep 
+
+The end-to-end results in §7.2 report Q, L, and C separately at the default weight only. We therefore evaluate every system under the same utility 𝑈 from §2.1 and sweep five weight settings across all SemBench scenarios, asking whether CADENZA ’s advantage is robust across representative preferences. 
+
+Setup. We evaluate all five SemBench scenarios (Movie, Wildlife, MMQA, Cars, E-Comm). Per scenario, queries handled by CADENZA ’s adaptive bypass are excluded. For each (system, query, weight), we compute 𝑈 from §2.1 with ˆ𝐿 and ˆ𝐶 obtained by per-query min–max normalisation SIGMOD ’27, June 03–05, 2018, Woodstock, NY Jaehyun Ha, Yongjoo Park, and Wook-Shin Han 
+
+across all (system, weight) runs, then average within each scenario. Weights, in (𝑤 𝑞 , 𝑤 𝑙 , 𝑤 𝑐 ) order, span balanced, quality-leaning, efficiency-leaning, equal, and quality-only regimes: 𝑊 1=(1, 0.4, 0.3), 𝑊 2=(1, 0.1, 0.1), 𝑊 3=(0.3, 1, 1), 𝑊 4=(1, 1, 1), 𝑊 5=(1, 0, 0). CADENZA , Extended AFlow, and Extended DyFlow ingest the weights directly. Palimpzest’s optimiser receives them via a custom WeightedSum policy. LOTUS and ThalamusDB lack explicit utility weights; we sweep their native quality knob (LOTUS: recall_target ; ThalamusDB: max_error ) and, per weight, retain the frontier point with the highest 𝑈 . DocETL is excluded as a quality-only optimiser. W1 W2 W3 W4 W5                                                                                                                                    
+
+> CADENZA
+> LOTUS
+> Palimpzest
+> ThalamusDB
+> AFlow
+> DyFlow
+> 1.29 0.79 2.15 2.54 0.59
+> 0.87 0.49 1.64 1.84 0.35
+> 0.90 0.68 1.30 1.58 0.61
+> 0.45 0.23 0.95 1.03 0.15
+> 1.09 0.53 2.08 2.32 0.38
+> 0.89 0.42 2.09 2.32 0.38
+> Movie
+> W1W2W3W4W5
+> 1.66 1.17 2.29 2.94 0.98
+> 0.66 0.52 0.67 0.96 0.48
+> 1.05 0.87 1.30 1.70 0.81
+> 1.22 0.74 2.11 2.46 0.56
+> 1.28 0.87 1.95 2.34 0.73
+> 1.47 1.05 2.07 2.61 0.90
+> Wildlife
+> W1W2W3W4W5
+> 1.34 0.92 2.18 2.60 0.76
+> 0.45 0.16 1.26 1.26 0.04
+> 0.30 0.11 1.17 1.03 0.05
+> 1.21 0.87 1.94 2.26 0.76
+> 1.06 0.66 1.99 2.19 0.53
+> MMQA
+> W1W2W3W4W5
+> 1.37 0.90 2.20 2.65 0.72
+> 0.74 0.51 1.10 1.36 0.42
+> 0.94 0.73 1.37 1.67 0.66
+> 0.77 0.54 1.18 1.38 0.46
+> 0.89 0.52 1.85 1.99 0.39
+> 0.88 0.49 1.85 1.98 0.36
+> Cars
+> W1W2W3W4W5
+> 1.31 0.85 2.18 2.59 0.67
+> 0.88 0.59 1.44 1.68 0.48
+> 0.84 0.63 1.37 1.61 0.54
+> 0.20 0.12 0.42 0.44 0.10
+> 0.93 0.55 1.87 2.03 0.41
+> 0.97 0.56 1.96 2.15 0.41
+> E-Comm
+> 0.0
+> 0.5
+> 1.0
+> 1.5
+> 2.0
+> 2.5
+> Mean utility per (scenario, system, weight)
+
+Figure 7: Mean utility per (scenario, system, weight). Queries a system fails to run contribute zero to its mean (zero-fill). Higher is better. Table 18: Per-(system, weight) Quality, Latency, Cost—pooled across all (scenario, non-bypass query) tuples. Quality is the arithmetic mean of ˆ𝑄 (F1 or 1−MAPE /100 ); Latency and Cost are geometric means. 
+
+𝑊 1 𝑊 2 𝑊 3 𝑊 4 𝑊 5
+
+System Q L C Q L C Q L C Q L C Q L C
+
+CADENZA 0.73 9.9m $0.58 0.75 11.8m $0.72 0.72 7.4m $0.39 0.73 8.6m $0.49 0.76 13.1m $0.81 LOTUS 0.53 1.1h $4.70 0.54 1.1h $4.98 0.50 57.1m $3.99 0.51 1.0h $4.32 0.55 1.2h $5.17 Palimpzest 0.59 49.9m $13.28 0.61 52.5m $14.14 0.52 38.9m $9.63 0.56 42.9m $11.32 0.61 1.1h $17.83 ThalamusDB 0.50 42.1m $1.48 0.51 45.5m $1.63 0.48 31.6m $1.04 0.49 37.9m $1.30 0.51 48.4m $1.75 Extended AFlow 0.47 26.7m $1.17 0.50 32.6m $1.48 0.42 18.6m $0.75 0.45 22.2m $0.96 0.51 37.9m $1.82 Extended DyFlow 0.47 19.2m $1.20 0.50 25.2m $1.61 0.44 13.9m $0.80 0.47 16.5m $1.01 0.52 26.9m $1.79 
+
+Result. Figure 7 shows that CADENZA produces the highest or tied-highest mean utility on every (scenario, weight) cell. The margin is largest on cost-aware settings ( 𝑊 3, 𝑊 4), where Table 18 confirms that no baseline matches CADENZA ’s pooled cost; on quality-leaning settings ( 𝑊 2,
+
+𝑊 5), CADENZA reaches higher Q at an order-of-magnitude lower C than the nearest competitor. Each baseline’s limited weight-responsiveness stems from missing one of CADENZA ’s three ingredients—operator catalog, BO-tuned plan parameters, and intent-aware plan synthesis. LOTUS only shifts its LLM-vs.-proxy cascade threshold ( recall_target ). ThalamusDB only tunes its sampling budget ( max_error ); the operator choice never changes. Palimpzest searches a richer plan space, but its candidate set is a small discrete pool of pre-computed physical plans with no continuous tuning. Extended AFlow and DyFlow search a workflow space, but their grammar is narrower than CADENZA ’s catalog and their LLM-driven code generation can produce broken candidates. Each baseline therefore traverses only the subspace its mechanism exposes. 
+
+## E Pareto Frontier Approximation 
+
+We evaluate whether CADENZA can recover a good approximate Pareto frontier over quality, latency, and cost. Figure 8 (top) shows the BO outcomes for one representative query (Movie, Q5): each point is one evaluated choice 𝜔 𝑡 ∈ Ω with its measured performance on the validation set, where the x-axis is normalized latency, the y-axis is quality, and color encodes normalized cost. Stars mark the final non-dominated Pareto set among all evaluations, and we label milestone trials (3, 5, 13, 21) where the frontier visibly expands. To quantify how the recovered frontier improves over BO, we track hypervolume after each trial. Using the same normalization and maximization space as above (with the same 𝐿 max and 𝐶 max ), let 𝐵 𝑡𝑢𝑛𝑒 be the total BO trial budget and let F𝑡 denote the non-dominated points among the first 𝑡 trials ( 𝑡 = 1, . . . , 𝐵 ). With a dominated reference point 𝑟 = (0, 0, 0), we compute 
+
+𝐻𝑉 (F 𝑡 ; 𝑟 ) = 𝜆 
+
+Ø
+
+𝑥 ∈ F 𝑡 
+
+[𝑟 𝑞 , 𝑥 𝑞 ] × [ 𝑟 ℓ , 𝑥 ℓ ] × [ 𝑟 𝑐 , 𝑥 𝑐 ]
+
+!
+
+,CADENZA: Compiling Natural-Language Intent into Task-Specific Operator DAGs for Semantic Query Processing SIGMOD ’27, June 03–05, 2018, Woodstock, NY 0.00 0.25 0.50 0.75 1.00 
+
+Normalized Latency 
+
+> 0.25
+> 0.50
+> 0.75
+> Quality
+
+Final Pareto set 0.0        
+
+> 0.2
+> 0.4
+> 0.6
+> Normalized Cost 510 15 20 25 30 35 40
+
+BO trials 
+
+> 0.4
+> 0.6
+> Hypervolume
+
+Figure 8: BO trials and hypervolume over the Pareto set. 
+
+where 𝑥 = (𝑥 𝑞 , 𝑥 ℓ , 𝑥 𝑐 ) and 𝜆 (·) denotes 3D volume. Figure 8 (bottom) plots 𝐻𝑉 (F 𝑡 ; 𝑟 ) versus 𝑡 ; steps indicate trials that expand the frontier, while plateaus indicate no improvement. 
+
+## F Plan Visualization 1     
+
+> OpTxtCls (Text1)
+> σ!"#$% &”()"*+” ∧-./)$ &0
+> OpTxtQA (Text) (What Brand? )
+> γ12+ ,#)+4 ,5"6 (-./)$ ):-#-
+> TopK 12+ ,#)+4 ;<$= >#-
+
+2 3              
+
+> OpTxtSplit (prdDesc1)
+> OpTxtCls (Text2)
+> σ!"#$% &”()"*+” ∧-./)$ &0
+> OpTxtQA (Text) (What Brand? )
+> γ12+? ,#)+? ,5"6 (-./)$ ):-#-
+> TopK 12+? ,#)+? ;<$= >#-
+> OpTxtSplit (prdDesc2)
+> ⋈
+> OpTxtNLI (brd1, brd2) (sam e?)
+> σ!"#$% &”@AB:C!” ∧-./)$ &0
+> OpImgEmbed (region1)
+> OpImgRegio n(image1)
+> OpImgEmbed (region2)
+> OpImgRegion2(image2)
+> ⋈
+> OpImgPairScore (vec1, vec2)
+> σ-25 _-./)$ &0
+> OpImg Cls (region1 )
+> σ!"#$% >“()"*+” ∧-./)$ &0
+> OpImg VQA (region1 )(What Brand?)
+> σ:*-F$) !>A/*$ ∧-./)$ &0
+> OpTxtCls (Text1)
+> σ!"#$% &”()"*+” ∧-./)$ &0
+> OpTxtQA (Text) (Brand? )
+> γ12+ ,#)+4 ,5"6 (-./)$ ):-#-
+> TopK 12+ ,#)+4 ;<$= >#-
+> OpTxtSplit (prdDesc1)
+> OpImgVQ A(Text) (Is this brand?)
+> OpImgCls (region2)
+> OpImgRegio n(image2)
+> σ!"#$% >“()"*+” ∧-./)$ &0
+> σ:*-F$) >H$-∧-./)$ &0
+> γ12+ ,22+ ,./I*J (*)&4
+
+Figure 9: Top-3 logical plans for a representative E-Commerce query. Query. SemJoin query from the E-Commerce scenario: “You will receive descriptions and images of two products. Determine whether they are from the same brand. Product A: {productDisplayName_right} {productDescriptors_right}, image {images_right}. Product B: {productDisplayName_left} {productDescriptors_left}, image {images_left}.” 
+
+Interpreting Plans in Figure 9. Figure 9 shows three logical plans for the representative E-Commerce SemJoin query. All three plans implement the same intent—deciding whether two products are from the same brand—but they differ in where they obtain brand evidence (text vs. image) and how they make the final match decision. A key empirical property of this workload is that the brand is often explicitly present in text (e.g., the display name or a few relevant fields inside productDescriptors ), yet productDescriptors is a long, heterogeneous JSON string with many irrelevant keys (e.g., materials_care_desc , style_note , inventory ). Thus, plans that can isolate brand-bearing fields/segments from the JSON tend to perform strongly, while plans that rely heavily on image understanding face more noise because product photos frequently contain multiple garments and distracting regions. 
+
+Plan 1 (Text-first Brand Matching). Plan 1 is a text-only strategy that extracts brand candidates independently from each product’s description and then matches them. Concretely, it (i) applies OpTxtSplit to decompose the long JSON string into manageable segments, (ii) uses OpTxtCls to keep only segments that likely contain brand cues, (iii) runs OpTxtQA to extract a brand string with a confidence score from each retained segment, and (iv) aggregates and retains the top brand candidates per product (Top-𝐾 ). Finally, it joins the candidate sets across the two products and uses OpTxtNLI to decide whether the two brand strings entail a “same brand” relationship. This plan performs best in our setting because many products already expose the brand in text; once the JSON is decomposed and irrelevant fields are filtered SIGMOD ’27, June 03–05, 2018, Woodstock, NY Jaehyun Ha, Yongjoo Park, and Wook-Shin Han 
+
+out, the remaining segments are short and brand-bearing, enabling accurate extraction and a cheap, reliable textual match. In other words, decomposition primarily addresses the JSON heterogeneity problem , after which the join reduces to a near-deterministic comparison. 
+
+Plan 2 (Image-first Region Alignment & Brand Extraction). Plan 2 is an image-centric strategy designed for cases where textual cues are missing or unreliable. It first decomposes each product image into regions via OpImgRegion , embeds regions with OpImgEmbed , and uses 
+
+OpImgPairScore to align visually similar region pairs across the two products. It then filters to high-similarity pairs and applies image-side operators ( OpImgCls and OpImgVQA ) to extract a brand hypothesis from the aligned region(s). This plan benefits from decomposition because E-Commerce images often include multiple garments or clutter; region-level processing can isolate logo- or label-like patches, making subsequent inference more focused than operating on the full image. However, compared to Plan 1 it is typically less consistent on this workload, since brands are frequently conveyed textually and logos may be subtle, partially occluded, or non-textual, making open-ended brand extraction from images harder and more variable. 
+
+Plan 3 (Asymmetric Text-to-Image Verification). Plan 3 is a hybrid verification strategy that treats text as the primary source of candidate 
+
+brands and uses images only for confirmation . It first follows the Plan 1 text pipeline to produce a small Top-𝐾 set of brand candidates for one (or both) products. Independently, it decomposes the other product’s image into regions and filters to brand-like regions with 
+
+OpImgCls . Instead of asking an open-ended “What brand is this?” question on the image, it runs OpImgVQA in a closed-form manner (e.g., “Is this region associated with brand X ?”), iterating over the text-derived candidates and accepting the pair if any candidate is verified with sufficient confidence. This plan can be competitive with Plan 1 when text is mostly correct but occasionally ambiguous (e.g., multiple brands mentioned, noisy descriptors), because decomposition shrinks the text to a concise candidate set and converts image understanding into a simpler yes/no verification task. Compared to Plan 2, it avoids the brittleness of open-ended brand extraction from images by constraining the answer space to a small set of plausible brands. 
+
+Takeaway. Across these plans, decomposition is the common enabler: splitting the JSON descriptions into segments and splitting images into regions isolates salient evidence, reducing both irrelevant context and downstream inference difficulty. In this workload, because the brand often exists in text, the text-first plan (Plan 1) usually dominates; image-centric plans are most useful either as alternatives when text cues are absent or as verification mechanisms when text is noisy. 
+
+## G Validation Set Noise 
+
+Setup. We sanity-check robustness to imperfect validation labels by injecting synthetic noise and rerunning physical planning under the same budget. We use a binary E-Commerce SemJoin intent that asks whether two product descriptions refer to products of the same category from the same brand (as in our join instruction), and uniformly flip 10% of validation labels (match ↔ non-match). We also repeat the experiment with 20% label flips and observe the same outcome 
+
+Table 19: Top-1 plan selection under synthetic validation-label noise for a binary E-Commerce SemJoin query.                            
+
+> Validation labels Top-1 plan (operator sequence) Differences Clean Per side: OpTxtSplit(prdDesc) →OpTxtCls →OpTxtQA(“What Brand?”) →
+> 𝛾 (max(score) )→TopK Then: OpTxtNLI(brd 1,brd 2)→𝜎 (ENTAIL ∧score ≥𝜏 )Tuned cutpoints only ( 𝜏 cls , 𝜏 qa , 𝐾, 𝜏 nli )10% flipped Same operator sequence (text-first brand extraction →textual entailment match) Slightly different cutpoints ( 𝜏 cls , 𝜏 qa , 𝐾, 𝜏 nli )20% flipped Same operator sequence (text-first brand extraction →textual entailment match) Slightly different cutpoints ( 𝜏 cls , 𝜏 qa , 𝐾, 𝜏 nli )
+
+Result. The Top-1 plan remains structurally unchanged under 10% label flips. Both runs select the same text-first pipeline that (i) splits the long, heterogeneous productDescriptors into short segments, (ii) filters for brand-bearing segments, (iii) extracts brand candidates with confidence scores, and (iv) matches the two products via an entailment-style comparison of the extracted brand strings. The only differences are in tuned cutpoints (e.g., confidence thresholds and 𝐾 in Top-𝐾 selection), not in the operator sequence. Intuitively, alternative candidates (e.g., single-shot classification over the full JSON or overly aggressive early filters) fail systematically on easy cases, so moderate label noise does not change which plan family wins. 
+
+## H Constrained Optimization Support 
+
+The main results use CADENZA ’s default weighted-utility objective. The same optimizer also accepts explicit latency and cost budgets 
+
+(𝐿 max , 𝐶 max ): each BO trial’s sample set metrics are extrapolated to full data units, and a log-scaled penalty on the relative budget violation is added to the scalar utility as score (𝜃 ) = 𝑈 (𝜃 ) − 𝛼 [log (1+𝑣 𝐿 ) + log (1+𝑣 𝐶 )] , with 𝑣 𝐿 = (𝐿 𝜃 − 𝐿 max )+/𝐿 max and 𝑣 𝐶 defined analogously; 𝛼 
+
+controls the penalty strength. The standard BoTorch acquisition function therefore biases sampling toward budget-respecting regions without any change to the surrogate or acquisition family. We evaluate on the Movie scenario. The Default row reproduces the unconstrained result; each constrained row tightens every query’s budget by a factor 𝑚 relative to its observed default (𝐿 def , 𝐶 def ), sweeping 𝑚 ∈ { 0.5, 0.2, 0.1}.CADENZA: Compiling Natural-Language Intent into Task-Specific Operator DAGs for Semantic Query Processing SIGMOD ’27, June 03–05, 2018, Woodstock, NY 
+
+Table 20: Q, L, and C across queries under CADENZA ’s default weighted-utility objective and three constrained variants that tighten each query’s budgets to (𝐿 max , 𝐶 max ) = 𝑚 ·( 𝐿 def , 𝐶 def ). Q is an arithmetic mean across queries; L and C are geometric means. Variant Q↑ L (s) ↓ C ($) ↓
+
+Default 0.544 266 0.30 Mild ( 𝑚 =0.5) 0.481 142 0.14 Tight ( 𝑚 =0.2) 0.348 65 0.05 Very tight ( 𝑚 =0.1) 0.228 24 0.02 The logical plan barely changes across 𝑚 ; the change is in physical tuning. As budgets tighten, BO progressively reduces the LLM share in favor of local ML and then symbolic backends. At Mild, hard tuples once routed to the LLM fall to local ML, costing modest Q; at Tight, the LLM share drops near zero and those tuples fall to symbolic, producing a sharper drop; at Very tight, most tuples are handled symbolically, pushing Q toward a floor where easy predicates remain decent but hard joins and extractions collapse. The weighted-utility default is thus a convenience, not a structural requirement—users with hard budgets can use the same optimizer by setting 𝐿 max and 𝐶 max .
+
+## I Per-Scenario Quality–Cost Trade-off 
+
+Figures 10–14 report per-scenario Quality–Cost scatter plots for all systems, providing a 2D trade-off view (R3.M1) rather than averaged improvements. Each marker is one (system, query) outcome; up-and-left is better. CADENZA often lies on the upper-left frontier, while the plots also expose per-query exceptions where a baseline’s narrow operator support happens to match the query. CADENZA LOTUS Palimpzest ThalamusDB DocETL AFlow DyFlow 10 3 10 2 10 1
+
+> 0.0
+> 0.5
+> 1.0
+> Quality
+
+Q1    
+
+> 10 210 1
+
+Q2    
+
+> 10 210 1
+
+Q3    
+
+> 10 210 1
+
+Q4    
+
+> 10 210 1
+
+Q5    
+
+> 10 210 1
+> Cost ($, log)
+> 0.0
+> 0.5
+> 1.0
+> Quality
+
+Q6 
+
+> 10 0
+> Cost ($, log)
+
+Q7    
+
+> 10 210 1
+> Cost ($, log)
+
+Q8   
+
+> 10 110 0
+> Cost ($, log)
+
+Q9   
+
+> 10 010 110 2
+> Cost ($, log)
+
+Q10 
+
+Figure 10: Quality–Cost trade-off on Movie. Up-and-left is better. 10 0 10 1
+
+> 0.0
+> 0.5
+> 1.0
+> Quality
+
+Q1   
+
+> 10 110 0
+
+Q2    
+
+> 10 110 010 1
+
+Q3     
+
+> 10 210 110 0
+
+Q4 
+
+> 10 0
+
+Q5 
+
+> 10 0
+> Cost ($, log)
+> 0.0
+> 0.5
+> 1.0
+> Quality
+
+Q6    
+
+> 10 110 010 1
+> Cost ($, log)
+
+Q7 
+
+> 10 0
+> Cost ($, log)
+
+Q8 
+
+> 10 0
+> Cost ($, log)
+
+Q9  
+
+> 10 010 1
+> Cost ($, log)
+
+Q10 
+
+Figure 11: Quality–Cost trade-off on Wildlife. Up-and-left is better. SIGMOD ’27, June 03–05, 2018, Woodstock, NY Jaehyun Ha, Yongjoo Park, and Wook-Shin Han 10 1
+
+0.0 
+
+0.5 
+
+1.0 
+
+> Quality
+
+Q1 
+
+10 0
+
+Q2a 
+
+10 0
+
+Q2b 
+
+10 1
+
+Q3a 
+
+10 1
+
+Q3f 
+
+10 2 10 1
+
+0.0 
+
+0.5 
+
+1.0 
+
+> Quality
+
+Q4 
+
+Cost ($, log) 
+
+Q5 
+
+10 1
+
+Cost ($, log) 
+
+Q6a 
+
+10 1
+
+Cost ($, log) 
+
+Q6b 
+
+10 1
+
+Cost ($, log) 
+
+Q6c 
+
+10 0 10 1
+
+Cost ($, log) 
+
+0.0 
+
+0.5 
+
+1.0 
+
+> Quality
+
+Q7 
+
+Figure 12: Quality–Cost trade-off on MMQA. Up-and-left is better. 10 0 10 1
+
+0.0 
+
+0.5 
+
+1.0 
+
+> Quality
+
+Q1 
+
+10 1 10 0 10 1
+
+Q2 
+
+10 2 10 1
+
+Q3 
+
+10 0 10 1
+
+Q4 
+
+10 1 10 0 10 1
+
+Q5 
+
+10 1
+
+Cost ($, log) 
+
+0.0 
+
+0.5 
+
+1.0 
+
+> Quality
+
+Q6 
+
+10 1 10 0 10 1
+
+Cost ($, log) 
+
+Q7 
+
+10 1 10 0 10 1
+
+Cost ($, log) 
+
+Q8 
+
+10 1
+
+Cost ($, log) 
+
+Q9 
+
+10 1
+
+Cost ($, log) 
+
+Q10 
+
+Figure 13: Quality–Cost trade-off on Cars. Up-and-left is better. CADENZA: Compiling Natural-Language Intent into Task-Specific Operator DAGs for Semantic Query Processing SIGMOD ’27, June 03–05, 2018, Woodstock, NY 10 0
+
+> 0.0
+> 0.5
+> 1.0
+> Quality
+
+Q1 
+
+> 10 0
+
+Q2   
+
+> 10 110 0
+
+Q3 
+
+> 10 0
+
+Q4 
+
+> 10 0
+
+Q5 
+
+> 10 0
+> 0.0
+> 0.5
+> 1.0
+> Quality
+
+Q6   
+
+> 10 010 110 2
+
+Q7   
+
+> 10 010 110 2
+
+Q8 
+
+> 10 1
+
+Q9  
+
+> 10 110 2
+
+Cost ($, log) 
+
+Q10 
+
+> 10 2
+
+Cost ($, log) 
+
+> 0.0
+> 0.5
+> 1.0
+> Quality
+
+Q11 
+
+> 10 1
+
+Cost ($, log) 
+
+Q12 
+
+> 10 1
+
+Cost ($, log) 
+
+Q13 
+
+> 10 1
+
+Cost ($, log) 
+
+Q14 
+
+Figure 14: Quality–Cost trade-off on E-Commerce. Up-and-left is better. SIGMOD ’27, June 03–05, 2018, Woodstock, NY Jaehyun Ha, Yongjoo Park, and Wook-Shin Han 
+
+## J Semantic Queries 
+
+This section lists the natural-language intent of each semantic query used in our evaluation, together with the core semantic operator chain expressed in LOTUS-style Python where supported, or in CADENZA Python where LOTUS does not natively support the operator. Boilerplate (data loading, path resolution, modality-specific routing knobs) is omitted for brevity; the full source is provided in the accompanying artifact repository. 
+
+## J.1 Movie 
+
+Q1. Five clearly positive reviews (any movie). Return reviewId .
+
+Reviews . sem_filter (" review is clearly positive : { reviewText }"). limit (5) 
+
+Q2. Five positive reviews for movie taken_3 . Return reviewId .
+
+Reviews [ Reviews . id == " taken_3 " ]. sem_filter (" review is clearly positive : { reviewText }"). limit (5) 
+
+Q3. Count of positive reviews for movie taken_3 .
+
+len ( Reviews [ Reviews . id == " taken_3 " ]. sem_filter (" review is clearly positive : { reviewText }")) 
+
+Q4. Positivity ratio of reviews for movie taken_3 .
+
+R = Reviews [ Reviews . id == " taken_3 "] ratio = len (R. sem_filter (" review is clearly positive : { reviewText }")) / len (R) 
+
+Q5. Ten pairs of reviews for ant_man_and_the_wasp_quantumania expressing the same sentiment. 
+
+R1 . sem_join (R2 , " Both reviews share the same sentiment : { R1 . reviewText }, { R2 . reviewText }" , on = lambda r1 , r2 : r1 . id == r2 . id and r1 . reviewId != r2 . reviewId ). limit (10) 
+
+Q6. Ten pairs of reviews for the same movie expressing the opposite sentiment. 
+
+R1 . sem_join (R2 , " These two reviews express opposite sentiments : { R1 . reviewText }, { R2 . reviewText }" , on = lambda r1 , r2 : r1 . id == r2 . id and r1 . reviewId != r2 . reviewId ). limit (10) 
+
+Q7. All such opposite-sentiment pairs (no LIMIT ). 
+
+R1 . sem_join (R2 , " These two reviews express opposite sentiments : { R1 . reviewText }, { R2 . reviewText }" , on = lambda r1 , r2 : r1 . id == r2 . id and r1 . reviewId != r2 . reviewId ) 
+
+Q8. Counts of positive and negative reviews for taken_3 .
+
+R = Reviews [ Reviews . id == " taken_3 " ]. sem_extract ({ " sentiment ": " positive | negative from { reviewText }" }) R. groupby (" sentiment "). count () 
+
+Q9. Score 1–5 how much each reviewer liked ant_man_and_the_wasp_quantumania .
+
+Reviews [ Reviews . id == " ant_man ... " ]. sem_extract ({ " reviewScore ": " int 1 -5 from { reviewText }" }) 
+
+Q10. Rank movies by mean per-review score (1–5) over all their reviews. 
+
+Reviews . sem_extract ({ " reviewScore ": " int 1 -5 from { reviewText }" }) . groupby (" id "). mean () 
+
+## J.2 Wildlife 
+
+Q1. How many pictures of zebras do we have? 
+
+len ( Images . sem_filter (" image shows a zebra : { image }")) 
+
+Q2. How many sound recordings of elephants do we have? 
+
+len ( Audio . sem_filter (" recording is of elephants : { audio }")) 
+
+Q3. City with the most zebra pictures (ties broken arbitrarily). 
+
+Images . sem_filter (" image shows a zebra : { image }"). groupby (" city "). count () . topk (1) 
+
+Q4. City with the most elephant audio recordings. 
+
+Audio . sem_filter (" recording is of elephants : { audio }"). groupby (" city "). count () . topk (1) 
+
+Q5. Cities with elephant images or elephant audio. 
+
+img = Images . sem_filter (" image shows an elephant : { image }"). select (" city ") aud = Audio . sem_filter (" recording is of elephants : { audio }"). select (" city ") union ( img , aud ). distinct () 
+
+Q6. Cities with monkey images but no monkey audio. 
+
+img = Images . sem_filter (" image shows a monkey : { image }"). select (" city "). distinct () aud = Audio . sem_filter (" recording is of monkeys : { audio }"). select (" city "). distinct () img . except_ ( aud ) CADENZA: Compiling Natural-Language Intent into Task-Specific Operator DAGs for Semantic Query Processing SIGMOD ’27, June 03–05, 2018, Woodstock, NY 
+
+Q7. Cities where zebra and impala co-occur in images. 
+
+zeb = Images . sem_filter (" image shows a zebra : { image }"). select (" city "). distinct () imp = Images . sem_filter (" image shows an impala : { image }"). select (" city "). distinct () zeb . intersect ( imp ) 
+
+Q8. Cities with elephant evidence (image or audio) AND monkey evidence (image or audio). 
+
+ele = union ( Images . sem_filter (" elephant : { image }") , Audio . sem_filter (" elephant : { audio }")). select (" city ") mon = union ( Images . sem_filter (" monkey : { image }") , Audio . sem_filter (" monkey : { audio }")). select (" city ") ele . intersect ( mon ). distinct () 
+
+Q9. Cities with both monkey images and monkey audio. 
+
+img = Images . sem_filter (" image shows a monkey : { image }"). select (" city "). distinct () aud = Audio . sem_filter (" recording is of monkeys : { audio }"). select (" city "). distinct () img . intersect ( aud ) 
+
+Q10. (City, station) with the most zebra pictures. 
+
+Images . sem_filter (" image shows a zebra : { image }"). groupby ([ " city " ," station " ]) . count () . topk (1) 
+
+## J.3 MMQA 
+
+Q1. Director of the movie that has Ben Piazza as Bob Whitewood. 
+
+Movies . sem_join ( Roles , "{ Movie . synopsis } mentions { Roles . actor } as { Roles . character }") . sem_extract ({ " director ": " from { synopsis }" }) 
+
+Q2a. For each racetrack where A. P. Warrior was a contender, find logo images if any. 
+
+Racetracks [ contender ("A.P. Warrior ") ]. sem_join ( Images , "{ Image } is a logo of { track }") 
+
+Q2b. Same as Q2a, additionally extract the color of each matched logo. 
+
+Q2a_result . sem_extract ({ " color ": " primary color of { Image }" }) 
+
+Q3a. Movies that are comedies. 
+
+Movies . sem_filter (" movie is a comedy : { synopsis }") 
+
+Q3f. Movies that are romantic comedies. 
+
+Movies . sem_filter (" movie is a romantic comedy : { synopsis }") 
+
+Q4. Categorize each movie by genre (multi-label). 
+
+Movies . sem_extract ({ " genres ": " list of genres from { synopsis }" }) . explode (" genres ") 
+
+Q5. Actor common to a fixed list of 16 movies. 
+
+Cast [ Cast . movie . isin ( MOVIE_LIST ) ]. groupby (" actor "). count () == 16 
+
+Q6a. Airlines with destinations in Frankfurt. 
+
+Airlines . sem_filter (" airline serves Frankfurt : { destinations }") 
+
+Q6b. Airlines with destinations in Germany. 
+
+Airlines . sem_filter (" airline serves any destination in Germany : { destinations }") 
+
+Q6c. Airlines with destinations in Europe. 
+
+Airlines . sem_filter (" airline serves any destination in Europe : { destinations }") 
+
+Q7. For each airline with European destinations, find its logo (if any). 
+
+Q6c_result . sem_join ( Images , "{ Image } is the logo of { Airline . name }") 
+
+## J.4 Cars 
+
+Q1. Cars whose textual complaint entails a crash/accident/collision. 
+
+Complaints . sem_filter (" complaint entails the car was in a crash / accident / collision : { summary }") 
+
+Q2. Cars whose audio recording shows a dead battery. 
+
+( Cars | > <| Audio ). sem_filter (" audio recording : car has a dead battery : { audio_path }" , oracle =" audio ") 
+
+Q3. Ten cars with Manual transmission whose image shows the car is not damaged. 
+
+(( Cars | > <| Images )[ transmission == " Manual "] . sem_filter (" image : car is not damaged : { image_path }")). limit (10) SIGMOD ’27, June 03–05, 2018, Woodstock, NY Jaehyun Ha, Yongjoo Park, and Wook-Shin Han 
+
+Q4. Average age of cars whose complaint mentions engine problems. 
+
+mean (2026 - ( Cars | > <| Complaints ) . sem_filter (" complaint : car has engine problem : { summary }"). year ) 
+
+Q5. Cars damaged based on both audio and image evidence. 
+
+aud = Audio . sem_filter (" audio captures damaged car : { audio_path }" , oracle =" audio ") img = Images . sem_filter (" image : car is damaged : { image_path }") aud . merge ( img , on =" car_id ") 
+
+Q6. Cars with damage evidence in at least two modalities (image, audio, text). 
+
+img = Images . sem_filter (" image : car is damaged : { image_path }") aud = Audio . sem_filter (" audio captures damaged car : { audio_path }" , oracle =" audio ") txt = Complaints . sem_filter (" complaint : car was on fire or burned : { summary }") multimodal_at_least_two ( img , aud , txt ) 
+
+Q7. Cars that are dented (image), have worn brakes (audio), and report electrical issues (text). 
+
+dented = ( Cars | > <| Images ). sem_filter (" image : car is dented : { image_path }") worn = ( Cars | > <| Audio ). sem_filter (" audio : car has worn brakes : { audio_path }" , oracle =" audio ") elec = ( Cars | > <| Complaints ). sem_filter (" complaint : electrical - system problem : { summary }") intersect ( dented , worn , elec ) 
+
+Q8. First 100 cars whose image shows both punctures and paint scratches. 
+
+( Cars | > <| Images ). sem_filter (" image : car has both puncture and paint scratches : { image_path }"). head (100) 
+
+Q9. Cars whose image shows tearing and whose audio shows bad ignition. 
+
+torn = Images . sem_filter (" image : car is torn : { image_path }") ign = Audio . sem_filter (" audio : car has bad ignition : { audio_path }" , oracle =" audio ") torn . merge ( ign , on =" car_id ") 
+
+Q10. Classify each complaint into a problem category. 
+
+Complaints . sem_extract ({ " problem_category ": " from { summary }" }) 
+
+## J.5 E-Commerce 
+
+Q1. Product ids of backpacks from Reebok (text). 
+
+Products . sem_filter (" product is a backpack from Reebok : { description }") 
+
+Q2. Sports shoes that are predominantly yellow and silver (image). 
+
+Products . sem_filter (" image shows sports shoes that are predominantly yellow and silver : { image }") 
+
+Q3. For each product, extract the brand name from text. 
+
+Products . sem_extract ({ " category ": " brand name from { title }, { description }" }) 
+
+Q4. For each product, extract the primary color from the image. 
+
+Products . sem_extract ({ " category ": " primary color of { image }" }) 
+
+Q5. Classify each product into one of {Dress, Bottomwear, Socks, Topwear, Innerwear} from text. 
+
+Products . sem_extract ({ " category ": " one of { Dress | Bottomwear | Socks | Topwear | Innerwear } from { title }, 
+
+↩→ { description }" }) 
+
+Q6. Same five-class classification, from the product image. 
+
+Products . sem_extract ({ " category ": " one of { Dress | Bottomwear | Socks | Topwear | Innerwear } from { image }" }) 
+
+Q7. Self-join of products with price ≤ 500 on same article-type and brand (text-to-text). 
+
+P = Products [ price <= 500] P. sem_join (P , " two products are of the same article type from the same brand : { P1 . description }, 
+
+↩→ { P2 . description }" , on = lambda p1 , p2 : p1 . id != p2 . id )
+
+Q8. Self-join: for each product description ≥ 3000 chars, find matching product images. 
+
+Products [ len ( description ) >= 3000] . sem_join ( Products , " image { Image } matches the description { description }, title { title }") 
+
+Q9. Image-to-image self-join finding similar products by base color and article type. 
+
+Products . sem_join ( Products , " two product images are of the same article type and base color : { image1 }, 
+
+↩→ { image2 }" , on = lambda p1 , p2 : p1 . id != p2 . id )CADENZA: Compiling Natural-Language Intent into Task-Specific Operator DAGs for Semantic Query Processing SIGMOD ’27, June 03–05, 2018, Woodstock, NY 
+
+Q10. 3-way join: shoes ⊲⊳ bottomwear ⊲⊳ topwear matching by color and brand (cross-modal). 
+
+shoes = Products [ isFootwear ]. sem_filter (" ... ") lower = Products [ isBottomwear ]. sem_filter (" ... ") upper = Products [ isTopwear ]. sem_filter (" ... ") sem_join_chain ( shoes , lower , upper , on =" color , brand ") 
+
+Q11. 4-way join across multiple categories on color and brand (cross-modal). 
+
+sem_join_chain ( shoes , bottomwear , topwear , accessories , on =" color , brand ") 
+
+Q12. For each item, generate JSON {id, brand, category} via combined map+classify on text and image. 
+
+Products . sem_extract ({ " brand ": " ... " , " category ": " topwear | bottomwear from { title } ,{ description } ,{ image }" }) . map ( lambda r: {" id ": r. id , " brand ": r. brand , " category ": r. category }) 
+
+Q13. Multi-modal complex filter (e.g., men’s sports tshirts; blue/black; short sleeves; round neck; striped; not winter). 
+
+Products . sem_filter (" matches all attributes : men , sports , tshirt , blue or black , short - sleeve , round - neck , 
+
+↩→ striped , not winter season : { description }, { image }") 
+
+Q14. For each product priced < 130 , find the single best-matching image, but only if it depicts white socks. 
+
+Products [ price < 130]. sem_topk ( Images , " image best matches the product and depicts white socks : { description }, 
+
+↩→ { Image }" , k =1) 
+
+## J.6 BioDEX 
+
+For BioDEX, we follow LOTUS [ 21 ]’s formulation, which casts the task—extreme multi-label classification of adverse drug reactions reported in medical articles—as a single sem_join between articles and reactions. Unlike the SemBench scenarios, which contain multiple distinct queries, BioDEX therefore appears here as one query. 
+
+Q. For each medical article, identify the adverse drug reactions reported, modeled as an article ⊲⊳ reaction sem_join .
+
+articles . sem_join ( reactions , " the article { article } reports the adverse drug reaction { reaction }")

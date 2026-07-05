@@ -1,0 +1,973 @@
+Title: Can Language Models Actually Retrieve In-Context? Drowning in Documents at Million Token Scale
+
+URL Source: https://arxiv.org/pdf/2607.01538v1
+
+Published Time: Fri, 03 Jul 2026 00:19:56 GMT
+
+Number of Pages: 26
+
+Markdown Content:
+# Can Language Models Actually Retrieve In-Context? Drowning in Documents at Million Token Scale 
+
+Siddharth Gollapudi ∗
+
+UC Berkeley 
+
+Nilesh Gupta 
+
+UT Austin 
+
+Prasann Singhal 
+
+UC Berkeley 
+
+Sewon Min 
+
+UC Berkeley 
+
+## Abstract 
+
+Language models (LMs) raise an intriguing alternative to vector-based retrieval: conditioning on an in-context corpus and directly generating a relevant answer. However, prior work has largely focused on proprietary systems or the smaller-scale reranking task, leaving corpus-scale in-context retrieval largely unexplored. In this work, we present the first systematic study of in-context retrieval on two scales practical retrievers demand: million-token corpora and length-generalization far beyond training-time sizes. We first introduce B LOCK SEARCH , a 0.6B LM retriever whose architectural and training modifications improve over prior LM baselines and length-generalize up to 10 × beyond its training regime. Nevertheless, retrieval still collapses under more extreme extrapolation. We trace this failure to an attention dilution effect: as the corpus grows, irrelevant documents dominate the softmax denominator, reducing the normalized mass on the gold document even when its pre-softmax score stays high. Motivated by this analysis, we introduce length-aware adjustments to the attention softmax and document-level sparse attention. With these modifications, at the million-token scale, our model matches dense retrieval on widely studied benchmarks (e.g, MS MARCO and NQ), while outperforming the concurrent model MSA despite being 7× smaller. Furthermore, it significantly outperforms dense retrieval on tasks requiring entirely different notions of similarity, such as LIMIT, achieving a 3× higher score. Together, our results position in-context retrieval a promising alternative to classical retrieval while emphasizing attention control under extreme context growth as a new challenge. 
+
+## 1 Introduction 
+
+Retrieval—identifying the relevant document(s) in a corpus {D1, . . . , D N } for a query Q—has long been dominated by vector-based methods [ 1]. Recent advances in language modeling (LMs) suggest a more radical alternative: casting retrieval as conditional generation, where the model directly decodes the identifier of the relevant document from the corpus in-context [ 2]. Such in-context retrieval 
+
+(ICR) could collapse retrieval and generation into a single model, replacing the two-stage retrieval-augmented generation pipeline [ 3 ] and enabling complex retrieval behavior beyond inner-product similarity [ 4 ]. In other words, rather than relying on external harnesses (retrievers), the model itself decides which parts of its context are relevant to the task at hand. However, this possibility remains largely untested at realistic scale: prior work either relies on proprietary systems without controlled evaluation [ 2] or studies reranking over small candidate sets [ 5, 6], rather than true corpus-scale retrieval. As a result, it remains unclear whether LMs can reliably retrieve relevant documents from large in-context corpora [7, 6, 8]. ICR differs fundamentally from standard long-context modeling. Rather than processing a single coherent sequence, it operates over large collections of independent documents, creating both opportunities and challenges. On one hand, document-level independence naturally enables parallel  
+
+> ∗Correspondence to sgollapu@berkeley.edu .Preprint.
+> arXiv:2607.01538v1 [cs.CL] 1 Jul 2026
+
+encoding and caching. On the other hand, effective retrieval requires two capabilities that current LMs struggle with: (C1) scaling to corpora containing millions of tokens, and (C2) generalizing to corpus sizes far beyond those seen during training. Both are difficult in practice: million-token attention remains computationally expensive, while extrapolation to substantially longer contexts is known to be brittle in modern LMs [7, 9, 10]. To this end, we present the first systematic study of whether an LM can act as a corpus-scale retriever under these conditions. We first introduce B LOCK SEARCH (§3), a 0.6B-parameter LM retriever that builds on prior ICR architectures using block-sparse attention [ 5]. For scale and length generalization, it adds randomized per-document identifier codes, in-batch negative training, and an on-policy auxiliary loss that trains on the model’s own rolled-out digit prefixes. On widely studied retrieval benchmarks (e.g., MS MARCO and NQ), B LOCK SEARCH matches a dense retriever at smaller corpus sizes ( 95 .8% vs. 95 .5% on MS MARCO at ∼45k tokens), and maintains non-trivial accuracy beyond the LM baseline, generalizing up to 10 × beyond its training context. Despite these improvements, B LOCK SEARCH still collapses at large scale: recall approaches zero near million-token contexts, remaining far below a simple dense retrieval baseline. We trace this failure not to a ranking collapse, but to an attention dilution effect, a degradation that has also been observed in other settings [ 9 , 11 , 12 , 13 ]. Leveraging the natural alignment between queries and their gold documents, we find that the transformer usually assigns the highest pre-softmax attention score to the gold document even at million-token scale, but the aggregate contribution of irrelevant documents to the softmax denominator grows faster with corpus size, causing the normalized attention mass on the gold document to collapse (§4). Motivated by this analysis, we consider two techniques to mitigate attention dilution at extreme context lengths (§5). First, length-aware sinks reshape the effective softmax denominator, reducing the influence of diffuse attention without modifying QK scores. Second, document-level sparse attention reduces the number of documents participating in attention at intermediate layers [ 14 , 15 , 10 ,16 , 17 ]. Together, these methods mitigate the effects of attention dilution. On well-studied retrieval benchmarks (e.g. MSMARCO and NQ from BEIR [ 18 ]), they improve million-token Recall@1 from as little as 0.2% to 20 .5% , recovering the gap to dense retrieval. They also match or exceed MSA [16 ], a concurrent LM trained on much longer contexts with 7× more parameters. On benchmarks requiring more complex notions of similarity, where dense retrieval tends to fail, such as LIMIT [ 4], our method exceeds Qwen3-dense by nearly 3× (§6). Our results establish corpus-scale in-context retrieval as a viable alternative to dense retrieval under both scale and length extrapolation. More broadly, they identify attention dilution as the primary bottleneck at million-token scale: while simple interventions can substantially mitigate its effects, it remains a fundamental challenge for scalable in-context retrieval. 
+
+## 2 Related Work 
+
+In-context and generative retrieval. Most long-context evaluation work focuses on synthetic retrieval-style tasks such as Needle-in-a-Haystack and RULER [ 19 , 7, 8], potentially overstating real-world retrieval capability. The premise that an LM can subsume dense retrieval is first articulated by [2], primarily evaluating proprietary Gemini systems. Subsequent work studies LMs as rerankers over small candidate pools using block-sparse attention and relevance heads in intermediate Transformer layers [ 6, 5 ]. In contrast, we study LMs as corpus-scale retrievers, training with small contexts and evaluating up to 10 4 documents ( ∼1M tokens) in an effort to elicit length-generalization. Generative retrieval [ 20 , 21 , 22 ] also decodes with identifiers, but stores corpus information in model parameters, requiring retraining when the corpus changes. In contrast, ICR encodes the corpus explicitly in context, allowing corpus updates without retraining. 
+
+Sparse and routed attention. A large body of work makes long-context attention tractable by routing or sparsification; our document-level sparse attention proposed in §4 builds on this line of work. Prior approaches reduce attention cost through inference-time pruning [ 23 , 24 ], block-sparse kernels [ 17 ], learned block routing [ 14 , 15 ], or hierarchical sparse attention [ 10 , 25 ]. Our work is grounded in this literature, but the retrieval setting introduces unique opportunities and challenges. The most directly comparable work is concurrent: MSA-4B [ 16 ], which, like B LOCK SEARCH , learns to perform generative document citation from an in-context corpus. However, the two works focus on 2different questions: MSA primarily scales the retrieval recipe through larger models and extensive training, whereas our work studies the fundamental failure modes of ICR as corpus size grows. In fact, our proposed methods targeting these failure modes match or exceed MSA despite using 7×
+
+fewer parameters and significantly shorter training-time contexts (§5). 
+
+Attention sinks and softmax dilution. Streaming-LLM [ 26 ] introduces explicit attention sinks for stable long-context decoding, and the gpt-oss model card [ 27 ] documents a null-attention mechanism that absorbs unused softmax mass. Whereas these works use sinks for streaming stability, we apply them to mitigate softmax dilution under large N . A number of results show that as the number of attended tokens grows, the softmax distribution flattens, removing attention peaks [ 9, 11 , 13 ]; this loss of sensitivity has been tied to representational collapse in longer contexts [ 12 , 28 ]. We show that the primary cause of retrieval degradation with growing context is softmax dilution, and that softmax-adjusting mechanisms such as sinks may hold the key to mitigating its effects. 
+
+## 3 BLOCK SEARCH : Model and Million-Token Evaluation 
+
+We first investigate several training-time improvements to the standard long-context retrieval recipe. After reviewing the problem setup (§3.1), we describe the changes that constitute B LOCK SEARCH 
+
+(§3.2), our evaluation setup (§3.3), and the results (§3.4). These results motivate the later analysis of possible failure modes (§4) and promising lines for even further improvements (§5). 
+
+3.1 Setup 
+
+Given a corpus of N documents and a query, the model must generate the identifier of the document that best answers the query. The corpus is tokenized with at most Tdoc =300 tokens per document and prefilled into the KV cache; the query is appended, and the model autoregressively decodes a four-digit code in {0, . . . , 9999 } that maps back to one document (that’s hopefully relevant). This concretizes challenges C1 and C2 from §1: just 10,000 documents at ∼100 tokens each well exceeds the 32K-token native context of the Qwen3-0.6B backbone, and the model must generalize to corpora substantially larger than those seen during training: again, a requirement that distinguishes retrievers from rerankers and has been largely overlooked in prior LM-retrieval work. 
+
+3.2 Method: B LOCK SEARCH 
+
+We now describe B LOCK SEARCH : whenever possible, we follow prior ICR work, but our require-ments C1 and C2 expose several limitations that motivate our proposed improvements. 
+
+Prompt format. Prior in-context work assigns each document a sequential integer identifier from 1
+
+to N [ 5, 2]. In our regime, training-time IDs are a strict subset of inference IDs and risk overfitting to absolute position. We instead insert each document as <bos>Doc {code}: {text} (Doc {code})<eos> , with {code} drawn uniformly at random per training step, breaking any association between code, semantics, or position. We also drop the query prefix from prior work [ 5, 2]: while it improves performance, it prevents corpus reuse across queries, which is cost-prohibitive at our scale. For a full example of a corpus/query prompt, we refer the reader to §A. 
+
+Block-sparse attention. Causal prefill scales quadratically in tokens, which is prohibitive at our target N . Since documents are disjoint, we use a block-sparse mask [ 5 ]: document tokens attend causally only within their own block, and the query block attends over the full corpus and causally to itself. Following common practice [ 29 , 5 ], we reset RoPE [ 30 ] positions at each document start and shift the query to position 300. The mask is materialized via flex_attention [31]. 
+
+Training data. We train on the ReLabeled Hard Negatives (RLHN) version of BEIR [ 32 ], which uses an LLM judge to prune false negatives from mined hard negatives in datasets such as MS MARCO [ 33 ]. Per query we keep one pruned positive and 15 hard negatives; per-query relevance scores for the auxiliary loss are from Qwen3-Embedding-8B [ 34 ]. The training corpus totals ∼100M tokens; full mix and cleaning details are in §C. 
+
+Training regime. Inspired by in-batch contrastive training [ 1, 35 ], we adapt in-batch negatives to this setting. For a batch of b (query, 16-document) tuples (1 positive + 15 hard negatives each), we prefill all b×16 documents once (re-randomizing codes) and score every query against the shared 3corpus, converting one prefill into b training signals. Every model is trained with 256 documents in its corpus, i.e. b=16 .
+
+Training objective. We train with teacher forcing on the gold code, but this alon causes an exposure bias issue: at inference, each digit conditions on the model’s own potentially incorrect prefix, which lies off the training distribution. We therefore add an on-policy auxiliary loss. The model first rolls out a four-digit code from its own distribution with gradients disabled. For each digit position, we construct a teacher distribution from in-batch document scores, restricted to candidates whose prefix matches the rollout. We then replay the rollout with gradients enabled at the four answer positions and average the resulting cross-entropy losses. The total loss is L = LCE + λLaux with λ ramped in after a warmup; the full algorithm can be found in algorithm 1 (§F). 
+
+3.3 Evaluation 
+
+The model is judged by whether it can recover the relevant document from those placed in context; our metric is Recall@1 over the generated four-digit codes, decoded by a beam search over the digit sequence. We also evaluate Recall@5 using beam search over the top five predictions and observe trends consistent with Recall@1; see §J for details. 
+
+Evaluation data. We evaluate on three BEIR datasets [ 18 ]: MS MARCO (dev), HotpotQA (test), and NQ (test). We choose these datasets because they are among the most widely studied retrieval benchmarks, on which dense retrievers have been extensively optimized, providing a strong calibration point for comparison. We later complement these evaluations with benchmarks requiring different notions of similarity, where dense retrieval struggles (§6). For each dataset, we sample 400 queries without replacement from the its split. For each query, we take its gold document and 24 hard negatives (retrieved using Qwen3-Embedding-8B [ 36 ]); by taking a union of these documents across all 400 queries, we get a 10,000 document corpus. In contrast with prior work [2], the substantial use of hard negatives makes the input corpus far more challenging. 2
+
+To evaluate across varying corpus sizes (e.g. N =500 to N =10 ,000 ), we also construct smaller versions of each dataset. We first include every query’s gold document (400 documents), then fill out the rest of the dataset with documents randomly selected from the full 10,000 document corpus. 
+
+Baselines. We compare against two reference retrievers and two ablations of B LOCK SEARCH itself: • BLOCK SEARCH -position : sequential codes ( 0, . . . , 9999 by document position) to isolate the contribution of random codes, and no auxiliary loss; this corresponds to the prior ICR recipe. • BLOCK SEARCH -offpolicy : B LOCK SEARCH with the on-policy auxiliary loss removed (teacher-forced CE only); isolates the exposure-bias fix. • Qwen3-dense (0.6B) : a dense retriever trained on the same RLHN data [ 32 ] with a contrastive objective [ 1] from the same Qwen3-0.6B backbone (§E); our primary reference point and the dense-retrieval gold standard B LOCK SEARCH must clear to be practical. • MSA-4B [ 16 ]: a concurrent multi-million-token LM, ∼7× larger and trained with a much larger long-context budget, sidestepping the C2 generalization requirement; an oracle reference. 
+
+3.4 Results: B LOCK SEARCH is competitive, but collapses as N scales 
+
+We train Qwen3-0.6B into B LOCK SEARCH (and variants) on 8× NVIDIA A100s using the above changes; full hyperparameters are in §D. The performance of the models is demonstrated in fig. 1. Note that since HotpotQA has multiple golds, a query is successful in recall@1 as long as one of the golds is the best result. This is primarily to ensure compatibility with MSA, which does not support more than recall@1. 
+
+BLOCK SEARCH improves extrapolation in LMs, up to ~500,000 tokens. All LMs perform strongly at small N (> 95% on MS MARCO at N =1 ,000 ), but baselines degrade much faster. The position-coded variant, which is the prior ICR method, collapses to near-zero by N =5 ,000 on every dataset. B LOCK SEARCH -offpolicy trails B LOCK SEARCH (MS MARCO 15 .0 vs. 18 .8 at N =5 ,000 ;HotpotQA 6.2 vs. 13 .0), showing that random codes and the on-policy loss contribute distinct gains. Note that, while B LOCK SEARCH substantially improves extrapolation, all variants eventually collapse beyond roughly 500 ,000 tokens, corresponding to about 10 × the training context length. 
+
+> 2For NQ, we use fewer hard negatives per query due to longer documents; per-dataset sizes are in §B (table 4).
+
+458k 116k 290k 580k 1.0M              
+
+> 0
+> 50
+> 100
+> Approx. prefill size (tokens)
+> Recall@1 (%)
+> Natural Questions
+> 45k 90k 225k 450k 900k
+> 0
+> 50
+> 100
+> Approx. prefill size (tokens)
+> MS MARCO
+> 40k 80k 200k 400k 800k
+> 0
+> 50
+> 100
+> Approx. prefill size (tokens)
+> HotpotQA
+> Qwen3-dense-0.6B MSA-4B M-position M-offpolicy M(full)
+
+Figure 1: Recall@1 vs. approximate prefill size ( N × mean doc length; see §B) on NQ, MS MARCO, and HotpotQA. Solid: ICR variants (B LOCK SEARCH , B LOCK SEARCH -position, B LOCK SEARCH -offpolicy); dashed: baselines ( Qwen3-dense , MSA-4B). Note that the Qwen3-0.6B native context limit is ∼32k tokens. 
+
+BLOCK SEARCH vs. MSA-4B. Despite having ∼7× fewer parameters than MSA [ 16 ], BLOCK SEARCH matches MSA at N =500 , 1000 and 2500 , e.g., on MS MARCO, achieving 
+
+95 .8% , 75 .2% , 43 .8% vs. 93 .8% , 70 .2% , 42 .2% for MSA. At large corpus sizes, MSA-4B pulls ahead ( 27 .5% vs. 18 .8% at N =5 ,000 , 16 .0% vs. 0.2% at N =10 ,000 ), which is expected given that MSA is explicitly trained for long-context tasks, whereas these settings require B LOCK SEARCH to generalize to corpora 20 –40 × larger than those seen during training. Despite near-perfect long-context performance on synthetic evaluation such as RULER’s needle-in-a-haystack (NIAH) [ 19 ] as reported in the original paper [ 16 ], MSA degrades sharply on real retrieval tasks: substantially more than the dense retrieval baseline. This suggests that realistic retrieval settings are significantly more challenging than existing synthetic long-context benchmarks, highlighting the need for the long-context literature to adopt more semantically meaningful retrieval tasks in evaluation. 
+
+BLOCK SEARCH vs. dense retrieval. Dense retrieval also degrades with N but without the sharp LM collapse: B LOCK SEARCH matches the Qwen3-dense gold standard at small and mid N but trails it at large N (MS MARCO 18 .8 vs. 38 .5 at N =5 ,000 ; near-zero vs. 20 .2 at N =10 ,000 ), with similar trends on NQ and HotpotQA. Closing this large-N gap remains the central challenge for practical in-context retrieval and motivates the mechanistic analysis in §4. 
+
+## 4 Understanding the Large-N Deterioration 
+
+§3 shows that B LOCK SEARCH generalizes well past its training-time context length, but still collapses at N =10 ,000 . In this section, we posit that this collapse can be decomposed into two parts: a per-head, per-layer measure of attention recall (does the relevant document receive the highest attention score?) remains deep into the large-N regime, while generation recall (does the model decode the correct identifier?) collapses. We also find that the share of each attention layer’s output that comes from gold tokens collapses while the layer’s overall output magnitude is largely preserved, cleanly encapsulating the aformentioned attention dilution issue. 
+
+4.1 Setup 
+
+Decoder language models are not a homogeneous stack: layers and heads take on specific functional roles, with FFNs promoting concepts [ 37 , 38 ], induction heads carrying in-context learning [ 39 ], and a sparse subset of retrieval heads carrying the long-context retrieval signal [ 40 ]. For in-context retrieval specifically, BlockRank [ 5], ICR 2 [6 ], and QRHeads [ 41 ] build on those results, observing 5that per-head attention scores can serve directly as a relevance signal. This observation is the starting point for the measurements we report. 
+
+Preliminary. We write L ∈ { 0, . . . , 27 } for layer index, and h ∈ { 1, . . . , H =16 } for attention-head index. We probe B LOCK SEARCH at the final token of the query block, immediately before the first generated code digit (which we denote d1). At this position let qhL ∈ Rdhead be the post-RoPE query vector and khL,t , v hL,t the key and value at prefill position t, where dhead is the per-head dimension. The pre- and post-softmax attention scores assigned to position t are: 
+
+shL,t = qhL · khL,t 
+
+√dhead 
+
+, αhL,t = exp( shL,t )
+
+P 
+
+> t′
+
+exp( shL,t ′ ) , (1) and the layer’s attention output is 
+
+aL =  u1
+
+> L
+
+; u2
+
+> L
+
+; . . . ; uHL
+
+ W OL , uhL = X
+
+> t
+
+αhL,t vhL,t , (2) where uhL ∈ Rdhead is the per-head attention readout, [ · ; · ] denotes concatenation along the head dimension into a vector in RH·dhead , and W OL ∈ R(H·dhead )×dmodel is the layer’s learned output projection. 
+
+Metrics. For each query, partition the prefill tokens into the gold set G (the tokens of the gold document) and its complement ¯G. We use three measurements throughout this section: AttnRank ,
+
+GoldShare , and first-digit accuracy .
+
+AttnRank measures whether attention identifies the right document. More precisely, for each document 
+
+d in the prefill, we collapse its tokens to a single per-head score using the MaxSim operator from late-interaction retrieval [42]: 
+
+MaxSim hL(d) = max  
+
+> t∈d
+
+shL,t . (3) Writing d⋆ for the gold document, the per-head Recall@1 at layer L is R(h) 
+
+> L
+
+, the fraction of queries for which arg max d MaxSim hL(d) = d⋆. We report two cross-head aggregators of R(h) 
+
+> L
+
+:• Rsum  
+
+> L
+
+— sum-across-heads : rank documents by P 
+
+> h
+
+MaxSim hL(d) and check whether the top-ranked document is d⋆.• Rany  
+
+> L
+
+= fraction of queries for which at least one head puts d⋆ first. 
+
+GoldShare measures gold’s contribution to the layer’s attention output (before the residual add). By linearity of eq. (2) in the per-head readouts uhL, we decompose aL into a gold and a non-gold piece: 
+
+aL = aG 
+
+> L
+
++ a ¯G
+
+> L
+
+, aG 
+
+> L
+
+=  u1,G 
+
+> L
+
+; . . . ; uH, G
+
+> L
+
+ W OL , uh, G 
+
+> L
+
+= X
+
+> t∈G
+
+αhL,t vhL,t , (4) and report the gold-driven fraction ∥aG
+
+> L
+
+∥/∥aL∥ alongside the total magnitude ∥aL∥.
+
+First-digit accuracy probes how decisively the model has committed to the first code digit at a given layer, via an LM-head probe [ 43 ]: we project the layer-L output through the model’s final RMSNorm and lm_head and record the maximum probability assigned to any of the ten digit tokens at the d1
+
+position. We treat this as a coarse indicator of when the digit decision emerges, not as a calibrated probability at intermediate layers. 
+
+4.2 Layer Roles and the Recall–Generation Gap 
+
+Figure 2 reports Rsum  
+
+> L
+
+and first-digit accuracy on B LOCK SEARCH at the d1-emission position in the in-domain, small-N regime ( N =500 ). Two qualitatively distinct transitions emerge. First, Rsum  
+
+> L
+
+rises across L11 –L20 : the model accumulates relevance information over many layers, consistent with prior reports of middle-layer retrieval in decoder LMs [ 5 , 6 , 41 , 40 ]. We refer to this contiguous range as the retrieval band . Second, first-digit accuracy rises sharply at L18 →L19 , after which the model has effectively committed to d1; we refer to L19 onwards as the decode band .60 3 6 9 12 15 18 21 24 27    
+
+> 0
+> 0.25
+> 0.5
+> 0.75
+> 1
+> L18 →L19
+> Layer L
+> recall / accuracy
+> Rsum
+> L
+> first-digit accuracy
+
+Figure 2: Per-layer Rsum  
+
+> L
+
+and LM-head first-digit accuracy on B LOCK SEARCH , MS MARCO, N =500 .Retrieval signal emerges across L11 –L20 ; first-digit signal emerges sharply at L18 →L19 .
+
+Heads no longer agree on the gold document. Sweeping N ∈ { 500 , 1000 , 2500 , 5000 , 10000 }
+
+on MS MARCO (Figure 3), we see these behaviors degrade. The retrieval band erodes under the sum aggregator: Rsum  
+
+> 19
+
+drops from 0.97 at N =500 to 0.01 at N =10 ,000 , matching the collapse in generation recall reported in §3.4. Rany  
+
+> L
+
+, however, stays at 1.00 across L18 –L25 at every N : at every N , at least one head per query still ranks the gold document first. In other words, per-head retrieval signal persists with large N , while the agreement between heads does not. This attention-recall/readout gap is not specific to MS MARCO: on the out-of-distribution LIMIT benchmark [ 4], we get Rany  
+
+> 19
+
+=1 .00 , while the code-generation readout recovers only 0.73 (§6).                              
+
+> 04812 16 20 24
+> 0
+> 0.25
+> 0.5
+> 0.75
+> 1
+> Layer L
+> Rsum
+> L
+> (a) Rsum
+> Lvs L
+> 04812 16 20 24
+> 0
+> 0.25
+> 0.5
+> 0.75
+> 1
+> persistent band
+> Layer L
+> Rany
+> L
+> (b) Rany
+> Lvs L
+> N=500 N=1k N=2 .5k N=5k N=10k
+
+Figure 3: Per-layer recall vs. L across N ∈ { 500 , 1000 , 2500 , 5000 , 10000 } on B LOCK SEARCH ,MS MARCO. (a) Rsum  
+
+> L
+
+drops monotonically as N grows, reaching ≈ 0 across all layers at N =10k .
+
+(b) Rany  
+
+> L
+
+remains at 1.00 across L18 –L25 at every N .
+
+The pre-softmax score is preserved, but normalization breaks the final attention distribution. 
+
+The Rany  
+
+> L
+
+result might suggest the per-head signal can be recovered by a better aggregator. But what the rest of the model sees is not a per-head ranking; it is the layer’s attention output aL, into which gold’s value vectors enter in proportion to their post-softmax mass αhL,t , not the per-head ranking of gold over other documents. So even at L19, where Rany  
+
+> 19
+
+=1 .00 at N =10k , the relevant question is what aL contains. Table 1 reports ∥a19 ∥ and GoldShare across the N sweep. The total magnitude ∥a19 ∥ shrinks by only 
+
+∼ 36% from N =500 to N =10k — the layer keeps writing into the residual at roughly its original amplitude. GoldShare , however, drops from 0.91 to 0.01 , a factor of about 130 . The L19 attention output is rewritten from a gold-token average to a non-gold-token average of comparable size; by the time the LM head reads the residual at L21, the slot that carried gold-derived information at small 
+
+N now carries an aggregate of distractors. Additional per-head softmax statistics behind this swap (gold’s pre-softmax score eroding while the non-gold log-sum-exp grows) are reported in §G. 7Table 1: Attention-output decomposition a19 = aG 
+
+> 19
+
++ a ¯G 
+
+> 19
+
+on B LOCK SEARCH , MS MARCO, 400 queries. Total magnitude shrinks only ∼ 36% , but the gold-driven share drops from 0.91 to 0.01 .                         
+
+> N∥aG
+> 19 ∥∥a¯G
+> 19 ∥∥a19 ∥∥aG
+> 19 ∥/∥a19 ∥
+> 500 43 .03 17 .47 47 .48 0.91 1k 30 .99 21 .11 45 .36 0.68 2.5k 7.64 33 .64 43 .03 0.18 5k 2.10 34 .61 36 .90 0.06 10k 0.21 29 .88 30 .27 0.01
+
+Conclusion: softmax attention dispersion as N grows. The vector-level result of table 1 is driven by a single mechanism inside each head. As N grows, gold’s largest pre-softmax score shL,t ⋆ (with 
+
+t⋆ = arg max t∈G shL,t ) no longer dominates over the larger pool of competing distractor scores, so the post-softmax weight assigned to gold’s value vector shrinks and the per-head readout uhL becomes a non-gold average at comparable magnitude. This length-driven softmax dispersion is a generic phenomenon [ 9, 11 , 12 ] and an empirical driver of length-generalization failure across tasks [ 44 , 45 ]; the contribution here is connecting it to a vector-level swap at the residual stream rather than treating it as an abstract probability-mass collapse. §5 then evaluates two avenues of improvement that target this mechanism. 
+
+## 5 Addressing the Attention Dilution Problem 
+
+Having identified softmax dispersion under growing N as the guilty party, we study two potential directions that address it. We first consider two length-aware modifications to attention softmax that mitigate the dispersion issue. We also consider document-level sparse attention , thereby pruning the set of tokens that enter the softmax. 
+
+5.1 Method Length-aware softmax. We first describe two methods that change how softmax converts the pre-softmax scores shL,t to attention weights. Both are length-aware : each carries a corpus-size signal that lets the softmax adapt to the large N setting. An additive sink appends a learned constant to the softmax denominator, so a head whose largest scores fall below that constant leaks probability mass into the appended slot and emits a small attention output [ 26 , 27 ]; the per-token weights ˜αhL,t 
+
+no longer sum to one. The length-awareness is implicit: training under a wide range of effective corpus sizes Neff ∼ LogUniform(128 , 5000) ) lets the learned scalar absorb a length signal, so the gate fires more often at large N where attention is diffuse. Multiplicative score rescaling keeps a proper softmax but sharpens it, and is length-aware by construction: SSMax [ 9] multiplies the pre-softmax scores by s · log N (for a tuned scaling parameter s) so that the gap between the largest score and the bulk grows directly with N .Following GPT-OSS [27] we instantiate the sink with a learned scalar bL ∈ R per attention layer: 
+
+˜αhL,t = exp( shL,t )
+
+P 
+
+> t′
+
+exp( shL,t ′ ) + exp( bL) . (5) The appended slot has no value vector, so P 
+
+> t
+
+˜αhL,t ≤ 1 and a layer with diffuse attention writes a smaller residual update (gate-form derivation in §H). We refer to the resulting model as B LOCK -SEARCH -sink. We then produce B LOCK SEARCH -SSMax following [ 9 ] with s initialized to 0.43 
+
+at every attention layer. Both models compose with the block-sparse attention pattern and train seamlessly with the changes in §3. 
+
+Document-level sparse attention. On the flip side, we also consider scoring documents and keeping a top-B shortlist before the code generation is performed; this is a popular approach in long-context research that prunes the context down into a manageable state [ 16 , 14 , 17 , 23 , 24 , 25 ]. We perform a doc-level routing step at L16 , immediately upstream of the retrieval band (§4.2): a forward pass through L0 –L15 produces the per-document score Rsum  
+
+> 16
+
+(d) from §4.2; only the tokens of 8Table 2: Recall@1 ( ×100 ) vs. corpus size N on Natural Questions, MS MARCO, and HotpotQA. SSMax (applied at all 28 attention layers), top-B=256 routing at L16 , and their composition are strong for the full N sweep, recovering most of the gap to Qwen3-dense and matching or exceeding MSA-4B at ∼1/7 the parameters. NQ caps at N =8 ,607 to stay under a ∼1M-token prefill budget. The top row is the attention ceiling Rany  
+
+> 19
+
+(§4): the fraction of queries ( n=400 ) for which at least one head ranks the gold document first at L19 by pre-softmax QK-MaxSim.                                                                                                                                            
+
+> Natural Questions MS MARCO HotpotQA
+> N0.5k 1k 2.5k 5k 8.6k 0.5k 1k 2.5k 5k 10k 0.5k 1k 2.5k 5k 10k BLOCK SEARCH attn., Rany
+> 19 100.0 100.0 96.2 100.0 97.0 100.0 100.0 99.8 100.0 100.0 100.0 100.0 99.2 99.8 100.0
+> Qwen3-dense 95.5 86.5 62.9 51.4 39.6 95.5 75.2 52.8 38.5 20.2 99.0 97.5 92.2 87.5 79.5 MSA-4B 59.7 51.6 36.3 26.8 18.6 93.8 70.2 42.2 27.5 16.0 97.0 96.8 90.8 84.0 75.5 BLOCK SEARCH 92.2 77.7 43.9 4.8 0.2 95.8 75.2 43.8 18.8 0.2 97.0 95.2 64.2 13.0 0.5 - sink 91.2 76.2 45.6 10.3 1.5 96.5 75.2 45.2 21.2 2.5 95.0 93.2 58.0 14.5 1.0 - SSMax 90.5 79.5 58.1 42.6 30.3 95.5 74.5 49.8 33.8 16.5 96.5 95.2 85.8 73.5 56.8 - routing 93.2 82.7 63.2 48.1 34.6 96.0 74.5 50.7 38.2 18.8 98.2 98.2 91.8 86.5 78.5 - SSMax+routing 91.5 81.4 61.4 46.1 34.3 95.5 75.0 50.0 38.2 20.5 97.5 95.8 90.8 84.8 72.5
+
+the top B=256 documents participate in dense attention at L17 onward. We call this B LOCK SEARCH -routing, and we pick doc-level over token-level because each document is a conveniently coherent semantic unit. We refer the reader to §I for more information on the choice of B.
+
+5.2 Results 
+
+In the top row of Table 2, the attention ceiling Rany  
+
+> 19
+
+stays near perfect across all three datasets and the full range of N , confirming that the collapse in the rows below reflects a readout failure rather than a loss of the underlying retrieval signal. The proposed modifications aim to recover this latent retrieval signal at the model output. 
+
+The additive sink barely moves the large-N collapse. BLOCK SEARCH -sink yields only modest mid-N gains and a small lift at MS MARCO N =10k (0.2 → 2.5, from a near-floor base); its absolute level stays low across all three datasets and tracks the no-modification curve at large N . A learned constant cannot restore the gold token’s post-softmax weight once the softmax denominator has grown by orders of magnitude: it shifts the denominator uniformly and cannot rescale its N -dependence. 
+
+SSMax holds up across the full N sweep. SSMax closes most of the gap to Qwen3-dense on every dataset: MS MARCO 33 .8 at N =5k and 16 .5 at N =10k (82 × over no-modification, against 
+
+20 .2 for the dense baseline); HotpotQA 56 .8 at N =10k where the additive sink reaches 1.0. Scaling pre-softmax scores by log N widens the gap between gold and distractor scores so the post-softmax gold weight stays bounded as N grows: with ∆ = shL,t ⋆ − ¯shL, distractor , αgold ≈ 1/ 1+( N −1) N −s∆,and the log N schedule cancels the (N − 1) growth in the denominator whenever s∆ > 1.
+
+Top-B routing matches the dense baseline at large N . Routing applied to vanilla B LOCK SEARCH 
+
+reaches 18 .8 at MS MARCO N =10k , within 1.4 points of the dense baseline; on HotpotQA it reaches 
+
+78 .5, essentially matching the dense baseline ( 79 .5) and exceeding MSA-4B ( 75 .5) at roughly 1/7 the parameter count. We note that while routing addresses the same mechanism as SSMax, it reintroduces a retrieve-then-read (e.g. RAG) decomposition inside the model: the very structure in-context retrieval is intended to remove. 
+
+SSMax plus routing. Stacking the two (B LOCK SEARCH -SSMax-routing) gives the strongest configuration on MS MARCO at N =10k (20 .5, edging the dense baseline) and matches B LOCK -SEARCH -routing on Natural Questions and HotpotQA, indicating they may be complementary rather than redundant. A residual gap to Qwen3-dense at N =10k remains on HotpotQA and Natural Questions, and is the subject of future work. 
+
+Gap to attention ranking While the proposed modifications substantially narrow this gap, long-context performance remains well below the near-perfect attention ceiling Rany  
+
+> 19
+
+. This suggests that attention dilution, not attention ranking, remains the primary bottleneck for future work. 9Table 3: LIMIT length generalization: Recall@1 (multi-gold, n=1 ,000 ) as the corpus grows from 
+
+N =46 to N =5 ,000 by adding distractor biographies ( ∼8k to ∼850k tokens). The top row is the attention ceiling Rany  
+
+> 19
+
+(§4): the fraction of queries for which at least one head ranks a gold document first at L19 , by pre-softmax QK-MaxSim under the corrected (live-decode-faithful) measurement.                                                   
+
+> Method Scoring 46 500 1000 2500 5000
+> BLOCK SEARCH attention, Rany
+> 19 any-head MaxSim 1.000 1.000 1.000 1.000 1.000
+> BLOCK SEARCH ICR beam 0.354 0.094 0.022 0.000 0.000
+> -sink ICR beam 0.252 0.051 0.018 0.001 0.000
+> -SSMax ICR beam 0.439 0.215 0.141 0.067 0.054
+> -SSMax+routing ICR beam 0.439 0.234 0.215 0.196 0.149
+> Qwen3-dense pooled cosine 0.176 0.080 0.061 0.047 0.035
+> Random chance —0.043 0.004 0.002 0.001 0.000
+
+## 6 Out-of-Distribution Generalization: LIMIT 
+
+Experiments in §3–§5 focused on widely studied retrieval benchmarks that dense retrieval has been heavily optimized for. B LOCK SEARCH , with the proposed modifications, matches dense retrieval, which is a notable milestone given that these benchmarks largely define the strengths of dense retrieval. However, a fundamental question remains: can in-context retrieval actually outperform dense retrieval, going beyond matching it? To answer this question, we evaluate B LOCK SEARCH 
+
+on LIMIT [ 4], a benchmark requiring a lexical notion of similarity, where dense retrieval struggles. Under a strict out-of-distribution evaluation setup, B LOCK SEARCH significantly outperforms dense retrieval. 3
+
+Evaluation setup. In LIMIT, every query has two gold documents drawn from a corpus of 50 ,000 
+
+short biographies. We scale the corpus from N =46 (the gold documents only, “LIMIT-small”) up to N =5 ,000 by adding distractor biographies, which grows the prefill from ∼8k to ∼850k tokens while each query keeps its two golds. We evaluate the four B LOCK SEARCH variants of §5 against a same-backbone pooled dense retriever, with n=1 ,000 queries and an the same version of Recall@1 for the multi-gold regime as HotpotQA (§3.3). We do this for consistency; for true Recall@2 results, we refer the reader to §K. 
+
+Attention vs. readout. The attention ceiling Rany  
+
+> 19
+
+stays at 1.00 across the entire sweep, from N =46 
+
+up to N =5 ,000 (∼850k tokens): at every corpus size at least one head still ranks a gold document first. The base B LOCK SEARCH readout, by contrast, collapses far faster: from 0.354 to 0.000 by 
+
+N =2 ,500 . The gap between the two is the same readout bottleneck identified in §4, now both out of distribution (a lexical task that B LOCK SEARCH never trained on; its training mix is semantic, §C) and length-generalized: the per-head retrieval signal persists while the code-generation readout cannot recover it. 
+
+Routing. Of our modifications, SSMax+routing performs the best, with R@1 at 0.149 at N =5 ,000 
+
+while B LOCK SEARCH and B LOCK SEARCH -sink are at zero. SSMax also helps at mid-N , but reaches 0.054 R@1 by N =5 ,000 . The length-aware sink does not help on this lexical benchmark: BLOCK SEARCH -sink trails B LOCK SEARCH at every N (e.g. 0.252 vs. 0.354 at N =46 ), in contrast to its roughly neutral effect on MS MARCO. B LOCK SEARCH -SSMax-routing also stays above the same-backbone pooled Qwen3-dense retriever at every N (0.149 vs. 0.035 at N =5 ,000 ), suggesting that our methods do offer better out-of-distribution performance and potential extension to more complex tasks beyond basic semantic search. 
+
+Caveats. Routing delays but does not prevent the inevitable: B LOCK SEARCH -SSMax-routing is still declining with N (0.149 at ∼850k tokens). Thus, these modifications extend functional LIMIT retrieval to larger corpora, rather than solving it, which remains an open problem. 
+
+## 7 Conclusion 
+
+In this work, we presented the first systematic study of corpus-scale in-context retrieval with long-context language models, focusing on two requirements expected of practical retrieval systems: 
+
+> 3For additional out-of-distribution results, we also provide figures for the OBLIQ evaluation [46] in §L.
+
+10 scaling to million-token corpora and generalizing to corpus sizes far beyond those seen during training. We showed that, with appropriate training and architectural modifications, LMs can perform meaningful retrieval far beyond their nominal training regime, approaching dense retrieval performance at moderate scales. The story is a tale of two cities: on benchmarks built around single-vector retrieval, our methods match a strong dense baseline at million-token scale, while on LIMIT, designed to defeat embedding similarity, they exceed it by nearly 3×. At the same time, we identified attention dispersion as a fundamental scaling bottleneck: even when retrieval signals remain internally present, normalized attention mass collapses under extreme context growth. Motivated by this analysis, we demonstrated that length-aware tweaks to attention substantially improve retrieval performance at million-token scale. Together, our results suggest that scalable in-context retrieval is both promising and fundamentally constrained by attention dilution, motivating new directions for retrieval architectures and long-context modeling. 
+
+## Acknowledgment 
+
+This research was supported by the NVIDIA Academic Grant Program. Siddharth Gollapudi is supported by the NSF (CSGrad4US award no. 2313998). 
+
+## References 
+
+[1] Vladimir Karpukhin, Barlas Oguz, Sewon Min, Patrick Lewis, Ledell Wu, Sergey Edunov, Danqi Chen, and Wen-tau Yih. Dense passage retrieval for open-domain question answering. In Proceedings of the 2020 conference on empirical methods in natural language processing (EMNLP) , pages 6769–6781, 2020. [2] Jinhyuk Lee, Anthony Chen, Zhuyun Dai, Dheeru Dua, Devendra Singh Sachan, Michael Bo-ratko, Yi Luan, Sébastien MR Arnold, Vincent Perot, Siddharth Dalmia, et al. Can long-context language models subsume retrieval, rag, sql, and more? arXiv preprint arXiv:2406.13121 ,2024. [3] Patrick Lewis, Ethan Perez, Aleksandra Piktus, Fabio Petroni, Vladimir Karpukhin, Naman Goyal, Heinrich Küttler, Mike Lewis, Wen-tau Yih, Tim Rocktäschel, et al. Retrieval-augmented generation for knowledge-intensive nlp tasks. Advances in neural information processing systems , 33:9459–9474, 2020. [4] Orion Weller, Michael Boratko, Iftekhar Naim, and Jinhyuk Lee. On the theoretical limitations of embedding-based retrieval. arXiv preprint arXiv:2508.21038 , 2025. [5] Nilesh Gupta, Chong You, Srinadh Bhojanapalli, Sanjiv Kumar, Inderjit Dhillon, and Felix Yu. Scalable in-context ranking with generative models. arXiv preprint arXiv:2510.05396 , 2025. [6] Yifu Qiu, Varun R Embar, Yizhe Zhang, Navdeep Jaitly, Shay B Cohen, and Benjamin Han. Eliciting in-context retrieval and reasoning for long-context large language models. In Findings of the Association for Computational Linguistics: ACL 2025 , pages 3176–3192, 2025. [7] Yushi Bai, Shangqing Tu, Jiajie Zhang, Hao Peng, Xiaozhi Wang, Xin Lv, Shulin Cao, Jiazheng Xu, Lei Hou, Yuxiao Dong, et al. Longbench v2: Towards deeper understanding and reason-ing on realistic long-context multitasks. In Proceedings of the 63rd Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers) , pages 3639–3664, 2025. [8] Kelly Hong, Anton Troynikov, and Jeff Huber. Context rot: How increasing input tokens impacts llm performance. Technical report, Chroma, July 2025. [9] Ken M Nakanishi. Scalable-softmax is superior for attention. arXiv preprint arXiv:2501.19399 ,2025. [10] Jiaqi Leng, Xiang Hu, Junxiong Wang, Jianguo Li, Wei Wu, and Yucheng Lu. Understanding and improving length generalization in hierarchical sparse attention models. arXiv preprint arXiv:2510.17196 , 2025. [11] Petar Veliˇ ckovi´ c, Christos Perivolaropoulos, Federico Barbero, and Razvan Pascanu. Softmax is not enough (for sharp size generalisation). arXiv preprint arXiv:2410.01104 , 2024. 11 [12] Federico Barbero, Andrea Banino, Steven Kapturowski, Dharshan Kumaran, João G Araújo, Alex Vitvitskyi, Razvan Pascanu, and Petar Veliˇ ckovi´ c. Transformers need glasses! informa-tion over-squashing in language tasks. Advances in Neural Information Processing Systems ,37:98111–98142, 2024. [13] Sai Surya Duvvuri, Nirmal Patel, Nilesh Gupta, and Inderjit S Dhillon. Lucid: Attention with preconditioned representations. arXiv preprint arXiv:2602.10410 , 2026. [14] Enzhe Lu, Zhejun Jiang, Jingyuan Liu, Yulun Du, Tao Jiang, Chao Hong, Shaowei Liu, Weiran He, Enming Yuan, Yuzhi Wang, et al. Moba: Mixture of block attention for long-context llms. 
+
+arXiv preprint arXiv:2502.13189 , 2025. [15] Guangxuan Xiao, Junxian Guo, Kasra Mazaheri, and Song Han. Optimizing mixture of block attention. arXiv preprint arXiv:2511.11571 , 2025. [16] Yu Chen, Runkai Chen, Sheng Yi, Xinda Zhao, Xiaohong Li, Jianjin Zhang, Jun Sun, Chuanrui Hu, Yunyun Han, Lidong Bing, et al. Msa: Memory sparse attention for efficient end-to-end memory model scaling to 100m tokens. arXiv preprint arXiv:2603.23516 , 2026. [17] Daniel Ohayon, Itay Lamprecht, Itay Hubara, Israel Cohen, Daniel Soudry, and Noam Elata. Block sparse flash attention. arXiv preprint arXiv:2512.07011 , 2025. [18] Nandan Thakur, Nils Reimers, Andreas Rücklé, Abhishek Srivastava, and Iryna Gurevych. Beir: A heterogenous benchmark for zero-shot evaluation of information retrieval models. arXiv preprint arXiv:2104.08663 , 2021. [19] Cheng-Ping Hsieh, Simeng Sun, Samuel Kriman, Shantanu Acharya, Dima Rekesh, Fei Jia, Yang Zhang, and Boris Ginsburg. Ruler: What’s the real context size of your long-context language models? arXiv preprint arXiv:2404.06654 , 2024. [20] Yi Tay, Vinh Tran, Mostafa Dehghani, Jianmo Ni, Dara Bahri, Harsh Mehta, Zhen Qin, Kai Hui, Zhe Zhao, Jai Gupta, et al. Transformer memory as a differentiable search index. Advances in neural information processing systems , 35:21831–21843, 2022. [21] Yujing Wang, Yingyan Hou, Haonan Wang, Ziming Miao, Shibin Wu, Qi Chen, Yuqing Xia, Chengmin Chi, Guoshuai Zhao, Zheng Liu, et al. A neural corpus indexer for document retrieval. 
+
+Advances in Neural Information Processing Systems , 35:25600–25614, 2022. [22] Shashank Rajput, Nikhil Mehta, Anima Singh, Raghunandan Hulikal Keshavan, Trung Vu, Lukasz Heldt, Lichan Hong, Yi Tay, Vinh Tran, Jonah Samost, et al. Recommender systems with generative retrieval. Advances in Neural Information Processing Systems , 36:10299–10315, 2023. [23] Jiaming Tang, Yilong Zhao, Kan Zhu, Guangxuan Xiao, Baris Kasikci, and Song Han. Quest: Query-aware sparsity for efficient long-context llm inference. arXiv preprint arXiv:2406.10774 ,2024. [24] Wei Wu, Zhuoshi Pan, Kun Fu, Chao Wang, Liyi Chen, Yunchu Bai, Tianfu Wang, Zheng Wang, and Hui Xiong. Tokenselect: Efficient long-context inference and length extrapolation for llms via dynamic token-level kv cache selection. In Proceedings of the 2025 Conference on Empirical Methods in Natural Language Processing , pages 21275–21292, 2025. [25] Xiang Hu, Zhihao Teng, Jun Zhao, Wei Wu, and Kewei Tu. Efficient length-generalizable atten-tion via causal retrieval for long-context language modeling. arXiv preprint arXiv:2410.01651 ,2024. [26] Guangxuan Xiao, Yuandong Tian, Beidi Chen, Song Han, and Mike Lewis. Efficient streaming language models with attention sinks. arXiv preprint arXiv:2309.17453 , 2023. [27] Sandhini Agarwal, Lama Ahmad, Jason Ai, Sam Altman, Andy Applebaum, Edwin Arbus, Rahul K Arora, Yu Bai, Bowen Baker, Haiming Bao, et al. gpt-oss-120b & gpt-oss-20b model card. arXiv preprint arXiv:2508.10925 , 2025. 12 [28] Mathew Jacob, Erik Lindgren, Matei Zaharia, Michael Carbin, Omar Khattab, and Andrew Drozdov. Drowning in documents: consequences of scaling reranker inference. arXiv preprint arXiv:2411.11767 , 2024. [29] Dongyang Ma, Yan Wang, and Lan Tian. Block-attention for efficient prefilling. arXiv preprint arXiv:2409.15355 , 2024. [30] Jianlin Su, Murtadha Ahmed, Yu Lu, Shengfeng Pan, Wen Bo, and Yunfeng Liu. Roformer: Enhanced transformer with rotary position embedding. Neurocomputing , 568:127063, 2024. [31] Juechu Dong, Boyuan Feng, Driss Guessous, Yanbo Liang, and Horace He. Flex attention: A pro-gramming model for generating optimized attention kernels. arXiv preprint arXiv:2412.05496 ,2(3):4, 2024. [32] Nandan Thakur, Crystina Zhang, Xueguang Ma, and Jimmy Lin. Hard negatives, hard lessons: Revisiting training data quality for robust information retrieval with llms. arXiv preprint arXiv:2505.16967 , 2025. [33] Payal Bajaj, Daniel Campos, Nick Craswell, Li Deng, Jianfeng Gao, Xiaodong Liu, Rangan Majumder, Andrew McNamara, Bhaskar Mitra, Tri Nguyen, et al. Ms marco: A human generated machine reading comprehension dataset. arXiv preprint arXiv:1611.09268 , 2016. [34] An Yang, Anfeng Li, Baosong Yang, Beichen Zhang, Binyuan Hui, Bo Zheng, Bowen Yu, Chang Gao, Chengen Huang, Chenxu Lv, et al. Qwen3 technical report. arXiv preprint arXiv:2505.09388 , 2025. [35] Yingqi Qu, Yuchen Ding, Jing Liu, Kai Liu, Ruiyang Ren, Wayne Xin Zhao, Daxiang Dong, Hua Wu, and Haifeng Wang. Rocketqa: An optimized training approach to dense passage retrieval for open-domain question answering. In Proceedings of the 2021 conference of the North American chapter of the association for computational linguistics: human language technologies , pages 5835–5847, 2021. [36] Yanzhao Zhang, Mingxin Li, Dingkun Long, Xin Zhang, Huan Lin, Baosong Yang, Pengjun Xie, An Yang, Dayiheng Liu, Junyang Lin, et al. Qwen3 embedding: Advancing text embedding and reranking through foundation models. arXiv preprint arXiv:2506.05176 , 2025. [37] Mor Geva, Roei Schuster, Jonathan Berant, and Omer Levy. Transformer feed-forward layers are key-value memories. In Proceedings of the 2021 Conference on Empirical Methods in Natural Language Processing , pages 5484–5495, 2021. [38] Mor Geva, Avi Caciularu, Kevin Wang, and Yoav Goldberg. Transformer feed-forward layers build predictions by promoting concepts in the vocabulary space. In Proceedings of the 2022 conference on empirical methods in natural language processing , pages 30–45, 2022. [39] Catherine Olsson, Nelson Elhage, Neel Nanda, Nicholas Joseph, Nova DasSarma, Tom Henighan, Ben Mann, Amanda Askell, Yuntao Bai, Anna Chen, et al. In-context learning and induction heads. arXiv preprint arXiv:2209.11895 , 2022. [40] Wenhao Wu, Yizhong Wang, Guangxuan Xiao, Hao Peng, and Yao Fu. Retrieval head mecha-nistically explains long-context factuality. arXiv preprint arXiv:2404.15574 , 2024. [41] Wuwei Zhang, Fangcong Yin, Howard Yen, Danqi Chen, and Xi Ye. Query-focused retrieval heads improve long-context reasoning and re-ranking. In Proceedings of the 2025 Conference on Empirical Methods in Natural Language Processing , pages 23802–23816, 2025. [42] Omar Khattab and Matei Zaharia. Colbert: Efficient and effective passage search via contextual-ized late interaction over bert. In Proceedings of the 43rd International ACM SIGIR conference on research and development in Information Retrieval , pages 39–48, 2020. [43] nostalgebraist. interpreting GPT: the logit lens. LessWrong, 2020. [44] Ruining Li, Gabrijel Boduljak, et al. On vanishing variance in transformer length generalization. 
+
+arXiv preprint arXiv:2504.02827 , 2025. 13 [45] Pavlo Vasylenko, Hugo Pitorro, André FT Martins, and Marcos Treviso. Long-context general-ization with sparse attention. arXiv preprint arXiv:2506.16640 , 2025. [46] Diane Tchuindjo, Devavrat Shah, and Omar Khattab. Obliq-bench: Exposing overlooked bottle-necks in modern retrievers with latent and implicit queries. arXiv preprint arXiv:2605.06235 ,2026. [47] Stéphane Ross, Geoffrey Gordon, and Drew Bagnell. A reduction of imitation learning and structured prediction to no-regret online learning. In Proceedings of the fourteenth interna-tional conference on artificial intelligence and statistics , pages 627–635. JMLR Workshop and Conference Proceedings, 2011. 14 A Prompt Format 
+
+To make the input format used by B LOCK SEARCH concrete, fig. 4 shows a worked example for a single MS MARCO query against a four-document corpus. Each document is wrapped between BOS/EOS markers and bracketed by its randomly-assigned four-digit code (§3.2); RoPE[ 30 ] positions are reset to 0 at every BOS so that the document tokens occupy positions 0–Tdoc regardless of where the document sits in the prefill. Document tokens attend causally only inside their own block. After the corpus, the query block is appended at RoPE position Tdoc =300 and attends to the entire prefilled corpus. The query block carries an instruction prefix, the query, and the four answer slots; the model is supervised to emit the four-digit code identifying the gold document and is decoded autoregressively at inference. The same template is used at training and at evaluation, with one difference: at training time the four answer digits are teacher-forced and the on-policy auxiliary loss (§F) replays the model’s own rollout at the same four positions.          
+
+> # Document blocks: one per corpus document, codes sampled uniformly per training step. [BOS]Doc 7421: The Apollo program, also known as Project Apollo, was the third United States human spaceflight program carried out by NASA, which succeeded in landing the first humans on the Moon from 1969 to 1972 ... (Doc 7421)[EOS] [BOS]Doc 0394: Yuri Gagarin became the first human to journey into outer space on 12 April 1961, when his Vostok spacecraft completed one orbit of the Earth ... (Doc 0394)[EOS] [BOS]Doc 5108: ... (Doc 5108)[EOS] [BOS]Doc 8862: ... (Doc 8862)[EOS] # Query block: appended after all documents, at RoPE position 300. [BOS]Instruct: Given a web search query, retrieve relevant passages that answer the query Query: who was the first person to land on the moon Answer: 7 4 2 1
+
+Figure 4: Worked example of the B LOCK SEARCH prompt. Documents are prefilled with block-sparse attention (§3.2); the query is then appended and the model autoregressively decodes a four-digit code. The underlined digits are the supervision target at training time and the autoregressive output at inference. 
+
+## B Evaluation Suite                      
+
+> Dataset Split Queries Nmax Avg. tokens / doc Tokens @ Nmax
+> MS MARCO dev 400 10,000 94.8 948,421 HotpotQA test 400 10,000 116.3 1,163,144 NQ test 400 8,600 139.6 1,201,153
+
+Table 4: Datasets used for evaluation. Tokens measured under the Qwen3 tokenizer, capped at 300 tokens per document; means and totals are computed over the actual padded draws. Because NQ has far more tokens per document than MS MARCO or HotpotQA, we slightly truncate the dataset size, and reduce the number of hard negatives per query from 24 to either 20 or 21. This is the result of a round-robin algorithm that prunes out documents evenly from the dataset until we hit 8600 documents, or around 1.2M tokens. 15 C RLHN Training-Data Composition 
+
+We train all B LOCK SEARCH variants on a filtered version of the public RLHN-680K release [ 32 ]. 4
+
+Each query in the source ships with one or more positive passages and a pool of mined negatives. We score every (query, candidate) pair with Qwen3-Embedding-8B [ 34 ] (last-token pooling, ℓ2-normalized, max sequence length 512 ), then apply two filters and a fixed-shape trim: 1. drop queries with fewer than 16 candidates or fewer than 15 negatives; 2. drop queries where the highest-scoring candidate is a negative, i.e. max score( pos ) ≤
+
+max score( neg );3. retain the single best-scoring positive plus the top-15 highest-scoring negatives, giving exactly 
+
+16 documents per query. The resulting post-filter, post-trim dataset has 522 ,487 training samples drawn from 7 source corpora (table 5); each sample is one query paired with its 16 documents. Optimization steps are stratified per source: each batch contains queries from a single subset, so the gradient at any step reflects a single retrieval distribution. Documents are truncated to Tdoc =300 tokens at training time. Token counts in table 5 use the Qwen3-0.6B tokenizer; document-token averages are estimated from a stratified random sample of 8,000 documents per subset (standard error < 0.5 tokens at this n). Table 5: Composition of the post-filter, post-trim RLHN training mix. Source subsets carry their original RLHN names. Each training sample carries one query plus its 16 documents.                            
+
+> Source # training samples Avg. query tok Avg. doc tok MS MARCO 368,961 7.0 84.6 HotpotQA 81,551 24.2 100.6 FEVER 28,561 11.7 265.1 NQ 27,962 10.5 146.5 SCIDOCS-RR 11,787 13.4 221.9 FiQA 2,822 13.9 225.7 ArguAna 843 251.9 209.9 Total 522,487 ––
+> 4https://huggingface.co/datasets/rlhn/rlhn-680K
+
+16 D Training Hyperparameters 
+
+All B LOCK SEARCH variants in this paper share a single training recipe, fine-tuning Qwen/Qwen3-0.6B on the RLHN-filtered mix of §C with the on-policy auxiliary loss of §F. The shared hyperpa-rameters are listed in table 7; the modification variants of §5 (B LOCK SEARCH -sink, B LOCK SEARCH -SSMax) layer length-aware attention modifications on top of this recipe and otherwise inherit every other knob. The variant-specific differences are listed in table 6. 
+
+Note on the sink. The per-layer sink scalars bL sit in their own parameter group with LR 1×10 −3
+
+and zero weight decay (vs. 3×10 −5 / 0.01 for the base weights): the higher LR compensates for the small gradients flowing through σ(lse − bL) into a single scalar, and zero weight decay avoids pulling the gate toward an uninformative regime. The length signal is injected by sampling 
+
+Neff ∼ log U(N0, 5k) per step ( N0=128 for our 8-GPU setup) and using bL + α log( Neff /N 0) as the effective threshold, with the gate strength linearly ramped in over the first ∼2k steps. At evaluation the gate is disabled entirely: the learned bL stay in the checkpoint but do not affect attention. The mechanism only shapes what the rest of the model adapts to during training. 
+
+Note on SSMax. The per-layer scalars sL are initialized to 0.43 following [ 9] and trained in the shared parameter group — no separate LR or weight decay. Length conditioning is explicit through 
+
+log N , so the same scaling applies unchanged at evaluation. Table 6: Variant-specific hyperparameters: differences between B LOCK SEARCH , B LOCK SEARCH -sink, and B LOCK SEARCH -SSMax. All other settings are shared (table 7). 
+
+BLOCK SEARCH BLOCK SEARCH -sink BLOCK SEARCH -SSMax 
+
+Layers modified – all 28 all 28 
+
+Per-layer parameter – sink scalar bL scalar sL
+
+Initialization – b(0)  
+
+> L
+
+= 14 .0 s(0)  
+
+> L
+
+= 0 .43 
+
+Param-group LR – 1×10 −3 shared Param-group weight decay – 0 shared Warmup / ramp (steps) – 500 / 1500 —Length signal – bL + α log Neff  
+
+> N0
+
+sL log N
+
+Strength α – 1.0 —Gated rows – {0, 1, 2} —
+
+Neff at training – log U(N0, 5k) —
+
+N0 – 128 —
+
+Table 7: Shared training hyperparameters for all B LOCK SEARCH variants. 
+
+Group Value 
+
+Base model Qwen/Qwen3-0.6B (bf16) Distributed DDP, 8× NVIDIA A100 Optimizer AdamW (fused), β defaults Base LR / weight decay 3×10 −5 / 0.01 
+
+LR schedule linear warmup (start factor 0.05 ) over 1000 steps Per-GPU batch size 16 queries (effective global 128 )Epochs 1 pass over the RLHN-filtered triples Documents per query 16 (stratified from the top-32 RLHN candidates) Document length cap Tdoc = 300 tokens Code width / scheme 4 digits, sampled uniformly per training step Query rotary offset 300 
+
+Loss next-token CE on the 4-digit code + on-policy aux. loss weight λ = 0 .5 (§F) + KL distillation (auxiliary teacher) EMA α = 0 .95 
+
+Attention kernel block-sparse FlexAttention [31] 
+
+17 E Training details for Qwen3-dense 
+
+We fine-tune Qwen3-0.6B (FlashAttention-2, gradient checkpointing) into a last-token-pooled, ℓ2-normalized embedding model on the same RLHN-filtered mix used for B LOCK SEARCH training (§C). Each training example pairs one query with C=16 teacher-scored candidates; queries are formatted with the same instruction prefix used at evaluation (“ Given a web search query, retrieve relevant passages that answer the query ”), and only the last hidden state of each sequence is pooled. The loss is a contrastive term plus a teacher-distillation term: 
+
+L = LCE + λKL LKL , LCE = CE 
+
+ 1 
+
+> τs
+
+q C ⊤
+
+> all
+
+, y 
+
+
+
+, LKL = KL  σ(st/τ t) ∥ σ(ss/τ s), (6) where Call is the candidate matrix gathered (with gradient) across all DDP ranks, so each query is contrasted against W · B · C documents in total; y points at the gold candidate within the gathered block; and the KL term distills the teacher’s softmax over the local 16 candidates into the student’s softmax over the same 16. Hyperparameters are listed in table 8; we train a single epoch over the RLHN-filtered triples on 8× NVIDIA A100, with cosine decay to 0.1 η0 after a 500-step linear warmup, AdamW ( β defaults), and gradient clipping at 1.0. The resulting checkpoint is the 
+
+Qwen3-dense-0.6B dense baseline used throughout the paper. Table 8: Qwen3-dense training configuration. 
+
+Component Setting Value 
+
+Backbone Qwen3-0.6B, bf16, FlashAttn-2, grad-ckpt —Pooling last-token, ℓ2-normalized —Query / doc len max tokens 128 / 300 
+
+Candidates per query (RLHN teacher-scored) C=16 
+
+Negatives cross-rank gathered in-batch W · B · C
+
+Batch size per-GPU × GPUs 32 × 8
+
+Optimizer AdamW, weight decay 0.01 
+
+Learning rate peak η0 / floor 2×10 −5 / 0.1 η0
+
+Schedule linear warmup → cosine decay 500 steps warmup Grad clip ℓ2 1.0
+
+Student / teacher temperature τs / τt 0.02 / 0.02 
+
+KL weight λKL 0.5
+
+Epochs over RLHN-filtered 1
+
+18 F On-Policy Auxiliary Loss 
+
+§3.2 introduces an on-policy auxiliary loss to mitigate exposure bias when decoding the four-digit code. The procedure is given in algorithm 1. For each query in the batch, we have K candidate documents (1 positive, 15 hard negatives) with their full four-digit codes and Qwen3-Embedding-8B relevance scores, and the corpus has already been prefilled into the shared block-sparse cache (§3.2). 
+
+Algorithm 1 On-policy auxiliary loss for ICR decoding (per minibatch). 
+
+Require: model πθ ; batch of queries with prefilled document cache; per-query candidate codes 
+
+c(1) , . . . , c (K) (each a length-L digit string) with teacher relevance scores r(1) , . . . , r (K). 
+
+> 1:
+
+Compute teacher weights wk ∝ exp( r(k)/τ tch ) over the K candidates.  
+
+> 2:
+
+(1) Rollout the model on its own. Sample a code ˆa = ˆ a1 . . . ˆaL autoregressively from πθ with gradients off.  
+
+> 3:
+
+(2) Build a per-position teacher. For each digit position t: 
+
+> 4:
+
+Keep candidates whose first t − 1 digits match the rollout: Mt = {k : c(k) 
+
+> <t
+
+= ˆ a<t }. 
+
+> 5:
+
+Set the teacher distribution over the 10 digits to the candidate-weighted vote: 
+
+qt(d) ∝ X
+
+> k∈M t
+
+wk · 1[c(k) 
+
+> t
+
+= d]. 
+
+> 6:
+
+(3) Replay with gradients. Re-decode the four answer positions conditioned on ˆa<t (the rollout’s prefix, not the gold prefix) with gradients on, obtaining the student distributions πθ (· | ˆa<t ). 
+
+> 7:
+
+Loss: Laux = 1
+
+L
+
+PLt=1 CE  qt, π θ (· | ˆa<t ), added to the total loss as L = LCE + λLaux .The rollout uses the model’s own distribution rather than the gold code, so the prefixes that the four answer positions condition on are exactly the prefixes the model would visit at inference. The per-position teacher qt thus plays the role of a DAgger expert [ 47 ]: at every state visited along the model’s own trajectory, it specifies what the model should have done. We ramp λ in linearly from 0 over the first warmup steps so early training is dominated by the standard teacher-forced cross-entropy. 19 G Per-head softmax statistics at L19 
+
+§4 reports the vector-level outcome of the L19 failure ( ∥a19 ∥ preserved while the gold-driven fraction collapses to 0.01 ). Here we characterize the per-head softmax statistics that drive that vector-level swap, to show that the failure is a compound one: gold’s pre-softmax score erodes and the competitor mass widens against it. Gold’s per-head softmax mass admits the closed form gold _post hL = σ lse G − lse ¯G
+
+, a sigmoid of the gap between the gold-side and non-gold-side log-sum-exps. We track gold’s largest attention logit smax  
+
+> G
+
+(which dominates lse G ) and the noise gap lse ¯G − lse G separately at L19 across the same 
+
+N sweep used in the main text (table 9). Both move the wrong way: smax  
+
+> G
+
+drops by ∼ 3 logit units (gold’s query alignment itself erodes) and the noise gap widens by ∼ 3.5 (competitors out-compete gold for log-mass). Together the per-head gold mass at L19 (median over heads, denoted 
+
+gold _post 19 ) collapses by ∼ 150 ×, against only the ∼ 20 × that pure O(N ) denominator dilution would predict [ 11 , 12 ]. The L19 collapse is therefore a compound failure of two independent effects, and either one alone would not produce the observed magnitude. Table 9: Signal/noise decomposition at L19 on B LOCK SEARCH , MS MARCO, n=400 , median across heads. The gold signal smax  
+
+> G
+
+drops by ∼ 3 logit units, the noise gap lse ¯G − lse G widens by 
+
+∼ 3.5, and gold _post 19 collapses by ∼ 150 ×.                     
+
+> Nsmax
+> Glse ¯G−lse Ggold _post 19
+> 500 14 .60 +4 .63 0.0320 1k 14 .27 +5 .44 0.0152 2.5k 13 .81 +6 .60 0.0039 5k 12 .95 +7 .31 0.0010 10k 11 .53 +8 .06 0.0002
+
+20 H Equivalence of the additive-sink and sigmoid-gate forms of attention 
+
+We prove that the additive-sink softmax of eq. (5) is exactly equivalent to multiplying the standard softmax of eq. (1) by a sigmoid gate. 
+
+Proposition 1. Fix a layer L and head h. Let s = ( shL, 1, . . . , s hL,T ) ∈ RT be the pre-softmax logits at the d1-emission position, bL ∈ R the learned sink scalar, αhL,t the standard softmax weight from eq. (1) , and ˜αhL,t the additive-sink weight from eq. (5) . Define the layer-and-head-wise gate 
+
+ghL = σ lse( s) − bL
+
+, lse( s) = log 
+
+> T
+
+X
+
+> t=1
+
+exp( shL,t ), σ(x) = 11 + e−x .
+
+Then for every t ∈ { 1, . . . , T },
+
+˜αhL,t = αhL,t · ghL.
+
+Proof. Let Z = PTt′=1 exp( shL,t ′ ) = exp(lse( s)) denote the standard softmax normalizer. By eq. (1), 
+
+αhL,t = exp( shL,t )/Z . By eq. (5), the additive-sink weight is 
+
+˜αhL,t = exp( shL,t )
+
+Z + exp( bL) .
+
+Multiply numerator and denominator by 1/Z :
+
+˜αhL,t = exp( shL,t )/Z 
+
+1 + exp( bL)/Z = αhL,t · 11 + exp( bL − lse( s)) = αhL,t · σ lse( s) − bL
+
+ = αhL,t · ghL,
+
+where the third equality uses σ(x) = 1 /(1 + e−x) with x = lse( s) − bL.
+
+Interpretation. The gate ghL ∈ (0 , 1) depends only on the per-(layer, head) comparison between 
+
+lse( s) — a measure of how much pre-softmax mass the layer’s logits already concentrate — and the learned threshold bL. When the layer’s logits are sharp and concentrated relative to bL (large 
+
+lse ), ghL → 1 and eq. (5) reduces to the standard softmax. When the logits are diffuse and many tokens contribute small amounts (small lse relative to bL), ghL → 0 and the layer’s contribution to the residual update aL is suppressed multiplicatively. This is the mechanism by which the sink “costs” a noisy layer its write to the residual stream without altering the relative ranking of the per-token weights. 21 I Top-B Routing Recall 
+
+The top-B routing of §5 hinges on the assumption that the router can keep the gold document inside a small top-B shortlist with high probability across our checkpoints. We measure exactly that: for B ∈ { 32 , 64 , 128 , 256 , 512 , 1024 } we report the fraction of queries whose gold document survives the QK-MaxSim router at layer 16 , the default routing configuration used in §5. Evaluation uses N =10 ,000 MS MARCO documents and n=400 queries (the same query slice for all three checkpoints). Recall@ B is derived per query from the gold document’s rank under the router’s score relative to the full N =10 ,000 ranking. Across all three checkpoints the gold document is retained for at least 93 .5% of queries at the default 
+
+B=256 (B LOCK SEARCH : 0.962 ; B LOCK SEARCH -sink: 0.962 ; B LOCK SEARCH -SSMax: 0.935 ), and the curves flatten between B=256 and B=512 — going from B=256 to B=1024 recovers an additional ≤ 5 percentage points on every checkpoint (fig. 5). This is consistent with B=256 
+
+being a practical routing budget on this corpus: the remaining miss rate is dominated by the long tail of routing errors (gold ranked beyond the top-1024 ), which is unaffected by any reasonable enlargement of B. B LOCK SEARCH -SSMax’s lower curve at small B (0.762 at B=32 vs. 0.838 
+
+for B LOCK SEARCH ) is consistent with SSMax placing slightly less probability mass on the gold document at the routing layer, but the gap closes by B=512 .       
+
+> 32 64 128 256 512 1024
+> 0
+> 0.25
+> 0.5
+> 0.75
+> 1
+> B= 256
+> Top-Brouting budget
+> Recall@ B (gold survives)
+> BLOCK SEARCH
+> BLOCK SEARCH -sink
+> BLOCK SEARCH -SSMax
+
+Figure 5: Routing recall@ B for QK-MaxSim routing at layer 16 on MS MARCO with N =10 ,000 
+
+and n=400 queries. Dashed line marks the default B=256 used throughout the paper. 22 Algorithm 2 Digit-by-digit beam search for a single query. 
+
+Require: model πθ with the document corpus prefilled into its (block-sparse) KV cache; digit token ids D = {id(0) , . . . , id(9) }; code length L=4 ; beam width B; per-step prune kstep ; return depth 
+
+kret . 
+
+> 1:
+
+Append the query and forward once; let ℓ1 = log softmax of the next-token logits restricted to 
+
+D. 
+
+> 2:
+
+Initialize B beams from the top-min( B, 10) first digits, with beam scores = ℓ1 of the chosen digits; broadcast the KV cache across the B beams.  
+
+> 3:
+
+for t = 2 , . . . , L do  
+
+> 4:
+
+Forward all live beams one step; let ℓ(b) 
+
+> t
+
+be the digit log-probs for beam b. 
+
+> 5:
+
+Candidate scores: score( b, d ) = beam _score( b) + ℓ(b) 
+
+> t
+
+(d). 
+
+> 6:
+
+Per beam, keep only its top-kstep digits (set the rest to −∞ ).  
+
+> 7:
+
+Flatten over (b, d ) and keep the global top-B survivors; record each survivor’s parent beam and digit.  
+
+> 8:
+
+Reorder the KV cache by parent index; append the chosen digit to each surviving beam.  
+
+> 9:
+
+end for  
+
+> 10:
+
+Sort the B completed beams by score; return the top-kret digit strings. 
+
+## J Beam Search and Recall@5 
+
+The main text reports Recall@1 over the single highest-probability four-digit code (§3.3). Here we (i) specify the decoding procedure used to turn the model’s per-digit distributions into a ranked list of document codes, and (ii) report the corresponding Recall@5 across the full length-generalization sweep, so that the main-text Recall@1 conclusions can be checked at a wider cutoff. 
+
+J.1 Decoding 
+
+A query is answered by a digit-by-digit beam search over the full N -document corpus (context-parallel across GPUs), returning a ranked list of complete codes. Recall@ k is computed over this ranking. 
+
+J.2 Digit-by-digit beam search 
+
+Constrained beam search over a tree of identifier tokens is the standard decoder for generative and in-context retrieval, and we follow that practice rather than introduce a new procedure [ 20 , 21 , 5]. Because each identifier here is exactly four digits drawn from a 10 -symbol vocabulary, the search tree has depth 4 and branching factor 10 , and the beam is over digit strings rather than free-form text. Algorithm 2 shows the routine; our default configuration is beam width B=25 , per-step pruning 
+
+kstep =5 , and return depth kret =5 (so Recall@5 reads the top five returned codes). 
+
+J.3 Recall@5 across the length-generalization sweep 
+
+Table 10 reports Recall@5 for the same variants, datasets, and corpus sizes as the main-text Recall@1 (fig. 1 and table 2). The qualitative picture is identical to Recall@1: the position-coded variant and the no-modification model collapse by N =5 k– 10 k on every dataset, while SSMax, top-B routing, and their composition hold up across the full sweep. Recall@5 stays low wherever Recall@1 collapses and rises with it wherever the modifications hold (e.g. MS MARCO B LOCK SEARCH at N =10 k: R@1 0.2, R@5 0.2; B LOCK SEARCH -routing 18 .8 → 47 .5), confirming that the main-text collapse is not an artifact of the top-1 cutoff. For HotpotQA, whose queries have two golds, we also report Recall@2 in table 11 for completeness. 23 Table 10: Recall@5 (×100 ) vs. corpus size N , mirroring table 2 ( n=400 ). NQ caps at N =8 ,607 .HotpotQA has two golds per query, so its columns report true recall (the fraction of the two golds that land in the top 5); Natural Questions and MS MARCO are effectively single-gold, where this matches the hit-based metric used in the main body.                                                                                                                           
+
+> Natural Questions MS MARCO HotpotQA
+> N0.5k 1k 2.5k 5k 8.6k 0.5k 1k 2.5k 5k 10k 0.5k 1k 2.5k 5k 10k BLOCK SEARCH 96.0 91.7 62.9 9.5 0.2 99.5 98.0 76.2 38.2 0.2 70.6 67.9 47.8 11.0 0.0 BLOCK SEARCH -position 96.7 90.7 39.4 2.8 0.2 99.2 96.5 67.0 7.8 1.0 67.9 64.4 34.6 1.9 0.0 BLOCK SEARCH -offpolicy 95.5 90.7 56.9 6.0 0.2 99.8 97.0 77.8 29.2 0.5 68.2 66.4 43.0 6.1 0.0 BLOCK SEARCH -sink 95.5 90.5 65.7 21.8 2.3 99.8 97.8 76.8 45.2 9.0 73.1 70.6 46.2 13.6 0.0 BLOCK SEARCH -SSMax 96.0 92.7 79.2 68.4 56.9 99.2 97.5 81.0 63.0 43.8 68.8 66.6 59.0 50.0 41.1 BLOCK SEARCH -routing 98.2 95.2 85.2 71.2 60.2 99.5 98.5 83.0 66.8 47.5 75.0 74.4 67.8 60.1 53.6 BLOCK SEARCH -SSMax-routing 96.5 94.7 80.4 72.9 59.9 99.2 97.2 80.8 66.0 45.0 73.6 72.5 66.4 58.1 51.5
+
+Table 11: HotpotQA Recall@2 (×100 , true recall = fraction of a query’s two golds in the top 2,
+
+n=400 ), for completeness alongside the HotpotQA Recall@5 column of table 10 (same runs). 
+
+Method 0.5k 1k 2.5k 5k 10k BLOCK SEARCH 63.4 61.2 39.8 8.9 0.0 BLOCK SEARCH -position 61.2 58.0 29.6 1.2 0.0 BLOCK SEARCH -offpolicy 61.2 58.5 36.5 3.8 0.0 BLOCK SEARCH -sink 65.0 61.1 38.5 9.5 0.0 BLOCK SEARCH -SSMax 60.9 60.9 51.6 43.2 35.1 BLOCK SEARCH -routing 68.1 67.2 58.6 52.1 46.0 BLOCK SEARCH -SSMax-routing 64.6 64.0 57.4 50.2 44.6 
+
+## K LIMIT worked example 
+
+Figure 6 shows a worked LIMIT-small example for the lexical retrieval task evaluated in §6. 
+
+# LIMIT-small corpus: one short biography per person (46 documents). [BOS]Doc 6359: Geneva Durben likes Quokkas, River Otters, Tapirs, Asymmetry, Snow Leopards, ..., Joshua Trees, Pansies, Soy Sauce, Cards Against Humanity and Elm Trees. (Doc 6359)[EOS] [BOS]Doc 9841: ... (a different person, whose list does not contain Joshua Trees) ... (Doc 9841)[EOS] # Query block: appended after all 46 documents, at RoPE position 300. [BOS]Instruct: Given a web search query, retrieve relevant passages that answer the query Query: Who likes Joshua Trees? Answer: 6 3 5 9 
+
+Figure 6: Worked LIMIT-small example. Relevance is lexical: the gold document is a person whose preference list contains the queried item ( Joshua Trees ), among the 46 documents. Each query has two gold documents (we show one); either code is a correct answer. The query and gold text are from the evaluated corpus. 
+
+K.1 Recall@2 and Recall@5 
+
+The main-text table 3 reports Recall@1 under the metric used throughout the body (a query counts if either gold is in the top 1). Here we additionally report standard Recall@ k: the fraction of a query’s two golds that appear in the top k, at k=2 (table 12) and k=5 (table 13). The picture is the same: SSMax+routing holds up across the sweep while B LOCK SEARCH and B LOCK SEARCH -sink collapse by N =2 .5k, and all baselines stay far below the Rany  
+
+> 19
+
+attention ceiling, which surfaces both golds within the top 2 at every N .24 Table 12: LIMIT Recall@2 (fraction of a query’s two golds in the top 2, n=1 ,000 ) vs. corpus size N ,for the same runs as table 3. Top row is the Rany  
+
+> 19
+
+attention ceiling; the dense baseline is dense_v1 .
+
+Method Scoring 46 500 1000 2500 5000 
+
+BLOCK SEARCH attention, Rany  
+
+> 19
+
+any-head MaxSim 1.000 1.000 1.000 1.000 1.000 
+
+BLOCK SEARCH ICR beam 0.286 0.069 0.015 0.000 0.000 
+
+BLOCK SEARCH -sink ICR beam 0.198 0.038 0.016 0.002 0.000 
+
+BLOCK SEARCH -SSMax ICR beam 0.303 0.138 0.099 0.042 0.034 
+
+BLOCK SEARCH -SSMax-routing ICR beam 0.303 0.157 0.140 0.132 0.103 
+
+Qwen3-dense pooled cosine 0.160 0.063 0.045 0.036 0.025 
+
+Random chance — 0.043 0.004 0.002 0.001 0.000 
+
+Table 13: LIMIT Recall@5 (fraction of a query’s two golds in the top 5, n=1 ,000 ) vs. corpus size 
+
+N , for the same runs as table 3. 
+
+Method Scoring 46 500 1000 2500 5000 
+
+BLOCK SEARCH attention, Rany  
+
+> 19
+
+any-head MaxSim 1.000 1.000 1.000 1.000 1.000 
+
+BLOCK SEARCH ICR beam 0.436 0.104 0.027 0.000 0.000 
+
+BLOCK SEARCH -sink ICR beam 0.340 0.070 0.032 0.004 0.000 
+
+BLOCK SEARCH -SSMax ICR beam 0.437 0.190 0.133 0.065 0.048 
+
+BLOCK SEARCH -SSMax-routing ICR beam 0.437 0.211 0.196 0.187 0.139 
+
+Qwen3-dense pooled cosine 0.300 0.098 0.066 0.050 0.039 
+
+Random chance — 0.109 0.010 0.005 0.002 0.001 
+
+## L OBLIQ results 
+
+We additionally evaluate on OBLIQ [ 46 ], a benchmark of “ oblique ” retrieval, where relevance is indirect rather than lexical or topical. We use three of its tasks. Math and Writing are analogues 
+
+tasks: the query is a passage (a competition mathematics problem, or a paragraph of prose), and the gold documents are other passages that share an abstract reasoning pattern or argument with it despite entirely different surface content. Twitter is a descriptive task: the query is a natural-language description of a class of posts, and the gold documents are tweets matching that description (see fig. 7 for one example per task). Corpus size N is set per task by feasibility: Math uses the full corpus, while Twitter and Writing use gold-preserving subsamples (drawn from the full 72 k- and 
+
+10 ,388 -document corpora); per-dataset document counts, query counts, and average lengths are given in table 14. We apply the OBLIQ self-match exclusion (each query’s own source passage is dropped from its ranking). As in §6 we evaluate the four B LOCK SEARCH variants and the same-backbone pooled dense retriever, and additionally a long-context generative-retrieval baseline, MSA-4B [16 ]; for ICR the ranked list is the beam search output. Unlike the main body, here we report standard Recall@ k: the fraction of a query’s gold documents that appear in the top k. Recall is inversely related to the number of golds per query — a top-k list can hold at most k of them — so with OBLIQ’s many golds (a mean of ∼9–13 per query) the values are correspondingly small. For the 
+
+Rany  
+
+> 19
+
+ceiling, a gold counts as retrieved at k if some head ranks it within its top k.Table 14: OBLIQ dataset statistics for the evaluated subsets. Lengths are in Qwen3-0.6B tokens (mean over documents, and over queries that have a gold). Documents are truncated to 300 tokens at prefill, which affects mainly Writing. Twitter and Writing corpora are gold-preserving subsamples of the full 72 k- and 10 ,388 -document corpora. 
+
+Avg. tokens Dataset Documents Queries Doc Query Math (analogue) 3,507 151 116 181 
+
+Twitter (descriptive) 10 ,000 281 52 53 
+
+Writing (analogue) 4,000 512 498 653 
+
+25 Math (analogues). Instruction: Given a mathematical problem statement, retrieve passages that present analogous problems or techniques. 
+
+Query: Let (M, d ) be a nonempty complete metric space and S : M → M with S2 a strict contraction; show that S has a unique fixed point. . . . 
+
+Gold: Let U be a nonempty bounded open set in Rn; . . . show that there is an affine transformation carrying U to the unit ball. 
+
+Writing (analogues). Instruction: Given a passage of writing, retrieve other passages with analogous ideas, arguments, or stylistic techniques. 
+
+Query: “We see some good news in alignment – as models become more capable, they are also more aligned . . . but still far from the reliability required in high-stakes applications.” 
+
+Gold: “Leonard Shelby, the protagonist of Christopher Nolan’s film Memento , suffers from anterograde amnesia . . . he uses notes, photos, and tattoos to communicate facts to his future self.” 
+
+Twitter (descriptive). Instruction: Given a description of a tweet, retrieve tweets that match the description. 
+
+Query: Find tweets where users implicitly mock feel-good branding and token measures from tech moguls and politicians while actual wars intensify. 
+
+Gold: “@user ‘but we decided to send 8000 helmets to the Strait of Hormuz to help defend the free world’ ” 
+
+Figure 7: Worked OBLIQ examples, one per task. Math and Writing are analogues tasks (the gold shares an abstract pattern with the query despite different surface content); Twitter is a descriptive task. Query and gold text are from the evaluated corpora, abbreviated; the Twitter handle is anonymized. Table 15: OBLIQ results: Recall@1 / Recall@5 (the fraction of a query’s gold documents that appear in the top k; with many golds per query these values are small), with the OBLIQ self-match exclusion applied. The top row is the attention ceiling Rany  
+
+> 19
+
+(§4): the fraction of a query’s golds that some head ranks within top-k at L19 , by pre-softmax QK-MaxSim. MSA-4B emits ∼1 citation per query, so its R@5 is close to its R@1. On Twitter, Rany  
+
+> 19
+
+surfaces nearly every gold within top-5 (R@5 ≈1)yet almost none at rank 1, because a fixed set of sink documents occupies the top positions for the relevant head. 
+
+Math ( N =3 .5k) Twitter ( N =10 k) Writing ( N =4 k) Method Scoring R@1 R@5 R@1 R@5 R@1 R@5 BLOCK SEARCH attention, Rany  
+
+> 19
+
+any-head MaxSim 0.852 0.866 0.001 1.000 0.942 0.998 
+
+BLOCK SEARCH ICR beam 0.000 0.000 0.000 0.000 0.002 0.004 
+
+BLOCK SEARCH -sink ICR beam 0.000 0.001 0.000 0.001 0.000 0.003 
+
+BLOCK SEARCH -SSMax ICR beam 0.000 0.008 0.001 0.004 0.000 0.007 
+
+BLOCK SEARCH -SSMax-routing ICR beam 0.008 0.032 0.001 0.003 0.001 0.006 
+
+Qwen3-dense pooled cosine 0.014 0.057 0.000 0.004 0.009 0.025 
+
+MSA-4B gen. citations 0.013 0.027 0.002 0.008 0.004 0.008 
+
+26
