@@ -1,0 +1,506 @@
+Title: Diffusion-GR2: Diffusion Generative Reasoning Re-ranker
+
+URL Source: https://arxiv.org/pdf/2607.01170v2
+
+Published Time: Tue, 07 Jul 2026 01:53:01 GMT
+
+Number of Pages: 17
+
+Markdown Content:
+# Diffusion-GR2: Diffusion Generative Reasoning Re-ranker 
+
+Zhuoxuan Zhang 2,∗, Kangqi Ni 2,∗, Yuhang Chen 2,∗, Mingfu Liang 1,∗,†,‡, Xiaohan Wei 1, Yunchen Pu 1, Fei Tian 1, Chonglin Sun 1, Frank Shyu 1, Adam (Yang) Song 1, Sandeep Pandey 1, Luke Simon 1,‡, Tianlong Chen 2,‡, Xi Liu 1,‡
+
+> 1
+
+Meta AI, 2UNC Chapel Hill 
+
+> ∗
+
+Co-first author , †Project and Execution Lead , ‡Joint corresponding author 
+
+Generative reasoning re-rankers achieve strong recommendation accuracy by emitting a chain-of-thought before re-ordering a candidate list, but they are slow at inference: an autoregressive (AR) decoder spends one sequential forward pass per reasoning token, and the reasoning trace far exceeds the ranking it produces. To reduce this cost, block-diffusion language models decode many positions in parallel over a few denoising steps and are substantially faster, yet naively converting an AR re-ranker into one opens two accuracy gaps: (1) a structural gap: answer positions are denoised in parallel and scored independently, so the decoder emits invalid rankings (duplicated, dropped, or out-of-set identifiers) that AR avoids through left-to-right masking; and (2) a distributional gap: fine-tuning the converted model on fixed teacher trajectories is off-policy relative to its own decoding at inference, leaving a residual accuracy gap. To close both gaps while keeping the speedup, we propose Diffusion-GR2 , a recipe that converts our AR reasoning re-ranker (GR2) into a block-diffusion re-ranker. First, conversion fine-tuning (CFT) adapts the AR-initialized diffusion model to denoise the answer into a valid permutation on its own, without an external constrained decoder. Next, 
+
+on-policy distillation (OPD) then supervises the model on its own decoded trajectories with dense per-token targets from the AR teacher. Finally, we apply a reinforcement-learning (RL) stage against a re-ranking reward on top of OPD’s on-policy policy. Experiments on Amazon Beauty demonstrate that Diffusion-GR2 recovers to near-parity with the AR re-ranker, while block-parallel decoding raises decode throughput by 2.4–3.5× at the model’s reasoning output length. Ablations show that CFT recovers most of the conversion gap, and that on-policy distillation further closes it to the AR reference.  
+
+> Date:
+
+June 30, 2026 
+
+## 1 Introduction 
+
+Generative reasoning re-rankers (Liang et al., 2026) built on large language models (LLMs) (Radford and Narasimhan, 2018; Radford et al., 2019) have recently been shown to refine the final stage of recommendation pipelines by reasoning explicitly over a short candidate list before committing to an ordering. A reasoning re-ranker takes a user’s purchase history together with a pre-ranked list of candidate items produced by a retriever, generates a chain-of-thought that justifies a re-ordering, and emits a permutation of the candidates. The reasoning is what makes these models accurate: it grounds the decision in item semantics and user intent rather than a single learned score. It is also what makes them expensive. An autoregressive (AR) decoder spends one sequential forward pass per reasoning token, and the reasoning trace is far longer than the ranking it ultimately produces. In a production re-ranking setting, where the same model is queried for every impression, this sequential cost is the binding constraint. 
+
+Block-diffusion language models (Arriola et al., 2025b; Wu et al., 2025) suggest a way out. Rather than walking the sequence left to right, they decode many positions at once and refine them over a small number of denoising steps, committing the most confident positions at each step. This is attractive precisely where AR is most expensive, i.e., the long reasoning span, and it is the source of a large potential speedup. But the 
+
+> arXiv:2607.01170v2 [cs.IR] 4 Jul 2026
+
+Diffusion-GR2 Overview 
+
+> Convert an accurate sequential GR2 re-ranker into a block-parallel diffusion reasoner
+
+Re-ranking request            
+
+> Prompt P: user history H plus N candidate items D as semantic IDs.
+> User history H s1 s2 ... sk Candidates D c1 c2 c3 c4 c5 c6 c7 c8 c9 c10 task: output a permutation
+
+AR GR2 reference     
+
+> SFT + RL reasoning re-ranker. Accurate, but generates one token at a time.
+> t1 t2 t3 t4 ... NFE approximately output length
+
+Block-diffusion init     
+
+> Reuse AR weights; switch to block-causal masked denoising.
+> MMMMM
+
+Conversion recipe 1 CFT  
+
+> Masked-diffusion fine-tuning transfers AR format competence and recovers valid rankings.
+> 2
+
+OPD  
+
+> Roll out the diffusion policy; distill dense token targets from the AR teacher on-policy.
+> 3
+
+RL 
+
+> Optimize rank-promotion and conditional format rewards from the OPD policy.
+
+Diffusion-GR2        
+
+> Block-parallel reasoning re-ranker with AR-style prompt caching.
+> Reasoning trace r1 r2 ... Final ranking a c7 c2 c9 ... serve ranking only prompt convert deploy
+> AR teacher logits for OPD
+> near AR ranking quality 2.4-3.5x decode throughput valid permutation of candidates
+
+Figure 1 Overview of Diffusion-GR2. We start from the AR GR2 reasoning re-ranker, initialize a block-diffusion decoder from its weights, and recover the conversion gap through conversion fine-tuning (CFT), on-policy distillation (OPD), and reinforcement learning (RL). The final model preserves the GR2 re-ranking interface while reducing sequential decoding cost through block-parallel denoising. 
+
+speedup does not come for free. Replacing the AR decoder with a diffusion decoder drops ranking accuracy ,and the central question of this paper is how to convert the re-ranker to a diffusion decoder while giving up as little accuracy as possible. We study this trade-off directly: we measure the accuracy cost of the conversion and develop a recipe that minimizes it. We refer to the resulting system as Diffusion-GR2 , the block-diffusion counterpart of our autoregressive re-ranker GR2. The starting point is our trained AR re-ranker. Following GR2, it is obtained by supervised fine-tuning (SFT) on high-quality reasoning traces over semantic-ID-grounded items, followed by reinforcement learning (RL) against a re-ranking reward; the resulting model sets the accuracy bar we try to recover after conversion. We initialize a block-diffusion model from this AR model and ask it to reproduce the same reasoning-and-ranking behavior under parallel decoding. The accuracy cost of the conversion has two sources, and Diffusion-GR2 addresses each in turn. The first source is structural and concentrates at the answer. The final ranking must be a permutation of exactly the candidates that were given. An AR decoder enforces this implicitly: it commits to one item at a time and can mask the items it has already used. A diffusion decoder predicts the answer positions in parallel and scores them independently, so nothing prevents it from repeating an item, omitting one, or emitting an identifier that was never a candidate. In practice this happens often enough to cost real accuracy. We address this failure mode with conversion fine-tuning (CFT): because the diffusion model is initialized from the AR re-ranker, which produces valid permutations for free, fine-tuning it on the re-ranking data transfers this competence, and the converted model learns to denoise the answer span into a valid permutation on its own without an external constrained decoder, recovering most of the accuracy lost at conversion. The second source is distributional . After we fine-tune the converted model on fixed teacher trajectories, training is off-policy relative to inference: the model is trained on teacher reasoning traces and ground-truth answers, but at inference it decodes its own trajectories under block-diffusion decoding. The mismatch leaves a residual gap. We shrink it with on-policy distillation (OPD): the converted model generates trajectories under its real block-diffusion decoding distribution, and the AR model supplies dense, per-token supervision on exactly those samples. Because supervision is computed on the model’s own outputs, training matches the distribution the model is evaluated under. Finally, a reinforcement-learning stage against a re-ranking reward recovers the remaining margin; consistent with our experience training the AR model, RL is most effective when it starts from OPD’s healthy on-policy policy rather than cold. We summarize our contributions as follows. 
+
+• Speed–accuracy trade-off. We frame and quantify the cost of replacing the AR decoder of a reasoning re-ranker with a block-diffusion decoder, and present Diffusion-GR2, a recipe that minimizes the accuracy cost while retaining most of the speedup. 
+
+• Conversion fine-tuning (CFT). We adapt the AR-initialized diffusion model so that it emits valid permuta-tions under parallel decoding without an external constrained decoder; by ablation, CFT accounts for most of the recovered accuracy. 
+
+• On-policy distillation, then RL. We show the residual off-policy gap is minimized by on-policy distillation (OPD), which recovers the bulk of the gap on-distribution, with a reinforcement-learning stage applied on top of OPD to recover the remaining margin. 
+
+• Accuracy–latency frontier. We validate Diffusion-GR2 on Amazon Beauty, showing that the converted model retains near-AR accuracy at 2.4–3.5× higher decode throughput. The remainder of this paper is organized as follows. Section 2 recaps the AR reasoning re-ranker and block-diffusion language models and fixes notation. Section 3 presents the Diffusion-GR2 conversion pipeline: the trade-off and its structural cause (section 3.3), conversion fine-tuning (section 3.4), on-policy distillation (section 3.5), and the reinforcement-learning stage (section 3.6). Section 4 reports experiments and analyses on Beauty. Section 5 reviews related work, and section 7 concludes. Additional algorithmic details, derivations, and hyperparameters are deferred to the Appendix. 
+
+## 2 Preliminaries and Problem Setup 
+
+2.1 Reasoning Re-ranking 
+
+We study reasoning-enabled re-ranking over a fixed candidate set, following the GR2 formulation. Each instance consists of a user purchase history H = ( sv1 , . . . , s vk ) and a pre-ranked candidate list D = ( sy1 , . . . , s yN ) of N
+
+items produced by a retriever, where each item is represented by a semantic identifier (SID) (Rajput et al., 2023) grounded in an RQ-VAE tokenizer (Lee et al., 2022). The goal is to re-order D so that the ground-truth next item is promoted toward the top. A re-ranker is a conditional distribution πθ (o | P (H, D )) over an output o = ( τ, a ), where τ = ( r1, . . . , r M ) is a chain-of-thought reasoning trace and a = ( a1, . . . , a N ) is the 
+
+answer : a permutation of the N candidate identifiers. We use N = 10 throughout, consistent with the GR2 setup. The prompt P (H, D ) is rendered in a chat format with an expert system role, SID-grounded items with title and category metadata, and a structured output specification; we reuse the GR2 template verbatim and reproduce it in section D. 
+
+2.2 The Autoregressive Re-ranker (GR2) 
+
+Our starting model is the GR2 re-ranker, an LLM (Qwen3-8B (Yang et al., 2025) unless stated otherwise) trained in two post-training stages. First, supervised fine-tuning on high-quality reasoning traces generated by a larger teacher LLM and filtered by rejection sampling teaches the model to produce SID-grounded reasoning and a ranked list, with the language-modeling loss decoupled between reasoning and answer tokens. Second, 
+
+reinforcement learning with a re-ranking reward, i.e., a rank-promotion term combined with a conditional format reward, optimized with DAPO (Yu et al., 2025), refines the policy to directly improve ranking quality. The SFT+RL model is the accuracy reference we aim to recover after conversion. The conversion to a block-diffusion model is weight-preserving: it copies the transformer tensors of this AR re-ranker one-to-one and only rewrites the configuration (block size, mask token, and the block-diffusion attention pattern), so that all adaptation to parallel decoding happens in the subsequent fine-tuning rather than at the repacking step. Crucially, the AR decoder enforces answer validity for free: at each step it emits a single identifier and can mask the identifiers it has already committed, so the answer is always a permutation of D.
+
+2.3 Block-Diffusion Language Models 
+
+A block-diffusion (or masked-diffusion) language model generates a sequence by iteratively denoising masked positions (Austin et al., 2021; Lou et al., 2024; Sahoo et al., 2024). The sequence is partitioned into blocks (Arriola et al., 2025a); within a block, all masked positions are predicted in parallel from the current partially-denoised context, and a subset is committed at each denoising step according to a confidence criterion (a per-position top-token probability threshold τ ), while the rest are re-masked and resolved in later steps (figure 2). Let x(0) be the fully-masked answer canvas and x(s) the state after s denoising steps. At step s the model produces position-wise distributions pθ (· | x(s), P ) over the vocabulary V for every masked position, and a commitment rule C selects positions to fix: 
+
+x(s+1) = C
+
+
+
+x(s), {pθ (· | x(s), P )}
+
+
+
+. (1) The number of sequential steps S needed to fill a span of length L can be far smaller than L, since many positions are committed per step; this is the source of the speedup over AR decoding, which requires exactly 
+
+L sequential passes. The cost is that positions committed in the same step are scored independently given the shared context, which is harmless for free-form reasoning text but, as we show next, breaks the permutation structure of the answer. 
+
+## 3 Method: The Diffusion-GR2 Conversion 
+
+3.1 Overview 
+
+Figure 1 summarizes the Diffusion-GR2 pipeline. We begin from the trained AR GR2 re-ranker (section 2.2) and initialize a block-diffusion model from its weights. We then close the conversion gap in three stages: 
+
+conversion fine-tuning (section 3.4) adapts the model as a diffusion reasoner and, by transferring the AR model’s format competence, recovers most of the lost accuracy while making answers valid; on-policy distillation 
+
+(section 3.5) removes the residual off-policy gap; and a reinforcement-learning stage (section 3.6) recovers the remaining margin to near-parity. The output is a re-ranker that matches the AR model’s accuracy at a fraction of its sequential decode cost. 
+
+3.2 The Block-Diffusion Decoder and Inference Acceleration 
+
+Figure 2 illustrates the inference-time architecture of Diffusion-GR2, placing our block-diffusion decoder side by side with the autoregressive GR2 decoder it replaces; it is the reference for the design described throughout this subsection. To make the re-ranker fast, we replace its AR decoder with a block-diffusion decoder while keeping the same backbone weights. In the style of Fast-dLLM (Wu et al., 2025), the decoder performs masked-diffusion denoising under attention that is causal across blocks , rather than the fully bidirectional masked diffusion of LLaDA (Zhu et al., 2026) or Dream (Ye et al., 2025). The choice is deliberate: the block structure is what turns the diffusion model’s fewer-sequential-steps property into an actual wall-clock speedup at our long-prompt operating point. We discuss the structure and its consequences here; the accuracy cost of the conversion is taken up in section 3.3. 
+
+Structure. The response is partitioned into contiguous blocks of a fixed size B (we use B = 32 ). Attention is 
+
+bidirectional within a block but causal across blocks : a position in block j attends to every position of its own block and to the committed (clean) context of all earlier blocks j′ < j , but not to later blocks. Decoding proceeds block by block, and within each block the masked positions are denoised in parallel over a few steps (section 2.3). Once a block is fully committed the model advances to the next. Setting B = 1 recovers ordinary left-to-right autoregressive decoding as a special case; this degenerate setting, on the same weights, is exactly the AR baseline we compare against for speed (figure 2, left). Diffusion-GR2 Inference 
+
+> Block-causal masked denoising commits many reasoning and answer tokens per sequential step
+
+Autoregressive GR2 one new token per forward pass Prompt P 
+
+> history + candidates
+
+KV cache Sequential decode r1 r2 r3 r4 r5 a1 a2 ... NFE roughly equals output length L 
+
+> Good ranking quality, but the long reasoning trace dominates serving latency.
+> Answer validity is easy
+> after each item is emitted, AR can mask already-used candidate IDs.
+
+Block-Diffusion GR2 prefill once; denoise active blocks in parallel Prompt P 
+
+> history + candidates
+
+KV cache Block-causal attention                                                    
+
+> previous blocks cached; only active block recomputed
+> Active block B=32 s=0 MMMMMMMMMMs=1 r1 MMr4 MMr7 MMMs=2 r1 r2 Mr4 r5 Mr7 r8 MMs=3 r1 r2 r3 r4 r5 r6 r7 r8 r9 r10 Commit rule
+> fix positions with top-token probability >= tau; force at least one token for progress
+> advance after block is committed Answer span: learned valid permutation c7 c2 c9 c1 c4 c6 c10 c3 c8 c5 no duplicates, no omissions, no out-of-set IDs convert decoder NFE = sum steps per block NFE << L tau controls speed-quality frontier
+
+Figure 2 Diffusion-GR2 inference. AR GR2 emits one token per forward pass, whereas Diffusion-GR2 prefills the prompt once, reuses the KV cache for committed context, and denoises the active block in parallel. At each denoising step, high-confidence positions are committed according to threshold τ , reducing the number of sequential forward passes from roughly the output length to the sum of denoising steps across blocks. 
+
+Why block diffusion: cacheable, prefill-amortized inference. The across-block causal structure is what enables a key–value (KV) cache (Wu et al., 2025). Because a block never attends to later blocks, the keys and values of the prompt and of already-committed blocks are fixed for the remainder of decoding, so they can be cached once and reused, exactly as in autoregressive inference; each denoising step then recomputes attention only over the small active block against cached context, instead of over the full sequence. On top of this, confidence-thresholded parallel decoding commits every position whose top-token probability exceeds a threshold τ at each step (plus a forced arg-max to guarantee progress), so a block of B positions is typically resolved in far fewer than B forward passes. The number of sequential forward passes (NFE) to produce a response of length L is therefore P
+
+blocks (steps per block ) ≪ L, and τ tunes the trade-off: a higher τ commits fewer, more confident tokens per step (closer to AR, higher quality), a lower τ commits more per step (faster, until parsing degrades). 
+
+Contrast with fully bidirectional diffusion. Decoder-only masked-diffusion language models with fully bidirec-tional attention (e.g. LLaDA (Zhu et al., 2026), Dream (Ye et al., 2025)) attend over the entire sequence at every denoising step, including the prompt. This is marginally more flexible, i.e., any position may condition on any other at any step. However, it forecloses both accelerations above: there is no causal direction to cache against, so the KV cache cannot be reused across steps, and the long prompt must be re-encoded at every step. At our operating point this is decisive: the re-ranking prompt averages ∼2,200 tokens against a short, constrained answer, so per-step prompt re-encoding is precisely the cost we cannot afford. Block diffusion keeps the prompt and completed blocks cached and pays full attention only on the active block, recovering AR-style prefill amortization while still committing many answer tokens in parallel. We therefore adopt a block-diffusion decoder for Diffusion-GR2, accepting its slightly more constrained attention in exchange for inference that a fully bidirectional model cannot match at long-prompt, short-answer re-ranking. Candidate set D = {1, 2, 3, 4, 5}                       
+
+> 12345
+> Naive parallel decode
+> 33945
+> duplicate 3, out-of-set 9, missing 1 and 2
+> ×invalid ranking
+> AR-initialized diffusion +CFT
+> transfers the AR model’s format competence
+> After CFT
+> 31452
+> ✓valid permutation of D
+> Figure 3 Stage 1: conversion fine-tuning (CFT). Decoding the converted model naively scores answer positions independently, so it routinely emits invalid rankings (duplicated, out-of-set, or missing identifiers). Because the diffusion model is initialized from the AR re-ranker, CFT transfers its format competence: the model learns to denoise the answer span into a valid permutation of the candidate set Don its own, with no external constrained decoder.
+
+3.3 The Conversion Trade-off and Why Naive Decoding Loses Accuracy 
+
+Converting the re-ranker to a diffusion decoder is a speed–accuracy trade-off, and the accuracy cost concentrates at the answer. The reasoning span and the answer span behave very differently under parallel decoding. Reasoning is free-form text: committing several tokens in the same step, conditioned on the shared context, is benign. The answer is not free-form: it is a permutation of a known set, and its positions are highly coupled. Because diffusion commits answer positions in parallel and scores them independently (equation (1)), the decoder has no mechanism to enforce that the committed identifiers form a permutation of D. Three failure modes result: 
+
+• Duplicates : the same candidate identifier is committed at two ranks. 
+
+• Omissions : a candidate never appears in the answer. 
+
+• Out-of-set identifiers : a token that is a syntactically valid identifier, but not among the N candidates of this query, is committed. An AR decoder cannot make these mistakes, because it places one item at a time and masks what it has already used. This asymmetry is the first and largest part of the conversion gap: a naively converted model frequently produces malformed rankings, and the resulting accuracy falls well below the AR reference. The next section shows how the conversion itself recovers validity. 
+
+3.4 Stage 1: Conversion Fine-Tuning (CFT) 
+
+The failure modes of section 3.3 are not specific to re-ranking: diffusion language models are broadly unreliable at structured output, because they commit positions in parallel and score them independently rather than tracking what has already been emitted. A natural fix is to attach a constrained decoder at inference that masks the answer logits to the candidate set; this guarantees syntactic validity, but it is external machinery bolted onto a model whose generative behavior is unchanged, and it does nothing for the order the model was trained to produce. We take a different route that is native to our setting: we recover validity from the conversion itself. Our diffusion re-ranker is not trained from scratch. It is initialized from the AR GR2 model, which produces valid permutations of D for free through left-to-right masking (section 2.2), and is then fine-tuned on the re-ranking data with a masked-diffusion objective over the assistant message, decoupling the loss between reasoning and answer tokens as in GR2. AR initialization transfers the source model’s capabilities into the diffusion decoder, and we find that emitting a well-formed ranking is one of the behaviors it transfers: after conversion fine-tuning, the model learns to denoise the answer span into a valid permutation on its own, AR teacher πAR                                    
+
+> ϕ(frozen) causal, clean context
+> o1o2o3o4o5
+> clean response
+> Student πθ(block-diffusion)
+> masked canvas
+> o1Mo3MM
+> masked canvas
+> score
+> decode
+> KL KL KL
+> OPD objective
+> min
+> θKL  πAR
+> ϕπθ
+> 
+> forward KL only at masked positions ; both logits right-shifted by one ( t→token t)
+> Figure 4 Stage 2: on-policy distillation (OPD). The AR teacher is scored on the clean response under causal attention, while the student is scored on the masked block-diffusion canvas it decodes. The forward KL KL (πAR
+> ϕ∥πθ)is applied only at the student’s masked positions, with both logits right-shifted by one so position tscores token t, so a single AR teacher supervises the diffusion student token-for-token and removes the off-policy gap left by CFT.
+
+without a task-specific constrained decoder, recovering most of the accuracy lost at conversion. The model is then free to spend its capacity on getting the order right rather than on remembering to produce a well-formed list. Figure 3 contrasts a naively decoded answer, i.e., with duplicated, out-of-set, and missing identifiers, against the valid permutation the model emits after CFT. A residual gap to the AR reference nonetheless remains, which we turn to next. 
+
+3.5 Stage 2: On-Policy Distillation (OPD) 
+
+With answer validity recovered, a residual gap to the AR reference remains, for a structural reason: conversion fine-tuning is off-policy . The model is trained on fixed trajectories (teacher reasoning traces and ground-truth answers), but at inference it decodes its own trajectories, i.e., the denoising order, the partially-decoded contexts it conditions on, and its own commitments are not the contexts it saw during fine-tuning, and this train/inference mismatch shows up as lost ranking accuracy. This is precisely the exposure bias of sequence models trained by teacher forcing (Ranzato et al., 2016): supervising on fixed teacher trajectories is a form of sequence-level knowledge distillation (Kim and Rush, 2016) that never exposes the student to the partially-decoded, self-generated contexts it must condition on at inference, so small per-step deviations compound over the trajectory. The standard remedy is to make training on-policy , i.e., to supervise the student on its own rollouts rather than the teacher’s, as in DAgger (Ross et al., 2011) for imitation learning and generalized knowledge distillation (Agarwal et al., 2024) for language models. We follow this route with on-policy distillation (Lu and Lab, 2025). The converted model generates trajectories under its real decoding distribution (block-diffusion denoising as used at inference) and the AR model supplies dense, per-token supervision on exactly those samples. Aligning the two models is not immediate: the AR teacher and the block-diffusion student use different attention and masking—the teacher factorizes left-to-right over a clean sequence, whereas the student predicts 
+
+masked positions from a partially-denoised, block-bidirectional canvas. We resolve this mismatch in three steps inspired by Su et al. (2026): (i) the teacher is evaluated on the clean, mask-free response under its native causal attention, while the student is evaluated on the masked canvas it actually decodes; (ii) because both models’ logits are AR-derived (position t scores token t+1), we right-shift both by one so that the distribution at position t scores token t; and (iii) the forward KL is applied only at the student’s masked response positions , where the teacher’s clean-context distribution supplies the per-token target. This lets a single AR teacher supervise the diffusion student token-for-token despite their different decoding masks. Concretely, let o ∼ πθ (· | P ) be a trajectory sampled on-policy from the converted model, with denoising states {x(s)}. For each committed position t we minimize the token-level divergence between the converted model and the AR teacher πAR  
+
+> ϕ
+
+evaluated on the on-policy context: 
+
+LOPD (θ) = EP ∼D Eo∼πθ (·| P )
+
+ 1
+
+|o|
+
+> |o|
+
+X
+
+> t=1
+
+KL  πAR  
+
+> ϕ
+
+(· | P, o <t ) πθ (· | P, o <t ) . (2) Because the supervision is computed on the model’s own decoded outputs, training matches the distribution the model is actually evaluated under, directly attacking the off-policy mismatch described above. Dense per-token targets also give the optimizer far more signal than a single ranking scalar. The teacher is the SFT+RL AR re-ranker, so OPD pulls the converted model back toward that model’s accuracy. Figure 4 illustrates this on-policy distillation loop. OPD recovers the bulk of the residual gap (section 4.2). 
+
+3.6 Stage 3: Reinforcement Learning 
+
+A final reinforcement-learning stage optimizes the re-ranking objective directly and recovers the last of the margin. This instantiates, for re-ranking, the reinforcement-learning-from-verifiable-rewards (RLVR) paradigm behind recent reasoning LLMs (Guo et al., 2025): unlike RLHF against a learned preference model (Ouyang et al., 2022), our reward is a checkable ranking signal. We reuse the GR2 reward: a rank-promotion reward that measures how much the ground-truth target svn+1 is lifted by re-ranking, 
+
+Rrank = rDsvn+1 
+
+− rosvn+1 
+
+N , (3) where rD and ro are the ranks of the target in the pre-ranked and re-ranked lists, combined with a conditional format reward Rfmt that is granted only when re-ranking strictly improves the target’s rank, or when an already-top-1 target is preserved at rank 1, so as not to reward order-preserving degeneracy. Inspired by TraceRL (Wang et al., 2025), we optimize the diffusion policy with a trajectory-level GRPO/DAPO-style objective (Schulman et al., 2017; Shao et al., 2024; Yu et al., 2025) over groups of G sampled trajectories. Rather than scoring each trajectory with a single mean-field forward pass, we evaluate the importance ratio 
+
+ρi,t by replaying the recorded denoising trace of each rollout: for each committed position t we reconstruct the masked canvas at the denoising step at which t was committed and score it under the model’s inference-time (block-causal) attention and autoregressive token-shift. Because the converted model emits valid permutations, 
+
+Rrank is well-defined on essentially every rollout; an invalid or overflowing rollout instead receives a reward of 
+
+−1 and is kept in its group, and we drop only groups with zero reward variance, for which the normalized advantage is undefined: 
+
+J (θ) = EP ∼D , {oi}Gi=1 ∼πθold (·| P )
+
+ 1
+
+P 
+
+> i
+
+|oi|
+
+> G
+
+X
+
+> i=1
+> |oi|
+
+X
+
+> t=1
+
+min  ρi,t (θ) ˆAi,t , clip( ρi,t (θ), 1 − ε, 1 + ε) ˆAi,t 
+
+ , (4) where ρi,t (θ) is the trajectory-replay importance ratio defined above and ˆAi,t = ( Ri − mean {Rj })/std {Rj } is the group-normalized advantage. Figure 5 summarizes the stage. The RL stage is most effective applied on top of OPD. OPD provides a healthy, on-distribution policy with non-degenerate trajectories, and from that starting point RL improves the ranking metric and closes more of the residual gap than OPD alone. The headline gap-minimizing recipe is therefore OPD → RL : dense on-policy distillation to recover the bulk, then RL to optimize the metric directly for the remaining margin. 
+
+## 4 Experiments 
+
+We organize the evaluation around three questions: Policy πθ    
+
+> o1
+> o2
+> o3
+> Grollouts; target (blue) lifted toward rank 1 ⇒higher Rrank
+
+R = Rrank + αR fmt ,
+
+Rrank = rD − ro
+
+N
+
+group-normalized advantage 
+
+ˆAi = ( Ri − mean )/std 
+
+TraceRL: ρi,t by 
+
+replaying the denoising trace; PPO update   
+
+> Figure 5 Stage 3: reinforcement learning.
+
+For each prompt the policy samples a group of G rollouts; the rank-promotion reward Rrank = ( rD − ro)/N (plus a conditional format reward) scores how far the target is lifted toward rank 1. Advantages are group-normalized, and the importance ratio ρi,t is computed by replaying each rollout’s recorded denoising trace before the PPO update. Applied on top of OPD, this recovers the last margin to the AR teacher. 
+
+Dataset #Users #Items Avg. Seq. Len. 
+
+Beauty 22,363 12,101 8.87  
+
+> Table 1
+
+Statistics of the Amazon Review Beauty dataset used for re-ranking. 
+
+• Q1 : How much ranking accuracy does converting the AR re-ranker to a block-diffusion decoder cost, and how much do conversion fine-tuning and on-policy distillation recover? 
+
+• Q2 : What inference speedup does the block-diffusion decoder buy over autoregressive decoding, and at what accuracy? 
+
+• Q3 : Does the converted model reason faithfully, or reach its rankings with degraded filler? 
+
+4.1 Experimental Setup 
+
+Datasets. We evaluate on the Amazon Review Beauty dataset (McAuley et al., 2015) under the standard TIGER protocol (Rajput et al., 2023): 5-core filtering, chronological ordering, and a leave-one-out train/vali-dation/test split (table 1). Each item is encoded as a 4-token RQ-VAE semantic identifier. For each user, a retriever returns a top-10 candidate list, which the re-ranker reorders to promote the ground-truth next item; the retriever’s ordering is the pre-rank floor . The test set contains n = 1 ,615 users. 
+
+Metrics. We report Recall@ K (K ∈ { 1, 3}) and NDCG@ 3 on the re-ranked list, computed with a single relevant item (IDCG = 1 ) and a log-base-2 discount, consistent with GR2. For efficiency we report decode throughput (tokens per second) at the model’s reasoning output length ( ∼130 tokens), on a single H100-80G GPU with torch.compile .
+
+Systems. All systems share the Qwen3-8B backbone. The reference points are the pre-rank floor (the retriever’s order, no re-ranking) and the AR GR2 re-ranker (the autoregressive teacher, our accuracy target). The converted models are: the block-diffusion model decoded without conversion fine-tuning ( naive ); and Diffusion-GR2 after each stage, i.e., conversion fine-tuning ( +CFT), on-policy distillation ( +OPD), and reinforcement learning ( +OPD → RL). Unless noted, accuracy is measured under quality-preserving decoding (confidence threshold 1.0); the speed–accuracy trade-off of parallel decoding is studied in section 4.3. Method Recall@1 Recall@3 NDCG@3 
+
+Pre-rank floor (retriever) 0.2811 0.5591 0.4401 
+
+AR GR2 (reference) 0.2960 0.5651 0.4497 
+
+Diffusion-GR2, naive (no CFT) 0.2811 0.5591 0.4401 
+
+Diffusion-GR2 +CFT 0.2930 0.5651 0.4497 
+
+Diffusion-GR2 +CFT +OPD 0.2944 0.5658 0.4497 
+
+Diffusion-GR2 +CFT +OPD → RL 0.2951 0.5671 0.4517       
+
+> Table 2 Re-ranking accuracy on Amazon Beauty (Qwen3-8B backbone; quality-preserving decoding). The AR GR2 teacher (bold) is the accuracy target; the pre-rank floor is the retriever’s order. Conversion fine-tuning recovers most of the conversion gap, and OPD →RL (highlighted) reaches Recall@1 0.2951 , essentially matching the teacher.
+
+4.2 Q1: Recovering the Conversion Accuracy Gap 
+
+Table 2 reports re-ranking accuracy on Beauty; read top to bottom, it traces the conversion. The pre-rank floor is Recall@1 0.2811 , and the AR GR2 re-ranker reaches 0.2960 , i.e., the accuracy we aim to recover. Decoding the converted model naively , in parallel and without conversion fine-tuning, emits a valid ranking for only ∼0.1% of queries (valid-JSON rate 0.001 ) and never reorders; the malformed outputs fall back to the retriever’s order, so naive decoding collapses exactly to the pre-rank floor ( 0.2811 Recall@1) and forfeits the entire re-ranking gain (section 3.3). Conversion fine-tuning recovers the great majority of the gap: Diffusion-GR2 +CFT reaches Recall@1 0.2930 , within 0.0030 of the AR reference. On-policy distillation closes most of what remains: +OPD reaches 0.2944 , within 0.0016 of the AR teacher. A reinforcement-learning stage on top of OPD (OPD → RL) recovers the final margin, reaching Recall@1 0.2951 and essentially matching the AR teacher. The deeper ranking metrics tell an even stronger story: on Recall@3 and NDCG@3 the converted model already matches the AR teacher after conversion fine-tuning (both 0.5651 and 0.4497 ) and then surpasses it in the later stages: +OPD lifts Recall@3 to 0.5658 , and OPD → RL attains the best Recall@3 (0.5671 ) and NDCG@3 ( 0.4517 ) in the table, above the AR teacher’s 0.5651 and 0.4497 . In other words, the recipe does not merely recover top-1 accuracy to near-parity; on the broader top-3 ranking quality it modestly exceeds the teacher, as reinforcement learning redistributes probability among the top candidates rather than only the single top slot. Two observations close the question. First, it is conversion fine-tuning, not an external constrained decoder, that recovers answer validity and the bulk of the accuracy; on-policy distillation then supplies dense per-token targets on the model’s own decoded trajectories, directly correcting the off-policy mismatch of section 3.5 and lifting accuracy nearest to the teacher. Second, the band is narrow: the AR teacher sits only 0.0149 Recall@1 above the pre-rank floor, so the converted model operates in a near-saturated regime in which OPD already reaches near-parity. This answers Q1 .
+
+4.3 Q2: The Accuracy–Latency Frontier 
+
+Table 3 compares the AR re-ranker against Diffusion-GR2 on decode throughput at the reasoning output length ( ∼130 tokens). The AR re-ranker decodes sequentially at 71 tokens per second. Diffusion-GR2 decodes its answer in parallel and reaches 172 –246 tok/s, i.e., a 2.4–3.5× speedup, by committing multiple tokens per forward pass. The confidence threshold τ governs the trade-off: at τ = 0.9 the valid-JSON rate stays at 1.0 and Recall@1 is 0.2950 at 2.4×; at τ = 0.6 throughput rises to 3.3× (Recall@1 0.2942 ); below τ ≤0.4
+
+parsing degrades and accuracy drops. Diffusion-GR2 thus delivers near-AR ranking accuracy at 2.4–3.5×
+
+higher throughput; combined with the quality-preserving operating point of table 2 (Recall@1 0.2951 at AR-level latency), this traces the accuracy–latency frontier. Figure 6 breaks this speedup down by sequence length: the diffusion advantage grows with the output length —where AR pays one sequential forward pass per token—while staying roughly flat across input length, confirming that the gain comes from parallel decoding 
+
+rather than prefill. This scaling favors the long reasoning traces that dominate re-ranking latency, and points to even larger gains at higher reasoning budgets. This answers Q2 .Decoding Recall@1 Throughput (tok/s) Speedup 
+
+AR GR2 0.2960 71 1.0×
+
+Diffusion-GR2 ( τ =0 .9) 0.2950 172 2.4×
+
+Diffusion-GR2 ( τ =0 .6) 0.2942 234 3.3×
+
+Diffusion-GR2 ( τ =0 .4) 0.2936 246 3.5× 
+
+> Table 3
+
+Accuracy–latency frontier on Beauty (Qwen3-8B, n= 1615 , single H100-80G, torch.compile , ∼2,215-token prompt, ∼130-token reasoning output). The AR re-ranker decodes sequentially; Diffusion-GR2 decodes in parallel with block size 32 and confidence threshold τ . Diffusion-GR2 is 2.4–3.5× faster; τ =0.9 (highlighted) keeps the valid-JSON rate at 1.0, while τ ≤0.4 degrades parsing. 32 64 128 256 512 1024 2048 4096   
+
+> Input Tokens
+> 4.0
+> 4.2
+> 4.4
+> 4.6
+> 4.8
+> 5.0
+> Speedup (AR / Diffusion)
+> 4.6x
+> 4.1x
+> 4.8x 4.8x
+> 4.2x 4.2x
+> 4.0x
+> 4.3x
+
+(a) Input-length scaling     
+
+> 32 64 128 256 512
+> Output Tokens
+> 1.0
+> 1.5
+> 2.0
+> 2.5
+> 3.0
+> 3.5
+> 4.0
+> 4.5
+> Speedup (AR / Diffusion)
+> 1.1x
+> 1.5x
+> 2.2x
+> 3.2x
+> 4.7x
+
+(b) Output-length scaling 
+
+D-GR2 speedup over AR (8B, batch=1, thr0.6)  
+
+> Figure 6
+
+Decode speedup of Diffusion-GR2 over the AR re-ranker (Qwen3-8B, single request, τ =0.6, torch.compile ), sweeping (a) input length (output fixed at 512 ) and (b) output length (input fixed at ∼2,400). The diffusion advantage grows with output length, where AR pays one sequential pass per token, and stays roughly flat in input length, reflecting that the gain comes from parallel decoding rather than prefill. 
+
+4.4 Q3: Reasoning Quality 
+
+Because free-form reasoning is the hard case for parallel decoding, we ask whether Diffusion-GR2 reaches its rankings with genuine reasoning or with degraded filler. We run an LLM-as-judge study (Zheng et al., 2023) over 50 paired, blind comparisons of AR and Diffusion-GR2 reasoning traces on Beauty, scoring three 1–5
+
+quality axes, i.e., history grounding, internal consistency, and logical flow, plus a binary identifier-correctness check ( 0/1, where 1 denotes no history/candidate-identifier confusion). Table 4 reports the per-axis means. Diffusion-GR2 tracks the AR re-ranker closely on every axis: history grounding ( 4.34 vs. 4.50 ), internal consistency ( 4.94 vs. 4.94 ), logical flow ( 4.40 vs. 4.54 ), and identifier correctness ( 1.00 vs. 1.00 ). A blind pairwise preference over the same 50 pairs is AR 17 / Diffusion-GR2 9 / tie 24 , with a 100% parse rate and no history/candidate-identifier confusion, i.e., no systematic degradation in reasoning quality. This answers Q3 .
+
+## 5 Related Work 
+
+5.1 Generative and Reasoning Re-rankers 
+
+Generative recommendation (Zhou et al., 2025; Zhang et al., 2025b; Zhao et al., 2024; Wu et al., 2024; Geng et al., 2022; Liu et al., 2025; He et al., 2025) reformulates retrieval and ranking as sequence generation over semantic identifiers. Most LLM-based work targets retrieval and early ranking; the re-ranking stage, and Reasoning axis AR GR2 Diffusion-GR2 
+
+History grounding ( 1–5) 4.50 4.34 
+
+Internal consistency ( 1–5) 4.94 4.94 
+
+Logical flow ( 1–5) 4.54 4.40 
+
+Identifier correctness ( 0/1) 1.00 1.00            
+
+> Table 4 Reasoning-quality comparison on Beauty (LLM-as-judge, 50 paired blind evaluations). The first three axes are scored 1–5; identifier correctness is a binary 0/1check (fraction of traces with no identifier confusion). Diffusion-GR2 tracks the AR re-ranker on every axis; the blind pairwise preference is AR 17 / Diffusion-GR2 9/ tie 24 , indicating no systematic degradation.
+
+especially reasoning-based re-ranking, has received less attention. GR2 (Liang et al., 2026) establishes design principles for reasoning re-rankers, i.e., semantic-ID grounding, high-quality reasoning traces via rejection sampling, and a re-ranking-specific RL reward, and is the autoregressive model we convert. In the search domain, reasoning-augmented re-rankers such as ReaRank (Zhang et al., 2025a) optimize relevance via RL. Our work is orthogonal to these: we keep the reasoning-re-ranker formulation fixed and change the decoder ,asking how to retain the AR re-ranker’s accuracy under parallel diffusion decoding. 
+
+5.2 Block-Diffusion Language Models and Parallel Decoding 
+
+Masked- and block-diffusion language models (Austin et al., 2021; Lou et al., 2024; Sahoo et al., 2024; Ye et al., 2025; Zhu et al., 2026; Arriola et al., 2025b; Wu et al., 2025; Arriola et al., 2025a; Labs et al., 2025) generate text by iteratively denoising masked positions, committing the most confident positions per step. They offer parallel decoding and a tunable accuracy–latency trade-off, but their decoding is task-agnostic and treats every output token identically. Our approach departs from this: rather than a task-agnostic decoder, we recover answer validity through conversion fine-tuning from an AR initialization, so the converted re-ranker emits valid permutations of the candidate set on its own. 
+
+5.3 AR-to-Diffusion Conversion and RL for Diffusion LMs 
+
+A growing body of work initializes diffusion language models from autoregressive checkpoints and adapts them with reinforcement learning, including TraceRL (Wang et al., 2025) and d1 (Zhao et al., 2026). We build on this conversion-plus-RL paradigm but add two task-specific ingredients: conversion fine-tuning that transfers the AR model’s permutation-validity competence into the diffusion decoder, and an on-policy distillation stage that recovers the AR model’s behavior before RL. 
+
+5.4 On-policy and Generalized Knowledge Distillation 
+
+On-policy distillation (Lu and Lab, 2025; Su et al., 2026), an on-policy instance of generalized knowledge distillation (Hinton, 2015; Agarwal et al., 2024), supervises a student on its own sampled outputs rather than a fixed dataset, reducing the train/inference mismatch of off-policy distillation. Our OPD stage instantiates this idea for diffusion re-ranking: the student samples under its real block-diffusion decoding distribution and the AR model provides dense per-token targets, directly addressing the off-policy gap introduced by conversion fine-tuning. 
+
+## 6 Next Steps  
+
+> Speculative decoding with a diffusion draft.
+
+The conversion of AR GR2 into Diffusion-GR2 opens a natural path to speculative decoding (Leviathan et al., 2023; Chen et al., 2023), in which the two decoders play complementary roles: a fast block-diffusion draft and the autoregressive verifier . Because the AR verify pass is the final quality gate, the draft is free to be recklessly fast, e.g., an aggressively pruned Diffusion-GR2 with a large block size and a low confidence threshold for maximal decoding parallelism, which cleanly decouples speed (owned by the draft) from quality (owned by the verifier) and promises further latency and FLOP reductions at no loss in ranking accuracy.  
+
+> Adaptive, pivot-aligned block sizing.
+
+A second direction makes the block size adaptive rather than a fixed compromise between acceptance rate and parallelism. The diffusion draft optimistically decodes the entire remaining span in one shot; a single AR verify pass then locates the pivot , i.e., the position where the draft first diverges from the AR distribution, and the first block is resized to end at that pivot, with the procedure repeated over the remainder until the sequence is complete. Easy sequences are then decoded with near-full-sequence parallelism, while hard ones degrade gracefully to standard fixed-block cost. The same idea extends to a dynamic confidence threshold (larger blocks on high-agreement regions, smaller where the draft is uncertain) and to a coarse-to-fine verifier (a lightweight model that cheaply localizes the pivot region before the full AR verify). These ingredients compose: a pruned Diffusion-GR2 draft with progressively shrinking, pivot-aligned blocks stacks the speedup from pruning on top of the adaptive parallelism. 
+
+## 7 Conclusion 
+
+We presented Diffusion-GR2, a recipe for converting an autoregressive reasoning re-ranker into a faster block-diffusion model while giving up as little accuracy as possible. Framing the conversion as a speed–accuracy trade-off, we identified its structural cause, i.e., invalid rankings under independent parallel decoding, and addressed it with conversion fine-tuning, which transfers the AR model’s permutation-validity competence and recovers most of the conversion gap. We then minimized the residual off-policy gap with on-policy distillation, reaching near-parity with the AR re-ranker on Amazon Beauty while block-parallel decoding raises decode throughput by 2.4–3.5× at the reasoning output length, with a reinforcement-learning stage on top of OPD to recover the remaining margin. We hope Diffusion-GR2 is useful as a template for deploying reasoning re-rankers at lower latency without sacrificing the reasoning that makes them accurate. Appendix 
+
+## A On-Policy Distillation: Details 
+
+We draw G′ = 4 on-policy trajectories per prompt from the converted model, detach the AR teacher, and minimize the forward KL of equation (2) over committed positions, weighting reasoning and answer tokens with the same decoupled weights used in conversion fine-tuning. Teacher logits are computed once per trajectory and cached. We use a constant learning rate of 1 × 10 −6, 128 prompts per optimizer step, and a single epoch over the training prompts; OPD converges within roughly 1.5k steps on Beauty. 
+
+## B Reinforcement Learning: Details 
+
+We optimize equation (4) with group size G = 8 , clip range ε = 0 .2, and the conditional format-reward weight α = 0 .2 from GR2. Because the converted model emits valid permutations, Rrank in equation (3) is well-defined on essentially every rollout. We initialize from the OPD checkpoint for the OPD → RL recipe. RL is run for 600 steps at a learning rate of 5 × 10 −7.
+
+## C Hyperparameters 
+
+Stage Beauty 
+
+Conversion FT epochs 3
+
+Block size 32 
+
+Denoising steps (eval) 64 
+
+OPD on-policy samples / prompt 4
+
+OPD learning rate 1×10 −6
+
+RL group size G 8
+
+RL learning rate 5×10 −7 
+
+> Table 5 Key hyperparameters for the Diffusion-GR2 conversion pipeline.
+
+## D Chat-Formatted Prompt Template 
+
+We reuse the GR2 chat template without modification: a system message defining the expert persona and the re-ranking task; a user message presenting the SID-grounded purchase history and the full candidate set with title and category metadata; and an assistant message containing a step-by-step, SID-grounded reasoning trace followed by a structured JSON object with the reasoning explanation and the ranked recommendation list. The answer span, i.e., the ranked list inside the JSON object, is the span the converted model learns to denoise into a valid permutation of the candidate set. References 
+
+Rishabh Agarwal, Nino Vieillard, Yongchao Zhou, Piotr Stanczyk, Sabela Ramos Garea, Matthieu Geist, and Olivier Bachem. On-policy distillation of language models: Learning from self-generated mistakes. In International Conference on Learning Representations , volume 2024, pages 21246–21263, 2024. Marianne Arriola, Aaron Gokaslan, Justin Chiu, Zhihan Yang, Zhixuan Qi, Jiaqi Han, Subham Sahoo, and Volodymyr Kuleshov. Block diffusion: Interpolating between autoregressive and diffusion language models. In International Conference on Learning Representations , volume 2025, pages 50726–50753, 2025a. Marianne Arriola, Aaron Gokaslan, Justin T Chiu, Jiaqi Han, Zhihan Yang, Zhixuan Qi, Subham Sekhar Sahoo, and Volodymyr Kuleshov. Interpolating autoregressive and discrete denoising diffusion language models. In The Thirteenth International Conference on Learning Representations , 2025b. https://openreview.net/forum?id=tyEyYT267x .Jacob Austin, Daniel D. Johnson, Jonathan Ho, Daniel Tarlow, and Rianne van den Berg. Structured denoising diffusion models in discrete state-spaces. In Advances in Neural Information Processing Systems (NeurIPS) , 2021. Charlie Chen, Sebastian Borgeaud, Geoffrey Irving, Jean-Baptiste Lespiau, Laurent Sifre, and John Jumper. Accelerating large language model decoding with speculative sampling. arXiv preprint arXiv:2302.01318 , 2023. Shijie Geng, Shuchang Liu, Zuohui Fu, Yingqiang Ge, and Yongfeng Zhang. Recommendation as language processing (rlp): A unified pretrain, personalized prompt & predict paradigm (p5). In Proceedings of the 16th ACM Conference on Recommender Systems , pages 299–315, 2022. Daya Guo, Dejian Yang, Haowei Zhang, Junxiao Song, Ruoyu Zhang, Runxin Xu, Qihao Zhu, Shirong Ma, Peiyi Wang, Xiao Bi, et al. Deepseek-r1: Incentivizing reasoning capability in llms via reinforcement learning. arXiv preprint arXiv:2501.12948 , 2025. Ruining He, Lukasz Heldt, Lichan Hong, Raghunandan Keshavan, Shifan Mao, Nikhil Mehta, Zhengyang Su, Alicia Tsai, Yueqi Wang, Shao-Chuan Wang, et al. Plum: Adapting pre-trained language models for industrial-scale generative recommendations. arXiv preprint arXiv:2510.07784 , 2025. Geoffrey Hinton. Distilling the knowledge in a neural network. arXiv preprint arXiv:1503.02531 , 2015. Yoon Kim and Alexander M. Rush. Sequence-level knowledge distillation. In Proceedings of the 2016 Conference on Empirical Methods in Natural Language Processing (EMNLP) , 2016. Inception Labs, Samar Khanna, Siddhant Kharbanda, Shufan Li, Harshit Varma, Eric Wang, Sawyer Birnbaum, Ziyang Luo, Yanis Miraoui, Akash Palrecha, et al. Mercury: Ultra-fast language models based on diffusion. arXiv preprint arXiv:2506.17298 , 2025. https://www.inceptionlabs.ai/blog/introducing-mercury .Doyup Lee, Chiheon Kim, Saehoon Kim, Minsu Cho, and Wook-Shin Han. Autoregressive image generation using residual quantization. In Proceedings of the IEEE/CVF conference on computer vision and pattern recognition , pages 11523–11532, 2022. Yaniv Leviathan, Matan Kalman, and Yossi Matias. Fast inference from transformers via speculative decoding. In 
+
+International Conference on Machine Learning (ICML) , 2023. Mingfu Liang, Yufei Li, Jay Xu, Kavosh Asadi, Xi Liu, Shuo Gu, Kaushik Rangadurai, Frank Shyu, Shuaiwen Wang, Song Yang, et al. Generative reasoning re-ranker. arXiv preprint arXiv:2602.07774 , 2026. Zhanyu Liu, Shiyao Wang, Xingmei Wang, Rongzhou Zhang, Jiaxin Deng, Honghui Bao, Jinghao Zhang, Wuchao Li, Pengfei Zheng, Xiangyu Wu, Yifei Hu, Qigen Hu, Xinchen Luo, Lejian Ren, Zixing Zhang, Qianqian Wang, Kuo Cai, Yunfan Wu, Hongtao Cheng, Zexuan Cheng, Lu Ren, Huanjie Wang, Yi Su, Ruiming Tang, Kun Gai, and Guorui Zhou. Onerec-think: In-text reasoning for generative recommendation. CoRR , abs/2510.11639, 2025. doi: 10.48550/ARXIV.2510.11639. https://doi.org/10.48550/arXiv.2510.11639 .Aaron Lou, Chenlin Meng, and Stefano Ermon. Discrete diffusion modeling by estimating the ratios of the data distribution. In International Conference on Machine Learning (ICML) , 2024. Kevin Lu and Thinking Machines Lab. On-policy distillation. Thinking Machines Lab: Connectionism , 2025. doi: 10.64434/tml.20251026. https://thinkingmachines.ai/blog/on-policy-distillation. Julian McAuley, Christopher Targett, Qinfeng Shi, and Anton van den Hengel. Image-based recommendations on styles and substitutes. In Proceedings of the 38th International ACM SIGIR Conference on Research and Development in Information Retrieval , 2015. Long Ouyang, Jeffrey Wu, Xu Jiang, Diogo Almeida, Carroll Wainwright, Pamela Mishkin, Chong Zhang, Sandhini Agarwal, Katarina Slama, Alex Ray, et al. Training language models to follow instructions with human feedback. 
+
+Advances in neural information processing systems , 35:27730–27744, 2022. Alec Radford and Karthik Narasimhan. Improving language understanding by generative pre-training. 2018. https: //api.semanticscholar.org/CorpusID:49313245 .Alec Radford, Jeff Wu, Rewon Child, David Luan, Dario Amodei, and Ilya Sutskever. Language models are unsupervised multitask learners. 2019. https://api.semanticscholar.org/CorpusID:160025533 .Shashank Rajput, Nikhil Mehta, Anima Singh, Raghunandan Hulikal Keshavan, Trung Vu, Lukasz Heldt, Lichan Hong, Yi Tay, Vinh Tran, Jonah Samost, et al. Recommender systems with generative retrieval. Advances in Neural Information Processing Systems , 36:10299–10315, 2023. Marc’Aurelio Ranzato, Sumit Chopra, Michael Auli, and Wojciech Zaremba. Sequence level training with recurrent neural networks. In International Conference on Learning Representations (ICLR) , 2016. Stéphane Ross, Geoffrey Gordon, and Drew Bagnell. A reduction of imitation learning and structured prediction to no-regret online learning. In Proceedings of the Fourteenth International Conference on Artificial Intelligence and Statistics (AISTATS) , 2011. Subham Sekhar Sahoo, Marianne Arriola, Yair Schiff, Aaron Gokaslan, Edgar Marroquin, Justin T. Chiu, Alexander M. Rush, and Volodymyr Kuleshov. Simple and effective masked diffusion language models. In Advances in Neural Information Processing Systems (NeurIPS) , 2024. John Schulman, Filip Wolski, Prafulla Dhariwal, Alec Radford, and Oleg Klimov. Proximal policy optimization algorithms. arXiv preprint arXiv:1707.06347 , 2017. Zhihong Shao, Peiyi Wang, Qihao Zhu, Runxin Xu, Junxiao Song, Xiao Bi, Haowei Zhang, Mingchuan Zhang, YK Li, Yang Wu, et al. Deepseekmath: Pushing the limits of mathematical reasoning in open language models. arXiv preprint arXiv:2402.03300 , 2024. Xingyu Su, Jacob Helwig, Shubham Parashar, Atharv Chagi, Lakshmi Jotsna, Degui Zhi, James Caverlee, Dileep Kalathil, and Shuiwang Ji. Data-efficient autoregressive-to-diffusion language models via on-policy distillation. arXiv preprint arXiv:2606.06712 , 2026. Yinjie Wang, Ling Yang, Bowen Li, Ye Tian, Ke Shen, and Mengdi Wang. Revolutionizing reinforcement learning framework for diffusion large language models. arXiv preprint arXiv:2509.06949 , 2025. Chengyue Wu, Hao Zhang, Shuchen Xue, Shizhe Diao, Yonggan Fu, Zhijian Liu, Pavlo Molchanov, Ping Luo, Song Han, and Enze Xie. Fast-dllm v2: Efficient block-diffusion llm. arXiv preprint arXiv:2509.26328 , 2025. Likang Wu, Zhi Zheng, Zhaopeng Qiu, Hao Wang, Hongchao Gu, Tingjia Shen, Chuan Qin, Chen Zhu, Hengshu Zhu, Qi Liu, et al. A survey on large language models for recommendation. World Wide Web , 27(5):60, 2024. An Yang, Anfeng Li, Baosong Yang, Beichen Zhang, Binyuan Hui, Bo Zheng, Bowen Yu, Chang Gao, Chengen Huang, Chenxu Lv, et al. Qwen3 technical report. arXiv preprint arXiv:2505.09388 , 2025. Jiacheng Ye, Zhihui Xie, Lin Zheng, Jiahui Gao, Zirui Wu, Xin Jiang, Zhenguo Li, and Lingpeng Kong. Dream 7b: Diffusion large language models. arXiv preprint arXiv:2508.15487 , 2025. Qiying Yu, Zheng Zhang, Ruofei Zhu, Yufeng Yuan, Xiaochen Zuo, Yu Yue, Weinan Dai, Tiantian Fan, Gaohong Liu, Lingjun Liu, et al. Dapo: An open-source llm reinforcement learning system at scale. arXiv preprint arXiv:2503.14476 ,2025. Le Zhang, Bo Wang, Xipeng Qiu, Siva Reddy, and Aishwarya Agrawal. Rearank: Reasoning re-ranking agent via reinforcement learning. In Proceedings of the 2025 Conference on Empirical Methods in Natural Language Processing ,pages 2458–2471, 2025a. Yihua Zhang, Xi Liu, Xihuan Zeng, Mingfu Liang, Jiyan Yang, Rong Jin, Wen-Yen Chen, Yiping Han, Hao Ma, Bo Long, et al. Reasonrec: A reasoning-augmented multimodal agent for unified recommendation. In ICML 2025 Workshop on Programmatic Representations for Agent Learning , 2025b. Siyan Zhao, Devaansh Gupta, Qinqing Zheng, and Aditya Grover. d1: Scaling reasoning in diffusion large language models via reinforcement learning. Advances in Neural Information Processing Systems , 38:56729–56762, 2026. Zihuai Zhao, Wenqi Fan, Jiatong Li, Yunqing Liu, Xiaowei Mei, Yiqi Wang, Zhen Wen, Fei Wang, Xiangyu Zhao, Jiliang Tang, et al. Recommender systems in the era of large language models (llms). IEEE Transactions on Knowledge and Data Engineering , 36(11):6889–6907, 2024. Lianmin Zheng, Wei-Lin Chiang, Ying Sheng, Siyuan Zhuang, Zhanghao Wu, Yonghao Zhuang, Zi Lin, Zhuohan Li, Dacheng Li, Eric P. Xing, Hao Zhang, Joseph E. Gonzalez, and Ion Stoica. Judging LLM-as-a-judge with MT-bench and chatbot arena. In Advances in Neural Information Processing Systems (NeurIPS) , 2023. Huixue Zhou, Hengrui Gu, Zaifu Zhan, Xi Liu, Kaixiong Zhou, Yongkang Xiao, Mingfu Liang, Srinivas Prasad Govindan, Piyush Chawla, Jiyan Yang, et al. The efficiency vs. accuracy trade-off: Optimizing rag-enhanced llm recommender systems using multi-head early exit. In Proceedings of the 63rd Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers) , pages 26443–26458, 2025. Fengqi Zhu, Rongzhen Wang, Shen Nie, Xiaolu Zhang, Chunwei Wu, Jun Zhou, Yankai Lin, Ji-Rong Wen, and Chongxuan Li. Llada 1.5: Variance-reduced preference optimization for large language diffusion models. In 
+
+Proceedings of the 64th Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers) ,pages 11425–11460, 2026.
