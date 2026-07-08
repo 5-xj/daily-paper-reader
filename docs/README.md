@@ -6,65 +6,74 @@
 </div>
 
 ## 每次日报
-- 最新运行日期：2026-07-07
-- 运行时间：2026-07-07 22:21:02 UTC
+- 最新运行日期：2026-07-08
+- 运行时间：2026-07-08 21:48:25 UTC
 - 运行状态：成功
-- 本次总论文数：15
-- 精读区：6
-- 速读区：9
+- 本次总论文数：18
+- 精读区：8
+- 速读区：10
 
 ### 今日简报（AI）
-今日推荐聚焦生成式推理排序与模型自进化两大突破。最值得看的是《Diffusion-GR2》用扩散模型革新推理重排序，以及《Harness-Aware Self-Evolving》实现模型权重与任务解协同进化。普通读者可优先关注《Diffusion-GR2》在提升检索准确率上的潜力，以及自进化框架对自动化调参的参考价值。
-- 详情：[/202607/07/README](/202607/07/README)
+今日精选18篇推荐，重点解读了本体学习工具库和模型自进化两大高分工作。值得关注的方向：基于LLM的本体学习（OntoLearner）和模型权重-任务协同进化（Harness-Aware），均获得9.0高分。建议优先阅读精读文章，尤其对知识图谱或自动化本体构建感兴趣的读者可深入OntoLearner。
+- 详情：[/202607/08/README](/202607/08/README)
 
 ### 精读区论文标签
-1. [Diffusion-GR2: Diffusion Generative Reasoning Re-ranker](/202607/07/2607.01170v2-diffusion-gr2-diffusion-generative-reasoning-re-ranker)  
+1. [OntoLearner: A Modular Python Library for Ontology Learning with Large Language Models](/202607/08/2607.01977v1-ontolearner-a-modular-python-library-for-ontology-learning-with-large-language-models)  
+   标签：评分：9.0/10、query:ad
+   evidence：大语言模型驱动的本体学习管道
+2. [Harness-Aware Self-Evolving: Co-Evolving Model Weights, Harness, and Task Solutions](/202607/08/2607.03935v1-harness-aware-self-evolving-co-evolving-model-weights-harness-and-task-solutions)  
+   标签：评分：9.0/10、query:ad
+   evidence：协同进化用于算法发现，包括圆填充
+3. [InfluMatch: Frontier-Quality KOL Search at 4B-Model Cost](/202607/08/2607.05968v1-influmatch-frontier-quality-kol-search-at-4b-model-cost)  
    标签：评分：9.0/10、query:rerank-train
-   evidence：基于扩散模型的生成式推理重排序器，加速推理过程
-2. [Harness-Aware Self-Evolving: Co-Evolving Model Weights, Harness, and Task Solutions](/202607/07/2607.03935v1-harness-aware-self-evolving-co-evolving-model-weights-harness-and-task-solutions)  
-   标签：评分：9.0/10、query:ad
-   evidence：使用大模型进行自动发现，同时进化模型权重、装备和任务解决方案
-3. [PhysMiner: An Agentic AI Framework for Discovering Turbulence Physics](/202607/07/2607.04009v1-physminer-an-agentic-ai-framework-for-discovering-turbulence-physics)  
-   标签：评分：9.0/10、query:ad
-   evidence：LLM驱动推理与速度梯度分解结合发现湍流物理机制
-4. [Language models guide symbolic equation discovery by controlling search](/202607/07/2607.04156v1-language-models-guide-symbolic-equation-discovery-by-controlling-search)  
-   标签：评分：9.0/10、query:ad
-   evidence：大模型控制搜索进行符号方程发现
-5. [GR2 Technical Report](/202607/07/2606.31984v3-gr2-technical-report)  
+   evidence：点级重排器训练方法
+4. [GR2 Technical Report](/202607/08/2606.31984v3-gr2-technical-report)  
    标签：评分：8.0/10、query:rerank-train
-   evidence：提出基于强化学习的重排序训练方法，直接涉及重排序器训练技术
-6. [Inverse-k Primordial Oscillations from a Symbolic Regression Search](/202607/07/2607.04925v1-inverse-k-primordial-oscillations-from-a-symbolic-regression-search)  
+   evidence：使用大模型和强化学习进行推荐重排序，直接涉及重排序训练
+5. [SwarmResearch: Orchestrating Coding Agents for Open-Ended Discovery](/202607/08/2607.02807v1-swarmresearch-orchestrating-coding-agents-for-open-ended-discovery)  
    标签：评分：8.0/10、query:ad
-   evidence：符号回归用于科学发现
+   evidence：SwarmResearch使用牧羊人代理引导搜索代理群体进行开放式发现，结合启发式搜索与多代理协作
+6. [KARMA: Knowledge graph-based Automated Reasoning Materialization and Alignment](/202607/08/2607.03166v1-karma-knowledge-graph-based-automated-reasoning-materialization-and-alignment)  
+   标签：评分：8.0/10、query:ad
+   evidence：利用LLM和知识图谱启发式的知识发现
+7. [Relevance-Based Embeddings: Lightweight Candidate Retrieval via Heavy-Ranker Calls](/202607/08/2607.03515v1-relevance-based-embeddings-lightweight-candidate-retrieval-via-heavy-ranker-calls)  
+   标签：评分：8.0/10、query:rerank-train
+   evidence：利用重排器评分训练检索嵌入
+8. [Candidate-Constrained Retrieval-Augmented Generation for LongEval-RAG: System Design and Empirical Analysis](/202607/08/2607.04008v1-candidate-constrained-retrieval-augmented-generation-for-longeval-rag-system-design-and-empirical-analysis)  
+   标签：评分：8.0/10、query:rerank-train
+   evidence：系统包含轻量级证据重排序和MiniLM句子重排序，直接涉及重排序训练方法
 
 ### 速读区论文标签
-1. [Minimal MMAO: A Resource-Closed-Loop Framework for Adaptive Metaheuristic Search](/202607/07/2606.30450v2-minimal-mmao-a-resource-closed-loop-framework-for-adaptive-metaheuristic-search)  
+1. [PORTS: Preference-Optimized Retrievers for Tool Selection with Large Language Models](/202607/08/2607.05441v1-ports-preference-optimized-retrievers-for-tool-selection-with-large-language-models)  
+   标签：评分：8.0/10、query:rerank-train
+   evidence：使用偏好优化训练检索器用于大模型工具选择
+2. [When RAG Meets Query Planning: Logical Query Trees for Resolving Exploratory Reasoning Problems](/202607/08/2607.00508v2-when-rag-meets-query-planning-logical-query-trees-for-resolving-exploratory-reasoning-problems)  
    标签：评分：7.0/10、query:ad
-   evidence：自适应元启发式搜索，通过资源循环实现优化和发现
-2. [Explainable Novel Category Discovery in Semantic Concept Space](/202607/07/2607.04548v1-explainable-novel-category-discovery-in-semantic-concept-space)  
+   evidence：PlanRAG使用大模型和逻辑查询树解决探索性推理，与使用大模型和启发式的自动发现一致
+3. [TSP with Predictions: Heatmap to Tour with Provable Guarantees](/202607/08/2607.03791v1-tsp-with-predictions-heatmap-to-tour-with-provable-guarantees)  
+   标签：评分：7.0/10、query:atsp
+   evidence：提出了从热力图到路径的算法，具有理论保证，与ATSP方法相关
+4. [Order-based Causal Discovery for Multistage Processes](/202607/08/2607.03971v1-order-based-causal-discovery-for-multistage-processes)  
    标签：评分：7.0/10、query:ad
-   evidence：在语义概念空间中自动发现新类别
-3. [When RAG Meets Query Planning: Logical Query Trees for Resolving Exploratory Reasoning Problems](/202607/07/2607.00508v2-when-rag-meets-query-planning-logical-query-trees-for-resolving-exploratory-reasoning-problems)  
+   evidence：多阶段过程因果发现方法，属于从数据中自动发现知识
+5. [ML and AI for density functional theory: different priorities for Kohn-Sham and orbital-free DFT, for electronic and nuclear DFT](/202607/08/2607.04095v1-ml-and-ai-for-density-functional-theory-different-priorities-for-kohn-sham-and-orbital-free-dft-for-electronic-and-nuclear-dft)  
+   标签：评分：7.0/10、query:sr
+   evidence：强调符号回归在构建动能泛函中的概念优势，与符号回归知识发现相关
+6. [Retrieving a Set, Not Independent Passages: Set-Level Compatibility Learning for Efficient Set Exploration](/202607/08/2607.05712v1-retrieving-a-set-not-independent-passages-set-level-compatibility-learning-for-efficient-set-exploration)  
+   标签：评分：7.0/10、query:rerank-train
+   evidence：集合级排序模型训练以兼容证据
+7. [Task Decomposition-Guided Reranking for Adaptive Agent Skill Retrieval](/202607/08/2607.06283v1-task-decomposition-guided-reranking-for-adaptive-agent-skill-retrieval)  
+   标签：评分：7.0/10、query:rerank-train
+   evidence：提出SkillReranker,一种任务分解引导的重排序框架用于自适应技能选择
+8. [Data Analysis in the Wild: Benchmarking Large Language Models Against Real-World Data Complexities](/202607/08/2607.06482v1-data-analysis-in-the-wild-benchmarking-large-language-models-against-real-world-data-complexities)  
+   标签：评分：7.0/10、query:ad
+   evidence：评估大模型在数据分析中的探索性洞察发现能力
+9. [Multi-Turn Agentic Scientific Literature Search via Workflow Induction](/202607/08/2607.00597v2-multi-turn-agentic-scientific-literature-search-via-workflow-induction)  
+   标签：评分：6.0/10、query:rerank-train
+   evidence：多轮文献搜索智能体，将重排序器训练作为工作流归纳的一部分
+10. [Knowledge-Informed Local Causal Discovery of Optimal Adjustment Sets](/202607/08/2607.04447v1-knowledge-informed-local-causal-discovery-of-optimal-adjustment-sets)  
    标签：评分：6.0/10、query:ad
-   evidence：PlanRAG框架结合大语言模型与查询规划用于探索性推理发现
-4. [Multi-Turn Agentic Scientific Literature Search via Workflow Induction](/202607/07/2607.00597v1-multi-turn-agentic-scientific-literature-search-via-workflow-induction)  
-   标签：评分：6.0/10、query:ad
-   evidence：基于大模型的科学文献搜索代理，通过工作流归纳实现多轮交互
-5. [Multi-Turn Agentic Scientific Literature Search via Workflow Induction](/202607/07/2607.00597v2-multi-turn-agentic-scientific-literature-search-via-workflow-induction)  
-   标签：评分：6.0/10、query:ad
-   evidence：科学文献搜索代理，通过工作流归纳进行自动发现
-6. [Vehicle Routing Problem Meets Large Language Models: An Overview and Perspectives](/202607/07/2607.00604v1-vehicle-routing-problem-meets-large-language-models-an-overview-and-perspectives)  
-   标签：评分：6.0/10、query:ad
-   evidence：大语言模型用于车辆路径优化综述，可迁移至自动发现任务
-7. [Hybridizing a Grouping Metaheuristic with Reinforcement Learning for the One-Dimensional Bin Packing Problem](/202607/07/2607.02315v1-hybridizing-a-grouping-metaheuristic-with-reinforcement-learning-for-the-one-dimensional-bin-packing-problem)  
-   标签：评分：6.0/10、query:ad
-   evidence：混合元启发式与强化学习选择操作符求解装箱问题
-8. [TSP with Predictions: Heatmap to Tour with Provable Guarantees](/202607/07/2607.03791v1-tsp-with-predictions-heatmap-to-tour-with-provable-guarantees)  
-   标签：评分：6.0/10、query:atsp
-   evidence：基于机器学习的旅行商问题求解，具有理论保证
-9. [Ising-Machine-Assisted Large Neighborhood Search with Flexibly Tunable Subproblem Size](/202607/07/2607.05169v1-ising-machine-assisted-large-neighborhood-search-with-flexibly-tunable-subproblem-size)  
-   标签：评分：6.0/10、query:ad
-   evidence：基于伊辛机的大邻域搜索启发式方法用于组合优化
+   evidence：知识引导的局部因果发现
 
 
 <div class="dpr-home-promo-card">

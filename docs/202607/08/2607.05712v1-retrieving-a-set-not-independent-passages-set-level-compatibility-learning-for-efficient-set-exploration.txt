@@ -1,0 +1,942 @@
+Title: Retrieving a Set, Not Independent Passages: Set-Level Compatibility Learning for Efficient Set Exploration
+
+URL Source: https://arxiv.org/pdf/2607.05712v1
+
+Published Time: Wed, 08 Jul 2026 00:19:32 GMT
+
+Number of Pages: 19
+
+Markdown Content:
+## Retrieving a Set, Not Independent Passages: Set-Level Compatibility Learning for Efficient Set Exploration 
+
+Mooho Song, Jay-Yoon Lee *
+
+Seoul National University {anmh9161, lee.jayyoon}@snu.ac.kr 
+
+Abstract 
+
+Multi-hop question answering and retrieval-augmented reasoning require selecting evi-dence passages that are jointly useful for an-swering a query. However, most retrievers still score passages independently or make locally supervised sequential decisions, which can fail when evidence usefulness depends on compat-ibility among passages. LLM-based set selec-tion can model such interactions, but its com-putational cost limits practical use. We address this gap by formulating multi-hop retrieval as query–set compatibility scoring and propose a set-level retrieval framework. Our training objective teaches retrievers to rank complete and compatible evidence sets above incomplete, noisy alternatives, making set scoring more robust to variable-length and partially noisy contexts. We instantiate the framework with two complementary set scorers: ParaSet , a lightweight late-interaction scorer that applies self-attention over precomputed bi-encoder em-beddings for fast candidate-set exploration, and 
+
+SetCE , a cross-encoder-based reranker trained with the same set-level objective. Experiments on various multi-hop QA benchmarks show that set-level compatibility learning improves retrieval performance and downstream QA task performance. We further show that the pro-posed set-level retrievers not only outperform document-level retrievers, but also exhibit com-plementary retrieval characteristics: combining their outputs yields stronger performance than simply retrieving more passages from a single document-level retriever. 
+
+1 Introduction 
+
+Document retrieval has traditionally focused on se-lecting the single most relevant passage for a given query. However, many reasoning-intensive tasks such as multi-hop QA require retrieving a set of evidence passages , where the usefulness of each passage is inherently dependent on the others. In 
+
+> *Correspondence author
+
+such settings, retrieving individual passages in in-dependent manner is insufficient: a passage that is useful in isolation may become uninformative or even misleading when combined with an incompati-ble context. This interdependence makes multi-hop retrieval fundamentally a set-level problem, render-ing standard single-passage retrieval approaches inadequate. Recent work such as Lee et al. (2025) explicitly highlights this limitation and proposes retrieving sets of passages rather than individual passages. However, their approach relies on LLM-based set selection, resulting in substantial computational and memory overhead that limits its practicality in large-scale or latency-sensitive settings. Similarly, although Chen et al. (2025) does not explicitly dis-cuss the limitations of single-passage retrieval, it also aims to retrieve multiple objects jointly by leveraging structured relationships across hetero-geneous sources. However, its retrieval pipeline depends on both an LLM and an MIP solver, in-curring high computational cost. These approaches suggest the importance of set-level reasoning, but also highlight a central challenge: making set-level retrieval computationally practical. A useful set-level retrieval model should be able to account for global compatibility among passages while remain-ing efficient enough to search over many candidate passage sets. Non-LLM sequential retrieval methods provide a more computationally efficient alternative. For example, although Zhang et al. (2024) does not explicitly frame its motivation around set retrieval, its cross-encoder scorer can be directly used for multi-hop QA by iteratively constructing a retrieval chain using beam search. This procedure enables conditioning on previously retrieved evidence with-out relying on LLM-based passage selection. How-ever, the training signal remains local : the point-wise binary classification (BCE) objective super-vises whether each candidate is a correct ‘next 1arXiv:2607.05712v1 [cs.IR] 7 Jul 2026 30               
+
+> 32
+> 34
+> 36
+> 38
+> 40
+> 42
+> 44
+> QA EM (%)
+> 35.0
+> 39.0 38.7 39.1
+> 40.4 40.0
+> 42.9
+> HotpotQA
+> 15
+> 20
+> 25
+> 30
+> 35
+> 40
+> 21.9
+> 28.4
+> 25.1
+> 24.1
+> 28.7
+> 31.5
+> 35.1
+> 2WikiMultiHop
+> 6.0
+> 6.5
+> 7.0
+> 7.5
+> 8.0
+> 8.5
+> 9.0
+> 9.5
+> 10.0
+> 8.45 8.53
+> 8.07
+> 8.98
+> 7.30
+> 8.89
+> 9.30
+> MuSiQue
+> CE 10 (ParaSet+SetCE)
+> +CE 5
+> 10
+> 15
+> 20
+> 25
+> 30
+> 35
+> EM (% of all questions)
+> 24.2
+> 6.1
+> 30.3%
+> 23.5
+> 7.3
+> 30.9%
+> MCE 5
+> MCE 5
+> (a) QA EM Comparison (b) Macro Avg EM
+> Bi CE5 ListCE SetCE ParaSet+SetCE CE10 ParaSet+SetCE+CE5
+
+Figure 1: Summary of our main empirical findings. Methods involving SetCE or ParaSet are our set-level retrieval methods. (a) Set-level methods improve QA performance in several settings, and combining ParaSet +SetCE with document-level CE yields the strongest results. (b) Macro-average QA EM using Qwen3 as the first-stage retriever, decomposed by overlap with CE 5. Compared with CE 10 , (ParaSet + SetCE )+CE 5 recovers more CE 5-missed examples and achieves higher overall EM, indicating complementary evidence recovery. See § 4.2 and § 4.3. 
+
+passage’ given the current prefix, rather than di-rectly optimizing the global compatibility between the query and the entire evidence set. In addition, such models are typically trained under a fixed-hop regime with limited prefix lengths, whereas inference can expose them to longer and partially corrupted prefixes due to error accumulation. As a result, the scoring function is not explicitly encour-aged to robustly evaluate query–set interactions under variable-length or noisy retrieval chains. We provide a controlled analysis of this failure mode in Appendix B, where sequential scorers trained with local supervision show substantial degradation under longer and noisier prefixes, while the same architecture fine-tuned with our set-level objective remains more robust. Figure 1 previews our main empirical findings: set-level methods improve QA performance in sev-eral settings, and CE-augmented set-level retrieval yields further gains by recovering examples missed by CE 5. We discuss these results in § 4.2 and § 4.3. 
+
+Our Approach. Motivated by these limitations, we reframe multi-hop retrieval as a query–set scor-ing problem: instead of ranking passages inde-pendently or making local next-passage decisions, our approach directly scores the compatibility be-tween a query and a candidate passage set. This formulation separates two challenges: learning a compatibility-aware set scorer and searching the combinatorial space of passage sets efficiently. Our contributions are summarized as follows: • Query–set scoring for multi-hop retrieval. We formulate multi-hop retrieval as directly scoring the compatibility between a query and a candi-date passage set. Unlike independent passage rerankers or conditional next-passage scorers, which decompose evidence selection into local decisions, our framework learns a direct query– set scoring function. To the best of our knowl-edge, this is the first non-LLM neural framework that trains retrieval models to explicitly score query–set compatibility. • Set-level compatibility learning. We introduce a model-agnostic margin-based objective that ranks compatible evidence sets above incom-plete, noisy, or corrupt alternatives. We show that the proposed objective can effectively train models across different architectures, including lightweight set scorers and cross-encoder-based set rerankers, improving their robustness under variable-length and noisy retrieval contexts. • Efficient set-level retrieve-and-rerank. To avoid exhaustive scoring over 2N − 1 possi-ble non-empty subsets, we use beam search to approximate high-scoring passage sets. We further instantiate this search procedure with two complementary set scorers analogous to bi-encoders and cross-encoders in standard retrieval: 
+
+ParaSet efficiently explores candidate sets over precomputed embeddings, while SetCE performs fine-grained set-level reranking with the same compatibility objective. • Complementarity with passage-level retrieval. 
+
+We show that passage-level and set-level scoring capture different evidence signals: passage-level cross-encoders identify individually salient pas-sages, whereas set-level scoring captures glob-ally compatible combinations. Combining the two yields further gains, showing that set-level 2retrieval is a complementary component rather than a replacement for passage-level scoring. 
+
+2 Related Work 
+
+2.1 Multi-Passage Retrieval for Multi-hop QA 
+
+Early retrieval-based approaches to multi-hop QA retrieve multiple passages independently, typically by selecting the top-k passages for a query using dense retrievers or cross-encoders (Karpukhin et al., 2020; Izacard and Grave, 2021; Lewis et al., 2020; Min et al., 2019). Although such methods can ag-gregate information from multiple sources, they assume independent passage relevance and do not explicitly model interactions among retrieved ev-idence. This limits their ability to select passages whose usefulness depends on compatibility with other passages. 
+
+2.2 Sequential Multi-hop Retrieval 
+
+To move beyond independent retrieval, iterative methods repeatedly retrieve passages conditioned on an evolving query or reasoning state (Xiong et al., 2020; Yao et al., 2022; Press et al., 2023; Trivedi et al., 2023; Yue et al., 2024). Similarly, Zhang et al. (2024) propose a cross-encoder re-triever that predicts the next passage conditioned on the query and previously retrieved passages, enabling non-LLM sequential multi-hop retrieval. These methods can condition on intermediate con-text, but they still formulate retrieval as a sequence of local decisions rather than directly scoring the compatibility of the retrieved set as a whole. 
+
+2.3 Set-level Retrieval 
+
+A more direct approach is to retrieve evidence through global set selection. For example, Lee et al. (2025) formulate retrieval as a set selection prob-lem and use LLMs to jointly reason over candidate passages. Relatedly, Chen et al. (2025) consider structured multi-object retrieval, where relation-ships among retrieved items are explicitly mod-eled during inference. Although these approaches capture interactions among retrieved items, their reliance on LLM-based reasoning or complex in-ference pipelines incurs substantial computational and memory overhead. In contrast, our approach directly scores a large number of candidate passage sets in a parallel manner with lightweight neural scorers, enabling efficient and scalable set-level retrieval without LLM-based selection. 
+
+3 Set-Level Query–Set Scoring 
+
+We propose a set-level retrieval framework that directly scores the compatibility between a query and a candidate passage set. The framework has two components: a model-agnostic set-level com-patibility learning objective, and efficient set scor-ers for exploring and reranking candidate passage sets. We instantiate it with two complementary models. ParaSet is a lightweight attention-based scorer over bi-encoder embeddings that efficiently explores promising sets, while SetCE is a more ex-pressive cross-encoder-based scorer trained with the same objective for fine-grained reranking. To-gether, they form a set-level retrieve-and-rerank pipeline analogous to standard document retrieval: 
+
+ParaSet serves as a fast set-level explorer, and 
+
+SetCE as an expressive set-level reranker. 
+
+3.1 Set-level Compatibility Learning 
+
+We introduce a compatibility learning objective that trains a scorer to rank passage sets by their usefulness as a whole. Let the gold evidence set for query q be 
+
+Gq = {d+1 , . . . , d + 
+
+> k
+
+}.
+
+Given a scoring function S(q, ·), we aim to as-sign higher scores to sets that are more compatible with the query and the gold evidence structure, and lower scores to incomplete, noisy, or incompati-ble alternatives. The objective is model-agnostic and can train both lightweight set scorers such as 
+
+ParaSet and cross-encoder-based scorers such as 
+
+SetCE .
+
+Candidate set construction. We construct can-didate sets with varying degrees of compatibil-ity. First, we generate structured perturbations of the gold set using addition, elimination, and inter-change: 
+
+Addition: N = Gq ∪ { d−},
+
+Elimination: N ⊂ G q, N̸ = ∅,
+
+Interchange: N = ( Gq ∪ { d−}) \ { d+ 
+
+> i
+
+},
+
+where d− /∈ G q. These perturbations expose the model to over-complete, under-complete, and cor-rupted evidence sets. Second, we add in-batch nega-tives by using gold evidence sets from other queries and randomly sampled subsets of passages appear-ing in the mini-batch. These negatives can be plau-sible at the passage level but incompatible with the current query as a set. 3…                 
+
+> MLP
+> Score
+> qd1d2dn
+> ParaSet
+> (Set -Level Efficient Scorer)
+> SetCE
+> (Set -Level Reranker )
+> query document
+> …
+> query token
+> document token
+> Bi -Encoder
+> (Passage -Level Efficient Scorer)
+> Score
+> …
+> …
+> query document
+> …
+> …
+> …
+> MLP
+> Score
+> Cross -Encoder
+> (Passage -Level Reranker )
+> query document 1
+> …
+> MLP
+> Score
+> …
+> document n
+> …
+> …
+> ………
+> ……
+> …
+> …
+> …
+> …
+> …
+> …
+> (Pre -computed)
+> (Pre -computed
+> & KV -cached)
+> contextualized summary
+> document passage
+> query passage
+> pre -computed 020 40 60 80 100
+> PK(Top sets from ParaSet)
+> 0.55
+> 0.60
+> 0.65
+> 0.70
+> 0.75
+> Max Recall
+> HOTPOT - Max Recall
+> bk=5
+> bk=10
+> bk=20
+> bk=30
+> bk=40
+> bk=50
+
+Figure 2: Overview and empirical behavior of our set-level retrieval framework. (a) Comparison of document-level and set-level scoring architectures. Bi-encoder and cross-encoder models score query–passage pairs independently, whereas ParaSet and SetCE score query–set compatibility. ParaSet performs lightweight late interaction over precomputed and KV-cached embeddings for efficient candidate-set exploration, while SetCE jointly encodes the query and candidate tokens as an expressive set-level reranker. (b) Retrieved-set quality of ParaSet on HotpotQA. Here, BK is the first-stage candidate-passage budget and PK is the number of top candidate sets proposed by 
+
+ParaSet . Max Recall improves as BK and PK increase, even though the set search space grows exponentially with 
+
+BK . For example, BK = 50 induces 250 possible subsets. See Appendix E.2 for analysis on other datasets. 
+
+Set quality ordering. Rather than assigning ab-solute scores, we impose a relative ordering over candidate sets. In our experiments, set quality is defined by agreement with the gold evidence set and ranked lexicographically by prioritizing recall first and precision second. This reflects the needs of multi-hop QA, where covering required evidence is essential while avoiding unnecessary distractors re-mains useful. A concrete example of this ordering, including addition, elimination, and interchange perturbations, is provided in Appendix A.3. Let H ≻ L denote that H is more compatible than L under this ordering. For each ordered pair 
+
+(H, L ), we use the margin-based ranking loss 
+
+ℓ(H, L ) = max (0 , γ − S(q, H ) + S(q, L )) ,
+
+where γ is a margin hyperparameter. 
+
+Training objective. For each query, we construct a candidate pool C containing the gold set, struc-tured perturbations, and in-batch negatives. We first require the gold set to outrank all other candidates: 
+
+Lq
+
+pos-all = P
+
+L∈C\{G q } ℓ(Gq, L ). We further impose fine-grained constraints between adjacent compat-ibility levels: Lq
+
+adj = P
+
+(H,L )∈P adj ℓ(H, L ), where 
+
+Padj contains ordered pairs in which H is ranked immediately above L. The final objective is 
+
+Lfinal = X
+
+q
+
+(Lq
+
+pos-all + λ Lq
+
+adj ), (1) where λ controls the weight of adjacent-ranking constraints. Applying this objective to a sequential cross-encoder yields SetCE , which preserves the original architecture and inference procedure but replaces local next-passage supervision with set-level com-patibility learning. Applying it to a lightweight embedding-based scorer yields ParaSet , enabling efficient exploration of the passage-set space. 
+
+3.2 Lightweight Set Exploration with ParaSet 
+
+Set-level scoring requires efficient search, since a pool of n passages induces 2n − 1 non-empty sub-sets. We introduce ParaSet (Parallel Set-Scorer), a lightweight scorer designed to explore this com-binatorial space. 
+
+Architecture. ParaSet operates on bi-encoder representations. Given a query embedding q and passage embeddings {p1, . . . , p n}, it scores a can-didate set by forming a short sequence consisting of a learnable [CLS] token, the query embedding, and the embeddings of passages in the set. A sin-gle multi-head self-attention layer performs late interaction over this sequence, and the final score is computed from the resulting [CLS] representation. The computation required for ParaSet is sub-stantially smaller than cross-encoder set scoring because it avoids joint encoding of raw query– passage text. Moreover, since passage embeddings are query-independent and ParaSet uses only a shallow attention layer, the passage-side key and value projections can be precomputed and cached. At inference time, scoring a candidate set therefore starts from cached passage-side representations and only requires lightweight query-dependent compu-tation and dot-product attention over the selected elements. This enables many candidate sets for the same query to be scored efficiently in parallel. Thus, ParaSet serves as a set-level retriever ana-logue of a bi-encoder: its role is to propose and prioritize promising passage sets that can be passed to a stronger reranker such as SetCE .4Beam-search set retrieval. Given a candidate pool, we approximate 
+
+S⋆ = arg max 
+
+S⊆[n], S ̸ =∅
+
+sθ(q, S ),
+
+using beam search with batched set scoring. The beam is initialized with the top-B singleton sets, and we maintain an accumulated candidate pool 
+
+Sacc . At each step t, each beam subset of size t − 1
+
+is expanded by adding one new passage. The gen-erated size-t subsets are deduplicated and scored in parallel with ParaSet. The top-B size-t subsets are retained as the next beam, while all scored can-didates are added to the accumulated pool Sacc .Unlike standard beam search, we do not return only the final beam. Instead, we select the highest-scoring subset among all accumulated candidates: 
+
+ˆS = arg max 
+
+S∈S acc 
+
+sθ(q, S ). Additional details are pro-vided in Appendix A.4. 
+
+3.3 Expressive Set Reranking with SetCE 
+
+While ParaSet enables efficient exploration, a shallow embedding-based model may not provide the most expressive compatibility estimate. We therefore instantiate SetCE , a cross-encoder-based set scorer trained with the same objective in Eq. 1. 
+
+SetCE is obtained by fine-tuning a cross-encoder architecture that simply processes all tokens from a query and documents together. We essentially keep its architecture and inference procedure the same as our baseline sequential retriever (ListCE) to dis-entangle the effect of our proposed set-level com-patibility learning from architectural changes. Un-like pointwise next-passage supervision of ListCE, 
+
+SetCE is explicitly optimized to evaluate the com-patibility of an entire passage set with the query. In the full pipeline, ParaSet first explores the combinatorial set space and suggests a small num-ber of candidate sets. SetCE then reranks these proposed sets with more expressive set-level scor-ing. This mirrors the standard retrieve-and-rerank paradigm, but operates over passage sets rather than individual passages. 
+
+4 Experiments 
+
+We evaluate our framework across multi-hop QA benchmarks, first-stage retrievers, and retrieval set-tings. Our experiments focus on three questions: (1) Can set-level retrieval improve downstream QA performance? (2) Beyond aggregate performance, does set-level retrieval recover evidence missed 
+
+Table 1: We report downstream QA performance on two different first-stage retrievers with macro-average EM / F1 (%) across hops. Latency is reported in seconds per query. Hop-wise results are provided in Appendix D.                                                                                                              
+
+> Base Method HotpotQA 2Wiki MuSiQue Latency
+> EM F1 EM F1 EM F1 sec/query Contriever Bi 35.0 45.9 21.9 24.3 8.45 15.6 0.032 CE 539.0 50.6 28.4 30.9 8.53 15.9 0.067 ListCE 38.7 49.7 25.1 27.7 8.07 15.4 0.555 SetCE 39.1 50.6 24.1 26.7 8.98 16.2 0.555 ParaSet+SetCE 40.4 52.2 28.7 33.2 7.30 14.1 0.116 CE 10 40.1 51.6 31.5 35.2 8.89 14.8 0.067 (ParaSet+SetCE) +CE 542.9 55.3 35.1 39.2 9.30 15.7 0.196 Qwen3 Bi 37.0 47.3 28.5 31.2 12.6 20.2 0.073 CE 538.4 49.4 31.0 33.5 13.4 21.1 0.114 ListCE 38.0 48.6 30.7 33.5 14.2 22.6 0.585 SetCE 39.6 50.8 30.8 33.5 15.1 23.8 0.585 ParaSet+SetCE 36.9 48.0 34.7 37.9 14.2 24.1 0.164 CE 10 39.7 51.5 34.3 37.0 14.4 22.7 0.114 (ParaSet+SetCE) +CE 541.0 52.9 35.3 38.0 14.4 22.7 0.241
+
+Table 2: Example-level complementarity with document-level CE. Panel (a) reports overlap with CE 5
+
+macro-averaged over all six dataset/retriever settings, where values are normalized by M ∪ CE 5. The last column reports the macro-average EM of the CE-augmented variant M+CE 5 . Panel (b) reports question-type enrichment ratios for M = ParaSet + SetCE ,averaged over the two first-stage retrievers. Ratios are computed as the fraction of each question type in 
+
+M \ CE 5 divided by its fraction in CE 5 \ M . Ratios above 1 indicate question types more concentrated in the set-level-only region, while ratios below 1 indicate types more concentrated in the CE 5-only region.                                                
+
+> (a) Macro-average overlap with CE 5across all dataset/retriever settings Method MM\CE 5CE 5\MM∩CE 5EM of M+CE 5
+> ListCE 21.02 21.02 58.06 30.3
+> SetCE 20.51 18.20 61.14 30.5
+> ParaSet +SetCE 21.65 25.17 53.06 30.9 (b) Question-type enrichment ratios for M=ParaSet +SetCE
+> Dataset Sequential Ratio Parallel Ratio
+> (M\CE 5)/(CE 5\M)(M\CE 5)/(CE 5\M)
+> HotpotQA 1.06 0.60 2Wiki 2.43 0.52
+
+by document-level retrieval? (3) Can retrieve-and-rerank in set search achieve a favorable trade-off between retrieval quality and computational cost? 
+
+4.1 Experimental Setup Benchmarks. We evaluate on three multi-hop question answering benchmarks: HotpotQA (Yang et al., 2018), 2WikiMultihopQA (Ho et al., 2020), and MuSiQue (Trivedi et al., 2022). HotpotQA con-sists of 2-hop questions, while 2WikiMultihopQA and MuSiQue include questions requiring up to 4 hops. These datasets allow us to assess retrieval and downstream QA performance across different reasoning depths and evidence structures. 5First-stage retrievers. We use dense bi-encoder retrievers to construct the initial candidate pool for all reranking and set-level search methods. We evaluate both Contriever (Izacard et al., 2022) and Qwen3-Embedding-0.6B (Zhang et al., 2025) to ex-amine whether set-level scoring remains effective under different first-stage retrieval quality. 
+
+Compared methods. We compare methods rep-resenting different retrieval paradigms. Bi directly uses the top passages from the first-stage retriever. 
+
+CE is a passage-level cross-encoder reranker based on ms-marco-electra-base (Hugging Face, 2021), which scores query–passage pairs in-dependently. ListCE is a sequential cross-encoder scorer based on Zhang et al. (2024), implemented with a deberta-v3-base backbone and trained with pointwise next-passage classification. It ex-pands retrieval chains with beam search and selects the highest-scoring evaluated passage set. 
+
+SetCE uses the same architecture and inference procedure as ListCE, but is fine-tuned with our set-level compatibility objective, isolating the effect of set-level supervision. ParaSet+SetCE is our set-level retrieve-and-rerank pipeline: ParaSet first explores the combinatorial passage-set space and proposes candidate sets, and SetCE reranks them with one forward pass per set. This avoids apply-ing SetCE throughout beam search while retaining expressive set-level reranking. 
+
+CE augmentation notation. CE k denotes the document-level CE’s QA performance when the top-k CE-ranked passages are provided to the reader LLM. We use CE 5 to denote default document-level CE retriever results, and CE 10 de-notes outcome of expanded retrieval. For a set-level method M , we denote its CE-augmented variant by M+CE 5 , where the final context for the reader is formed by combining M ’s best-ranked set-level output with the top-5 passages selected by CE. This notation distinguishes retrieval augmentation, 
+
+M+CE 5 , from example-level set operations such as 
+
+M ∪ CE 5 used in the overlap analysis. 
+
+4.2 End-to-End Performance 
+
+Table 1 reports macro-average downstream QA performance across available hop categories; hop-wise results are provided in Appendix D. For each method, the selected passages are given with fixed few-shot exemplars to a frozen LLM (gpt-4o-mini , OpenAI) for answer generation, so performance differences reflect the upstream re-trieval stage. We evaluate all methods with Contriever and Qwen3-Embedding-0.6B as first-stage retrievers. Bi and CE 5 provide five passages to the reader. CE ,
+
+ListCE , and SetCE rerank a fixed pool of 20 pas-sages, while ParaSet and ParaSet +SetCE search over up to 50 passages due to the lower cost of lightweight set exploration. For ParaSet +SetCE ,
+
+ParaSet first proposes candidate passage sets and 
+
+SetCE reranks them with one forward pass per set. We also report CE 10 and (ParaSet + SetCE )+CE 5
+
+to evaluate whether combining document-level and set-level evidence improves performance beyond simply returning more CE-ranked passages. Several trends are worth noting. First, set-level compatibility learning improves over locally su-pervised sequential retrieval. Since ListCE and 
+
+SetCE share the same architecture and inference procedure, their comparison isolates the effect of replacing pointwise next-passage supervision with our set-level compatibility objective. This is con-sistent with Appendix B, where local supervision becomes brittle under longer or noisier prefixes, while set-level learning remains more stable. Second, ParaSet +SetCE shows that set-level re-trieval can be practical. Instead of applying a cross-encoder throughout beam search, ParaSet ex-plores candidate sets efficiently and SetCE reranks only the resulting pool. This retrieve-and-rerank design achieves competitive performance, support-ing the division of labor between lightweight set exploration and expressive set reranking. Finally, the strong performance of (ParaSet +
+
+SetCE )+CE 5 suggests that document-level and set-level retrieval provide complementary evidence, which we analyze next. 
+
+4.3 Complementarity of Document-Level and Set-Level Scoring 
+
+Figure 1(b) suggests that the gain from CE-augmented set-level retrieval is not simply due to preserving examples already solved by CE 5. Com-pared with CE 10 , (ParaSet + SetCE )+CE 5 loses a similar amount of CE 5-correct examples, but re-covers a larger number of CE 5-missed examples. We therefore analyze this complementarity more systematically at the example level. 
+
+Where Set-Level Retrieval Differs from CE. 
+
+For a retrieval method M , we partition examples solved by either M or CE 5 into M \CE 5, CE 5 \M ,6and M ∩ CE 5. Table 2(a) reports this partition, macro-averaged over all six dataset/retriever set-tings and normalized by M ∪ CE 5.The results show that ParaSet +SetCE has the largest M \ CE 5 region and the smallest M ∩ CE 5
+
+region among the compared set-level methods. This indicates that ParaSet +SetCE overlaps less with CE 5 and recovers more CE 5-missed examples, sug-gesting stronger complementarity than ListCE or 
+
+SetCE . Importantly, this occurs despite its lower inference cost: ParaSet performs lightweight set exploration, and SetCE reranks only a reduced candidate-set pool. The augmented EM column further shows that this complementarity translates into the strongest CE-augmented QA performance. 
+
+Question-type asymmetry. We next ask where this complementarity comes from. For 2-hop ques-tions, we distinguish parallel questions, where sup-porting passages can often be identified indepen-dently, from sequential questions, where evidence must be composed as a chain. Table 2(b) shows that sequential questions are more concentrated in the set-level-only region, whereas parallel questions are more concentrated in the CE 5-only region. This suggests that set-level retrieval complements CE particularly when evidence passages must be se-lected through sequential composition, while CE remains strong when passages can be retrieved in-dependently through passage-level relevance. 
+
+Combining CE with set-level methods. Fi-nally, we evaluate whether this complementar-ity is robust across answer-generation LLMs. Ta-ble 3 reports QA EM for CE 10 , SetCE +CE 5 , and 
+
+(ParaSet + SetCE )+CE 5 across multiple reader LLMs and first-stage retrievers. Across GPT-4o-mini, GPT-5.4-nano(OpenAI, 2026), and Gemini-2.5-flash-lite(Google, 2026), combining CE 5 with 
+
+ParaSet +SetCE generally yields the strongest per-formance. Thus, the benefit of CE augmentation is not tied to a particular reader model, but re-flects complementary evidence recovered during retrieval. 
+
+4.4 Retrieval Effectiveness–Efficiency Trade-off 
+
+We next evaluate retrieval quality and computa-tional efficiency. Because standard retrieval F1 does not align well with downstream QA perfor-mance, we first identify a retrieval-side metric that better reflects answerability. In multi-hop QA, miss-ing a required evidence passage can be more harm-
+
+Table 3: Downstream QA EM (%) with CE augmenta-tion across answer-generation LLMs. For each model 
+
+M , the CE-augmented variant M+CE 5 combines the method’s top-ranked set with CE 5 passages. For CE, augmentation corresponds to CE 10 , i.e., expanding the returned passages from top-5 to 10.                                                                  
+
+> Answer Generator Base Dataset CE 10 SetCE +CE 5Para+SetCE +CE 5
+> GPT-4o-mini Contriever HotpotQA 40.01 40.45 42.92
+> 2Wiki 31.53 31.98 35.11
+> MuSiQue 8.89 8.91 9.30
+> Qwen3 HotpotQA 39.77 39.86 40.95
+> 2Wiki 34.29 33.78 35.27
+> MuSiQue 14.40 14.81 14.42 GPT-5.4-nano Contriever HotpotQA 34.1 33.8 37.1
+> 2Wiki 15.8 16.0 17.8
+> MuSiQue 3.1 2.8 3.5
+> Qwen3 HotpotQA 31.7 34.1 34.6
+> 2Wiki 17.5 18.1 18.0 MuSiQue 4.4 5.6 9.1
+> Gemini-2.5-flash-lite Contriever HotpotQA 35.6 36.2 37.9
+> 2Wiki 17.6 18.3 21.1
+> MuSiQue 1.6 1.8 1.8
+> Qwen3 HotpotQA 32.7 35.2 36.5
+> 2Wiki 19.5 20.1 20.3
+> MuSiQue 4.2 5.3 4.5 0.001 0.01 0.1 0.5 1510
+> Latency (sec/query)
+> 0.40
+> 0.45
+> 0.50
+> 0.55
+> 0.60
+> 0.65
+> 0.70
+> F5
+> HotpotQA
+> Bi
+> CE-5
+> CE-10
+> ParaSet
+> ParaSet (Union CE)
+> ListCE
+> SetCE
+> SetCE (Union CE)
+> ParaSet+SetCE
+> ParaSet+SetCE (Union CE)
+
+Figure 3: Retrieval F5 versus latency on HotpotQA us-ing Contriever as the first-stage retriever. Each curve varies the number of first-stage candidate passages with 
+
+K ∈ { 5, 10 , . . . , 50 }, and each point corresponds to one value of K. The x-axis reports per-query latency on a logarithmic scale; for all methods except Bi, we exclude the first-stage bi-encoder retrieval time. 
+
+ful than including extra passages, since the reader may ignore some distractors but cannot recover absent evidence. To examine this, we compute retrieval precision, recall, and Fβ 1 scores across all methods, datasets, and first-stage retrievers used in our end-to-end QA experiments, and measure their Pearson correlation with QA EM. As shown in Table 4, precision alone correlates weakly with QA EM, while recall is sub-stantially more predictive. The correlation peaks at 
+
+F5 and slightly decreases for larger β, suggesting that downstream QA is strongly coverage-sensitive but still benefits from penalizing overly noisy con-texts. We therefore use F5 as the primary retrieval metric in our effectiveness–efficiency analysis. Figure 3 reports the HotpotQA trade-off between retrieval F5 and per-query latency as the first-stage 
+
+> 1
+
+Fβ = (1+ β2)·Precision ·Recall  
+
+> β2·Precision+Recall
+
+.
+
+7candidate pool size varies. We show HotpotQA in the main text and provide the corresponding results for other datasets in Appendix C. Several observations can be drawn from Fig-ure 3. First, cross-encoder-based set retrieval can improve retrieval quality, but incurs high latency because the scorer is repeatedly invoked during beam search over candidate sets. Second, ParaSet 
+
+provides a lightweight alternative for exploring this set space. Third, ParaSet +SetCE offers a practical compromise: ParaSet performs the combinatorial exploration, and SetCE reranks only the reduced candidate-set pool. This reduces per-query latency from 0.555s for beam-search SetCE at K = 20 
+
+to 0.116s for ParaSet +SetCE at K = 50 , while still using a larger first-stage candidate pool. Thus, our pipeline improves the effectiveness–efficiency trade-off by avoiding expensive cross-encoder scor-ing over the full beam-search space. 
+
+4.5 Comparison with LLM-based and Agentic Retrieval 
+
+We further compare our framework with two stronger retrieval paradigms: LLM-based set se-lection and multi-step agentic retrieval. First, we compare with an LLM-based set selector inspired by SETR (Lee et al., 2025), which jointly se-lects evidence using an LLM. As shown in Ap-pendix E.1, ParaSet +SetCE achieves competitive performance while being about 17 .5× faster than the LLM-based selector. With CE augmentation, our method further outperforms the LLM-based selector, yet still remains about 10 .7× faster. This suggests that much of the benefit of set-level evi-dence selection can be obtained without expensive LLM-based set selection. Second, we compare with IRCoT-style agentic retrieval (Trivedi et al., 2023), which interleaves LLM-driven query generation, retrieval, and rea-soning over multiple steps. Unlike such multi-step pipelines, our approach performs retrieval in a sin-gle stage by directly scoring candidate evidence sets. As shown in Table 13, our single-step set-level methods achieve competitive or stronger perfor-mance while avoiding repeated LLM calls and iter-ative retrieval. Moreover, ParaSet +SetCE +CE 5 is about 44 .1× faster than the multi-step CE pipeline, while achieving stronger downstream performance. 
+
+4.6 Additional Analyses 
+
+We conduct additional analyses to better under-stand the behavior and efficiency of set retrieval. 
+
+Candidate quality of ParaSet. As ParaSet is intended as a lightweight candidate-set genera-tor, its top-1 performance alone can underesti-mate its utility. In our retrieve-and-rerank pipeline, 
+
+ParaSet does not merely rerank individual pas-sages. Instead, it proposes the top-kp candidate ev-idence sets, and SetCE selects the best set among them. Thus, kp denotes the number of candidate sets passed to the reranker, not the number of passages returned to the reader. We analyze Max-F1@ kp over these top-kp candidate sets and find that ParaSet often includes high-quality evidence sets within a small candidate-set pool, supporting its role in retrieve-and-rerank pipelines. Full results are provided in Appendix E.2. 
+
+Ablations. We further analyze the beam width used in ParaSet search and the adjacent-ranking weight λ in Eq. (1) . Increasing beam width from 1 to 2 improves retrieval quality, but larger beams yield diminishing returns while increasing latency. The effect of λ is dataset-dependent, suggesting that the optimal coverage–parsimony trade-off varies across benchmarks. Full results are provided in Appendix E.4 and Appendix E.5. 
+
+5 Conclusion 
+
+We studied multi-hop retrieval as a query–set scor-ing problem, where evidence passages should be selected by joint compatibility rather than indepen-dent relevance. We proposed a set-level retrieval framework that combines compatibility learning with efficient set search, making query–set scoring practical over combinatorial passage sets. Experiments show that set-level compatibility learning is an effective supervision signal for multi-hop QA. SetCE improves robustness over locally supervised sequential retrieval under the same architecture and inference procedure, while 
+
+ParaSet +SetCE enables practical retrieve-and-rerank with lightweight set exploration followed by expressive reranking. Our analyses further show that set-level retrieval complements document-level reranking: combining set-level evidence with CE outputs yields stronger performance than rely-ing on either paradigm alone. These results suggest that set-level retrieval is a useful direction for effi-cient retrieval systems that support multi-hop ques-tion answering and retrieval-augmented reasoning. 8Limitations 
+
+First, our current framework uses relatively simple search and combination strategies. For example, CE-augmentation framework combines document-level and set-level outputs through a direct union, and ParaSet uses beam search for set exploration. While these choices are simple and effective, more adaptive strategies could further improve perfor-mance, such as dynamically deciding when to rely on document-level versus set-level evidence, learn-ing how to merge retrieved sets, or allocating dif-ferent candidate budgets depending on query dif-ficulty. Second, our experiments focus on multi-hop QA benchmarks with relatively short passages and controlled evidence annotations. Real-world retrieval-augmented reasoning may involve longer documents, noisier corpora, ambiguous evidence boundaries, and larger-scale candidate pools. Ex-tending set-level compatibility learning to these settings, potentially with indexing or approximate search methods over passage sets, is an important direction for future work. 
+
+Acknowledgments 
+
+This work was supported in part by the National Research Foundation of Korea (NRF) grant (RS-2023-00280883, RS-2023-00222663); by the Na-tional Research Foundation, Korea, under project BK21 FOUR(Dept. of Data Science, SNU, No. 5199990914569); by the Korea Institute of Sci-ence and Technology Information (KISTI) in 2026 (No. (KISTI)K26L3M1C1), aimed at developing KONI (KISTI Open Neural Intelligence), a large language model specialized in science and tech-nology; and by the Institute of Information & communications Technology Planning & Evalu-ation (IITP) grant funded by the Korea govern-ment(MSIT) (RS-2025-02263754, Human-Centric Embodied AI Agents with Autonomous Decision-Making); by grant (25202MFDS003) from Min-istry of Food and Drug Safety in 2025; by AI-BIO Research Grant through Seoul National Univer-sity; Institute of Information & communications Technology Planning & Evaluation (IITP) grant funded by the Korea government(MSIT) (No. RS-2025-25442149, LG AI STAR Talent Development Program for Leading Large-Scale Generative AI Models in the Physical AI Domain). 
+
+References 
+
+Peter Baile Chen, Yi Zhang, Mike Cafarella, and Dan Roth. 2025. Can we retrieve everything all at once? arm: An alignment-oriented llm-based retrieval method. In Proceedings of the 63rd Annual Meet-ing of the Association for Computational Linguistics (Volume 1: Long Papers) , pages 30298–30317. Google. 2026. Gemini 2.5 flash-lite. https: //ai.google.dev/gemini-api/docs/models/ gemini-2.5-flash-lite . Accessed: 2026-05. Xanh Ho, Anh-Khoa Duong Nguyen, Saku Sugawara, and Akiko Aizawa. 2020. Constructing a multi-hop qa dataset for comprehensive evaluation of reasoning steps. arXiv preprint arXiv:2011.01060 .Hugging Face. 2021. ms-marco-electra-base. 
+
+https://huggingface.co/cross-encoder/ ms-marco-electra-base . Cross-encoder model fine-tuned on MS MARCO. Gautier Izacard, Mathilde Caron, Lucas Hosseini, Sebas-tian Riedel, Piotr Bojanowski, Armand Joulin, and Edouard Grave. 2022. Unsupervised dense informa-tion retrieval with contrastive learning. In Proceed-ings of ICLR .Gautier Izacard and Edouard Grave. 2021. Leveraging passage retrieval with generative models for open domain question answering. In Proceedings of the 16th conference of the european chapter of the asso-ciation for computational linguistics: main volume ,pages 874–880. Vladimir Karpukhin, Barlas Oguz, Sewon Min, Patrick Lewis, Ledell Wu, Sergey Edunov, Danqi Chen, and Wen-tau Yih. 2020. Dense passage retrieval for open-domain question answering. In Proceedings of EMNLP .Dahyun Lee, Yongrae Jo, Haeju Park, and Moontae Lee. 2025. Shifting from ranking to set selection for retrieval augmented generation. In Proceedings of the 63rd Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers) ,pages 17606–17619. Patrick Lewis, Ethan Perez, Aleksandra Piktus, Fabio Petroni, Vladimir Karpukhin, Naman Goyal, Hein-rich Küttler, Mike Lewis, Wen-tau Yih, Tim Rock-täschel, and 1 others. 2020. Retrieval-augmented gen-eration for knowledge-intensive nlp tasks. Advances in neural information processing systems , 33:9459– 9474. Sewon Min, Victor Zhong, Luke Zettlemoyer, and Han-naneh Hajishirzi. 2019. Multi-hop reading compre-hension through question decomposition and rescor-ing. arXiv preprint arXiv:1906.02916 .OpenAI. 2024. Gpt-4o mini. https://platform. openai.com/docs/models . Accessed: 2026-01. 
+
+9OpenAI. 2026. Gpt-5.4 nano model. https: //developers.openai.com/api/docs/ models/gpt-5.4-nano . Accessed: 2026-05. Ofir Press, Muru Zhang, Sewon Min, Ludwig Schmidt, Noah A Smith, and Mike Lewis. 2023. Measuring and narrowing the compositionality gap in language models. In Findings of the Association for Computa-tional Linguistics: EMNLP 2023 , pages 5687–5711. Harsh Trivedi, Niranjan Balasubramanian, Tushar Khot, and Ashish Sabharwal. 2022. Musique: Multi-hop questions via single-hop question composition. 
+
+Transactions of the Association for Computational Linguistics , 10:539–554. Harsh Trivedi, Niranjan Balasubramanian, Tushar Khot, and Ashish Sabharwal. 2023. Interleaving retrieval with chain-of-thought reasoning for knowledge-intensive multi-step questions. In Proceedings of the 61st annual meeting of the association for com-putational linguistics (volume 1: long papers) , pages 10014–10037. Wenhan Xiong, Xiang Lorraine Li, Srini Iyer, Jingfei Du, Patrick Lewis, William Yang Wang, Yashar Mehdad, Wen-tau Yih, Sebastian Riedel, Douwe Kiela, and 1 others. 2020. Answering complex open-domain questions with multi-hop dense retrieval. 
+
+arXiv preprint arXiv:2009.12756 .Zhilin Yang, Peng Qi, Saizheng Zhang, Yoshua Bengio, William Cohen, Ruslan Salakhutdinov, and Christo-pher D Manning. 2018. Hotpotqa: A dataset for diverse, explainable multi-hop question answering. In Proceedings of the 2018 conference on empiri-cal methods in natural language processing , pages 2369–2380. Shunyu Yao, Jeffrey Zhao, Dian Yu, Nan Du, Izhak Shafran, Karthik R Narasimhan, and Yuan Cao. 2022. React: Synergizing reasoning and acting in language models. In The eleventh international conference on learning representations .Zhenrui Yue, Honglei Zhuang, Aijun Bai, Kai Hui, Rolf Jagerman, Hansi Zeng, Zhen Qin, Dong Wang, Xuan-hui Wang, and Michael Bendersky. 2024. Inference scaling for long-context retrieval augmented genera-tion. arXiv preprint arXiv:2410.04343 .Jiahao Zhang, Haiyang Zhang, Dongmei Zhang, Liu Yong, and Shen Huang. 2024. End-to-end beam re-trieval for multi-hop question answering. In Proceed-ings of the 2024 Conference of the North American Chapter of the Association for Computational Lin-guistics: Human Language Technologies (Volume 1: Long Papers) , pages 1718–1731. Yanzhao Zhang, Mingxin Li, Dingkun Long, Xin Zhang, Huan Lin, Baosong Yang, Pengjun Xie, An Yang, Dayiheng Liu, Junyang Lin, and 1 others. 2025. Qwen3 embedding: Advancing text embedding and reranking through foundation models. arXiv preprint arXiv:2506.05176 .
+
+A Details of the ParaSet and Beam-Search Inference 
+
+This appendix provides implementation-level de-tails of the ParaSet scorer and its beam-search inference procedure. 
+
+A.1 Notation 
+
+Given an input query, a bi-encoder produces a query embedding ( q ∈ Rd) and candidate passage embeddings {p1, . . . , p n} where pi ∈ Rd. We write a candidate set by its index subset S ⊆ [n] and denote the corresponding passage embeddings by 
+
+{pi}i∈S . In the attention layer, we use ( Q) for the attention query vector, and ( K, V ) for key/value vectors: 
+
+Q = WQq, Ki = WK pi, Vi = WV pi.
+
+We use a beam width B.
+
+A.2 Forward Computation of the Set Score 
+
+To score a set S, we construct an input sequence consisting of a learnable [CLS] token, the query embedding ( q), and the passage embeddings in the set: 
+
+x(S) = ( [CLS] , q, {pi}i∈S ).
+
+We apply a single multi-head self-attention layer followed by a lightweight feed-forward block. The final set score is obtained from the [CLS] output: 
+
+s(q, S ) = w⊤h[CLS] (S),
+
+where h[CLS] (S) is the [CLS] representation after the single attention layer (and optional FFN). 
+
+A.3 Example of Set Quality Ordering 
+
+We illustrate the set quality ordering used in our margin-based objective. Suppose the gold evidence set for a query is 
+
+Gq = {d+1 , d +2 }.
+
+For a candidate set S, we compute recall and preci-sion with respect to Gq:
+
+Recall( S) = |S ∩ G q||G q| , Precision( S) = |S ∩ G q||S| .
+
+We then rank candidate sets lexicographically by recall first and precision second. That is, a set with higher recall is preferred; if two sets have the same recall, the one with higher precision is preferred. 10 For example, consider the following candidate sets: S1 = {d+1 , d +2 },S2 = {d+1 , d +2 , d −},S3 = {d+1 },S4 = {d+1 , d −},S5 = {d−}.
+
+Here, S1 is the complete gold set, S2 is an addition perturbation, S3 is an elimination perturbation, S4
+
+is an interchange-like corrupted set, and S5 is a fully negative set. Their recall and precision values are: Set Recall Precision 
+
+S1 = {d+1 , d +2 } 1.0 1.0
+
+S2 = {d+1 , d +2 , d −} 1.0 2/3
+
+S3 = {d+1 } 1/2 1.0
+
+S4 = {d+1 , d −} 1/2 1/2
+
+S5 = {d−} 0.0 0.0
+
+Therefore, the induced ordering is 
+
+S1 ≻ S2 ≻ S3 ≻ S4 ≻ S5.
+
+This ordering captures the intuition that covering all required evidence is most important, but among sets with the same coverage, more compact and less noisy sets should be preferred. The margin loss in Eq. (1) is then applied to ordered pairs (H, L )
+
+where H appears above L under this ordering. 
+
+A.4 Beam-Search Set Retrieval 
+
+Our objective is to approximately solve 
+
+S⋆ = arg max   
+
+> S⊆[n], S ̸=∅
+
+s(q, S ),
+
+where n is the number of candidate passages. Since there are 2n − 1 non-empty subsets, exhaustive enumeration is infeasible except for very small n.We therefore employ a depth-limited beam search 
+
+with batched set scoring. In practice, we restrict the maximum size of can-didate sets during inference to a predefined limit 
+
+Tmax . This constraint reflects the observation that multi-hop question answering typically requires only a small number of supporting passages, and it prevents unnecessary expansion into overly large and noisy sets. 
+
+Initialization and expansion. We first score all singleton sets and retain the top-B as the initial beam. At each iteration, every beam subset S is ex-panded by adding new passages from the remaining 
+
+Algorithm 1 Depth-limited beam search for set retrieval with ParaSet 
+
+Require: query embedding q, candidate passages 
+
+{p1, . . . , p n}, beam width B, maximum set size Tmax  
+
+> 1:
+
+Sacc ← ∅  
+
+> 2:
+
+B ← TOP B({{ i}} ni=1 ) 
+
+> 3:
+
+Sacc ← S acc ∪ B  
+
+> 4:
+
+while true do  
+
+> 5:
+
+C ← ∅  
+
+> 6:
+
+for each S ∈ B do  
+
+> 7:
+
+if |S| < T max then  
+
+> 8:
+
+for each j ∈ [n] \ S do  
+
+> 9:
+
+C ← C ∪ { S ∪ { j}}  
+
+> 10:
+
+end for  
+
+> 11:
+
+end if  
+
+> 12:
+
+end for  
+
+> 13:
+
+if C = ∅ then  
+
+> 14:
+
+break  
+
+> 15:
+
+end if  
+
+> 16:
+
+Score all S ∈ C in batch (with memoization)  
+
+> 17:
+
+Sacc ← S acc ∪ C  
+
+> 18:
+
+B ← TOP B(C) 
+
+> 19:
+
+end while  
+
+> 20:
+
+return RANK (Sacc )
+
+pool. The expansion proceeds only if |S| < T max ,ensuring that the beam search explores sets up to a bounded size. 
+
+Expansion. For step t = 2 , 3, . . . , T max , we ex-pand each beam subset by adding new elements from the remaining pool. Let amax denote the max-imum number of newly added passages per expan-sion step (in our standard setting, amax = 1 ). For each S ∈ B t−1 with |S| < T max , we generate candidate sets 
+
+N (S) = {S ∪ A : A ⊆ [n] \ S, 1 ≤ | A| ≤ amax } .
+
+All generated candidates are scored in batch, dedu-plicated, and the top-B subsets are retained as the next beam Bt.
+
+B Robustness Analysis of Sequential Set Scoring 
+
+We conduct a controlled analysis to examine whether sequential retrieval models can robustly evaluate query–set interactions under variable-length and noisy retrieval chains. We compare a sequential list-level scorer trained with pointwise 11 0 1 2 3 4 5 6 7 8        
+
+> Number of documents in chain ( T)
+> 0.3
+> 0.4
+> 0.5
+> 0.6
+> 0.7
+> 0.8
+> 0.9
+> 1.0
+> Retrieval Precision
+> Precision under Distractor Contexts
+> Baseline (Sequential List-level Learning)
+> Ours (Set-level Learning)
+> 012345678
+> Number of documents in chain ( T)
+> 0.3
+> 0.4
+> 0.5
+> 0.6
+> 0.7
+> 0.8
+> 0.9
+> 1.0
+> Retrieval Precision
+> Precision under Gold Contexts
+> Baseline (Sequential List-level Learning)
+> Ours (Set-level Learning)
+
+Figure 4: Controlled analysis of sequential retrieval ro-bustness on MuSiQue. We compare a sequential scorer trained with local BCE supervision against the same architecture fine-tuned with our set-level compatibility objective. Left: prefixes consist only of distractor pas-sages. Right: prefixes contain partial gold evidence and additional distractors, leaving one unseen gold passage as the retrieval target. Set-level compatibility learning yields more stable retrieval precision as prefixes become longer and noisier. 
+
+BCE supervision, following Zhang et al. (2024), against the same architecture fine-tuned only with our set-level compatibility learning objective. Thus, the two models differ only in their training objec-tive, not in architecture or inference procedure. Figure 4 shows results on MuSiQue under two controlled prefix settings. In the distractor-only set-ting, the retrieved prefix consists entirely of irrel-evant passages. In the partially-gold setting, for an H-hop question, the prefix contains only gold passages when T < H ; once T ≥ H, we include 
+
+H − 1 gold passages and fill the remaining posi-tions with distractors, leaving exactly one unseen gold passage as the retrieval target. Retrieval pre-cision measures the success rate of retrieving this target gold passage given a prefix of length T .The scorer trained with local BCE supervision degrades sharply as the prefix becomes longer or noisier. This suggests that local next-passage super-vision does not sufficiently encourage the model to evaluate the compatibility of the full query–prefix context, especially when retrieval errors accumu-late. By contrast, the same model fine-tuned with our set-level compatibility objective remains sub-stantially more stable across both settings. This supports our claim that set-level supervision im-proves robustness to variable-length and partially corrupted evidence contexts. 
+
+C Additional Retrieval Effectiveness–Efficiency Results 
+
+In § 4.4, we report the effectiveness–efficiency trade-off on HotpotQA using retrieval F5, which is most strongly correlated with downstream QA EM in our analysis. Here, we provide additional re-sults on all three datasets to show that the observed trade-off is not specific to HotpotQA. Figure 5 extends the analysis in Figure 3 to all three datasets. Across datasets, document-level CE provides a low-latency reranking baseline, while applying set-level cross-encoder scoring through-out beam search is substantially more expensive. 
+
+ParaSet remains lightweight because it performs late interaction over precomputed and KV-cached embeddings, allowing it to explore larger candidate pools with limited additional cost. The combined 
+
+ParaSet +SetCE pipeline improves the trade-off by separating the roles of exploration and rerank-ing: ParaSet first searches over candidate evi-dence sets, and SetCE is then applied only to a reduced pool of candidate sets. This distinction is important because beam-search SetCE invokes the cross-encoder scorer re-peatedly over intermediate candidate sets, whereas 
+
+ParaSet +SetCE pays the cross-encoder cost only after lightweight set exploration. In our latency measurements, beam-search SetCE at 
+
+K = 20 requires 0.555 seconds per query, while 
+
+ParaSet +SetCE at K = 50 requires only 0.116 seconds per query. Thus, the proposed retrieve-and-rerank design can use a larger first-stage candidate pool while avoiding cross-encoder scoring over the full beam-search space. 
+
+C.1 Correlation between Retrieval Metrics and QA EM 
+
+In Section 4.4, we use retrieval F5 as the pri-mary metric for the effectiveness–efficiency anal-ysis. Here, we provide the full correlation results that motivate this choice. We compute retrieval pre-cision, recall, and Fβ scores across all methods, datasets, and first-stage retrievers used in our end-to-end QA experiments, and measure their Pearson correlation with QA EM: 
+
+Fβ = (1 + β2) · Precision · Recall 
+
+β2 · Precision + Recall .
+
+Precision corresponds to F0, while recall corre-sponds to the large-β limit. As shown in Table 4, precision alone correlates weakly with QA EM, while recall is substantially more predictive. The correlation peaks at F5 and slightly decreases for larger β. This suggests that downstream QA is strongly coverage-sensitive, but still benefits from penalizing overly noisy retrieved 12 0.001 0.01 0.1 0.5 1 5 10             
+
+> Latency (sec/query)
+> 0.40
+> 0.45
+> 0.50
+> 0.55
+> 0.60
+> 0.65
+> 0.70
+> F5
+> HotpotQA
+> 0.001 0.01 0.1 0.5 1510
+> Latency (sec/query)
+> 0.40
+> 0.45
+> 0.50
+> 0.55
+> 0.60
+> 2WikiMultiHopQA
+> 0.001 0.01 0.1 0.5 1510
+> Latency (sec/query)
+> 0.125
+> 0.150
+> 0.175
+> 0.200
+> 0.225
+> 0.250
+> 0.275
+> MuSiQue
+> Bi
+> CE-5
+> CE-10
+> ParaSet
+> ParaSet (Union CE)
+> ListCE
+> SetCE
+> SetCE (Union CE)
+> ParaSet+SetCE
+> ParaSet+SetCE (Union CE)
+
+Figure 5: Retrieval F5 versus latency across HotpotQA, 2WikiMultihopQA, and MuSiQue using Contriever as the first-stage retriever. Each curve varies the number of first-stage candidate passages with K ∈ { 5, 10 , . . . , 50 }, and each point corresponds to one value of K, left-to-right order. The x-axis reports per-query latency on a logarithmic scale; for all methods except Bi, we exclude the first-stage bi-encoder retrieval time. Table 4: Pearson correlation between retrieval Fβ and QA EM. Precision corresponds to F0, while recall cor-responds to the large-β limit.               
+
+> Metric Precision F1F2F3F5F10 Recall Pearson 0.368 0.573 0.786 0.847 0.863 0.860 0.857
+
+contexts. We therefore use F5 as a finite recall-oriented metric in the main effectiveness–efficiency analysis. 
+
+C.2 Precision–recall behavior. 
+
+Because F5 is a recall-oriented metric, it is also use-ful to inspect precision and recall separately. Pre-cision measures the fraction of selected passages that are gold evidence, while recall measures the fraction of gold evidence passages covered by the selected set. In multi-hop QA, recall is often more predictive of downstream answerability because missing a required evidence passage prevents the reader from deriving the answer. However, recall alone ignores the cost of adding distractors, so we use F5 as a finite recall-oriented metric that still penalizes unnecessarily noisy contexts. 
+
+C.3 Analysis of Selected Evidence Set Size 
+
+Beyond retrieval accuracy and latency, set-level methods differ from passage-level rerankers in the number of passages they return. A standard passage-level cross-encoder produces a ranked list of individual passages, and in our evaluation we provide a fixed top-5 list to the answer generator. In contrast, set-level methods directly score candi-date passage sets, so the final output can contain a variable number of passages depending on the query and candidate pool. Table 5 reports the average number of selected passages on 2WikiMultiHopQA for different first-stage candidate sizes K. The CE baseline always re-
+
+Table 5: Average number of passages selected on 2Wiki-MultiHopQA. Unlike CE, which returns a fixed top-5 list, set-level methods select variable-size evidence sets. The average number of gold supporting passages is 2.5. 
+
+Model K = 20 K = 30 
+
+CE 5.0 5.0 ListCE 2.8 3.1 SetCE 3.5 3.9 
+
+ParaSet 3.5 4.4 
+
+ParaSet + SetCE 2.6 4.5 
+
+turns five passages, reflecting its fixed top-5 evalua-tion protocol. Set-level methods, however, produce variable-size evidence sets. This highlights a quali-tative difference between passage-level reranking and set-level retrieval: the latter selects an evidence set rather than a fixed-length ranked list. 
+
+D Hop-wise End-to-End QA Performance 
+
+Table 6 reports the full hop-wise downstream QA results corresponding to the macro-average results in Table 1. We report EM and F1 for each available hop category. HotpotQA contains only 2-hop ques-tions, whereas 2WikiMultihopQA and MuSiQue include questions with different reasoning depths. The macro-average is computed by averaging per-formance across the available hop categories for each dataset. These results provide a more fine-grained view of the behavior of different retrieval methods. Over-all, the trends are consistent with the main results in Table 1. Set-level compatibility learning often im-proves over locally supervised sequential retrieval, as shown by the comparison between ListCE and 
+
+SetCE . In addition, ParaSet +SetCE is particularly effective in several higher-hop settings, suggest-ing that explicit query–set scoring can be useful when evidence must be selected as a coherent group 13 rather than as independently relevant passages. 
+
+D.1 Efficiency of Combined Retrieval Pipelines 
+
+We provide additional efficiency measurements for the retrieval and reranking pipelines used in our ex-periments. The goal of this analysis is to quantify the computational overhead introduced by combin-ing document-level and set-level outputs, as used in the CE-augmentation setting in § 4.3. We report two metrics. First, we measure infer-ence latency in seconds per query while varying the number of first-stage candidate passages K. Sec-ond, we measure peak GPU memory usage in GB. The memory measurement captures the maximum allocated memory during actual inference, rather than the memory required only to load the model. All measurements are conducted under the same inference configuration used in our main experi-ments. Table 7 reports latency for K ∈ { 5, 10 , . . . , 50 }.Table 8 reports peak memory usage at K = 20 .The results show that combining document-level and set-level outputs introduces only moderate ad-ditional overhead. This is because the combined pipelines reuse the document-level output and aug-ment it with a compact set-level output, rather than requiring exhaustive scoring over all possible pas-sage combinations. Overall, these measurements support the practi-cal feasibility of combining document-level and set-level evidence. The combined pipelines improve downstream QA performance while keeping in-ference latency and peak memory usage within a modest range. 
+
+E Additional Experiments 
+
+E.1 Comparison with LLM-based Set Retrieval 
+
+We compare our methods with an LLM-based set selection baseline inspired by SETR (Lee et al., 2025), a representative set-level retrieval method. The original SETR framework fine-tunes a Llama-3.1-8B-Instruct model for set retrieval. We approxi-mate this SETR-style paradigm (especially, SETR-CoT&IRI in (Lee et al., 2025)) using GPT-4o-mini, the same model used for answer generation in our QA evaluation, as a LLM set selection. Ex-cept for replacing the fine-tuned SETR model with this frozen LLM selector, we keep the evaluation pipeline, candidate passages, prompting format consistent with the original SETR framework. Table 9 reports downstream QA performance on HotpotQA, 2WikiMultihopQA, and MuSiQue. Our methods achieve performance that is competi-tive with SETR across all datasets. On HotpotQA, 
+
+ParaSet +SetCE outperforms SETR in both EM and F1. On 2WikiMultihopQA, SETR achieves slightly higher EM, while ParaSet +SetCE 
+
+achieves higher F1. On MuSiQue, SETR achieves the highest EM, while SetCE achieves the highest F1. Overall, these results suggest that explicit set-level compatibility learning can provide compara-ble set-selection quality to LLM-based set retrieval. We also compare the computational cost of SETR and our set-level methods. Table 10 reports peak memory usage and inference latency. Because SETR performs LLM-based set selection, it re-quires substantially higher memory and latency than our neural set scorers. In contrast, SetCE and 
+
+ParaSet +SetCE achieve comparable set-selection quality with much lower computational cost. This supports the practical motivation of our frame-work: set-level retrieval can be performed effec-tively without relying on expensive LLM-based selection. 
+
+E.2 Candidate Quality and Standalone Performance of ParaSet ParaSet is designed to function as a lightweight set-level explorer. Its role is analogous to a first-stage retriever in the set space: it efficiently searches over a combinatorial space of candidate passage sets and returns a small pool of promising sets for subsequent reranking. Therefore, evaluat-ing only the top-ranked set can underestimate its usefulness in the full retrieve-and-rerank pipeline. To better characterize this behavior, we evalu-ate Max-F1@ kp. Given the top-kp candidate sets produced by ParaSet , Max-F1@ kp is defined as the maximum retrieval F1 among those candidate sets. This metric measures whether ParaSet can place high-quality evidence sets within a small can-didate pool, even when its top-1 prediction is not optimal. We vary two parameters: kb, the number of first-stage candidate passages retrieved by the bi-encoder, and kp, the number of candidate sets produced by ParaSet and passed to the reranker. Table 11 reports Max-F1@ kp on MuSiQue. For a fixed kb, Max-F1 consistently improves as kp in-creases. This shows that ParaSet often retrieves useful candidate sets within its top-kp outputs, sup-porting its role as a set-level explorer. At the same 14 Table 6: Hop-wise downstream QA performance with two first-stage retrievers. We report EM / F1 (%) for each hop category and the macro-average across available hops. 
+
+Base Retriever Dataset Method 2-hop 3-hop 4-hop Macro Avg 
+
+EM F1 EM F1 EM F1 EM F1 Contriever HotpotQA Bi 35.0 45.9 - - - - 35.0 45.9 CE 39.0 50.6 - - - - 39.0 50.6 ListCE 38.7 49.7 - - - - 38.7 49.7 SetCE 39.1 50.6 - - - - 39.1 50.6 
+
+ParaSet +SetCE 40.4 52.2 - - - - 40.4 52.2 2Wiki Bi 23.6 27.5 - - 20.1 21.1 21.9 24.3 CE 30.0 34.3 - - 26.7 27.5 28.4 30.9 ListCE 28.8 33.2 - - 21.3 22.2 25.1 27.7 SetCE 29.9 34.3 - - 18.3 19.1 24.1 26.7 
+
+ParaSet +SetCE 27.5 32.1 - - 29.9 34.3 28.7 33.2 MuSiQue Bi 11.1 18.1 9.80 17.7 4.46 10.9 8.45 15.6 CE 11.9 18.7 8.46 16.6 5.25 12.3 8.53 15.9 ListCE 10.8 18.2 9.26 17.3 4.20 10.8 8.07 15.4 SetCE 11.9 18.8 9.53 17.3 5.51 12.7 8.98 16.2 
+
+ParaSet +SetCE 10.4 17.1 5.77 13.4 5.77 11.7 7.30 14.1 Qwen3 HotpotQA Bi 37.0 47.3 - - - - 37.0 47.3 CE 38.4 49.4 - - - - 38.4 49.4 ListCE 38.0 48.6 - - - - 38.0 48.6 SetCE 39.6 50.8 - - - - 39.6 50.8 
+
+ParaSet +SetCE 36.9 48.0 - - - - 36.9 48.0 2Wiki Bi 29.6 33.9 - - 27.4 28.4 28.5 31.2 CE 31.7 35.7 - - 30.3 31.3 31.0 33.5 ListCE 32.2 36.9 - - 29.2 30.2 30.7 33.5 SetCE 34.4 39.0 - - 27.1 28.0 30.8 33.5 
+
+ParaSet +SetCE 37.1 42.2 - - 32.3 33.5 34.7 37.9 MuSiQue Bi 16.2 23.4 10.3 18.9 11.3 18.4 12.6 20.2 CE 16.2 24.0 11.3 20.5 12.6 18.7 13.4 21.1 ListCE 20.1 28.5 11.1 20.7 11.3 18.5 14.2 22.6 SetCE 19.5 28.7 13.8 23.7 12.1 19.1 15.1 23.8 
+
+ParaSet +SetCE 19.0 29.0 14.1 25.2 9.63 17.9 14.2 24.1 
+
+time, for a fixed kp, performance can decrease as 
+
+kb increases. This is expected because increasing 
+
+kb expands the set search space combinatorially, making it more difficult for a lightweight model to identify the best set at top-1 or within a very small candidate budget. In practice, larger candi-date pools may require larger kp so that the down-stream reranker receives sufficient candidate cover-age. These results clarify the role of ParaSet in our framework. ParaSet is not optimized to be the most accurate final scorer at top-1. Instead, its pri-mary purpose is to efficiently explore the set space and provide a compact candidate pool for a more expressive reranker such as SetCE . The consistent improvement from kp = 1 to larger kp values in-dicates that ParaSet can provide useful candidate coverage, which is precisely the desired behavior in the ParaSet +SetCE pipeline. For completeness, we also report the standalone QA performance of ParaSet in Table 12. As ex-pected, ParaSet alone is not always the strongest final scorer, especially on datasets where the best evidence set is difficult to identify from a large com-binatorial candidate space. This behavior is consis-tent with its intended role as a lightweight set-level explorer rather than a high-capacity reranker. 
+
+E.3 Comparison with Agentic Retrieval Pipelines 
+
+We compare our retrieve-at-once setting with IRCoT-style agentic retrieval pipelines (Trivedi et al., 2023). Agentic pipelines iteratively gener-ate intermediate queries, retrieve new passages, and perform intermediate reasoning, which can im-prove exploration but requires multiple LLM calls and repeated retrieval operations. We evaluate agentic variants equipped with a bi-15 Table 7: Inference latency in seconds per query for different retrieval and reranking pipelines. K denotes the number of first-stage candidate passages.                                                                                                     
+
+> Method K= 5 K= 10 K= 15 K= 20 K= 25 K= 30 K= 35 K= 40 K= 45 K= 50
+> Bi 0.032 0.030 0.030 0.030 0.030 0.029 0.030 0.029 0.029 0.029 Bi+CE 0.042 0.049 0.058 0.067 0.075 0.084 0.093 0.104 0.113 0.122 Bi+ListCE/SetCE 0.134 0.263 0.399 0.555 0.694 0.827 0.979 1.129 1.386 1.499 Bi+ParaSet 0.035 0.038 0.040 0.040 0.040 0.040 0.040 0.040 0.044 0.041 Bi+ParaSet+ListCE/SetCE 0.107 0.106 0.113 0.112 0.115 0.115 0.111 0.111 0.115 0.116 Bi+SetCE ( ∪CE) 0.164 0.342 0.540 0.729 0.943 1.139 1.343 1.533 1.755 1.948 Bi+ParaSet ( ∪CE) 0.053 0.063 0.070 0.079 0.087 0.098 0.110 0.114 0.118 0.133 Bi+ParaSet+ListCE/SetCE ( ∪CE) 0.112 0.126 0.133 0.141 0.147 0.160 0.168 0.178 0.183 0.196
+
+Table 8: Peak GPU memory usage at K = 20 . Memory is reported in GB and measured during actual inference. 
+
+Method Peak Memory (GB) 
+
+Bi 0.42 CE 0.90 SetCE 4.09 
+
+ParaSet 0.44 
+
+ParaSet +SetCE 2.01 SetCE ( ∪CE) 4.49 
+
+ParaSet +SetCE ( ∪CE) 2.43 
+
+Table 9: Comparison with an LLM-based set retrieval method. We report downstream QA EM / F1 (%). 
+
+Dataset Method EM F1 
+
+HotpotQA CE 39.0 50.6 SetCE 39.1 50.6 ParaSet+SetCE 40.4 52.2 ParaSet+SetCE ( ∪ CE) 42.9 55.3 
+
+LLM 40.1 51.4 2Wiki CE 28.4 30.9 SetCE 24.1 26.7 ParaSet+SetCE 28.7 33.2 ParaSet+SetCE ( ∪ CE) 35.1 39.2 
+
+LLM 29.7 32.3 MuSiQue CE 8.5 15.9 SetCE 9.0 16.2 
+
+ParaSet+SetCE 7.3 14.1 ParaSet+SetCE ( ∪ CE) 9.3 15.7 LLM 9.1 14.3 
+
+encoder retriever and with a bi-encoder followed by CE reranking. For our methods, retrieval is per-formed once and the selected passage set is di-rectly provided to the answer-generation LLM. Ta-ble 13 reports the results on MuSiQue. Our set-level methods are competitive with the agentic base-lines while avoiding iterative LLM-driven retrieval. In particular, the CE-augmented ParaSet +SetCE 
+
+variant achieves the best macro EM and performs especially well on 4-hop questions, suggesting that a one-shot combination of document-level and set-
+
+Table 10: Efficiency comparison with SETR. Memory denotes GPU memory usage after loading the model, before running inference. Latency is measured in sec-onds per query during inference. 
+
+Method Memory (GB) Latency (sec/query) 
+
+LLM 15.32 2.10 SetCE 2.12 0.90 ParaSet+SetCE 2.15 0.12 
+
+level evidence can recover useful multi-hop con-texts without iterative retrieval. Table 14 further compares inference latency. The multi-step agentic pipelines require substantially more time per query because they repeatedly in-voke the LLM and retrieval modules across rea-soning steps. In contrast, our single-step set-level methods perform retrieval only once. As a result, 
+
+SetCE is about 15 .0× faster than the multi-step CE pipeline, ParaSet +SetCE is about 74 .5× faster, and ParaSet +SetCE (∪ CE) remains about 44 .1×
+
+faster while achieving strong downstream perfor-mance. These results highlight the practical advan-tage of retrieve-at-once set-level scoring over itera-tive agentic retrieval. 
+
+E.4 Beam Width Analysis 
+
+We analyze the effect of beam width during 
+
+ParaSet inference. A larger beam allows the model to explore more candidate sets, but also in-creases inference cost. Table 15 reports retrieval F1 and relative inference speed on MuSiQue. Increasing the beam width from 1 to 2 improves retrieval F1, suggesting that limited branching is useful for set exploration. However, further increas-ing the beam width yields little additional gain while substantially reducing speed. We therefore use a small beam width in the main experiments. 16 Table 11: Max-F1@ kp of ParaSet on MuSiQue. kb denotes the number of first-stage candidate passages retrieved by the bi-encoder, and kp denotes the number of top candidate sets produced by ParaSet .                                                         
+
+> kb\kp13510 20 30 40 50
+> 50.2281 0.2484 0.2648 0.2728 0.2744 0.2744 0.2744 0.2744 10 0.1680 0.2057 0.2144 0.2267 0.2280 0.2317 0.2333 0.2347 15 0.1580 0.1944 0.2044 0.2151 0.2271 0.2271 0.2284 0.2301 20 0.1590 0.2034 0.2141 0.2261 0.2385 0.2394 0.2394 0.2428 25 0.1430 0.1915 0.2048 0.2181 0.2228 0.2264 0.2314 0.2328 30 0.1420 0.1786 0.2035 0.2225 0.2292 0.2312 0.2398 0.2411
+> Table 12: Standalone QA performance of ParaSet . We report EM / F1 (%) grouped by hop count, along with macro-average performance.
+
+Base Retriever Dataset Method 2-hop 3-hop 4-hop Macro Avg 
+
+EM F1 EM F1 EM F1 EM F1 Contriever HotpotQA Bi+ ParaSet 36.6 47.9 - - - - 36.6 47.9 2Wiki Bi+ ParaSet 25.8 30.3 - - 26.8 27.8 26.3 29.0 MuSiQue Bi+ ParaSet 8.65 15.2 6.04 13.5 3.94 10.2 6.21 12.9 Qwen3 HotpotQA Bi+ ParaSet 30.9 40.8 - - - - 30.9 40.8 2Wiki Bi+ ParaSet 16.9 21.0 - - 12.7 13.4 14.8 17.2 MuSiQue Bi+ ParaSet 11.9 18.3 8.86 15.0 9.19 16.2 9.98 16.5 
+
+E.5 Effect of Adjacent-Ranking Weight 
+
+This section provides a detailed analysis of how the weight of the fine-grained adjacent-ranking term ( λ
+
+in Eq. 1) influences the set size bias of ParaSet .Recall that the training objective consists of a coarse ranking constraint that enforces the gold set to be ranked above all candidates, together with an adjacent-ranking term: 
+
+Lfinal = Lpos-all + λ Ladj .
+
+The adjacent-ranking loss Ladj provides finer-grained supervision by contrasting candidate sets that differ only subtly in quality under a prede-fined set-quality ordering (recall-first and precision-second in our experiments). Increasing λ therefore strengthens the pressure to separate nearby candi-date sets generated through structured perturbations such as addition , elimination , and interchange ,as well as negatives induced implicitly by in-batch sampling. For each dataset, we train ParaSet with dif-ferent values of λ while keeping all other hyper-parameters fixed. At inference time, we retrieve the top-20 documents using a bi-encoder and ap-ply ParaSet to rank candidate passage sets con-structed from this fixed pool. To quantify how the strength of adjacent-ranking supervision affects re-trieval behavior, we measure the average size of the top-ranked set predicted by ParaSet . Here, the top-ranked set refers to the single highest-scoring candidate set under S(q, ·) among all sets consid-ered during inference. This metric captures whether training encourages the model to favor more par-simonious sets with fewer documents, or more in-clusive sets that incorporate additional, potentially redundant evidence. Table 18 reports the average size of the top-ranked predicted set across three datasets. The ef-fect of λ is highly dataset-dependent. On 2Wiki-MultihopQA , increasing λ leads to a consistent decrease in the predicted set size, from 4.08 to 3.35. Given that the average number of gold supporting documents in this dataset is approximately 2.4, this trend suggests that stronger adjacent-ranking super-vision helps prune non-essential documents while preserving coverage of relevant evidence. In contrast, HotpotQA exhibits the opposite be-havior: as λ increases, the predicted set size grows sharply and saturates near the candidate limit. This suggests that, under HotpotQA’s evidence distri-bution, overweighting adjacent-ranking constraints can bias the model toward overly inclusive sets. Fi-nally, MuSiQue also shows an increasing trend in set size with larger λ, although the effect is more moderate. Overall, these results highlight λ as a critical 17 Table 13: Comparison between multi-step (agentic) and single-step retrieval settings on the MuSiQue dataset. We report QA EM for each hop category and the macro average.                                
+
+> Hop Retrieval Setting Model QA EM
+> 2-hop Multi-step Bi 0.1172 CE 0.1334
+> Single-step SetCE 0.1188 ParaSet+SetCE 0.1035 ParaSet+SetCE ( ∪CE) 0.0932 3-hop Multi-step Bi 0.0819 CE 0.0805 Single-step SetCE 0.0953
+> ParaSet+SetCE 0.0577 ParaSet+SetCE ( ∪CE) 0.0932 4-hop Multi-step Bi 0.0551 CE 0.0472 Single-step SetCE 0.0551 ParaSet+SetCE 0.0577 ParaSet+SetCE ( ∪CE) 0.0927
+> Macro Avg Multi-step Bi 0.0847 CE 0.0871 Single-step SetCE 0.0898 ParaSet+SetCE 0.0730 ParaSet+SetCE ( ∪CE) 0.0930
+
+Table 14: Inference latency comparison between multi-step agentic retrieval and single-step retrieval on MuSiQue. Latency is measured in seconds per query.          
+
+> Retrieval Setting Model Latency
+> Multi-step Bi 8.32 CE 8.64 Single-step SetCE 0.555 ParaSet+SetCE 0.116 ParaSet+SetCE ( ∪CE) 0.196
+
+hyperparameter that governs the trade-off between coverage and parsimony in set-level retrieval. Im-portantly, its optimal value is not universal but de-pends on dataset-specific properties such as the typical number of supporting documents and the prevalence of plausible yet irrelevant distractors. 
+
+F Artifacts, Licenses, and Intended Use 
+
+We use publicly available benchmarks and pre-trained models for research purposes. The datasets used in our experiments are HotpotQA, 2WikiMul-tihopQA, and MuSiQue. The pretrained retrieval and reranking models include Contriever, Qwen3-Embedding-0.6B, ms-marco-electra-base , and 
+
+deberta-v3-base . We cite the original creators of these artifacts in the main text and bibliography. Our use of these artifacts is limited to academic research on retrieval and multi-hop question an-
+
+Table 15: Retrieval F1 and relative inference speed of 
+
+ParaSet on MuSiQue with different beam widths. In-ference speed is normalized by the beam width of 1.             
+
+> Beam Width Retrieval F1 Relative Speed
+> 10.2347 1.000 20.2375 0.677 30.2354 0.473 40.2350 0.401 50.2353 0.341
+
+swering. We do not redistribute the original datasets or pretrained model weights. Users should con-sult the original licenses and terms of use for each dataset and model before redistribution or deploy-ment. The datasets used in this work are existing public QA benchmarks. We do not collect new human-subject data, recruit annotators, or create additional personally identifying information. Because the datasets may contain text derived from public web or Wikipedia-like sources, we do not claim that they are free of all sensitive or offensive content. However, our work does not attempt to identify individuals, infer private attributes, or deanonymize any data. 
+
+G Dataset Statistics and Computational Budget 
+
+G.1 Dataset Statistics 
+
+Table 16 reports the standard train/dev/test split sizes of the multi-hop QA benchmarks used in our experiments. We use HotpotQA (Yang et al., 2018), 2WikiMultihopQA (Ho et al., 2020), and MuSiQue (Trivedi et al., 2022). For MuSiQue, we report the statistics of MuSiQue-Ans, which is the answerable split commonly used for multi-hop QA evaluation. 
+
+G.2 Model Size and Computational Budget 
+
+Table 17 reports the parameter counts of the main trainable retrieval models used in our experiments. 
+
+ListCE and SetCE share the same cross-encoder backbone and differ only in the training objective. 
+
+ParaSet is substantially smaller because it oper-ates over precomputed bi-encoder embeddings with a lightweight late-interaction layer. The parame-ter count of ParaSet depends on the embedding dimensionality of the first-stage retriever, result-ing in different sizes for Contriever and Qwen3-Embedding-0.6B. 18 Table 16: Dataset statistics for the multi-hop QA benchmarks used in our experiments. We report the standard train/dev/test split sizes.                 
+
+> Dataset Train Dev Test Hop Categories
+> HotpotQA 90,447 7,405 7,405 2-hop 2WikiMultihopQA 167,454 12,576 12,576 2–4 hop MuSiQue-Ans 19,938 2,417 2,459 2–4 hop
+
+Table 17: Parameter counts of the main trainable retrieval models.               
+
+> Model Backbone / Input Representation Parameters
+> ListCE deberta-v3-base cross-encoder 183M
+> SetCE deberta-v3-base cross-encoder 183M
+> ParaSet with Contriever Contriever embeddings 5.5M
+> ParaSet with Qwen3 Qwen3-Embedding-0.6B embeddings 8.3M
+
+Table 18: Average size of the top-ranked set predicted by ParaSet under different λ in Eq. 1.                   
+
+> Dataset λ=0.2λ=0.5λ=0.8
+> HotpotQA 3.049 19.80 19.88 2WikiMultihopQA 4.081 3.550 3.352 MuSiQue 1.396 1.787 3.320
+
+All latency measurements reported in the main text and appendix are measured on a single NVIDIA RTX 3090 GPU with 24GB memory. We report latency in seconds per query under the inference configurations used in the experiments. For all methods except the first-stage bi-encoder baseline, the reported latency excludes the shared first-stage retrieval time and measures the addi-tional retrieval/reranking cost. We do not train any foundation-scale language model or embedding model from scratch; our computational budget is limited to training lightweight set scorers and fine-tuning reranking models on top of publicly avail-able pretrained checkpoints. 19

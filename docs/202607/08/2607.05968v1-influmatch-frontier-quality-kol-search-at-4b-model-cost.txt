@@ -1,0 +1,293 @@
+Title: InfluMatch: Frontier-Quality KOL Search at 4B-Model Cost
+
+URL Source: https://arxiv.org/pdf/2607.05968v1
+
+Published Time: Wed, 08 Jul 2026 00:50:46 GMT
+
+Number of Pages: 15
+
+Markdown Content:
+# InfluMatch: Frontier-Quality KOL Search at 4B-Model Cost 
+
+## Krittanon Kaewtawee, Petmongkon Pornpichitsuwan, Natchaya Temyingyong, Nutnicha Laplamoon, Wachiravit Modecrua, Krittin Pachtrachai, Touchapon Kraisingkorn 
+
+Amity AI Holdings Co.,Ltd. 
+
+{krittanon, petmongkon, natchaya, nutnicha.lap, wachiravit, krittin, touchapon}@amity.co 
+
+Abstract 
+
+Matching influencers (KOLs) to free-form, multi-part Thai marketing criteria is today served either by keyword search over structured profiles, which misses semantic fit, or by prompting frontier LLMs over every candidate, which is accurate but slow and expensive. We present InfluMatch, a low-cost three-stage cascade — retrieval → rerank → reason — built entirely from small open-weight models: dense retrieval returns 50 candidates, a 4B pointwise reranker scores each by the log-probability of a single Yes token and keeps 10, and a 4B reasoner grades the shortlist per criterion on a rubric with a Thai rationale. The cascade is designed for cost: reasoning over a filtered top-10 halves token spend versus reasoning over all 50 while scoring 14 points higher. End-to-end against human relevance labels on an 11-query set with all 50 candidates labeled, the full cascade reaches 94.1% P@5, versus a retrieval-only baseline near random; it matches the frontier model Kimi-K2.6 (91.8%) while emitting ∼35 × fewer output tokens and serving a 50-KOL query in ∼20 s on one A100. Notably, the only fine-tuning that pays off is pairwise: a SimPO-tuned reranker matches the frontier baseline’s best-pick accuracy (78.0 EM), whereas fine-tuning the reasoner on pointwise per-criterion labels improves offline scores yet degrades end-to-end ranking — an inversion we trace to the design of the absolute labeling task — leaving the untuned base model as the strongest deployed reasoner. The result is a deployable, explainable KOL search system at a small fraction of frontier serving cost. 
+
+# 1 Introduction 
+
+Influencer marketing allocates a large share of brand budgets, and its central operational problem is matching : given a campaign, find the Key Opinion Leaders (KOLs) whose audience, content, and voice fit the brief. In the Thai market, a marketer’s intent is naturally expressed as free-form, multi-part criteria — “a female food reviewer with a playful tone whose audience skews young” — while the supply side is a long tail of creators whose relevance must be inferred from heterogeneous, largely Thai signals (bios, video transcripts, audience profiles) rather than read off a clean attribute table. 
+
+Why keyword and structured search fall short. The incumbent approach treats matching as lookup over a scraped KOL database filtered by keywords and hard attributes. This fails on three counts: it is lexical, not semantic (a “playful food reviewer” query misses a KOL whose bio never says so but whose content plainly fits); the signals are fragmented across profile fields, transcripts, and engagement metrics, so a query can satisfy each field in isolation yet return a poor overall match; and the deciding criteria are dynamic , campaign-specific predicates that a static schema cannot 1arXiv:2607.05968v1 [cs.CL] 7 Jul 2026 anticipate. Our evaluation confirms the ceiling of pure recall: dense retrieval alone barely separates from a random baseline on end-to-end precision (54.5% vs. 54.0% P@5, §6.3). 
+
+Approach. We present InfluMatch , a three-stage pipeline — retrieval → rerank → reason —that turns marketer criteria into a ranked KOL shortlist with per-criterion scores and Thai rationales. Stage 1 retrieves a top-50 candidate set from a vector index; Stage 2 applies a pointwise 4B LLM reranker that keeps the top 10; Stage 3 scores each shortlisted KOL per criterion and combines the scores by an even sum. To supervise the learned stages we build an evidence-grounded, multi-objective human-labeled corpus over synthetic-but-realistic Thai briefs — pointwise ordinal scores, binary pass/fail verdicts, and pairwise best/worst judgments — and fine-tune two 4B open-weight students: a pairwise SimPO reranker and a pointwise SFT +GRPO reason scorer. Only the pairwise student survives end-to-end evaluation (§7); the deployed reasoner is the untuned base model. 
+
+## 1.1 Contributions 
+
+• A deployable three-stage KOL matching pipeline for free-form Thai criteria, returning a ranked shortlist with per-criterion scores and Thai rationales. End-to-end, the full cascade lifts P@5 from ≈54.5% (retrieval only) to 94.1% on an 11-query pool with all 50 candidates labeled, while emitting ∼35 × fewer output tokens than a frontier model. 
+
+• A synthetic brief-generation pipeline and a multi-objective, evidence-grounded labeled corpus of pointwise ordinal scores, binary pass/fail verdicts, and pairwise best/worst judgments over realistic Thai briefs. 
+
+• A pairwise SimPO reranker (4B) that matches the frontier baseline’s best-pick accuracy (78.0 EM) and transfers downstream, improving end-to-end P@5 over the untuned reranker. 
+
+• An analysis of an offline–end-to-end inversion : pointwise SFT +GRPO fine-tuning of the reason scorer wins on per-criterion metrics but loses end-to-end to its untuned base; an evidence audit traces the gap to the design of the absolute labeling task, indicating that the recoverable supervision signal lives in relative judgments. 
+
+# 2 Background and Related Work 
+
+Influencer–brand matching. Industrial KOL discovery is dominated by database platforms that filter scraped creator profiles by keywords and hard attributes and surface candidates for manual review. Academic treatments formalize the problem as two-sided matching or recommendation over structured features, and marketing-science work models the market-level consequences of AI-assisted matching. Both lines presuppose that campaign intent is already encoded in a fixed attribute schema; neither addresses free-form, multi-part briefs whose deciding predicates are campaign-specific, nor produces per-criterion, evidence-grounded justifications a marketer can audit. We instead cast matching as criteria-conditioned retrieval and grading over heterogeneous, largely Thai creator evidence. 
+
+Multi-stage cascades for ranked retrieval. Telescoping retrieval through stages of increasing per-candidate cost is a classical effectiveness–efficiency design and remains the dominant shape of neural IR: an efficient dense or lexical first stage [ 1] feeds a stronger cross-encoder reranker [ 2], optionally followed by a pairwise final stage [ 3]; multilingual embeddings extend dense first stages to Thai. InfluMatch instantiates this cascade with an explicit per-stage token and latency budget, but departs at the last stage: rather than emitting only a permutation, the reason stage grades each 2criterion on a rubric with a Thai rationale, so the output is an auditable decision rather than an opaque ordering. 
+
+LLMs as rerankers. Prompted LLM rerankers span pointwise, pairwise [ 4], and listwise families. Pointwise relevance generation scores a candidate by the likelihood of a relevance token [ 5]; listwise prompting, e.g., RankGPT [ 6], achieves the strongest benchmark quality but pays with long prompts, sliding-window passes, and latency. A parallel line trains open-weight students, typically 7B listwise rerankers, on proprietary teacher orderings [ 7, 8]. Our reranker sits deliberately at the cheap end of this space: pointwise single-token scoring is embarrassingly parallel and emits O(1) 
+
+output tokens per candidate, fitting a production latency budget that listwise sliding windows do not. Unlike prior pointwise students trained with cross-entropy on absolute relevance labels, we train the 4B student on human pairwise preferences with SimPO, which §7 shows is the distinction that matters end-to-end. 
+
+LLM judges and rubric-based grading. Our reason stage is closer to LLM-as-a-judge than to reranking: it grades a (criterion, KOL) pair against a rubric and must justify the grade. Judging with strong proprietary LLMs is standard practice [ 9], and open evaluators such as Prometheus [10 ] show that rubric-following judgment can be distilled into mid-sized open-weight models. This literature also documents biases and calibration problems of absolute scoring relative to comparative judgment [ 11 ]; our deployment adds end-to-end evidence in the same direction, with the untuned base model remaining the strongest deployed judge (§7). 
+
+Post-training and the choice of supervision signal. Offline preference optimization aligns a policy directly on comparisons [ 12 ] — notably SimPO, a reference-free method whose implicit reward is the length-normalized sequence log-probability [ 13 ] — while Group Relative Policy Optimization (GRPO) optimizes against verifiable rewards without a critic [ 14 ]. Orthogonal to the algorithm is which label geometry to collect: relative judgments (best–worst scaling) are markedly more reliable than rating scales at equal annotation budget [ 15 ], and RLHF pipelines standardized on pairwise comparisons partly for this reason; offline gains failing to survive deployment is itself a documented pattern in recommender-system evaluation [ 16 ]. Our offline–end-to-end inversion is consistent with this literature at deployment scale: from the same corpus, the pairwise SimPO student transfers downstream while the pointwise SFT +GRPO student does not. 
+
+# 3 Method 
+
+## 3.1 Problem Formulation 
+
+Given a marketer brief expanded into a set of matching criteria C = {c1, . . . , c m} and a candidate pool of KOLs K = {k1, . . . , k N }, each represented by heterogeneous Thai signals, the task is to produce a ranked shortlist π over K such that KOLs satisfying C rank highest, together with a per-criterion score and a Thai rationale for each shortlisted candidate. 
+
+## 3.2 Cascade Overview 
+
+InfluMatch decomposes matching into three stages of increasing per-candidate cost, so that the expensive reasoning stage runs only on a filtered shortlist (Figure 1, Table 1). 3Figure 1: The three-stage InfluMatch pipeline: retrieval → rerank → reason. Each stage narrows the candidate set before the final per-criterion scoring. Table 1: The three pipeline stages. “Out” is the candidate count each stage emits.                             
+
+> Stage Mechanism In →Out Output Retrieval dense retrieval corpus →50 ranked candidates Rerank pointwise scorer, log p(Yes )50 →10 relevance scores Reason per-criterion {0,1,2}scoring, parallel 10 →final scores +Thai rationale
+
+Stage 1: Retrieval. Each criterion is embedded as its own query vector and searched against the pooled KOL vector table. A KOL’s similarity to a criterion is its best-matching vector — a per-KOL MIN -distance (least cosine distance) over all of that KOL’s pooled vectors — and the per-criterion similarities are summed into a single retrieval score per KOL. KOLs are ranked by this score, an optional hard tier filter is applied, and the top 50 candidates are kept, with their profile and top videos fetched for the downstream stages. This dense-retrieval stage is tuned for recall —not losing relevant KOLs from the candidate pool — rather than final ordering; the ordering work is done downstream by the rerank and reason stages. 
+
+Stage 2: Rerank. A 4B pointwise reranker scores each candidate in a single forward pass: the model receives the criteria together with the candidate’s profile details and video summaries, and the relevance score is the log-probability of a single Yes token. The top-10 candidates advance. Emitting one scored token per candidate keeps the stage’s output cost at ∼0.1k tokens per query. 
+
+Stage 3: Reason. A 4B reason scorer grades each shortlisted KOL against each criterion ci
+
+on a {0, 1, 2} ordinal rubric and produces a Thai rationale. The final ranking score is the even sum 
+
+s(k) = Pmi=1 si(k). The deployed scorer is the untuned base model (§7); the fine-tuned variant below is the experimental arm whose end-to-end behavior we analyze. 
+
+## 3.3 Supervision Signals 
+
+We collect three label types over (criteria, KOL) units drawn from synthetic-but-realistic Thai briefs (§4): (i) pointwise per-criterion ordinal scores in {0, 1, 2}; (ii) KOL-level binary pass/fail 4verdicts; and (iii) pairwise best/worst judgments over candidate groups. The reranker learns from relative judgments, the reason scorer from absolute ones. 
+
+## 3.4 Reranker Training: Pairwise SimPO 
+
+We fine-tune the reranker, as a LoRA adapter [ 17 ], with SimPO [ 13 ] on preference pairs (kw, k l)
+
+of a preferred and dispreferred candidate under the same criteria. Because the scored response is a single token, SimPO’s length-normalized reward reduces to the Yes log-probability itself, and the objective becomes a margin-augmented logistic loss on the score difference: 
+
+L = − log σ β (sw − sl) − γ, s = log p(Yes | C, k ), (1) where p(Yes | C, k ) is the reranker’s probability of the Yes token given criteria C and candidate k
+
+— so sw and sl are this score at the preferred and dispreferred candidate kw, k l — σ is the logistic sigmoid, β an inverse temperature, and γ a fixed target margin. This is reference-free and directly shapes the quantity used at inference, so training and serving optimize the same score. 
+
+SFT-judge baseline. As a fine-tuning control, we also train a direct A-vs-B judge (SFT-judge) by supervised fine-tuning on the same pairwise labels: the model receives the criteria and two candidates and is trained to emit the token of the preferred one ( A or B). SFT-judge and SimPO thus share the training data and differ only in objective and inference path — generative A-vs-B judgment versus pointwise log p(Yes ) scoring — isolating the contribution of the preference objective (§6.1). 
+
+## 3.5 Reason Scorer Training: Pointwise SFT+GRPO 
+
+To test whether absolute per-criterion supervision transfers to end-to-end ranking, we fine-tune the reason scorer in two phases on human pointwise labels; the labels contain ordinal scores only, with no reference rationales. SFT adapts the model to the per-criterion scoring format. GRPO 
+
+[14 ] then optimizes against the human labels with a single gated score reward: a completion earns non-zero reward only if it passes a joint gate — a valid ordinal score and a non-empty rationale — and gated completions are paid by ordinal distance to the human label: 1.0 for an exact match, 0.2
+
+for an off-by-one prediction, and 0 for a flipped one. The rationale is thus never directly supervised; the gate only requires that one be produced. 
+
+# 4 Data Creation 
+
+Our corpora are produced by a three-stage pipeline: (i) synthetic brief generation fabricates realistic, brand-grounded Thai marketer briefs; (ii) criteria synthesis expands each brief into five matching criteria; and (iii) human annotation collects pointwise, binary, and pairwise judgments over (brief, criteria, KOL) units. Tables 3 and 4 summarize the generation pipeline and the resulting labeled datasets. 
+
+## 4.1 Synthetic Briefs and Criteria 
+
+Real marketer briefs are scarce and proprietary, so we synthesize briefs mirroring the schema of real reference Thai campaign briefs. Each brief is seeded by a consumer and a marketer persona sampled from Nemotron-Personas-USA [ 18 ]; a campaign scenario is drawn from a six-axis taxonomy under non-uniform priors, constrained by 13 hard rules that forbid incoherent combinations (e.g. a 5crisis-recovery objective forces a reactive context). The campaign subject is grounded with a live web search, and the brief text — a structured object with brand, product, objective, audience, and tone fields — is written by DeepSeek-V3.2 [19 ], with marketer expertise sampled over three levels to control jargon. Each brief is then expanded into exactly five Thai criteria by a single DeepSeek-V3.2 call, aligned to five fixed dimensions: (C1) audience fit, (C2) content–product relevance, (C3) selling and persuasion style, (C4) communication credibility, and (C5) content format and execution. The criteria are dual-purpose : they serve as the Stage-1 retrieval queries and as the labeling rubric shown to annotators. 
+
+## 4.2 Human Annotation 
+
+Figure 2: The three annotation interfaces presented to human annotators: pointwise scoring (T2), where each criterion receives an ordinal 0/1/2 score; binary match (E2E), which elicits one overall pass/fail verdict per KOL for end-to-end evaluation; and best/worst selection (T10), where annotators pick the best and worst of three KOLs. Human supervision is collected through a dedicated labeling application over three task types (Table 4). T2 shows the criteria and one KOL, and elicits an ordinal score ∈ { 0, 1, 2} per criterion plus a KOL-level binary pass/fail verdict; the latter is reserved for end-to-end evaluation. Annotators judge each criterion directly: no scoring rubric defining the 0/1/2 boundaries was provided, leaving the threshold between scores to each annotator’s judgment. The interface also presents items grouped by criteria set, so an annotator scores all candidates under one brief consecutively. T10 shows three KOLs and elicits a best/worst pick, conditioning on the five criteria. 
+
+## 4.3 Label Quality 
+
+Evidence audit (T2). A Kimi audit of 873 human (KOL, criterion) pairs checks whether each score is backed by verbatim profile quotes, each verified as an exact substring of the profile — a model-independent grounding check that bounds the label ceiling any model can reach (full treatment in Results). Grounding is starkly score-dependent (Table 2): only 15.9% of score-2 (“match”) 6Table 2: T2 Kimi evidence audit         
+
+> Human score Pairs Evidence-supported (%) 0337 78.9 1115 54.8 2421 15.9
+
+Table 3: Synthetic generation pipeline.           
+
+> Generative step Input Output Problem inference Campaign, Persona Problem Subject grounding Problem, Campaign Evidence Brief generation Problem, Evidence, Persona, Constraints Brief Criteria synthesis Brief 5 criteria
+
+labels are evidence-supported. Since score-2 is the largest class ( ≈48%) yet ≈84% ungrounded, an evidence-faithful model must disagree with many human labels — the central finding developed in Results. 
+
+# 5 Experimental Setup 
+
+We evaluate at two levels: offline , testing each learned stage against its own held-out human labels, and end-to-end , testing the full cascade against human relevance labels while measuring serving cost. 
+
+Model arms. Throughout, Base denotes the untuned Qwen3.5-4B [ 20 ]; SFT and SFT +GRPO 
+
+denote the fine-tuned reason scorers of §3.5; SimPO denotes the fine-tuned reranker of §3.4; and 
+
+Kimi-K2.6 [ 21 ] is the frontier baseline, run under the same prompts and input format as the students. The deployed configuration is SimPO (text) rerank followed by Base reason. 
+
+## 5.1 Offline Evaluation: Reranker 
+
+Data. The human pairwise best/worst labels on the T10 test split (§4). 
+
+Metric: best-pick Exact Match (EM). For each triplet the model compares the human-annotated best and worst KOL (the middle KOL is ignored); the prediction is correct iff it ranks the best above the worst, and EM is the fraction of triplets decided correctly. The two training objectives induce two distinct inference paths, reported side by side: a direct generative A-vs-B judge (used by the frontier baseline and the SFT student) and an indirect log p(Yes ) scorer (used by Base and the SimPO student); their prompt formats are shown in Table 5. For the indirect scorer we also report the margin , the mean separation log p(Yes | best ) − log p(Yes | worst ) in nats — a calibration signal orthogonal to EM. 
+
+Baselines. (i) a random baseline (50% EM by construction, since each triplet is a binary best-vs-worst decision); (ii) the Kimi-K2.6 frontier baseline as a direct A-vs-B judge; and (iii) Base 
+
+under both inference paths — the direct judge and the indirect log p(Yes ) scorer. 7Table 4: Labeled datasets.                    
+
+> Task ID Task Input Label type T2 Pointwise scoring criterion +KOL ordinal 0/1/2
+> E2E Binary match criteria +KOL pass / fail T10 Best/worst selection 5 criteria +3 KOLs best / worst
+
+Table 5: Minimal reranker prompt formats. The text +vision variant also attaches each video’s cover thumbnail, which text-only drops.                            
+
+> Path Prompt Indirect (score 1 KOL)
+> System: rate whether one influencer is a strong overall match for the criteria.
+> Input: criteria (1–5) +one KOL (profile summary +up to 10 video summaries +
+> thumbnails in text +vision) +“Answer Yes or No .”
+> Output: Yes /No
+> Direct (judge 2 KOLs)
+> System: decide which of two influencers better satisfies the criteria, using only the provided evidence.
+> Input: criteria (1–5) +KOL A +KOL B, each serialized as above (text-only or
+> +thumbnails).
+> Output: Aor B
+
+## 5.2 Offline Evaluation: Reason Scorer 
+
+Data. The T2 pointwise corpus (§4): (KOL, criterion-set) units split into train and test, each yielding five criterion-level ordinal labels. All models are evaluated against held-out human labels. 
+
+Metric: support-weighted F1 (wf1). We report support-weighted F1 over the three ordinal classes. We weight by support rather than macro-averaging because the class distribution is heavily skewed (score-2 is ≈48% of labels, §4) and the deployed product cares about the dominant “yes” class, which macro-F1 under-weights. The distinction is not cosmetic: the same frontier-baseline prompt reads as 33.6 macro-F1 but 38.4 weighted-F1, because its class-1 F1 is 0.00 (it never emits a confident “unsure”). 
+
+Baselines. (i) a stratified random baseline that samples from the gold class distribution (20-seed average); (ii) the Kimi-K2.6 frontier baseline; and (iii) Base , prompted for score-only output. 
+
+## 5.3 End-to-End Evaluation 
+
+Query sets. Two human-labeled query sets are drawn from the binary (pass/fail) annotations: 
+
+• Set 1 — 11 queries, each with all 50 retrieved KOLs labeled, so precision is measured over the complete re-ranked list; 
+
+• Set 2 — 31 queries, each with the top-10 KOLs labeled. 
+
+Protocol. Retrieval is held fixed: the 50-candidate set per query is frozen, and only the rerank and reason stages are re-run with different models. All models use the same prompts and input format as the production pipeline, so measured numbers reflect the deployed system rather than an idealized re-implementation. Unless stated, reason runs on the rerank top-10; reason applied directly to all 50 candidates (no rerank) is reported as a contrast. 8Relevance and metrics. A KOL is relevant under binary majority : with vote fraction 
+
+f = pass /total , it is positive if f > 0.5, negative if f < 0.5, and dropped if f = 0 .5. Over the relevant set of size R per query we report, at cutoff k= 5: P@k = hits @k/ min (k, R ); MAP B@k, binary-relevance average precision normalized by min (R, k ); and nDCG @k = DCG @k/ IDCG (min (k, R )) .All metrics are macro-averaged over queries with R ≥ 1.
+
+# 6 Results 
+
+## 6.1 Reranker: Offline Best-Pick Accuracy 
+
+Table 6: Reranker best-pick EM on the human pairwise T10 test set. EM (%) Margin Model Direct judge log p(Yes ) (nats) Random 50.0 50.0 —Kimi-K2.6 78.0 (32/41) — —Base 75.6 (31/41) 63.4 (26/41) +0 .76 
+
+SFT 75.6 (31/41) — —SimPO — 78.0 (32/41) +4 .28 
+
+Table 6 reads down each column, since the two inference paths are not strictly comparable cell-for-cell. On the indirect log p(Yes ) path — the one the pipeline serves — SimPO training lifts Base from 63.4 to 78.0 EM ( +14 .6 points) and widens the best–worst margin roughly 6×
+
+(+0 .76 → +4 .28 ). The resulting 4B student matches the frontier baseline’s direct-judge EM (78.0). On the direct path, the judge-style SFT (75.6) sits at Base’s level: the gain is attributable to the SimPO objective, not the SFT-judge format. 
+
+## 6.2 Reason Scorer: Offline Per-Criterion Accuracy 
+
+Table 7: Reason-scorer offline leaderboard (support-weighted F1 against held-out human labels).                                      
+
+> Model Eval mode wf1 ∆vs no-think n
+> Random baseline –43.6 –259 Kimi-K2.6 no-think 36.8 –250 Kimi-K2.6 think 38.4 –244 Base no-think 52.9 –254 Base think 44.9 −8.0254 SFT no-think 57.7 –244 SFT +GRPO no-think 55.9 –254 SFT +GRPO think 59.0 +3 .1254
+
+Table 7 reports the offline leaderboard. The frontier baseline scores 38.4 wf1 — below the stratified random floor of 43.6 — because its evidence-faithful behavior collapses the middle class and withholds the generous “yes” that human annotators assign freely. Base reaches 52.9 , above both. Fine-tuning helps offline: score-only SFT reaches 57.7 (+19 .3pp over the frontier baseline, 9+14 .1pp over random), and SFT +GRPO tops the leaderboard at 59.0 wf1 in think mode. During GRPO, training reward climbs from 0.5 to 0.94 over 75 steps; since the gate pays only completions containing a rationale, the reward curve also certifies that the model learns to explain its scores. 
+
+Chain-of-thought. The effect of think mode [ 22 ] depends on training: thinking degrades Base by 8.0pp (52.9 → 44.9) but helps SFT +GRPO by 3.1pp (55.9 → 59.0). 
+
+## 6.3 End-to-End Ranking 
+
+Set 1 (full 50-KOL labeled pool). Table 8 reports Set 1 ( n= 11 ). Retrieval alone barely separates from random on P@5 and is at or below random on rank quality (MAP B/nDCG), confirming that embedding recall orders candidates only weakly. Rerank lifts P@5 by ∼11–15 points; the decisive gain comes from the reason stage. The best configuration — SimPO text rerank followed by Base reason on the top-10 — reaches 94.1% P@5, +26 .8 points over rerank alone and +39 .6 over retrieval. Table 8: Set 1 end-to-end results ( n=11 queries, top-50 labeled). Best P@5 in bold .Configuration P@5 (%) MAP B@5 nDCG@5 
+
+Baselines 
+
+Random 54.0 0.415 0.540 Retrieval only @5 54.5 0.383 0.523 Retrieval only @10 (P@10) 56.4 0.369 0.540 
+
++ Rerank (top-5 of 50) 
+
+Base log p(Yes ), text 65.5 0.544 0.662 SimPO log p(Yes ), text 67.3 0.568 0.681 SimPO log p(Yes ), vision 69.1 0.578 0.679 
+
+Reason on all 50 (no rerank) 
+
+Base 80.0 0.758 0.822 SFT +GRPO 78.2 0.731 0.807 Kimi-K2.6 (think) 78.2 0.726 0.801 Kimi-K2.6 (no think) 76.4 0.701 0.773 
+
+SimPO text rerank → reason (top-10) 
+
+Base 94.1 0.860 0.911 
+
+Kimi-K2.6 (think) 91.8 0.796 0.866 Kimi-K2.6 (no think) 89.5 0.787 0.856 SFT +GRPO 85.9 0.717 0.796 
+
+Base text rerank → reason (top-10) 
+
+Base 86.4 0.756 0.846 SFT +GRPO 83.6 0.747 0.840 Three observations stand out. First, rerank-then-reason beats reason-on-all-50 on both accuracy and cost: filtering removes weak candidates that would otherwise dilute the reason ranking, so the smaller pool is also the better one (94.1 vs. 80.0 P@5). Second, the upstream reranker matters: pairing reason with the SimPO reranker rather than Base adds ∼2–8 points to final P@5, because reason inherits a cleaner top-10. Third, Base reason outperforms SFT +GRPO everywhere under the deployed prompt — the offline–end-to-end inversion analyzed in §7. 10 Set 2. Table 9 replicates the headline trend on the larger query set ( n= 31 , top-10 labeled). Rerank adds +6 .7 points over retrieval, and reason adds a further +7 .6 to +11 .9 depending on the reasoner. SFT +GRPO is the weakest reasoner in both sets, but Base and Kimi-K2.6 swap the top rank: Base > Kimi-K2.6 on Set 1 (94.1 vs. 91.8), whereas Kimi-K2.6 > Base here (91.9 vs. 89.3). Gaps also compress on this smaller labeled pool. Table 9: Set 2 end-to-end results ( n= 31 queries, top-10 labeled). All reason rows use the SimPO text reranker upstream. Best P@5 in bold .Configuration P@5 (%) MAP B@5 nDCG@5 Random 68.2 0.502 0.610 Retrieval only @5 73.3 0.538 0.648 + SimPO rerank (text) 80.0 0.603 0.713 
+
+→ Kimi-K2.6 (think) 91.9 0.776 0.850 
+
+→ Kimi-K2.6 (no think) 91.1 0.755 0.835 
+
+→ Base 89.3 0.730 0.809 
+
+→ SFT +GRPO 87.6 0.695 0.783 
+
+## 6.4 Cost vs. Accuracy 
+
+Table 10: Per-query cost on Set 1 ( n=11 ). Pareto-optimal rows in bold .Configuration P@5 (%) In Out Total Wall (s) 
+
+Rerank only 
+
+SimPO text 67.3 251,525 100 251,625 12.1 SimPO vision 69.1 300,360 100 300,460 40.4 Base text 65.5 251,525 100 251,625 13.6 
+
+Reason on all 50 (no rerank) 
+
+Base 80.0 782,186 15,127 797,313 29.6 SFT +GRPO 78.2 782,186 11,137 793,324 34.1 Kimi-K2.6 (think) 78.2 1,069,004 482,549 1,551,553 226.6 Kimi-K2.6 (no think) 76.4 1,069,144 90,256 1,159,400 148.1 
+
+SimPO text rerank → reason (top-10) 
+
+Base 94.1 416,926 2,974 419,900 20.2 SFT +GRPO 85.9 416,926 2,341 419,267 21.4 Kimi-K2.6 (think) 91.8 475,594 102,862 578,456 81.0 Kimi-K2.6 (no think) 89.5 475,622 19,457 495,079 90.4 
+
+Base rerank → reason (top-10) 
+
+Base 86.4 416,926 2,974 419,900 21.8 SFT +GRPO 83.6 416,926 2,341 419,267 23.0 Table 10 reports per-query token consumption (Set 1, n= 11 ); token columns are average tokens per query. Cost is measured in tokens (input + output), which is concurrency-independent and therefore the fair axis; wall-clock is indicative only, as serving concurrency differs across models 11 (single A100-SXM4-80GB; Kimi-K2.6 at concurrency 16 on top-10 / 30 on all-50, all others at 50). Vision rerank excludes a one-time ∼39 s/query image fetch ( ∼452 thumbnails). The Pareto frontier comprises four points, in increasing cost: SimPO text rerank (67.3% at 251.6k tokens), SimPO vision rerank (69.1% at 300.5k), SimPO rerank → SFT +GRPO reason (85.9% at 419.3k), and SimPO rerank → Base reason (94.1% at 419.9k) — the clear knee of the curve. The SFT +GRPO point is only marginally non-dominated: 0.6k tokens cheaper than the Base-reason point but 8.2 points lower, so Base reason is the practical operating choice. Three trade-offs follow: 
+
+• Reason-on-all-50 costs ∼1.9 × the tokens of the two-stage pipeline (797k vs. 420k) yet scores 14 points lower (80.0 vs. 94.1) — rerank-then-reason is both cheaper and better. The gap is starker for Kimi-K2.6: reasoning over all 50 costs ∼2.7 × its two-stage tokens (1,552k vs. 578k) for 13.6 points less (78.2 vs. 91.8). 
+
+• Kimi-K2.6 emits ∼35 × more output tokens (102.9k vs. 3.0k per query) for lower Set 1 accuracy (91.8 vs. 94.1), making it strictly cost-dominated by the local 4B Base reasoner on this set. 
+
+• Vision rerank , though on the frontier, buys only +1 .8 points over text for +19% input tokens and ∼3.3 × the latency, so text rerank remains the cost-effective default. 
+
+# 7 Discussion 
+
+The best offline reason scorer is the weakest fine-tuned reasoner end to end: the SFT +GRPO checkpoint tops the per-criterion leaderboard (59.0 wf1 with thinking, Table 7) yet trails the untuned Base in the deployed cascade (85.9 vs. 94.1 P@5 on Set 1; 87.6 vs. 89.3 on Set 2). We attribute this inversion primarily to how the labeling task was designed, through three compounding choices. 1. Absolute scoring is under-specified. A single {0, 1, 2} per-criterion judgment is intrinsically hard, and no scoring rubric defining the class boundaries was provided (§4.2), so each annotator adopted a private standard — a known driver of human label variation [ 23 ]. The evidence audit quantifies the consequence: only 15.9% of score-2 (“match”) labels are backed by verbatim profile evidence (Table 2). 2. The interface grouped items by criteria set. Annotators scored all candidates under one brief consecutively (§4.2), so within-batch labels are correlated rather than independent judgments. 3. The two regimes use different human rubrics. End-to-end relevance is a holistic KOL-level pass/fail, whereas the reason scorer is supervised one criterion at a time and aggregated by an even sum. Even with clean labels, a model fit to per-criterion targets optimizes an objective that only loosely tracks the holistic signal — in our reading, the primary cause of the inversion. Choices 1–2 compound this: the per-criterion targets are not only a proxy objective but a noisy one. 
+
+The plateau is label-imposed, not capacity-imposed. Restricting evaluation to the ≈38% of test items the evidence audit marks clear-cut , the SFT checkpoint rises from 57.7 to 73.4 wf1 (clear-2 F1 91.7) and SFT +GRPO reaches 80.6 . On clean labels the 4B model is excellent; the full-set plateau reflects the model correctly disagreeing with ungrounded labels. This corroborates choice 1: the fine-tuned scorer learned the annotators’ generous, weakly grounded “yes” — exactly the signal that does not survive the holistic end-to-end test. 12 Text rerank over vision. The deployed reranker is text-only. Adding thumbnails carries a real serving cost — ∼19% more input tokens, ∼3.3× the rerank wall-clock, plus a one-time image fetch — while buying only +1 .8 P@5 end-to-end (Table 8). The marginal gain does not justify the added latency and image-processing cost. 
+
+Why filtering before reasoning wins. Reasoning over all 50 candidates loses to rerank-then-reason (80.0 vs. 94.1 P@5) despite seeing strictly more of the pool. We read the gap as a division of labor between complementary stages. The reranker, trained on pairwise preferences, is strong at 
+
+relative filtering but is not a precise judge — rerank alone tops out at 67–69 P@5. The reason scorer is the precise judge, but its per-criterion even sum has coarse resolution over a large pool: with five criteria scored in {0, 1, 2}, a 50-candidate field produces ties and near-ties in which weak candidates dilute the top-5. Filtering first with the preference-trained reranker hands the reasoner a short pool where its precision is decisive; each stage supplies what the other lacks. 
+
+# Limitations 
+
+Small samples. Set 1 has n= 11 queries and Set 2 n= 31 ; the pairwise test set has 41 triplets, so a single flipped triplet moves EM by ≈2.4pp. Differences of a few points should be read as directional, not significant. 
+
+Audit provenance. The evidence audit is produced by a frontier model acting as an indepen-dent auditor; although every quote is verified as an exact substring of the profile (a model-independent check), the selection of quotes and the grounding judgment inherit the auditor’s biases. 
+
+Synthetic briefs and single market. Training and evaluation queries derive from synthetic briefs; despite schema-mirroring and web grounding, their distribution may differ from real proprietary briefs. All experiments target the Thai KOL market with one model family (4B), so transfer to other languages, markets, and scales is untested. 
+
+Serving comparability. Wall-clock timings are not like-for-like across models (vLLM stages at concurrency 50, the frontier baseline at 16–30); cost conclusions rest on the token axis. 
+
+# 8 Conclusion 
+
+We presented InfluMatch, a three-stage retrieval → rerank → reason cascade that matches free-form Thai marketer criteria to KOLs using only small open-weight models. The deployed system — a SimPO-tuned 4B reranker followed by an untuned 4B reason scorer — reaches 89–94% P@5 against human relevance labels, matching or approaching a frontier model at ∼35 × fewer output tokens, and shows that the cascade design itself, filtering before reasoning, is both cheaper and more accurate than reasoning over the full candidate pool. Beyond the system, our central finding concerns supervision. Of the two fine-tuned students, only the one trained on relative judgments survived end-to-end evaluation: pairwise SimPO transferred and matched the frontier baseline, while pointwise SFT +GRPO topped the offline leaderboard yet degraded the deployed ranking — an inversion we trace, via an evidence audit, to the design of the absolute labeling task. On this evidence, pointwise fine-tuning was the wrong objective for this label distribution : the recoverable supervision signal in this domain lives in relative judgments, not absolute scores. 13 References 
+
+[1] Vladimir Karpukhin, Barlas Oğuz, Sewon Min, et al. Dense passage retrieval for open-domain question answering. In Proceedings of the 2020 Conference on Empirical Methods in Natural Language Processing (EMNLP) , pages 6769–6781. Association for Computational Linguistics, 2020. doi: 10.18653/v1/2020.emnlp-main.550. [2] Rodrigo Nogueira and Kyunghyun Cho. Passage re-ranking with BERT. arXiv preprint arXiv:1901.04085 , 2019. [3] Rodrigo Nogueira, Wei Yang, Kyunghyun Cho, et al. Multi-stage document ranking with BERT. 
+
+arXiv preprint arXiv:1910.14424 , 2019. [4] Zhen Qin, Rolf Jagerman, Kai Hui, et al. Large language models are effective text rankers with pairwise ranking prompting. In Findings of the Association for Computational Linguistics: NAACL 2024 . Association for Computational Linguistics, 2024. URL https://arxiv.org/ abs/2306.17563 .[5] Rodrigo Nogueira, Zhiying Jiang, Ronak Pradeep, et al. Document ranking with a pretrained sequence-to-sequence model. In Findings of the Association for Computational Linguistics: EMNLP 2020 , pages 708–718. Association for Computational Linguistics, 2020. doi: 10.18653/ v1/2020.findings-emnlp.63. URL https://aclanthology.org/2020.findings-emnlp.63/ .[6] Weiwei Sun, Lingyong Yan, Xinyu Ma, et al. Is ChatGPT good at search? investigating large language models as re-ranking agents. In Proceedings of the 2023 Conference on Empirical Methods in Natural Language Processing (EMNLP) , pages 14918–14937, Singapore, 2023. Association for Computational Linguistics. URL https://arxiv.org/abs/2304.09542 .[7] Ronak Pradeep, Sahel Sharifymoghaddam, and Jimmy Lin. RankVicuna: Zero-shot listwise document reranking with open-source large language models. arXiv preprint arXiv:2309.15088 ,2023. [8] Ronak Pradeep, Sahel Sharifymoghaddam, and Jimmy Lin. RankZephyr: Effective and robust zero-shot listwise reranking is a breeze! arXiv preprint arXiv:2312.02724 , 2023. [9] Lianmin Zheng, Wei-Lin Chiang, Ying Sheng, et al. Judging LLM-as-a-judge with MT-bench and chatbot arena. In Advances in Neural Information Processing Systems (NeurIPS), Datasets and Benchmarks Track , 2023. URL https://arxiv.org/abs/2306.05685 .[10] Seungone Kim, Jamin Shin, Yejin Cho, et al. Prometheus: Inducing fine-grained evaluation capability in language models. In International Conference on Learning Representations (ICLR) ,2024. URL https://arxiv.org/abs/2310.08491 .[11] Peiyi Wang, Lei Li, Liang Chen, et al. Large language models are not fair evaluators. In 
+
+Proceedings of the 62nd Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers) , pages 9440–9450, Bangkok, Thailand, 2024. Association for Computational Linguistics. URL https://arxiv.org/abs/2305.17926 .[12] Rafael Rafailov, Archit Sharma, Eric Mitchell, et al. Direct preference optimization: Your language model is secretly a reward model. In Advances in Neural Information Processing Systems (NeurIPS) , 2023. URL https://arxiv.org/abs/2305.18290 .14 [13] Yu Meng, Mengzhou Xia, and Danqi Chen. SimPO: Simple preference optimization with a reference-free reward. In Advances in Neural Information Processing Systems (NeurIPS) , 2024. URL https://arxiv.org/abs/2405.14734 .[14] Zhihong Shao, Peiyi Wang, Qihao Zhu, et al. DeepSeekMath: Pushing the limits of mathematical reasoning in open language models. arXiv preprint arXiv:2402.03300 , 2024. [15] Svetlana Kiritchenko and Saif M. Mohammad. Best-worst scaling more reliable than rating scales: A case study on sentiment intensity annotation. In Proceedings of the 55th Annual Meeting of the Association for Computational Linguistics (Volume 2: Short Papers) , pages 465–470, Vancouver, Canada, 2017. Association for Computational Linguistics. [16] Florent Garcin, Boi Faltings, Olivier Donatsch, et al. Offline and online evaluation of news rec-ommender systems at swissinfo.ch. In Proceedings of the 8th ACM Conference on Recommender Systems (RecSys) , pages 169–176, 2014. doi: 10.1145/2645710.2645745. [17] Edward J. Hu, Yelong Shen, Phillip Wallis, et al. LoRA: Low-rank adaptation of large language models. In International Conference on Learning Representations (ICLR) , 2022. URL 
+
+https://arxiv.org/abs/2106.09685 .[18] NVIDIA. Nemotron-personas-USA: Synthesized personas grounded in real-world distribu-tions. https://huggingface.co/datasets/nvidia/Nemotron-Personas-USA , 2025. CC BY 4.0. Generated with NeMo Data Designer. [19] DeepSeek-AI. DeepSeek-V3.2: Pushing the frontier of open large language models. arXiv preprint arXiv:2512.02556 , 2025. [20] Qwen Team. Qwen3.5: Towards native multimodal agents. https://qwen.ai/blog?id=qwen3. 5, 2026. Release blog, February 2026. Small model series (0.8B–9B) released March 2026. [21] Moonshot AI. Kimi K2.6. https://huggingface.co/moonshotai/Kimi-K2.6 , 2026. Model card and technical blog, April 2026. [22] Jason Wei, Xuezhi Wang, Dale Schuurmans, et al. Chain-of-thought prompting elicits reasoning in large language models. In Advances in Neural Information Processing Systems (NeurIPS) ,2022. URL https://arxiv.org/abs/2201.11903 .[23] Barbara Plank. The “problem” of human label variation: On ground truth in data, modeling and evaluation. In Proceedings of the 2022 Conference on Empirical Methods in Natural Language Processing (EMNLP) , Abu Dhabi, United Arab Emirates, 2022. Association for Computational Linguistics. 15
