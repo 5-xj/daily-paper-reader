@@ -6,74 +6,74 @@
 </div>
 
 ## 每次日报
-- 最新运行日期：2026-07-08
-- 运行时间：2026-07-08 21:48:25 UTC
+- 最新运行日期：2026-07-12
+- 运行时间：2026-07-12 21:34:56 UTC
 - 运行状态：成功
 - 本次总论文数：18
 - 精读区：8
 - 速读区：10
 
 ### 今日简报（AI）
-今日精选18篇推荐，重点解读了本体学习工具库和模型自进化两大高分工作。值得关注的方向：基于LLM的本体学习（OntoLearner）和模型权重-任务协同进化（Harness-Aware），均获得9.0高分。建议优先阅读精读文章，尤其对知识图谱或自动化本体构建感兴趣的读者可深入OntoLearner。
-- 详情：[/202607/08/README](/202607/08/README)
+今日精读8篇论文，聚焦科学方程发现与智能体检索增强两大突破。最值得关注的是《Dictionaries, Not Darwin》提出集合级选择优于LLM进化，以及《MMAgent-R$^2$》在智能体检索中引入重排序与拒绝机制。建议优先阅读这两篇9分论文，前者颠覆了科学发现的传统思路，后者可提升多轮问答系统的鲁棒性。
+- 详情：[/202607/12/README](/202607/12/README)
 
 ### 精读区论文标签
-1. [OntoLearner: A Modular Python Library for Ontology Learning with Large Language Models](/202607/08/2607.01977v1-ontolearner-a-modular-python-library-for-ontology-learning-with-large-language-models)  
+1. [Dictionaries, Not Darwin: Set-Level Selection Beats LLM Evolution in Scientific Equation Discovery](/202607/12/2607.04108v1-dictionaries-not-darwin-set-level-selection-beats-llm-evolution-in-scientific-equation-discovery)  
    标签：评分：9.0/10、query:ad
-   evidence：大语言模型驱动的本体学习管道
-2. [Harness-Aware Self-Evolving: Co-Evolving Model Weights, Harness, and Task Solutions](/202607/08/2607.03935v1-harness-aware-self-evolving-co-evolving-model-weights-harness-and-task-solutions)  
-   标签：评分：9.0/10、query:ad
-   evidence：协同进化用于算法发现，包括圆填充
-3. [InfluMatch: Frontier-Quality KOL Search at 4B-Model Cost](/202607/08/2607.05968v1-influmatch-frontier-quality-kol-search-at-4b-model-cost)  
+   evidence：基于大语言模型的进化引擎用于科学方程发现
+2. [MMAgent-R$^2$: Learning to Rerank and Reject for Agentic mRAG](/202607/12/2607.07383v1-mmagent-r2-learning-to-rerank-and-reject-for-agentic-mrag)  
    标签：评分：9.0/10、query:rerank-train
-   evidence：点级重排器训练方法
-4. [GR2 Technical Report](/202607/08/2606.31984v3-gr2-technical-report)  
+   evidence：学习重排与拒绝的多模态RAG方法，直接涉及重排器训练
+3. [Stochastic Order Learning: An Approach to Rank Estimation Using Noisy Data](/202607/12/2607.08103v1-stochastic-order-learning-an-approach-to-rank-estimation-using-noisy-data)  
+   标签：评分：9.0/10、query:rerank-train
+   evidence：重排序训练中使用的损失函数
+4. [DeepPySR -- A Symbolic Regression Framework with Dynamic Pruning, Pareto Selection, and Hierarchical Composition for Real-World Scientific Discovery](/202607/12/2607.08150v1-deeppysr----a-symbolic-regression-framework-with-dynamic-pruning-pareto-selection-and-hierarchical-composition-for-real-world-scientific-discovery)  
+   标签：评分：9.0/10、query:ad
+   evidence：符号回归与启发式搜索
+5. [Task Decomposition-Guided Reranking for Adaptive Agent Skill Retrieval](/202607/12/2607.06283v1-task-decomposition-guided-reranking-for-adaptive-agent-skill-retrieval)  
    标签：评分：8.0/10、query:rerank-train
-   evidence：使用大模型和强化学习进行推荐重排序，直接涉及重排序训练
-5. [SwarmResearch: Orchestrating Coding Agents for Open-Ended Discovery](/202607/08/2607.02807v1-swarmresearch-orchestrating-coding-agents-for-open-ended-discovery)  
+   evidence：提出技能检索的重排序框架
+6. [When Does In-Context Search Help? A Sampling-Complexity Theory of Reflection-Driven Reasoning](/202607/12/2607.06720v1-when-does-in-context-search-help-a-sampling-complexity-theory-of-reflection-driven-reasoning)  
    标签：评分：8.0/10、query:ad
-   evidence：SwarmResearch使用牧羊人代理引导搜索代理群体进行开放式发现，结合启发式搜索与多代理协作
-6. [KARMA: Knowledge graph-based Automated Reasoning Materialization and Alignment](/202607/08/2607.03166v1-karma-knowledge-graph-based-automated-reasoning-materialization-and-alignment)  
+   evidence：对大语言模型上下文搜索进行理论分析，展示启发式搜索过程
+7. [From Solvers to Research: Large Language Model-Driven Formal Mathematics at the Research Frontier](/202607/12/2607.07779v1-from-solvers-to-research-large-language-model-driven-formal-mathematics-at-the-research-frontier)  
    标签：评分：8.0/10、query:ad
-   evidence：利用LLM和知识图谱启发式的知识发现
-7. [Relevance-Based Embeddings: Lightweight Candidate Retrieval via Heavy-Ranker Calls](/202607/08/2607.03515v1-relevance-based-embeddings-lightweight-candidate-retrieval-via-heavy-ranker-calls)  
-   标签：评分：8.0/10、query:rerank-train
-   evidence：利用重排器评分训练检索嵌入
-8. [Candidate-Constrained Retrieval-Augmented Generation for LongEval-RAG: System Design and Empirical Analysis](/202607/08/2607.04008v1-candidate-constrained-retrieval-augmented-generation-for-longeval-rag-system-design-and-empirical-analysis)  
-   标签：评分：8.0/10、query:rerank-train
-   evidence：系统包含轻量级证据重排序和MiniLM句子重排序，直接涉及重排序训练方法
+   evidence：使用大语言模型进行数学公式自动发现
+8. [Coding agents author interpretable single-cell embedding models from the literature](/202607/12/biorxiv-10-64898-2026-07-07-737048-v1-coding-agents-author-interpretable-single-cell-embedding-models-from-the-literature)  
+   标签：评分：8.0/10、query:ad
+   evidence：使用编码代理（可能基于大语言模型）从文献中自动构建可解释的单细胞嵌入模型，符合大模型发现任务
 
 ### 速读区论文标签
-1. [PORTS: Preference-Optimized Retrievers for Tool Selection with Large Language Models](/202607/08/2607.05441v1-ports-preference-optimized-retrievers-for-tool-selection-with-large-language-models)  
-   标签：评分：8.0/10、query:rerank-train
-   evidence：使用偏好优化训练检索器用于大模型工具选择
-2. [When RAG Meets Query Planning: Logical Query Trees for Resolving Exploratory Reasoning Problems](/202607/08/2607.00508v2-when-rag-meets-query-planning-logical-query-trees-for-resolving-exploratory-reasoning-problems)  
-   标签：评分：7.0/10、query:ad
-   evidence：PlanRAG使用大模型和逻辑查询树解决探索性推理，与使用大模型和启发式的自动发现一致
-3. [TSP with Predictions: Heatmap to Tour with Provable Guarantees](/202607/08/2607.03791v1-tsp-with-predictions-heatmap-to-tour-with-provable-guarantees)  
+1. [UniSGR: Unified Framework for Semantic ID Generation and Ranking](/202607/12/2607.04068v1-unisgr-unified-framework-for-semantic-id-generation-and-ranking)  
+   标签：评分：7.0/10、query:rerank-train
+   evidence：排序模型训练技术
+2. [Geometric Characteristics of Subproblems in Ising-Machine-Assisted Large Neighborhood Search](/202607/12/2607.05014v1-geometric-characteristics-of-subproblems-in-ising-machine-assisted-large-neighborhood-search)  
    标签：评分：7.0/10、query:atsp
-   evidence：提出了从热力图到路径的算法，具有理论保证，与ATSP方法相关
-4. [Order-based Causal Discovery for Multistage Processes](/202607/08/2607.03971v1-order-based-causal-discovery-for-multistage-processes)  
+   evidence：比较车辆路径问题中大邻域搜索的子问题构造，属于组合优化启发式，与ATSP启发式方法相关
+3. [Efficient Long-Horizon Learning for Learned Optimization](/202607/12/2607.06772v2-efficient-long-horizon-learning-for-learned-optimization)  
    标签：评分：7.0/10、query:ad
-   evidence：多阶段过程因果发现方法，属于从数据中自动发现知识
-5. [ML and AI for density functional theory: different priorities for Kohn-Sham and orbital-free DFT, for electronic and nuclear DFT](/202607/08/2607.04095v1-ml-and-ai-for-density-functional-theory-different-priorities-for-kohn-sham-and-orbital-free-dft-for-electronic-and-nuclear-dft)  
-   标签：评分：7.0/10、query:sr
-   evidence：强调符号回归在构建动能泛函中的概念优势，与符号回归知识发现相关
-6. [Retrieving a Set, Not Independent Passages: Set-Level Compatibility Learning for Efficient Set Exploration](/202607/08/2607.05712v1-retrieving-a-set-not-independent-passages-set-level-compatibility-learning-for-efficient-set-exploration)  
-   标签：评分：7.0/10、query:rerank-train
-   evidence：集合级排序模型训练以兼容证据
-7. [Task Decomposition-Guided Reranking for Adaptive Agent Skill Retrieval](/202607/08/2607.06283v1-task-decomposition-guided-reranking-for-adaptive-agent-skill-retrieval)  
-   标签：评分：7.0/10、query:rerank-train
-   evidence：提出SkillReranker,一种任务分解引导的重排序框架用于自适应技能选择
-8. [Data Analysis in the Wild: Benchmarking Large Language Models Against Real-World Data Complexities](/202607/08/2607.06482v1-data-analysis-in-the-wild-benchmarking-large-language-models-against-real-world-data-complexities)  
+   evidence：通过学习优化器自动发现算法
+4. [Think Big, Search Small: Where Capacity Matters in Hierarchical Search Agents?](/202607/12/2607.07548v1-think-big-search-small-where-capacity-matters-in-hierarchical-search-agents)  
    标签：评分：7.0/10、query:ad
-   evidence：评估大模型在数据分析中的探索性洞察发现能力
-9. [Multi-Turn Agentic Scientific Literature Search via Workflow Induction](/202607/08/2607.00597v2-multi-turn-agentic-scientific-literature-search-via-workflow-induction)  
+   evidence：探索基于大语言模型的分层搜索代理的角色容量分配，与语言模型引导的启发式搜索相关
+5. [Drift-Aware Temporal Graph Rewiring (DATGR) for Adaptive Semantic Modeling in Biomedical Text](/202607/12/2607.08490v1-drift-aware-temporal-graph-rewiring-datgr-for-adaptive-semantic-modeling-in-biomedical-text)  
+   标签：评分：7.0/10、query:ad
+   evidence：生物医学文本知识发现中的语义漂移感知图重连
+6. [WebSwarm: Recursive Multi-Agent Orchestration for Deep-and-Wide Web Search](/202607/12/2607.08662v1-webswarm-recursive-multi-agent-orchestration-for-deep-and-wide-web-search)  
+   标签：评分：7.0/10、query:ad
+   evidence：提出递归多智能体大语言模型框架用于深度网络搜索，符合语言模型引导的启发式搜索
+7. [Candidate-Constrained Retrieval-Augmented Generation for LongEval-RAG: System Design and Empirical Analysis](/202607/12/2607.04008v1-candidate-constrained-retrieval-augmented-generation-for-longeval-rag-system-design-and-empirical-analysis)  
    标签：评分：6.0/10、query:rerank-train
-   evidence：多轮文献搜索智能体，将重排序器训练作为工作流归纳的一部分
-10. [Knowledge-Informed Local Causal Discovery of Optimal Adjustment Sets](/202607/08/2607.04447v1-knowledge-informed-local-causal-discovery-of-optimal-adjustment-sets)  
+   evidence：提出了包含轻量级证据重排序和可选MiniLM句子重排序的RAG系统，与重排序器训练方法相关
+8. [AgenticPD: A Stage-Aware Agentic Framework for Physical Design QoR Optimization](/202607/12/2607.04758v1-agenticpd-a-stage-aware-agentic-framework-for-physical-design-qor-optimization)  
    标签：评分：6.0/10、query:ad
-   evidence：知识引导的局部因果发现
+   evidence：使用大语言模型智能体进行优化任务
+9. [InductWave: Inductive Multi-Hop Logical Query Answering on Knowledge Graphs](/202607/12/2607.07422v1-inductwave-inductive-multi-hop-logical-query-answering-on-knowledge-graphs)  
+   标签：评分：6.0/10、query:ad
+   evidence：知识图谱逻辑查询回答方法，属于知识发现
+10. [Finding Simple Proofs for First-Order Optimization](/202607/12/2607.08753v1-finding-simple-proofs-for-first-order-optimization)  
+   标签：评分：6.0/10、query:ad
+   evidence：通过结构化搜索自动发现性能界和证明
 
 
 <div class="dpr-home-promo-card">
