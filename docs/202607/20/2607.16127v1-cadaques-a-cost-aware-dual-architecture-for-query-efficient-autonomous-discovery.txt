@@ -1,0 +1,463 @@
+Title: CADAQUES: A Cost-Aware Dual Architecture for Query-Efficient Autonomous Discovery
+
+URL Source: https://arxiv.org/pdf/2607.16127v1
+
+Published Time: Mon, 20 Jul 2026 01:11:01 GMT
+
+Number of Pages: 19
+
+Markdown Content:
+# CADAQUES : A C OST -A WARE DUAL ARCHITECTURE FOR 
+
+# QUERY -E FFICIENT AUTONOMOUS DISCOVERY 
+
+PREPRINT 
+
+Jorge Bravo-Abad 
+
+Departamento de Física Teórica de la Materia Condensada and Condensed Matter Physics Center (IFIMAC) Universidad Autónoma de Madrid, E-28049 Madrid, Spain 
+
+jorge.bravo@uam.es 
+
+July 20, 2026 
+
+# ABSTRACT 
+
+Autonomous discovery systems couple a resource that answers queries (a simulator, instrument, or analytic model) to an algorithm that selects what to query next. Most software frameworks for this loop inherit the control structure of numerical optimization: campaigns run for a fixed number of iterations, query costs are not represented in the programming interface, and the cost of decision-making is treated as negligible. In practice, queries may differ in cost by orders of magnitude, and planners built on large language models or expensive surrogates consume resources of their own. Here we present CADAQUES , an open-source Python framework built on one architectural princi-ple: cost is a first-class primitive of the discovery loop. CADAQUES separates the loop into two structural protocols, an Oracle that answers queries and a Driver that proposes them, and charges oracle evaluations and driver decisions against a common vector-valued budget spanning wall time, CPU hours, monetary cost, and language model tokens. For each transaction, an append-only ledger records the cost declared before execution and the cost settled afterwards, making their discrepancy an observable property of the campaign. We evaluate its architectural claims by locating the cri-tical temperature of the two-dimensional Ising model from noisy finite-size estimates against an exact thermodynamic-limit reference. In this deliberately noisy setting, strategies that concentrate around the best observed result can be misled by peaks produced by noise, whereas a schedule that explores with low-cost, low-fidelity queries and refines with higher-fidelity ones produces, in this experiment and at the studied budget scale, lower and less variable observed errors than using high fidelity throughout. Metering adds tens of microseconds per iteration, three orders of mag-nitude below the cheapest oracle query. The framework is MIT-licensed and archived at Zenodo (doi:10.5281/zenodo.21293589). 
+
+Keywords autonomous discovery · self-driving laboratories · cost-aware optimization · scientific software architec-ture · Bayesian optimization · provenance · LLM agents 
+
+# 1 Introduction 
+
+Closed-loop autonomous discovery is increasingly used across the natural sciences. Self-driving laboratories integrate synthesis, characterization, and experiment planning in chemistry and materials science [1–3]. Bayesian optimization provides widely used machinery for sample-efficient experiment selection [4–6]. More recently, agents based on large language models (LLMs) have begun to plan and execute multi-step scientific workflows [7, 8]. Despite the diversity of these settings, they share the same computational abstraction: an expensive resource answers queries, and an algorithm decides what to query next. Software for implementing this loop generally inherits its control structure from numerical optimization, along with three assumptions that are increasingly difficult to justify in autonomous discovery. First, campaigns are often go-arXiv:2607.16127v1 [physics.comp-ph] 17 Jul 2026 CADAQUES : A Cost-Aware Dual Architecture for Query-Efficient Autonomous Discovery PREPRINT 
+
+verned by a fixed number of evaluations and assessed by the best value obtained after N iterations. This convention implicitly assigns equal cost to every query, even though nominally similar queries may differ in cost by orders of magnitude. For instance, in materials science, the same candidate atomic structure may be evaluated using either a tightly converged density-functional calculation or a much cheaper force-field model, with substantial differences in computational cost and fidelity. Second, query cost is rarely represented explicitly in the interface between the optimizer and the objective. Cost-aware methods, including multi-fidelity strategies [9], must therefore rely on framework-specific extensions or conventions outside the main campaign abstraction. This makes it difficult to express strategies that adapt their behavior to the remaining budget or choose the fidelity of each query according to its expected value and cost. Third, the decision-making procedure itself is commonly treated as free. That approximation may be acceptable for inexpensive heuristics, but it becomes less plausible for planners that repeatedly fit Gaussian process surrogates or invoke LLMs. In such cases, deliberation consumes wall time, compute, tokens, or funds, and may account for a non-negligible fraction of the total campaign expenditure. These assumptions have several practical consequences. Comparisons based only on iteration counts are difficult to interpret when per-query costs differ. Resource expenditure must often be reconstructed after the fact from hetero-geneous logs, when it is recorded at all. Budget-adaptive strategies are awkward to implement when neither query cost nor remaining resources are exposed through the programming interface. More generally, they make it difficult to determine whether an expensive planner justifies the resources it consumes. This paper presents CADAQUES (Cost-Aware Dual Architecture for QUery-Efficient autonomous diScovery), a com-pact open-source Python framework that treats cost as a first-class primitive of the discovery loop. Rather than adding cost tracking to an iteration-driven optimizer, CADAQUES represents each expense as a typed, vector-valued resource cost and charges it against a campaign budget whose capped components determine termination. The framework separates the discovery loop into two structural protocols. An Oracle answers queries through the methods price and evaluate , while a Driver selects queries through propose and observe . Structural typing allows numerical simulators, laboratory instruments, classical optimizers, and language model agents to occupy their respective roles without inheriting from framework-specific base classes. Both oracle evaluations and driver deci-sions are charged against the same vector-valued budget, with separate components for resources such as wall time, CPU hours, monetary cost, and language model tokens. For every transaction, CADAQUES distinguishes between the cost declared before execution and the cost settled afterwards. The declared cost supports affordability checks and planning, while the settled cost records what was actually spent. Their difference becomes an observable pro-perty of the campaign rather than an error hidden in external logs. An append-only ledger stores these records in a machine-readable form and supports the reconstruction of resource-normalized performance measures directly from the transaction history. The paper makes three contributions. First, it reduces the integration surface of an autonomous discovery campaign to two role-specific interfaces: an Oracle (price , evaluate ) and a Driver (propose , observe ). Second, it introduces vector-valued budgets, separate declared and settled costs, and common accounting for queries and decisions. Third, it implements these ideas in a dependency-light Python package with a campaign runner, an append-only ledger, and reference Oracles and Drivers, distributed through PyPI and archived at Zenodo. We test the design on a controlled physics task: locating the critical region of the two-dimensional Ising model from noisy finite-size susceptibility estimates. The thermodynamic-limit critical temperature provides an external reference. The study compares three protocol-conformant Drivers under equal nominal wall-time budgets, includes the proposal cost of a Gaussian process planner, examines fixed and scheduled fidelity policies, and measures the overhead of metering and ledger updates. The experiments expose several practical effects. Strategies that concentrate around the best observation can be trapped by noise peaks. A simple schedule that uses cheap, low-fidelity queries for exploration and more expensive queries for refinement produces, in this experiment and at the studied budget scale, lower and less variable observed errors than using high fidelity throughout. Metering adds only tens of microseconds per iteration, roughly three orders of magnitude below the runtime of the cheapest Oracle query in the study. The remainder of the paper is organized as follows. Section 2 develops the requirements that motivate the design. Section 3 presents the architecture, and Section 4 describes its implementation. Section 5 reports the evaluation, Section 6 reviews related work, Section 7 discusses limitations and future directions, and Section 8 concludes. 2CADAQUES : A Cost-Aware Dual Architecture for Query-Efficient Autonomous Discovery PREPRINT 
+
+# 2 Background and Requirements 
+
+The case for treating cost as an architectural primitive follows from how discovery campaigns consume resources in practice. This section identifies three recurring cost regimes that are handled poorly by conventional iteration-budgeted loops and derives from them the five requirements that motivate the design presented in Section 3. 
+
+2.1 Cost regimes in autonomous discovery 
+
+Three recurring regimes illustrate why cost belongs in a discovery framework’s architecture rather than only in user-written post-processing scripts. The first regime is heterogeneous query cost. In simulation-driven discovery, fidelity parameters such as mesh density, basis-set size, and statistical sampling effort trade computational cost against properties such as accuracy, variance, and resolution. Laboratory analogues include integration time, measurement resolution, and sample-preparation effort. A campaign that selects the fidelity of each query therefore operates in a setting where the cost of evaluating the same design point may vary by orders of magnitude. Multi-fidelity strategies are designed precisely to exploit this structure [9]. An interface that does not represent per-query cost and fidelity cannot express this trade-off directly, while an iteration budget obscures it by assigning the same unit weight to evaluations of very different expense. The second regime is the coexistence of heterogeneous, only partially commensurable resources. Laboratory cam-paigns may consume wall time, instrument time, consumables, and funds, while computational campaigns consume wall time, CPU or GPU hours, and, increasingly, metered API calls. These resources can be combined only through a valuation supplied for a particular application: there is no universal or stable exchange rate between, for example, an hour of beamline access and an hour of CPU time. Their relative value depends on the facility, scientific objective, deadline, and stage of the project. Collapsing them into a single scalar inside the framework would therefore impose a valuation that may not transfer across campaigns. Recording expenditure separately by resource instead supports transparent reporting and allows users to apply their own valuations at analysis time. The third regime is costly deliberation. A planner based on standard exact Gaussian process inference may incur computational costs that grow cubically with the number of observations, while a planner implemented as an LLM agent may consume tokens billed at externally metered rates [7]. Treating such decision-making as free introduces a systematic omission from campaign accounting. Depending on the planner and oracle, deliberation cost may be negligible, comparable to the cost of the queries, or even dominant. Whether an expensive but sample-efficient planner outperforms a cheaper, more sample-intensive alternative under common resource constraints is therefore an empirical question. It cannot be answered cleanly by a framework that meters the oracle but not the planner. 
+
+2.2 Requirements 
+
+These regimes motivate five requirements for a cost-aware discovery framework. 
+
+R1 Typed, vector-valued resource cost. Cost must be represented as a structured value over heterogeneous re-source components and attached to every metered query and decision. 
+
+R2 Budget-governed admission and termination. The runner must reject a transaction whose declared cost does not fit within the remaining capped resources and terminate when the next proposed transaction cannot be admitted under the remaining capped resources. Because realized cost is known only after execution, settled expenditure may exceed a nominal cap when a declaration underestimates the actual cost. Comparisons under common resource constraints are therefore governed by the execution system rather than reconstructed afterwards by the analyst. 
+
+R3 Declared and settled costs. The framework must distinguish the cost estimated before a transaction, which is needed for affordability checks and planning, from the cost actually incurred, which is needed for accurate accounting. Both values and their discrepancy must be recorded. 
+
+R4 Symmetric charging. Oracle evaluations and driver decisions must be charged against the same campaign budget. The runner should measure resources it can observe directly, such as wall time, while instrumented adapters may report additional components such as tokens, compute hours or monetary charges. Wall time is measured by the runner, whereas CPU hours represent aggregate compute consumption and must be supplied by an adapter or external scheduler when they differ from elapsed time. 
+
+R5 Transactional provenance. The complete sequence of metered transactions must be exportable in a machine-readable form containing enough information to reconstruct cumulative resource expenditure and the resource-normalized performance measures supported by the recorded data. 3CADAQUES : A Cost-Aware Dual Architecture for Query-Efficient Autonomous Discovery PREPRINT 
+
+Within the documented public interfaces examined for this work, we did not identify a framework for autonomous dis-covery that combines R1–R5 in one protocol-level campaign abstraction; Section 6 gives the scoped comparison. The individual mechanisms have clear precedents. CADAQUES contributes a compact interface that brings them together. 
+
+# 3 Design  
+
+> CADAQUES
+
+separates the discovery loop into the two structural interfaces shown in Fig. 1. Both are defined as Python 
+
+typing.Protocol classes, so conformance is structural: any object implementing the required methods can partic-ipate without inheriting from a framework-specific base class or registering with the package. This section presents the data model, the two protocols, the campaign loop, and the budget and ledger semantics. Their implementation is described in Section 4. 
+
+3.1 Data model 
+
+The core query–response exchange is represented by three value types: Cost , Query , and Result . They are im-plemented as frozen dataclasses, which prevents their fields from being rebound after construction and reflects their role as records of campaign events. Where fields contain mappings, the immutability is shallow unless the supplied mappings are themselves immutable. The runner, driver, and ledger derive their state from these records rather than from separate mutable representations of the same event. The first type is Cost , a frozen dataclass over the resource tuple (seconds , cpu_hours , euros , tokens ). It supports componentwise addition, subtraction and scaling, dictionary conversion, and a componentwise dominance relation through dominated_by . All components default to zero, so Cost(seconds=3.0) denotes an expense of three sec-onds and Cost() denotes zero recorded expenditure. An oracle or driver therefore needs to report only the resource components it consumes. The dominance relation reflects the fact that vector-valued resource costs are partially, rather than totally, ordered. An expense is affordable only when each of its components fits within the corresponding remaining budget. A scalar representation is possible only after the user supplies an external valuation that makes the resources commensurable. Keeping them as separate components therefore implements R1 without embedding a campaign-specific exchange rate in the stored records. The second type is Query , which contains two mappings and an optional string tag. The params mapping holds the design variables, while fidelity holds parameters that control the cost and statistical or numerical quality of the answer, such as lattice size, mesh density, or sampling effort. Plain mappings keep the framework domain-agnostic: their keys belong to the application, and the core package imposes no domain schema. Representing fidelity separately from the design variables makes multi-fidelity campaigns explicit at the type level rather than dependent on a naming convention inside params . The same design point evaluated at two fidelities constitutes two distinct queries, potentially with different declared costs, biases, variances, or resolutions. The ora-cle’s pricing and evaluation methods can therefore inspect fidelity directly. The optional tag provides a lightweight bookkeeping channel, for example to label phases of a scheduled policy. The evaluation in Section 5.3 exercises this dimension empirically. The third type is Result . It carries the query being answered, a scalar value , a free-form info mapping, and the settled Cost of producing the answer. Including the realized cost in the result ensures that the driver receives the cost associated with every observation. Results reach the driver both through the history passed to propose and through 
+
+observe , so a strategy may condition its future behavior on the expenditure associated with past answers. The info mapping provides a schema-free channel for domain-specific payloads, such as convergence flags or diag-nostic traces, without widening the core protocol. Restricting value to a scalar is a deliberate scope decision of the present release and is revisited in Section 7. 
+
+3.2 The Oracle and Driver protocols 
+
+Listing 1 shows the complete required method surface of the two protocols. Optional metering hooks used by particular drivers are described separately below. An Oracle is any object that answers queries at a cost. Its price method returns the estimated cost before the query is committed, allowing the runner to test affordability. Its evaluate method performs the query and returns a Result 
+
+containing the realized cost. The two values need not agree and, in physical or stochastic settings, often will not. Their discrepancy is retained as campaign data, as described in Section 3.4. 4CADAQUES : A Cost-Aware Dual Architecture for Query-Efficient Autonomous Discovery PREPRINT           
+
+> Driver
+> random search, Bayesian optimization, LLM agent
+> Oracle
+> simulator, instrument, analytic model
+> propose() →Query (params, fidelity)
+> Result (value, settled Cost)
+> Campaign runner
+> Budget (multi-resource caps) ·Ledger (append-only transactions)
+> seconds ·cpu_hours ·euros ·tokens
+> decision cost (wall time, tokens)
+> declared cost, settled cost
+> BudgetView (read-only)
+
+Figure 1: Overview of the dual architecture. Solid arrows show the query–result exchange between the Driver and Oracle; dashed arrows show accounting and budget information mediated by the campaign runner. The runner charges both parties against a common multi-resource budget and records each metered transaction in an append-only ledger. The Driver receives a read-only BudgetView , enabling budget-adaptive behavior without granting direct control over expenditure.                                        
+
+> @runtime_checkable class Oracle ( Protocol ) : def price ( self , query : Query ) -> Cost : " " " Declared ( ex - ante ) cost of answering . " " " def evaluate ( self , query : Query ) -> Result : " " " Answer ; Result carries settled cost . " " " @runtime_checkable class Driver ( Protocol ) : def propose ( self , history : Sequence [ Result ] , budget : BudgetView , )-> Query : " " " Next query , given results and budget . " " " def observe ( self , result : Result ) -> None : " " " Feedback after each settled query . " " "
+
+Listing 1: The required integration surface of CADAQUES (abridged docstrings). Conformance is structural (typing.Protocol ). A Driver is any object that decides what to ask next. Its propose method receives the complete sequence of settled results together with a read-only BudgetView . The view exposes the total, spent, and remaining budget, together with the largest fraction used across capped resource components. A strategy can therefore condition its behavior on the resource state of the campaign, which enables the budget-adaptive policies examined in Section 5.1. The view is read-only: drivers can inspect the budget but cannot charge it directly. The observe method delivers each newly settled result, supporting stateful strategies such as incremental surrogate updates. The two protocols have similarly small interfaces but distinct roles. Each is specified by behavior rather than inheri-tance: simulators, instruments, and analytic models can serve as Oracles, while random-search procedures, Bayesian optimizers, and LLM agents can serve as Drivers. This structural separation allows implementations developed outside  
+
+> CADAQUES
+
+to participate through the same small contract. 
+
+3.3 The campaign loop 
+
+The Campaign object couples one Oracle to one Driver under one budget and owns the loop summarized in Fig. 2. Each iteration contains two metered phases. In the decision phase , the runner measures the elapsed duration of the driver’s propose call and records it as a settled driver transaction. A driver may additionally expose a 
+
+last_proposal_cost attribute to report resource components that the runner cannot observe directly, such as LLM 5CADAQUES : A Cost-Aware Dual Architecture for Query-Efficient Autonomous Discovery PREPRINT 
+
+token use. This is an optional metering convention rather than part of the required Driver protocol. Implementations should avoid duplicating wall-time charges already measured by the runner. In the query phase , the runner asks the Oracle for the declared cost and checks whether that cost fits within the remaining capped resources. If it does, the runner calls evaluate . The settled cost returned in the Result is then charged unconditionally, because the realized cost is known only after the work has been performed and may exceed the declaration. The driver and oracle transactions are both appended to the ledger with their relevant declared and settled components, implementing R3–R5. Because proposal cost is incurred before the Oracle’s declared cost is known, the final Driver transaction may be charged even when the resulting query is rejected as unaffordable. The loop terminates for one of three reasons. It stops with budget_exhausted when the next declared oracle cost is unaffordable, with driver_stopped when the driver raises DriverStopped , or with max_queries when an optional query-count safeguard is reached. Because settlement is unconditional, a realized transaction may also bring a capped resource to or beyond its limit before the next iteration. The returned CampaignResult reports the stop reason together with the best result, complete history, final budget state, and ledger. The CampaignResult.trace method reconstructs a resource-normalized best-so-far curve directly from the recorded transactions: the best observed value is expressed as a function of cumulative settled expenditure in a selected resource component. This illustrates the intended analysis pattern, in which resource-normalized artifacts are derived from the campaign ledger rather than from separate bespoke logs. 
+
+3.4 Budget semantics and the ledger 
+
+A Budget may cap any subset of the supported resource components. Components with positive totals are constrained, while the others are tracked without imposing a limit. Affordability checks through can_afford compare declared costs with the remaining capped resources before commitment. Settlement through charge(..., settle=True) is unconditional. The read-only BudgetView supplied to drivers exposes total , spent , remaining , and fraction_used . The last quantity is the largest used fraction among capped resource components. For example, a campaign may cap both 
+
+seconds=3600 and tokens=100000 . A declared expense is affordable only if both components fit within their respective remaining amounts. The campaign becomes constrained as soon as any capped resource prevents the next transaction. There is no framework-defined scalar total unless the user provides an external valuation at analysis time. The Ledger is an append-only sequence of frozen Transaction records. Each record contains the responsible party (oracle or driver ), a label, the declared and settled costs, a timestamp, and free-form metadata. For oracle trans-actions, the metadata includes the returned value and the query’s design and fidelity fields. The derived overrun           
+
+> Driver Runner Oracle
+> propose(history, view)
+> Query
+> meter ∆t·charge driver cost ·record transaction
+> price(query)
+> declared Cost
+> can_afford(declared)? otherwise stop
+> evaluate(query)
+> Result (settled Cost)
+> charge settled ·record transaction (declared, settled)
+> observe(result)
+> repeat until termination
+
+Figure 2: Sequence of one campaign iteration. The runner first meters and records the Driver’s proposal, then requests the Oracle’s declared cost and checks affordability. If the query is admitted, the runner executes it, charges the settled cost returned with the result, records the declared and settled values, and delivers the result to the Driver. 6CADAQUES : A Cost-Aware Dual Architecture for Query-Efficient Autonomous Discovery PREPRINT 
+
+property is the componentwise difference between settled and declared costs and therefore quantifies transaction-level cost-estimation error. Systematic discrepancies between declared and settled costs can be detected and analyzed from the ledger. They are directly available for post hoc calibration and may support future cost-aware strategies if exposed through an appropriate adapter or campaign interface. Aggregation methods such as total and cumulative support resource analysis, while to_jsonl exports one transaction per line in JSON Lines format. This provides machine-readable transactional provenance suitable for reproducible analysis and FAIR-oriented data workflows [10]. 
+
+# 4 Implementation 
+
+The design of Section 3 is realized as a compact Python package. This section describes the package organization, the reference Oracles and Drivers included in the evaluated release, and the engineering and distribution practices used to support testing, inspection, and reuse. The small implementation surface is deliberate: it makes the campaign and accounting semantics easier to inspect and audit directly. 
+
+4.1 Package organization 
+
+The package has three principal subpackages. Their import structure is shown in Fig. 3, and their composition is summarized in Table 1. The framework proper resides in cadaques.core , which contains the data model and proto-cols ( protocols ), the cost and budget types ( cost ), the campaign runner ( campaign ), and the transactional ledger (ledger ). Reference implementations reside in cadaques.oracles and cadaques.drivers . They depend only on the public core types, illustrating the intended extension pattern: domain packages can provide protocol-conformant Oracles and Drivers without modifying the framework or importing its private implementation details. The top-level cadaques namespace re-exports fourteen public names: Budget , BudgetExceeded , BudgetView ,
+
+Campaign , CampaignResult , Cost , Driver , DriverStopped , Ledger , Oracle , Query , Result , Transaction ,and __version__ .The v0.1.0 implementation contains 761 non-blank lines of Python, including docstrings, and has one runtime de-pendency, NumPy ≥ 1.24 . It requires Python ≥ 3.10 . Record types are implemented with frozen dataclasses, and the two integration interfaces use typing.Protocol with @runtime_checkable . The limited dependency footprint is useful in discovery workflows, which may run alongside instrument-control software or within tightly managed computational environments. 
+
+4.2 Reference oracles 
+
+The evaluated release includes two reference Oracles, intended respectively for lightweight testing and controlled stochastic experiments. 
+
+AnalyticOracle wraps a function fn : params 7 → R as a metered Oracle. A configurable pricing function supplies the declared cost and defaults to Cost(seconds=1.0) . The settled cost combines the configured fixed charge with the measured execution time of the wrapped function. This construction provides a simple test case in which declared and settled costs remain distinct even for inexpensive analytic objectives. 
+
+Ising2DOracle implements a checkerboard Metropolis Monte Carlo simulation [11] of the two-dimensional Ising model. At a queried temperature, it returns a finite-size, finite-sampling estimate of the magnetic susceptibility. The implementation uses natural units, J = kB = 1 , so temperature is represented numerically in units of J/k B. The exact critical temperature of the infinite lattice in these units is [12] 
+
+Tc = 2ln(1 + √2) ≈ 2.269 
+
+The query fidelity is specified by the lattice size L, the number of equilibration sweeps nequil , and the number of measurement sweeps nmeas . These parameters affect both computational expense and estimator quality. The declared wall-time cost is obtained from a calibrated model proportional to 
+
+L2 (nequil + nmeas ) ,
+
+whereas the settled cost is the measured elapsed duration of the evaluation. Declared and settled costs can therefore differ when the calibrated model does not match the execution environment. 7CADAQUES : A Cost-Aware Dual Architecture for Query-Efficient Autonomous Discovery PREPRINT 
+
+> cadaques.core
+> core.cost
+> Cost, Budget, BudgetView
+> core.protocols
+> Query, Result, Oracle, Driver
+> core.ledger
+> Ledger, Transaction
+> core.campaign
+> Campaign, CampaignResult
+> drivers
+> RandomDriver, AnnealedLocalDriver
+> oracles
+> AnalyticOracle, Ising2DOracle
+> imports public core types
+
+Figure 3: Package organization and import dependencies. The dashed boundary encloses cadaques.core . Arrows point from a module to the core module on which it depends. The reference drivers and oracles subpackages import only public core types, illustrating the intended extension pattern for external implementations. Table 1: Composition of CADAQUES v0.1.0. LOC denotes non-blank Python lines, including docstrings.                             
+
+> Module Contents LOC
+> core.protocols Query ,Result ,Oracle ,Driver 80
+> core.cost Cost ,Budget ,BudgetView 138
+> core.campaign Campaign ,CampaignResult 146
+> core.ledger Ledger ,Transaction 92
+> oracles.analytic AnalyticOracle , test surfaces 50
+> oracles.ising Ising2DOracle 134
+> drivers.reference RandomDriver ,AnnealedLocalDriver 96
+> __init__ files public API re-exports 25 Total 761
+
+Each evaluation derives a separate pseudorandom stream from a common base seed. This avoids reusing identical ran-dom sequences across repeated queries while preserving the reproducibility of stochastic outputs under fixed software and numerical conditions. Measured wall-time costs remain dependent on the execution environment and are therefore not expected to reproduce bit-for-bit. 
+
+4.3 Reference drivers 
+
+The release includes two reference Drivers chosen to demonstrate the distinction between budget-blind and budget-adaptive behavior. 
+
+RandomDriver samples each design variable uniformly within a box-bounded domain at fixed fidelity. It does not use the observation history or the budget state. Uniform random search provides a simple and important baseline for evaluating more structured search procedures [13]. 
+
+AnnealedLocalDriver is a budget-adaptive local search procedure. It proposes Gaussian perturbations around the point with the highest observed value. The perturbation scale is interpolated linearly from σmax to σmin as 
+
+BudgetView.fraction_used increases from zero to one. The procedure therefore samples broadly early in the campaign and becomes progressively more localized as the budget is consumed. It is included to demonstrate that a Driver can condition directly on budget state, rather than as a claim of algorithmic novelty or general superiority. Its role is examined in Section 5.1. 
+
+4.4 Engineering and distribution 
+
+For v0.1.0, the repository contains a focused unit-test suite covering cost arithmetic, affordability and settlement, ledger aggregation and export, campaign termination, the read-only budget view, and reference-Oracle behavior. Con-8CADAQUES : A Cost-Aware Dual Architecture for Query-Efficient Autonomous Discovery PREPRINT 
+
+tinuous integration runs the test suite on CPython 3.10–3.12. These tests provide regression protection and encode several central semantics of Section 3.4, including componentwise affordability, unconditional settlement, transaction recording, and budget-governed termination. Static type checking is performed with mypy , and source style is checked with ruff . The package uses a src lay-out and is built with hatchling . The core package has one runtime dependency, NumPy; the reproduction scripts use additional scientific-Python packages where required. Version 0.1.0 is distributed through PyPI ( pip install cadaques ). The source code, documentation, tests, and reproduction scripts are available at https://github.com/ jorgebravoabad/cadaques , and the evaluated release is archived at Zenodo under doi:10.5281/zenodo.21293589. The repository also includes a CITATION.cff file containing machine-readable citation metadata. 
+
+# 5 Evaluation 
+
+The evaluation is designed to exercise the architectural claims of Sections 3 and 4 in operation rather than to establish the general superiority of any search strategy. It combines a constructive demonstration of expressibility, two con-trolled studies under common nominal wall-time budgets on a task with an exact thermodynamic-limit reference, an empirical examination of declared and settled costs, and a microbenchmark of the metering machinery. Results are reported as observed, including outcomes unfavorable to the adaptive strategies, because exposing such outcomes is one purpose of transaction-level accounting. The evaluation addresses four research questions. 
+
+RQ1 (Expressibility ) Does exposing budget state through the campaign interface enable strategies that a budget-blind interface supports only through ad hoc external accounting, which would in addition omit the cost of deliberation itself? 
+
+RQ2 (Failure case under a common nominal wall-time budget ) How do planner deliberation and failure modes induced by noise affect three protocol-conformant strategies under the same nominal 10 s budget? 
+
+RQ3 (Fidelity economics ) Under the same nominal 10 s budget, how do fixed low-fidelity, fixed high-fidelity, and budget-scheduled fidelity policies compare? 
+
+RQ4 (Overhead ) What runtime overhead does transaction-level metering add to the campaign loop? 
+
+5.1 RQ1: Expressibility 
+
+We answer RQ1 constructively. The schedule of AnnealedLocalDriver is a function of 
+
+BudgetView.fraction_used : its perturbation scale depends on the fraction of the campaign budget already consumed rather than on an iteration index. In a budget-blind campaign interface, the same behavior would require external state or an estimate of how many queries the available resources would support. That number is not fixed in 
+
+> CADAQUES
+
+, because query costs vary and driver deliberation is charged against the same budget. A driver could in principle reconstruct budget state on its own, by timing its calls and wrapping the oracle, but such ad hoc accounting would be strategy-specific and would not necessarily be represented in the shared campaign record. The claim is therefore one of standardized, complete accounting rather than of strict expressive power. In the experiments of Section 5.2, campaigns under the same nominal budget complete between 127 and 173 queries, illustrating the difference between iteration count and resource expenditure. The equal-budget comparisons in RQ2 are likewise implemented by the campaign runner rather than reconstructed from fixed-length runs. The Gaussian process Driver used there is defined in the accompanying reproduction script, imports only public CADAQUES types, and participates in the campaign without modifying the package. Its proposal time is metered automatically by the runner. Together, these examples demonstrate budget-dependent behavior and external protocol conformance through the documented interface. In the representative systems reviewed in Section 6, we did not identify this combination of capabilities exposed through the public campaign interface. 
+
+5.2 RQ2: Failure case under a common nominal wall-time budget 5.2.1 Task 
+
+We consider a discovery task based on the two-dimensional Ising model ( J = kB = 1 ): locating its critical temperature by maximizing the estimated magnetic susceptibility χ(T ) over T ∈ [1 .5, 3.5] . The exact thermodynamic-limit value given in Section 4.2 provides an external scoring reference. The Oracle, however, returns a finite-size, finite-sampling susceptibility estimate. Its maximum is noisy and may also be shifted from the critical temperature of the infinite lattice, making the task a controlled but deliberately imperfect proxy for stochastic discovery experiments. 9CADAQUES : A Cost-Aware Dual Architecture for Query-Efficient Autonomous Discovery PREPRINT 
+
+5.2.2 Setup 
+
+Three Drivers are evaluated against Ising2DOracle at fixed fidelity ( L = 24 , 400 measurement sweeps, and 200 equilibration sweeps). Each campaign has a nominal wall-time budget of 10.0 s on one CPU core. Experiments are repeated over ten seeds, numbered 0–9, which determine both the Oracle’s Monte Carlo streams and the Drivers’ stochastic choices. The evaluated Drivers are the two reference implementations of Section 4.3 and a Gaussian process expected-improvement planner: RandomDriver ; AnnealedLocalDriver , with σmax = 0 .5 and σmin = 0 .02 , both expressed as fractions of the width of the search interval; and GP-EI, using an RBF kernel with fixed hyperparameters, eight initial random queries, and a 512-point candidate grid. The GP implementation is defined outside the package as described under RQ1. Its surrogate update includes a dense Cholesky factorization whose cost grows cubically with the history length in this implementation, and its measured proposal time is charged by the runner. Campaigns stop when the next declared query is unaffordable, completing 127–173 queries. The range reflects vari-ation in settled query times and, for GP-EI, budget spent on deliberation. Because settled costs are charged after execution and may exceed their declarations, final expenditure can slightly exceed the nominal cap. The quantitative panels in Figs. 4 and 5 are reconstructed from exported ledgers. All timings in RQ2–RQ4 were measured on one core of a virtualized Intel Xeon processor at 2.80 GHz running Ubuntu 24.04, CPython 3.12.3, and NumPy 2.4.4. Absolute timings are specific to this environment; their implications are discussed in Section 5.5. 
+
+5.2.3 Results 
+
+Table 2 and Fig. 4 summarize the results. Figure 4a shows that all three Drivers sample the critical region in the representative seed, although their sampling patterns differ. Random search has the smallest observed median error, 0.069, and one failure above the 0.3 threshold. The budget-adaptive local strategy fails in five of ten campaigns. GP-EI spends 3.2% of its settled expenditure on deliberation and has a median error of 0.086. A one-sided Mann–Whitney U test of the alternative that GP-EI yields smaller errors than Random gives p = 0 .92 .No examined pairwise comparison reaches α = 0 .05 with ten seeds. The data therefore do not support superiority of either concentrating strategy over random search at this budget. More importantly here, the ledger captures the planner cost and the resulting failure trajectories under the same resource constraint. The dominant observed failure mode is incumbent capture . A finite-sampling susceptibility estimate can produce a spuriously large value far from Tc. Strategies that subsequently concentrate around the best observation may then devote further queries to that region. The annealed Driver localizes around its incumbent by construction, while the incumbent that defines the GP-EI improvement threshold is set by the largest observed value. Five annealed and three GP-EI campaigns finish with errors between 0.6 and 0.77, including outcomes near a domain boundary. This failure mode is orthogonal to the budget mechanism itself: exposing budget state makes schedules such as annealing expressible, but it does not protect a strategy whose concentration rule is misled by noise. Budget-adaptivity is a capability of the interface, not a guarantee of performance. Random search does not adaptively concentrate around a spurious incumbent, although it can still select a maximum produced by noise as its final estimate, as occurs in one campaign. A fixed-N comparison would also omit the variation in query cost and, unless measured separately, the GP’s proposal cost. Economic termination and symmetric charging therefore produce a resource-matched account of the three strategies. 
+
+5.2.4 Declared and settled costs 
+
+Figure 4c compares the settled per-query costs of one GP-EI campaign with the Oracle’s declared estimate. The ex-ante cost model was calibrated on different hardware and was deliberately left unchanged for this experiment. This intentionally stale calibration provides a stress test of the distinction between admission-time declarations and post-execution settlements. On the evaluation machine, the median percentage overrun is computed as 
+
+100 csettled − cdeclared 
+
+cdeclared 
+
+,
+
+where cdeclared is the Oracle’s predicted per-query cost and csettled is the measured cost recorded after execution. The median overrun is 652%, meaning that the median settled cost is approximately 7.5 times the declared value. This discrepancy does not invalidate the comparisons, which are analyzed against cumulative settled expenditure. It does affect affordability prediction: a planning calculation based only on the declared model would substantially 10 CADAQUES : A Cost-Aware Dual Architecture for Query-Efficient Autonomous Discovery PREPRINT 
+
+Table 2: Absolute error |T ∗ −Tc|, where T ∗ is the temperature with the largest observed susceptibility, after campaigns with the same nominal 10 s budget. Results summarize ten seeds. The Fail column counts campaigns with error > 0.3.Driver share is the fraction of total settled expenditure consumed by proposal deliberation.                         
+
+> Driver Median IQR Max Fail Driver share Random 0.069 [0.024, 0.087] 0.597 1/10 0.05% AnnealedLocal 0.425 [0.087, 0.733] 0.769 5/10 0.10% GP-EI 0.086 [0.062, 0.605] 0.769 3/10 3.2% 1.5 2.0 2.5 3.0 3.5
+
+Temperature T
+
+> 0
+> 5
+> 10
+> 15
+> 20
+> Susceptibility
+
+(a)      
+
+> Random
+> AnnealedLocal
+> GP-EI
+> Tc
+> 0246810
+
+Budget spent (settled seconds)  
+
+> 10 1
+> 10 0
+> |T* Tc|
+
+(b)      
+
+> Random AnnealedLocal GP-EI
+> 20 40 60 80
+
+Settled cost per query (ms) 
+
+> 0
+> 5
+> 10
+> 15
+> 20
+> Oracle transactions
+
+(c) 
+
+> declared
+> median
+> settled
+
+Figure 4: Ising campaigns for RQ2 under a nominal 10 s budget, over ten seeds. (a) Susceptibility observations versus queried temperature for seed 0; marker shape identifies the Driver and the vertical dashed line marks the exact Tc of the infinite lattice. (b) Best-so-far temperature error |T ∗ − Tc| versus cumulative settled expenditure. Solid lines show medians across seeds and shaded bands show interquartile ranges. The large upper quartiles of the two concentrating strategies reflect sensitivity to incumbent capture. (c) Histogram of settled per-query costs for one GP-EI campaign, reconstructed from its ledger. Vertical lines mark the Oracle’s constant declared cost and the median settled cost. On the evaluation machine, the median settled cost exceeds the declared cost by 652% , a factor of approximately 7.5. overestimate the number of queries supported by the budget. The ledger exposes the calibration error without a separate logging mechanism. Because declared and settled values are recorded per transaction, the same ledger also provides the data needed to recalibrate the cost model for the current environment; the reported overrun therefore reflects a deliberately uncorrected model rather than a floor on the calibration achievable with the recorded data. The experiment is low-dimensional, noisy, and limited to one budget scale. The GP implementation is also minimal, with fixed hyperparameters and no noise-robust incumbent treatment. Its purpose here is narrower: planner cost, observed performance, and cost-model error are recorded together, including when the planner performs poorly. 
+
+5.3 RQ3: Fidelity economics under a common nominal wall-time budget 
+
+RQ2 holds fidelity fixed. RQ3 varies it to exercise the representation of fidelity as a metered query component (Sec-tion 3.1). Three policies are evaluated over the same ten seeds with nominal 10 s budgets. 11 CADAQUES : A Cost-Aware Dual Architecture for Query-Efficient Autonomous Discovery PREPRINT 
+
+Two policies use uniform random sampling at fixed fidelity. The low-fidelity policy uses L = 16 and 150 measurement sweeps, with a mean settled cost of approximately 40 ms per query on the evaluation machine. Its estimates are inex-pensive but noisier and more affected by finite-size bias. The high-fidelity policy uses L = 32 and 800 measurement sweeps, at approximately 145 ms per query, producing a less noisy but more expensive estimate. The third policy is a two-phase schedule implemented in the accompanying script. During the first half of the budget it samples low-fidelity queries uniformly over the full domain. During the second half it samples high-fidelity queries uniformly within ±0.25 of the best low-fidelity temperature. The policy does not adapt repeatedly around each new high-fidelity incumbent, and is therefore less exposed to the specific feedback mechanism observed in RQ2, although its second phase can still be misdirected by a misleading low-fidelity result. Policies containing high-fidelity observations are scored using their high-fidelity queries only, because susceptibility values are not directly comparable across lattice sizes. The low-fidelity arm is necessarily scored from its own ob-servations. All arms are evaluated by the temperature error relative to Tc, but their underlying estimators differ in finite-size bias and noise, as discussed in Section 5.5. 
+
+5.3.1 Results 
+
+Table 3 and Fig. 5 report the comparison. In this experiment, the two-phase policy has smaller errors than fixed high-fidelity sampling in a one-sided Mann–Whitney test ( p = 0 .038 ). Its median is nearly identical to that of the low-fidelity arm, 0.067 versus 0.068 ( p = 0 .31 ), while its largest observed error is smaller, 0.098 versus 0.130. With ten seeds and multiple examined contrasts, these p-values are exploratory rather than confirmatory. The fixed high-fidelity policy yields the least favorable aggregate results in this experiment. At the measured cost per query, its budget supports only 68–72 evaluations, reducing domain coverage and the opportunity to average over occasional susceptibility spikes. It exceeds the 0.3 failure threshold in four of ten campaigns. At this budget scale, the extra fidelity of every query does not compensate for the loss of coverage. The two-phase policy allocates inexpensive queries to reconnaissance and more expensive queries to refinement, and produces the smallest observed worst-case error. The comparison also shows that policies with markedly different per-query costs can be run and evaluated within the same resource-accounted campaign. 
+
+5.4 RQ4: Metering overhead 
+
+We measured the end-to-end overhead of the campaign loop using 5,000-query runs of RandomDriver against an 
+
+AnalyticOracle wrapping an inexpensive closed-form objective with zero declared cost. A bare Python loop per-forming the same sampling and evaluation served as the reference. Across three repetitions, the median bare-loop time was 4.0 μs per iteration, whereas the fully metered campaign required 28.8 μs. The difference, approximately 25 μs per query, includes proposal timing, budget updates, ledger appends, and result bookkeeping. An Oracle evaluation in RQ2 has a median settled cost of roughly 65 ms on the same machine. The measured frame-work overhead is therefore more than three orders of magnitude smaller and corresponds to approximately 0.04% 
+
+of the Oracle evaluation cost in that setting. For the workloads evaluated here, transaction-level accounting adds negligible runtime relative to Oracle execution. 
+
+5.5 Threats to validity Construct validity. RQ2 scores a policy by the temperature associated with its largest observed susceptibility. The finite-sampling estimator can generate isolated spikes, and the study shows that these spikes affect both the adaptive trajectories and the final scoring rule. A noise-robust evaluation procedure, such as repeated local re-estimation around candidate maxima, could change the observed ordering. In addition, the finite-L susceptibility maximum need not coincide exactly with the Tc of the infinite lattice. In RQ3, susceptibility values are not directly comparable across lattice sizes. Mixed-fidelity policies are therefore scored using high-fidelity observations, while the low-fidelity arm is scored using its own estimator. The final tem-perature errors share the same reference value, but the estimators differ in finite-size bias and noise. For the two-dimensional Ising model, the finite-size shift of the susceptibility maximum scales as L−1/ν with ν = 1 , of order 
+
+0.05 –0.1 for L = 16 and therefore comparable to the median errors reported in Table 3. Part of the low-fidelity arm’s temperature error is thus expected to be systematic rather than statistical, which further complicates a direct compari-son of its median with that of the two-phase policy. The comparison should therefore be interpreted as the quality of the answer each policy can deliver within its budget, not as a controlled comparison of identical estimators. 12 CADAQUES : A Cost-Aware Dual Architecture for Query-Efficient Autonomous Discovery PREPRINT 
+
+Table 3: Fidelity policies under the same nominal 10 s budget, over ten seeds. Fail denotes error > 0.3. The two-phase policy is the only arm for which all ten observed errors are below 0.1.                         
+
+> Arm Median IQR Max Fail Mean settled cost/query Random high-fi 0.116 [0.053, 0.548] 0.685 4/10 144 ms Random low-fi 0.068 [0.030, 0.107] 0.130 0/10 40 ms Two-phase 0.067 [0.040, 0.084] 0.098 0/10 62 ms 0246810
+
+Cumulative settled spend (s) 
+
+> 0
+> 25
+> 50
+> 75
+> 100
+> 125
+> 150
+> 175
+> Settled cost per query (ms)
+> scheduled switch
+> (fraction_used = 0.5)
+
+(a)     
+
+> low fidelity
+> (L= 16)
+> high fidelity
+> (L= 32)
+> Random
+> high-fi
+> Random
+> low-fi
+> Two-phase
+> (scheduled)
+> 10 2
+> 10 1
+> 10 0
+> |T* Tc|
+> failure
+> threshold
+
+(b) 
+
+Figure 5: Fidelity economics in RQ3. (a) Settled cost per query in one two-phase campaign as a function of cumulative settled expenditure. The vertical dashed line marks the scheduled switch at fraction_used =0.5, from low-fidelity full-domain sampling to high-fidelity sampling in the selected region. The phases consume approximately 5.0 s each and contain 126 and 36 queries, respectively. (b) Final temperature error for each policy under the same nominal budget. Each point represents one seed, horizontal segments mark sample medians, and the dotted line marks the error threshold of 0.3. The two-phase policy is the only arm for which all ten observed errors are below 0.1. 
+
+Internal validity. Ten seeds support only coarse statistical conclusions. RQ2 provides no evidence that the adaptive strategies outperform random search, but it does not establish the superiority of random search in general. The nominal RQ3 p = 0 .038 contrast is exploratory because of the small sample and multiple examined comparisons. Settled costs are measured in wall time and are sensitive to machine load. Seeds determine the stochastic streams but not the exact realized timings. The stochastic query outputs are reproducible under fixed software and numerical conditions, whereas budget-dependent trajectories may differ because measured wall times affect when the campaign terminates. Publishing the ledgers makes this variation observable but does not eliminate it. 
+
+External validity. The evaluation uses a single one-dimensional simulated task selected because its target is known in the thermodynamic limit. The GP-EI implementation is deliberately minimal and uses fixed hyperparameters. Be-havior in higher-dimensional spaces, on real instruments, under parallel or asynchronous execution, and with monetary or token budgets remains to be demonstrated. The overhead benchmark was conducted on one machine, one Python version, and one inexpensive objective. Abso-lute timings will vary across environments. The large observed separation between framework overhead and Oracle execution provides headroom, but it should not be interpreted as a universal overhead guarantee. 
+
+# 6 Related Work  
+
+> CADAQUES
+
+lies at the intersection of several overlapping bodies of work: Bayesian optimization libraries, orches-tration platforms for autonomous experimentation, benchmarking frameworks for experiment planners, provenance and workflow infrastructures, and scientific agents based on large language models. These categories are used here 13 CADAQUES : A Cost-Aware Dual Architecture for Query-Efficient Autonomous Discovery PREPRINT 
+
+for organization rather than as mutually exclusive classes. For example, an optimization library may also manage experiments, while a laboratory platform may include planning and benchmarking components. Table 4 compares the architectural abstractions emphasized in the cited publications and documented interfaces. It is not an inventory of every software version or custom extension. The systems serve different roles: optimization li-braries provide decision algorithms, laboratory platforms coordinate physical operations, benchmarking suites provide standardized tasks, and CADAQUES supplies campaign-level budget-governed admission and transaction records. 
+
+6.1 Bayesian optimization libraries 
+
+Bayesian optimization provides a broad family of methods for selecting informative queries when evaluations are expensive [4, 5]. Libraries such as BoTorch and Ax provide modern probabilistic models, acquisition functions, and experiment-management facilities [6]. Their functionality includes cost-aware acquisition utilities and continuous multi-fidelity optimization [9]. In the self-driving-laboratory setting, Atlas provides a library of Gaussian-process planners tailored to laboratory campaigns, including multi-fidelity and cost-constrained acquisition strategies [14]. As with BoTorch and Ax, such planners address the decision algorithm itself; an Atlas-based strategy could likewise serve as a CADAQUES Driver, with the campaign runner supplying budget governance and transaction records. A related line of work in hyperparameter optimization treats evaluation budget, rather than iteration count, as the fundamental unit of allocation. Successive-halving methods and Hyperband distribute a fixed resource budget across candidate configurations evaluated at increasing fidelities [15], BOHB combines this allocation scheme with model-based proposals [16], and libraries such as Syne Tune expose these and related multi-fidelity schedulers behind a common tuning interface [17]. The two-phase schedule evaluated in Section 5.3 is structurally a coarse relative of these methods. In these systems, however, the budget is an allocation parameter internal to the search algorithm. They do not expose a campaign-level contract that records declared and settled costs for each transaction, meters the planner’s own deliberation, or preserves vector-valued resource components for post hoc analysis, which is the focus of the present work. In this setting, cost is commonly introduced as an input to the optimization model or acquisition rule. This is distinct from making resource expenditure a property of every campaign transaction. In the documented public abstractions examined here, and subject to the scoping stated at the start of this section, we did not find a single campaign-level contract that simultaneously represents vector-valued resource caps, records both declared and settled cost for each evaluation, and charges planner deliberation against the same budget. A BoTorch or Ax strategy can be adapted to the Driver protocol while retaining its modeling and acquisition machinery.  
+
+> CADAQUES
+
+then supplies budget views, affordability checks, decision-time metering, settlement of realized query costs, and transaction records. 
+
+6.2 Autonomous-experimentation platforms 
+
+Autonomous-laboratory platforms address the operational integration required to execute closed-loop experiments. Systems such as ChemOS coordinate planning algorithms, databases, instruments, scheduling, and data exchange across heterogeneous laboratory components [1, 3]. These responsibilities extend well beyond the scope of 
+
+> CADAQUES
+
+, which does not provide instrument drivers, workflow scheduling, safety interlocks, user interfaces, or laboratory data management. The distinction is primarily one of abstraction level, not competing capability. CADAQUES defines a small accounting boundary around the interaction between a question-selecting component and a question-answering component. An orchestration platform could expose this boundary internally, or a campaign could use it alongside the platform, to associate each planning decision and experimental action with declared and settled resource expenditure. Conversely, a simulation-only campaign can use the same contract without adopting a full laboratory-orchestration stack. 
+
+6.3 Benchmarking frameworks 
+
+Benchmarking frameworks such as Olympus standardize noisy objective surfaces, experimental datasets, and inter-faces for comparing experiment-planning algorithms [18]. Their principal contribution is to make planner comparisons more realistic and reproducible than comparisons restricted to simple synthetic test functions.  
+
+> CADAQUES
+
+addresses a different part of the benchmarking problem. It does not provide a collection of benchmark datasets or claim to prescribe which planners should be compared. Instead, it supplies execution and provenance semantics through which a benchmark can be run under explicit resource constraints. Evaluation-count curves, wall-time curves, monetary-cost curves, and other resource-normalized summaries can then be reconstructed from the same 14 CADAQUES : A Cost-Aware Dual Architecture for Query-Efficient Autonomous Discovery PREPRINT 
+
+Table 4: Qualitative positioning of representative systems relative to CADAQUES . The comparison concerns the cited publications and documented public abstractions; it does not attempt to cover all functionality obtainable through custom extensions or later software versions. 
+
+System Primary emphasis Relationship to the present work BoTorch/Ax Bayesian optimization model-ing and adaptive-experiment management Provides advanced acquisition functions, including cost-aware and multi-fidelity methods, together with experiment and trial management. ABoTorch- or Ax-based planner can serve as a CADAQUES Driver, while the campaign runner records declared and settled query costs and meters the planner’s own decision time. Olympus Benchmarking noisy opti-mization and experiment-planning algorithms Provides standardized benchmark surfaces, experimentally derived datasets, and interfaces for comparing planners. CADAQUES can supply budget-governed execution and transaction records from which resource-normalized benchmark curves are derived. Hyperband/BOHB Budget allocation across fi-delities in hyperparameter op-timization Treat a fixed resource budget as an allocation parameter internal to the search algorithm. CADAQUES instead places the budget in the campaign contract, with per-transaction declared and settled costs and metered planner delibera-tion. AiiDA Workflow automation and data provenance in computa-tional science Automatically records the full data lineage of high-throughput workflows as a queryable provenance graph. CADAQUES records transactional cost prove-nance (declared and settled expenditure per query and decision) rather than data lineage; the two forms of record are complementary. ChemOS Orchestration of autonomous laboratory workflows Coordinates laboratory equipment, data exchange, and experiment-planning components at an operational level broader than the scope of CADAQUES .The Oracle/Driver boundary may be used within or alongside such a platform as a portable interface for campaign-level accounting.  
+
+> CADAQUES
+
+Budgeted campaign execution and transactional provenance Focuses narrowly on vector-valued resource budgets, ex-ante and ex-post costs, symmetric charging of planning and evaluation, and machine-readable transaction records. 
+
+ledger. Olympus tasks could therefore be exposed through an Oracle adapter, while Olympus-compatible planners could be exposed through Driver adapters. 
+
+6.4 Provenance and workflow systems 
+
+Recording what a computational campaign did is also the concern of workflow and provenance infrastructures. In computational materials science, AiiDA automatically captures the full data provenance of high-throughput workflows as a queryable graph of calculations and data, with reproducibility as its central goal [19]. Experiment-tracking tools common in machine learning likewise log metrics, parameters, and artifacts produced during runs. These systems answer the question of what was executed and from which inputs . CADAQUES records a complementary and narrower kind of provenance: the economic history of a campaign, in which each query and each planning decision carries a declared and a settled resource cost and is admitted against explicit budget caps. Data lineage is outside its scope, and transactional cost accounting is outside the documented scope of the provenance systems above; a campaign could use both, with a workflow engine tracking lineage while the Oracle/Driver boundary tracks expenditure. 
+
+6.5 LLM agents for science 
+
+Recent systems use large language models to plan scientific procedures, select tools, interpret observations, and interact with laboratory or computational resources [7, 8]. Such planners introduce resource components that are less visible in conventional optimization loops. Their decisions may consume tokens, wall time, external API charges, and additional computational services. Depending on the relative costs of planning and experimentation, omitting these components may materially change the apparent efficiency of a campaign. The architectural issue is not specific to language models. It is the more general question of whether the cost of deciding what to evaluate is recorded alongside the cost of performing the evaluation. CADAQUES provides one explicit implementation of this accounting principle by allowing Driver and Oracle transactions to draw from the same vector-valued budget. A future LLM adapter could report token or monetary charges through the optional proposal-cost hook described in Section 3.3. The present release does not include or evaluate an end-to-end LLM Driver. 15 CADAQUES : A Cost-Aware Dual Architecture for Query-Efficient Autonomous Discovery PREPRINT 
+
+6.6 Positioning of CADAQUES 
+
+Cost-aware acquisition, multi-fidelity modeling, experiment orchestration, provenance recording, and resource-constrained optimization are established ideas. CADAQUES combines four of them in a small campaign abstraction: typed resource vectors, ex-ante declarations and ex-post settlements, common charging of query and decision costs, and an append-only record for resource-normalized analysis. It is designed to interoperate with existing optimization, benchmarking, and orchestration software. 
+
+# 7 Discussion and Future Work 
+
+This section discusses the practical implications, current limitations, design choices, and next steps. 
+
+7.1 Implications 
+
+The evaluation points to three practical lessons. First, planner cost should be considered together with sample effi-ciency. In the Ising study, random search remained a competitive resource-normalized baseline, while the concentrat-ing strategies were vulnerable to noise-induced incumbent capture. Additional planner sophistication did not guarantee better performance under the common budget. Second, allocating resources across fidelities may matter as much as the choice of search algorithm. In RQ3, inexpen-sive reconnaissance followed by higher-fidelity refinement produced a smaller observed worst-case error than applying the high-fidelity estimator throughout. At this budget, balancing coverage and fidelity mattered more than maximizing the accuracy of every query. Third, iteration-indexed performance curves are insufficient when evaluations and decisions consume heterogeneous resources. They can obscure differences in query cost, planner deliberation, fidelity, and final expenditure. Reporting performance against cumulative settled resource use, together with the underlying transaction record, makes these factors visible and permits alternative valuations to be applied after the campaign. For LLM-based scientific agents, this distinction is especially relevant: evidence that an agent is resource-efficient requires accounting for token, time, and monetary costs as well as experimental outcomes. 
+
+7.2 Limitations 
+
+Version 0.1.0 supports sequential campaign execution only: batch proposals, asynchronous evaluations, parallel instru-ments, and distributed simulation workloads are not yet supported. Adding these modes will require explicit semantics for reservations, concurrent settlements, cancellation, and ordering in the ledger. The current Result type contains a scalar objective value. Multi-objective, constrained, vector-valued, and structured-output campaigns would require extensions to the result representation and to the framework’s generic notion of an incumbent. The present implementation also assumes that a completed evaluation returns one settled result. Partial observations, streaming measurements, failed evaluations, and recoverable instrument states are outside the current model. Supporting asynchronous execution and structured results will therefore require changes to the data and exe-cution models, not only additional adapters. Affordability is checked using declared cost, whereas settled cost is known only after execution and is charged un-conditionally. Consequently, a transaction may bring expenditure beyond a nominal cap when the declared model underestimates the realized cost. This behavior reflects the irreversibility of completed work, but the release does not yet provide reservations, uncertainty margins, probabilistic affordability checks, or policies for handling large overruns. Driver wall time is measured automatically within the runner. Other resource components are self-reported through 
+
+last_proposal_cost . This mechanism does not independently verify token counts, remote API charges, GPU use, energy consumption, or work performed asynchronously outside the measured call. Automatic meters integrated with API clients, schedulers, and hardware telemetry are therefore an important extension. Finally, the empirical evaluation uses one simulated, one-dimensional discovery task and does not demonstrate op-eration with a physical instrument, an end-to-end LLM agent, or a genuinely multi-resource campaign. The study validates the implemented accounting behavior and illustrates the analyses it enables, but it does not establish perfor-mance or usability across the broader range of settings in autonomous discovery. 16 CADAQUES : A Cost-Aware Dual Architecture for Query-Efficient Autonomous Discovery PREPRINT 
+
+7.3 Design alternatives 
+
+Three principal design choices merit discussion. First, structural protocols were chosen instead of abstract base classes. This allows objects defined in external packages or user scripts to participate without inheriting from framework-owned classes. Static type checkers can detect many interface mismatches during development, and @runtime_checkable 
+
+permits limited runtime conformance checks. These mechanisms do not verify method semantics or all type details at runtime, so some errors may still emerge only when a campaign invokes the object. The trade-off favors low coupling and third-party interoperability over strict runtime enforcement. Second, costs are stored as vectors rather than collapsed into a scalar through framework-defined exchange rates. A scalar budget would simplify ranking and termination, but it would embed a valuation that depends on the campaign, facility, deadline, and scientific objective. Preserving resource components separately keeps the ledger reusable: users may apply different monetary or utility valuations to the same transaction history without rewriting the original record. A related choice is the fixed resource vocabulary of the present release: Cost spans exactly four components (seconds, CPU hours, monetary cost, and tokens), chosen to cover the computational and API-metered campaigns targeted by v0.1.0 while keeping the arithmetic, dominance, and serialization semantics simple to specify and test. Resources named in Section 2, such as GPU hours, energy, instrument time, or consumables, do not yet have dedicated compo-nents and would currently have to be mapped onto the existing ones. Making the component set user-extensible with-out weakening the componentwise budget semantics or fragmenting ledger schemas across campaigns is a planned revision of the data model. Third, metering responsibility is placed primarily in the campaign runner rather than delegated entirely to Drivers and Oracles. The runner can measure elapsed time around calls and can enforce a common accounting path for both parties. This measured wall time is a lower-level observation that does not depend on voluntary reporting by the component. It is not, however, a complete measure of all resource use. The optional proposal-cost hook complements it by allowing adapters to report externally metered components such as tokens or API charges. Future integrations should replace or validate self-reported values wherever authoritative meters are available. 
+
+7.4 Future work 
+
+Near-term engineering priorities include campaign replay from exported ledgers, checkpointing and resumption, batch proposals, asynchronous evaluation, and concurrency-safe budget and ledger semantics. A reference Bayesian op-timization Driver would provide a reusable integration with an established Gaussian process stack while allowing model-fitting and acquisition costs to be recorded through the same campaign machinery. A second priority is an end-to-end LLM Driver adapter with explicit token, monetary, and wall-time metering. Such an adapter would enable controlled comparisons between LLM-based planning, conventional optimization, and inex-pensive baselines under common resource constraints. Automatic accounting should be obtained from the relevant API clients where possible rather than relying solely on self-reported costs. On the Oracle side, protocol-conformant adapters for established simulation packages and laboratory systems would test whether the abstraction remains practical when evaluations involve job queues, failures, instrument availability, and heterogeneous metadata. Photonics simulation is one candidate application, but meaningful validation will require examples from multiple scientific domains. Longer term, resource-normalized evidence should become easier to produce and compare across autonomous-discovery studies. That will require agreed resource definitions, reporting conventions for declared and settled costs, and benchmark protocols that separate scientific performance from resource efficiency. CADAQUES provides one piece of that infrastructure. 
+
+# 8 Conclusion 
+
+We have presented CADAQUES , a compact framework for autonomous discovery built around the premise that resource cost should be represented within the discovery loop rather than added only during post hoc analysis. Two small, role-specific protocols separate the component that proposes queries from the component that answers them. Around this boundary, the framework provides vector-valued budgets, separate declared and settled costs, metering of both planning and evaluation, and an append-only transaction ledger. Together, these mechanisms allow campaigns to run under explicit resource control and performance to be reconstructed as a function of expenditure from a single machine-readable record. On the noisy Ising task, neither the budget-adaptive local strategy nor the Gaussian process planner improved on random search under the same nominal wall-time budget in our experiments. Both concentrating strategies were 17 CADAQUES : A Cost-Aware Dual Architecture for Query-Efficient Autonomous Discovery PREPRINT 
+
+vulnerable to noise-induced incumbent capture, and the Gaussian process planner consumed 3.2% of its settled ex-penditure in deliberation. In the fidelity study, at the examined budget scale, a two-phase policy that used inexpensive queries for exploration and more expensive queries for refinement produced the smallest observed worst-case error. Evaluation counts alone would hide both the planner cost and the fidelity trade-off. The additional accounting machinery required approximately 25 μs per query in the reported microbenchmark, about three orders of magnitude less than the Oracle runtime in the Ising experiments. As scientific planners increasingly rely on computationally expensive surrogate models, external services, or LLM agents, the cost of deciding what to evaluate may become a non-negligible part of the campaign itself. CADAQUES provides a small, interoperable foundation for recording that cost alongside scientific outcomes and for evaluating discovery strategies under explicit resource constraints. 
+
+# References 
+
+[1] Milad Abolhasani and Eugenia Kumacheva. The rise of self-driving labs in chemical and materials sciences. Nature Synthesis ,2:483–492, 2023. doi:10.1038/s44160-022-00231-0. [2] Benjamin P. MacLeod, Fraser G. L. Parlane, Thomas D. Morrissey, Florian Häse, Loïc M. Roch, Kevan E. Dettelbach, Raphaell Moreira, Lars P. E. Yunker, Michael B. Rooney, Joseph R. Deeth, et al. Self-driving laboratory for accelerated discovery of thin-film materials. Science Advances , 6(20):eaaz8867, 2020. doi:10.1126/sciadv.aaz8867. [3] Loïc M. Roch, Florian Häse, Christoph Kreisbeck, Teresa Tamayo-Mendoza, Lars P. E. Yunker, Jason E. Hein, and Alán Aspuru-Guzik. ChemOS: Orchestrating autonomous experimentation. Science Robotics , 3(19):eaat5559, 2018. doi:10.1126/scirobotics.aat5559. [4] Bobak Shahriari, Kevin Swersky, Ziyu Wang, Ryan P. Adams, and Nando de Freitas. Taking the human out of the loop: A review of Bayesian optimization. Proceedings of the IEEE , 104(1):148–175, 2016. doi:10.1109/JPROC.2015.2494218. [5] Jasper Snoek, Hugo Larochelle, and Ryan P. Adams. Practical Bayesian optimization of machine learning algorithms. In 
+
+Advances in Neural Information Processing Systems , volume 25, 2012. [6] Maximilian Balandat, Brian Karrer, Daniel R. Jiang, Samuel Daulton, Benjamin Letham, Andrew Gordon Wilson, and Ey-tan Bakshy. BoTorch: A framework for efficient Monte-Carlo Bayesian optimization. In Advances in Neural Information Processing Systems , volume 33, 2020. [7] Daniil A. Boiko, Robert MacKnight, Ben Kline, and Gabe Gomes. Autonomous chemical research with large language models. Nature , 624:570–578, 2023. doi:10.1038/s41586-023-06792-0. [8] Andres M. Bran, Sam Cox, Oliver Schilter, Carlo Baldassari, Andrew D. White, and Philippe Schwaller. Augmenting large language models with chemistry tools. Nature Machine Intelligence , 6:525–535, 2024. doi:10.1038/s42256-024-00832-8. [9] Kirthevasan Kandasamy, Gautam Dasarathy, Jeff Schneider, and Barnabás Póczos. Multi-fidelity Bayesian optimisation with continuous approximations. In Proceedings of the 34th International Conference on Machine Learning , volume 70 of 
+
+Proceedings of Machine Learning Research , pages 1799–1808, 2017. [10] Mark D. Wilkinson, Michel Dumontier, IJsbrand Jan Aalbersberg, Gabrielle Appleton, Myles Axton, Arie Baak, Niklas Blomberg, Jan-Willem Boiten, Luiz Bonino da Silva Santos, Philip E. Bourne, et al. The FAIR guiding principles for scientific data management and stewardship. Scientific Data , 3:160018, 2016. doi:10.1038/sdata.2016.18. [11] Nicholas Metropolis, Arianna W. Rosenbluth, Marshall N. Rosenbluth, Augusta H. Teller, and Edward Teller. Equation of state calculations by fast computing machines. The Journal of Chemical Physics , 21:1087–1092, 1953. doi:10.1063/1.1699114. [12] Lars Onsager. Crystal statistics. I. A two-dimensional model with an order-disorder transition. Physical Review , 65:117–149, 1944. doi:10.1103/PhysRev.65.117. [13] James Bergstra and Yoshua Bengio. Random search for hyper-parameter optimization. Journal of Machine Learning Re-search , 13:281–305, 2012. [14] Riley J. Hickman, Malcolm Sim, Sergio Pablo-García, Gary Tom, Ivan Woolhouse, Han Hao, Zeqing Bao, Pauric Bannigan, Christine Allen, Matteo Aldeghi, and Alán Aspuru-Guzik. Atlas: a brain for self-driving laboratories. Digital Discovery , 4: 1006–1029, 2025. doi:10.1039/D4DD00115J. [15] Lisha Li, Kevin Jamieson, Giulia DeSalvo, Afshin Rostamizadeh, and Ameet Talwalkar. Hyperband: A novel bandit-based approach to hyperparameter optimization. Journal of Machine Learning Research , 18(185):1–52, 2018. [16] Stefan Falkner, Aaron Klein, and Frank Hutter. BOHB: Robust and efficient hyperparameter optimization at scale. In Proceed-ings of the 35th International Conference on Machine Learning , volume 80 of Proceedings of Machine Learning Research ,pages 1437–1446, 2018. [17] David Salinas, Matthias Seeger, Aaron Klein, Valerio Perrone, Martin Wistuba, and Cédric Archambeau. Syne Tune: A library for large scale hyperparameter tuning and reproducible research. In Proceedings of the First International Conference on Automated Machine Learning , volume 188 of Proceedings of Machine Learning Research , pages 16/1–23, 2022. 
+
+18 CADAQUES : A Cost-Aware Dual Architecture for Query-Efficient Autonomous Discovery PREPRINT 
+
+[18] Florian Häse, Matteo Aldeghi, Riley J. Hickman, Loïc M. Roch, Melodie Christensen, Elena Liles, Jason E. Hein, and Alán Aspuru-Guzik. Olympus: a benchmarking framework for noisy optimization and experiment planning. Machine Learning: Science and Technology , 2:035021, 2021. doi:10.1088/2632-2153/abedc8. [19] Sebastiaan P. Huber, Spyros Zoupanos, Martin Uhrin, Leopold Talirz, Leonid Kahle, Rico Häuselmann, Dominik Gresch, Tiziano Müller, Aliaksandr V. Yakutovich, Casper W. Andersen, et al. AiiDA 1.0, a scalable computational infrastructure for automated reproducible workflows and data provenance. Scientific Data , 7:300, 2020. doi:10.1038/s41597-020-00638-4. 
+
+19
