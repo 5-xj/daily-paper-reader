@@ -1,0 +1,387 @@
+Title: Search-on-Graph-R1: Training Large Language Models to Search Knowledge Graphs with Reinforcement Learning
+
+URL Source: https://arxiv.org/pdf/2607.18481v1
+
+Published Time: Wed, 22 Jul 2026 00:12:16 GMT
+
+Number of Pages: 14
+
+Markdown Content:
+# Search-on-Graph-R1: Training Large Language Models to Search Knowledge Graphs with Reinforcement Learning 
+
+Jia Ao Sun 1,2 Yu Hao 3,2 Fengran Mo 1 Zhan Su 4
+
+Yuchen Hui 1 Bang Liu 1,2,5 Jian-Yun Nie 11Université de Montréal 2Mila – Québec AI Institute 
+
+> 3
+
+McGill University 4Halmstad University College 5Canada CIFAR AI Chair 
+
+Abstract 
+
+Knowledge graph question answering (KGQA) requires navigating from topic entities to an answer several relations away. Recent meth-ods prompt a frontier LLM to explore the graph through a retrieval tool, but their re-liance on frontier-scale inference makes them costly to deploy. We present Search-on-Graph-R1 (S OG-R1), which internalizes this navi-gation into a compact 8B model through su-pervised fine-tuning (SFT) followed by rein-forcement learning (RL). Our central idea is to scaffold a frontier teacher with each ques-tion’s gold SPARQL query, so the teacher tra-verses a known answer-bearing path with a live 
+
+Search tool rather than having to discover the path itself. Since every call executes against a live Freebase server, the resulting trajectories are grounded in the knowledge graph by con-struction. On WebQSP, CWQ, and GrailQA, SOG-R1 at 8B surpasses every frozen frontier-LLM system in our comparison and posts the strongest results on CWQ of any system we compare against. It does so using no auxil-iary module at inference and no LLM judge during training. Isolating each training stage shows that SFT and RL contribute complemen-tary gains, our approach transfers across model families, and RL learns to reach answers in fewer Search calls than its SFT initialization. 
+
+1 Introduction 
+
+Large language models (LLMs) excel at general-purpose reasoning, but knowledge-intensive tasks remain a persistent failure mode; their parametric knowledge is incomplete or outdated, and difficult to verify (Ji et al., 2023; De Cao et al., 2021). Pair-ing LLMs with knowledge graphs (KGs) offers a principled remedy (Pan et al., 2024); a KG encodes explicit, structured relations between entities, al-lowing an LLM agent to “hop” across connected entities and recover multi-hop answer paths that flat semantic retrieval would miss. A growing line of work shows that frontier LLMs, by being prompted to interact with a KG through structured retrieval tools, can interleave reasoning with explicit KG queries and reach competitive accuracy on complex multi-hop KGQA benchmarks (Sun et al., 2024; Chen et al., 2024; Sun et al., 2025). These prompting-based methods, however, all rely on GPT-4-class frozen frontier LLMs that are impractical for production deployment due to la-tency, cost, and access constraints. The next step is to post-train a smaller open-source LLM, teaching it to reason over the KG to match these frontier systems. One family of methods treats KGQA as semantic parsing, training the model to emit a com-plete logical form (e.g., an s-expression) that is compiled to an executable query and run against the KG (Ye et al., 2022; Luo et al., 2024a; Yu et al., 2023). Because the parse commits to schema-specific relations in a single pass, these methods struggle when the gold parse involves schema el-ements unseen at training. A second family of methods treats the KG as a black-box search en-vironment and trains the model to use a general retrieval tool, much as Search-R1 (Jin et al., 2025) trains LLMs to query a web search engine with-out memorizing its index. We adopt this framing, which yields a navigation policy over the KG rather than a fixed parse. Two concurrent efforts adopt the same framing but keep retrieval and reasoning disjoint. EoG (Yan et al., 2026) shares our two-stage SFT-then-RL pipeline, but extracts a per-question subgraph of-fline, places it in the prompt as static text, and then reasons over that fixed context without ever issuing a query; accuracy is then bounded by the recall of a preprocessing step the model cannot influence. KG-Hopper (Wang and Yu, 2026) does query the KG live, but its reward loop depends on external LLM judges to score reasoning traces and verify answers. Both permit the model to fall back on parametric memory when retrieval falls short, so 1arXiv:2607.18481v1 [cs.CL] 20 Jul 2026 A. SPARQL -scaffolded teacher trace generation      
+
+> Gold SPARQL Query
+> Teacher LLM
+> w/ Search Tool Explored Path in Knowledge Graph Generated Teacher Trajectory
+> SELECT DISTINCT ?x WHERE {
+> ?c major_exports ?k .
+> ?k industry apple_tree .
+> ?c capital ?x .
+> }
+> Teacher LLM
+> (235B)
+> Search
+> Tool
+
+🔍                
+
+> Apple Tree CVT
+> Nod e
+> Capital
+> Q: What is the state capital
+> where the major export is Apple
+> trees?
+> --------------------------------
+> 1. Search(Apple tree, incoming)
+> ⤷result (table )
+> 2. Search(CVT Node, incoming)
+> ⤷result (table )
+> 3. Search(Washington, outgoing)
+> ⤷result (table)
+> --------------------------------
+> Final answer: {Olympia}
+> Washington Olympia
+> Malus (genus)
+> The Botany of Desire
+> Pacific Northwest
+> Royal Trux Pacific Time Zone
+> Tarte Tatin
+> 1
+> 234
+> Major exports Industry
+> Higher
+> classification
+> Time zone
+> Origin
+> Ingredient
+> Subjects
+> Contained by
+> KG results
+> Tool calls
+> Other (distractor) edges Teacher -searched path Answer
+> B. Student post -training
+> Teacher Trajectories
+> (grounded tool -use traces )
+> RL Question Pool
+> (question + gold answer)
+> Student LLM
+> (8B)
+> Student LLM
+> (8B)
+> SoG -R1
+> (8B )
+> SoG -R1 -Zero
+> (8B )
+> SoG -SFT
+> (8B )
+> SFT
+> GRPO + Search
+> GRPO + Search
+
+Figure 1: Overview of S OG-R1. (A) SPARQL-scaffolded teacher trace generation. We walk through the CWQ question “What is the state capital where the major export is Apple trees?” (1) Its gold SPARQL query is shown to a 235B teacher LLM. (2) Using the Search tool, the teacher reads the query as a traversal blueprint and issues the tool calls needed to navigate the knowledge graph, executing each against a live Freebase server. (3) The resulting path runs Apple Tree → CVT node → Washington → Olympia , the answer; distractor edges the teacher must reject are faded. (4) The executed calls and their results are serialized into a multi-turn teacher trajectory ending in the final answer. (B) Student post-training. Both branches start from the same off-the-shelf 8B instruct model. Top: LoRA SFT on the grounded teacher trajectories of (A) produces S OG-SFT; GRPO with the same Search tool, initialized from S OG-SFT and trained on a pool of ( question , gold answer ) pairs, produces S OG-R1. Bottom: applying that same GRPO stage directly to the base 8B model, with no SFT, produces S OG-R1-Z ERO , the RL-only ablation. 
+
+neither guarantees that the facts it cites exist in the KG. SOG-R1 instead fuses retrieval and reasoning into a single loop; the model itself decides what to fetch, mid-reasoning, through live Search calls, so that recall becomes a learnable property of naviga-tion rather than a fixed property of preprocessing. To cold-start this behavior, we scaffold a frontier teacher with each question’s gold SPARQL query, which is present in every KGQA training set but never shown to the student at inference, and have it traverse the known answer path using the same live Search tool the student will use. What it pro-duces is a teacher trajectory: a sequence of exe-cuted search calls, the results they returned, and the final answer. Since every call executes against a live Freebase server, these trajectories are grounded in the KG by construction. We then fine-tune a compact 8B student on these trajectories and refine it with GRPO (Shao et al., 2024) under a simple outcome reward, with no gold-path supervision or judge in the reward loop. The resulting 8B agent surpasses every frozen frontier LLM system in our comparison on all three benchmarks, and posts the strongest CWQ accuracy of any system we com-pare against, including post-trained models with larger backbones, at a fraction of the inference cost. Our contributions are: • We turn the inference-time S OG paradigm into a learnable behavior of a single compact model, internalizing KG traversal into an 8B student’s weights, with no auxiliary module and no LLM judge at any stage of training or inference. • We scaffold a frontier teacher with each ques-tion’s gold SPARQL query, never shown to the student, so it traverses the answer path with the same live Search tool the student uses: every call executes against Freebase, so cold-start traces are KG-grounded by construction. We further batch the S OG tool over entities, re-moving a dropped-entity failure mode at small scale. • We evaluate on WebQSP, CWQ, and GrailQA, where the 8B agent outperforms every frozen frontier-LLM system and achieves the best CWQ accuracy in our comparison. Stage ab-lations show SFT and RL contribute comple-mentary gains, and RL reaches answers in fewer Search calls than its SFT initialization 2on all three benchmarks. 
+
+2 Related Work 
+
+We group KG-augmented LLM methods by whether the LLM that performs reasoning and an-swering at inference is itself post-trained. 
+
+Frozen-LLM methods. These methods keep the reasoning LLM fixed and supply KG access through prompting and inference-time orchestra-tion: step-wise navigators query the KG hop-by-hop via beam search (Sun et al., 2024), sub-objective planning (Chen et al., 2024), multi-agent question simplification (Ma et al., 2025), mes-sage passing (Wan et al., 2025), ontology-guided paths (Liu et al., 2025), or tool calls over full rea-soning history (Sun et al., 2025), while others or-chestrate frozen LLMs over training-free graph-aware constrained decoding (Li et al., 2025) or off-the-shelf retrieval (Li et al., 2024; Sui et al., 2025; Mavromatis et al., 2025). A second line keeps the reasoning LLM frozen but trains a small dedi-cated helper to carry navigation or pruning: a GNN for 2-hop entity selection (Wang and Yu, 2025), a compact pruning or path-ranking model (Dong et al., 2025; Lin et al., 2025), or an RL policy or value model (Zhang and Zhao, 2025; Shen et al., 2025). A third line trains a small auxiliary LLM but still delegates the answer-producing reasoning to a frozen frontier model: GCR (Luo et al., 2025) trains a small LLM to decode graph-constrained paths that a frozen GPT-4o then reasons over, PARoG (Shi et al., 2026) trains a small Llama-3.1-8B planner whose sub-objectives a frozen GPT-4 answers and refines, and Rule-KBQA (Zhang et al., 2025) fine-tunes a small rule generator whose offline-mined templates guide a symbolic agent, with a frozen GPT-4 scoring each construction step. In all three lines KG competence stays outside the reasoning LLM’s weights, so accuracy leans on a strong, often frontier backbone and on auxiliary modules whose interface must be hand-tuned. 
+
+Post-trained-LLM methods. Semantic-parsing methods fine-tune the LLM to emit executable log-ical forms grounded against the KG (Luo et al., 2024a; Feng and He, 2025; Tian et al., 2025); these are frontier-free at execution but bounded by the training distribution, since the model commits to a full parse in one pass with no opportunity to revise against what the graph actually contains. Another family instead post-trains the LLM to traverse the KG directly, so the model that reasons at inference is the one that was trained. KG-Agent (Jiang et al., 2025) fine-tunes a 7B agent on synthesized tool-calling trajectories. A growing set of concurrent systems applies an SFT-then-RL pipeline to com-pact KG reasoners, but each relaxes a different one of three properties: retrieval over a curated KB, live querying rather than a static context, and a reward that is a deterministic function of the trajectory. Graph-R1 (Luo et al., 2026) trains a multi-turn retrieval policy with GRPO, but in a GraphRAG setting, retrieving by embedding similarity over a hypergraph self-extracted from text rather than traversing a curated KB. EoG (Yan et al., 2026) keeps retrieval and reasoning separate on a curated KB; it reasons over a statically extracted subgraph placed into the prompt and never issues a query, so the triples it cites are not guaranteed to exist in the KG. KG-Hopper (Wang and Yu, 2026) equips its agent with a live search tool, but its reward loop depends on external LLM judges—a 70B scorer that grades each reasoning trace and a 3B model that verifies answers—making its training signal stochastic and model-dependent. Both EoG and KG-Hopper permit the model to fall back on para-metric memory when retrieval falls short, so neither guarantees KG-grounded answers. Our S OG-R1 instead fuses retrieval and reasoning in one com-pact model: retrieval is the sole knowledge channel with no parametric fallback permitted, and the re-ward is a deterministic function of the trajectory, with no LLM judge in the reward loop and no co-operating model at inference. 
+
+3 Knowledge Graphs and KGQA 
+
+A knowledge graph is a set of fact triples G =
+
+{(e, r, e ′) | e, e ′ ∈ E , r ∈ R} , where E and R are the entity and relation sets and each triple (e, r, e ′)
+
+states that relation r holds between entities e and e′.Knowledge Graph Question Answering (KGQA) aims to answer a natural-language question q using 
+
+G; the goal is to identify the entity set Aq ⊆ E that answers q. Following prior work (Sun et al., 2024; Chen et al., 2024; Sun et al., 2025), we assume the topic entities Eq ⊆ E mentioned in q have already been identified and linked to nodes in G, and serve as the starting points for reasoning. Answering q is rarely a one-hop lookup; the answer typically lies several relations away from the topic entities, so 
+
+Aq is only reachable through a multi-hop path in 
+
+G, which the agent must discover by traversing the 3Algorithm 1 SOG-R1 inference.                                                       
+
+> Require: question q, topic entities Eq, policy π, turn budget
+> T
+> Ensure: predicted answer set ˆAq
+> 1: h←[q, Eq]▷running context 2: for t= 1 , . . . , T do
+> 3: at∼π(· | h)▷sample next action 4: if atis a final answer then
+> 5: return answer set ˆAqparsed from at
+> 6: else ▷ a tis a Search call 7: ot←SEARCH (at)
+> 8: h←h∥[at, o t]▷append call and observation 9: end if
+> 10: end for
+> 11: return ∅▷turn budget exhausted
+
+graph from Eq.
+
+4 Methodology 
+
+SOG-R1 is built in three sequential stages ap-plied to a compact instruction-tuned student model. 
+
+Stage 1: SPARQL-Scaffolded Cold-Start Trace Generation (§4.2). For each training question, a frontier-scale teacher LLM walks the gold an-swer path using the same Search tool the student will use at inference, emitting a multi-turn trajec-tory of tool calls and observations terminating in a final answer, with the gold SPARQL query as the scaffold. Stage 2: Supervised Fine-Tuning 
+
+(§4.3). The student is LoRA-fine-tuned on the col-lected trajectories, producing S OG-SFT. Stage 3: Reinforcement Learning (§4.4). SOG-SFT is further trained with GRPO under a reward com-bining exact-match correctness with a turn-count efficiency factor, producing S OG-R1. At inference the student receives only the question q and an en-tity dictionary Eq (no SPARQL) and produces an answer through the tool-augmented loop of Algo-rithm 1. 
+
+4.1 Tool: Batched 1-Hop Neighbour Retrieval 
+
+The agent has access to a single tool, Search :
+
+> Search( entities: List[str], direction: "incoming" | "outgoing", properties: List[str] = None ) -> str
+
+Given a list of entity IDs and a direction, Search 
+
+returns the adjacent triples as a markdown table of properties, neighbouring entities, and their la-bels, each row tagged with its source entity. The optional properties argument restricts the result to a given set of predicates. The key change from the original S OG (Sun et al., 2025) tool is that it accepts a list of entities in a single call, whereas the original Search took only one entity at a time. When the agent needs to expand several entities from the same hop—for example the compound-value-type (CVT) nodes Freebase returns for an actor’s individual film performances—the single-entity tool forces a separate call per entity. We find the model often issues calls for only a subset before moving on, dropping the rest and losing the answers behind them. Bundling the entities into one list and passing that list to Search makes this a single decision; the agent collects every entity it in-tends to expand into one call, which is far harder to truncate than a sequence of independent calls. As a secondary benefit, it also lowers the total number of tool calls per question, reducing inference cost and the chance of mid-trajectory derailment. 
+
+4.2 Stage 1: SPARQL-Scaffolded Cold-Start Trace Generation 
+
+Cold-start data for tool-using KG agents requires multi-turn trajectories that interleave reasoning with valid tool calls and reach the gold an-swer. Generic distillation pipelines (e.g., Tool-former (Schick et al., 2023), ToolLLM (Qin et al., 2024)) prompt a teacher with the question alone and filter post-hoc by output correctness. We in-stead exploit a structural property of KGQA train-ing data; every training question comes with a gold SPARQL query, which is not merely an executable that returns the answer but an explicit encoding of how to reach it in the graph. Each triple in its WHERE clause is a single hop from the topic entity in Eq, through intermediate CVT nodes or relation endpoints, to the SELECT target that resolves to the answer—exactly the traversal a Search -equipped agent must produce. We therefore use the gold query to scaffold a frontier teacher; rather than asking it to rediscover a path the dataset already encodes, we give it σq as a hint and have it walk that path using the same Search tool the student uses at inference. Every call executes against a live Freebase Virtuoso server so that each KG fact in a trajectory originates from a real query rather than model-generated prose. Figure 1(A) shows an example. Topic entities are given as Eq, as is standard for these benchmarks and consistent with our baselines. We retain a trajectory only if its fi-nal answer exactly matches the gold answer and all of its Search calls executed without error; this retains 99.6% of trajectories on WebQSP, 96.0% on CWQ, and 87.2% on GrailQA. The full prompt 4is in Appendix A. 
+
+4.3 Stage 2: Supervised Fine-Tuning 
+
+Each retained teacher trajectory (§4.2) is serialized into a multi-turn conversation whose assistant turns are Search tool calls and whose intervening turns carry the returned observations, terminating in the final-answer turn. We LoRA-fine-tune (Hu et al., 2022) the student on these conversations, comput-ing the next-token loss only on the assistant turns, so it learns to produce tool calls and answers with-out being trained to predict tool outputs. We train a separate specialist per dataset, matching the few-shot trace distribution to the target benchmark and isolating the cold-start contribution per benchmark. Adapter, optimization, and hardware settings are in §B. 
+
+4.4 Stage 3: Reinforcement Learning 
+
+Starting from S OG-SFT, we apply GRPO (Shao et al., 2024) with the student interacting live with the KG. The reward and its design are below; roll-out, optimization, and capacity settings are in §B. 
+
+Reward. For a trajectory τ with solution string s
+
+and nt tool calls, the reward is the product of three factors: 
+
+r(τ ) = g(τ ) · rem (τ ) · f (nt),
+
+a binary format gate g(τ ) ∈ { 0, 1}, a binary exact-match term rem (τ ) ∈ { 0, 1}, and a turn-count effi-ciency factor f (nt). The format gate g(τ ) = 1 iff (i) nt ≥ 1, so the model must call the tool at least once, ruling out direct-answer rollouts that bypass KG navigation, and (ii) s terminates cleanly with a single " Final answer: ", rejecting rollouts that wrap the answer in commentary or continue gener-ating past it, both common in early RL. The exact-match term rem (τ ) returns 1 if the predicted answer set matches the gold answer and 0 otherwise; there is no partial credit giving GRPO a sparse but unam-biguous correctness signal. The turn-count factor penalizes verbosity through a floored linear penalty on excess turns, 
+
+f (nt) = max  fmin , 1 − λ · max(0 , n t − Td),
+
+governed by three constants: a free-zone thresh-old Td, below which no penalty applies; a per-turn penalty rate λ; and a floor fmin that caps the maxi-mum penalty. Crucially, the factor is multiplicative, so efficiency pressure operates only among correct rollouts; since rem = 0 on any incorrect trajectory, 
+
+f (nt) acts as a tie-breaker that prefers shorter paths without ever losing correctness. Neither λ nor fmin 
+
+can change the sign of the advantage between a correct and an incorrect rollout, only the margin between two correct ones. We therefore fix both at conservative values and do not tune them. 
+
+5 Experiments 
+
+We organize our evaluation around five research questions. RQ1: How does S OG-R1, at 8B, com-pare against frozen frontier LLM and post-trained KGQA systems? RQ2: What does each post-training stage (SFT cold-start, RL) contribute, and is cold-start necessary for RL to work at all? RQ3: 
+
+Does the RL stage learn fewer search calls than its SFT initialization? RQ4: How does test accuracy scale with the size of the grounded training pool? 
+
+RQ5: Does our approach transfer across different base models and parameter sizes? 
+
+5.1 Setup Datasets. We evaluate on three standard Free-base (Bollacker et al., 2008) KGQA benchmarks: 
+
+WebQSP (Yih et al., 2016), CWQ (Talmor and Berant, 2018), and GrailQA (Gu et al., 2021). 
+
+Metrics. Following prior work (Li et al., 2023; Sun et al., 2024; Chen et al., 2024), we report exact match accuracy (Hits@1) over the answer set. 
+
+Baselines. We compare against three families, reflecting the taxonomy of §2. LLM-only base-lines (IO prompting, Chain-of-Thought (Wei et al., 2022), Self-Consistency (Wang et al., 2022)) run the same 8B backbone with no KG access, estab-lishing the no-KG floor for this backbone. The following frozen-LLM KG methods pair a frozen frontier LLM with inference-time orchestration: ToG (Sun et al., 2024), PoG (Chen et al., 2024), LMP (Wan et al., 2025), iQUEST (Wang and Yu, 2025), ORT (Liu et al., 2025), DoG (Ma et al., 2025), PARoG (Shi et al., 2026), and the prompted SOG (Sun et al., 2025). The following post-trained 
+
+methods fine-tune the reasoning LLM on KGQA data: ChatKBQA (Luo et al., 2024a), Reasoning-on-Graph (Luo et al., 2024b), KG-Agent (Jiang et al., 2025), RGR-KBQA (Feng and He, 2025), CompKBQA (Tian et al., 2025), D-RAG (Gao et al., 2025), KG-Hopper (Wang and Yu, 2026), and EoG (Yan et al., 2026). Of these, EoG and KG-Hopper are the concurrent systems most directly 5SFT RL                 
+
+> Dataset train val train val WebQSP 2,707 300 2,707 300 CWQ 8,700 300 8,700 300 GrailQA 2,700 300 2,700 300
+> Table 1: Training and validation question counts per stage. SFT and RL draw from the same pool per dataset; WebQSP uses its entire retained teacher-trace pool.
+
+comparable to ours; both post-train Llama-3.1-8B, our exact backbone. 
+
+Training and validation data. Within each dataset, SFT and RL operate on the same retained teacher-trace pool (§4.2), so the gap between S OG-SFT and S OG-R1 reflects the training procedure rather than a difference in the questions each stage draws on, and each stage holds out a fixed 300-question validation set. We train on 8,700 ques-tions for CWQ and 2,700 for GrailQA; for We-bQSP, whose retained pool is an order of magni-tude smaller, we use all 2,707 available after the validation split. GrailQA also draws on a smaller pool because its class-level questions, whose gold SPARQL binds no topic entity, leave entity-seeded 
+
+Search with no starting point and are filtered out. Table 1 gives the per-stage counts, and §5.5 quanti-fies the effect of pool size. 
+
+Implementation. The student is Llama-3.1-8B-Instruct (Grattafiori et al., 2024) and the cold-start teacher is Qwen3-235B-A22B-Thinking-2507 (FP8) (Yang et al., 2025). SFT uses LoRA via LLaMA-Factory (Zheng et al., 2024), and RL uses GRPO in verl (Sheng et al., 2024) with vLLM (Kwon et al., 2023) rollouts, all on a sin-gle 8×H200 141GB node. Both teacher trace gen-eration and RL rollouts dispatch Search calls to a self-hosted Freebase Virtuoso instance. For the turn-count factor we fix λ = 0 .05 and fmin = 0 .3
+
+across all datasets; the free-zone threshold Td is set per dataset to the 75th-percentile turn count of that dataset’s teacher trajectories. Full hyperparameters and per-stage walltimes are in Appendix B. 
+
+5.2 Main Results 
+
+Table 2 compares S OG-R1 against frozen frontier-LLM and post-trained systems. Three findings stand out. First, S OG-R1 exceeds every frozen frontier system on all three benchmarks—well above its KG-free floor of 62 .2/42 .0/28 .8 (the same Llama-3.1-8B backbone with no KG access) and above the strongest frozen entries, including S OG(91 .3/75 .1/86 .9) and LMP (GPT-4) on CWQ and GrailQA. The margin is decisive on CWQ ( +6 .5
+
+over LMP) but narrower on WebQSP ( +0 .4) and GrailQA ( +0 .7). Second, among post-trained methods S OG-R1 posts the best CWQ accuracy of any system in the table ( 88 .7, over ChatKBQA’s 86 .0) and is second to EoG on WebQSP and GrailQA. This comparison is backbone-matched—both post-train Llama-3.1-8B—but the two systems are given different inputs at inference. EoG reasons over a per-question sub-graph produced by a separate, offline retrieval step and placed in its prompt as static text; its policy is-sues no queries, so the region of the KG available to the model is fixed before it runs and recall is a prop-erty of that external step rather than of the learned policy. S OG-R1 is only given the topic entities and must locate the answer region itself through live 
+
+Search calls over the full KG. The results therefore cannot be compared directly; S OG-R1’s 6.1-point CWQ lead is obtained while also performing re-trieval, and the 1.1 and 2.1 point gaps on WebQSP and GrailQA are small relative to that lead. Third, against KG-Hopper, which shares our backbone and SFT-then-RL structure, S OG-R1 gains 14 .8/30 .5/34 .6 points. Overall, S OG-R1 de-livers the strongest CWQ accuracy of any system in the table with a single 8B policy, with no judge or path supervision in training. 
+
+5.3 Training Stage Ablation 
+
+To isolate each post-training stage, we compare four configurations of the same Llama-3.1-8B-Instruct backbone, evaluated on all three test sets under an identical Search tool, system prompt, and decoding setup: • Base (zero-shot inference): the off-the-shelf instruct model, no fine-tuning, prompted with the SoG system prompt and the Search tool. • SOG-SFT (SFT only): LoRA SFT on SPARQL-scaffolded 235B-teacher traces. • SOG-R1-Z ERO (RL only): GRPO applied directly to the base instruct model with no cold-start data, with the same reward, same hyperparameters as the full pipeline. • SOG-R1 (full pipeline, SFT then RL): the proposed system. SFT on 235B-teacher traces, then GRPO with the Search tool. 6Method Backbone Size WebQSP CWQ GrailQA                                                                                                     
+
+> LLM-only
+> IO Prompt Llama-3.1 8B 62.2 38.3 24.6 Chain-of-Thought Llama-3.1 8B 60.2 41.4 28.8 Self-Consistency Llama-3.1 8B 61.2 42.0 26.6
+> Frozen-LLM Methods
+> Think-on-Graph (Sun et al., 2024) GPT-4 –82.6 69.5 81.4 Plan-on-Graph (Chen et al., 2024) GPT-4 –87.3 75.0 84.7 LMP (Wan et al., 2025) GPT-4 –90.0 82.2 89.3 iQUEST (Wang and Yu, 2025) GPT-4o –88.9 73.9 73.5 ORT (Liu et al., 2025) GPT-4o –87.7 65.4 –Debate-on-Graph (Ma et al., 2025) GPT-4 –91.0 56.0 80.0 PARoG (Shi et al., 2026) GPT-4 –91.2 79.3 87.1 Search-on-Graph (Sun et al., 2025) GPT-4o –91.3 75.1 86.9
+> Post-trained LLM Methods
+> ChatKBQA (Luo et al., 2024a) Llama-2 13B 86.4 86.0 –Reasoning-on-Graph (Luo et al., 2024b) Llama-2-Chat 7B 85.7 62.6 –KG-Agent (Jiang et al., 2025) Llama-2 7B 83.3 72.2 86.1 RGR-KBQA (Feng and He, 2025) Llama-3 8B 84.5 82.0 –CompKBQA (Tian et al., 2025) Llama-2 13B 84.2 83.6 –D-RAG (Gao et al., 2025) Llama-3-Inst. 8B 89.1 70.3 –KG-Hopper (Wang and Yu, 2026) Llama-3.1 8B 76.9 58.2 55.4 Explore-on-Graph (Yan et al., 2026) Llama-3.1 8B 92.8 82.6 92.1 SOG-R1 (Ours) Llama-3.1 8B 91.7 88.7 90.0
+
+Table 2: Exact match accuracy (%) on WebQSP, CWQ, and GrailQA, grouped by the taxonomy of §2: LLM-only (no KG), frozen-LLM methods, and post-trained LLM methods. Baseline numbers are taken from the cited papers’ best-reported configurations. Bold marks the best result in each column, underline the second-best. “–” indicates a dataset the method does not report on.                 
+
+> Configuration WebQSP CWQ GrailQA Base (zero-shot) 50.9 35.3 55.5 SOG-R1-Z ERO (RL only) 80.9 63.0 60.7 SOG-SFT (SFT only) 89.6 86.1 88.8 SOG-R1 (SFT + RL) 91.7 88.7 90.0
+
+Table 3: Effect of each post-training stage on the same Llama-3.1-8B-Instruct backbone, reported as mean ± standard deviation over three seeds. Base is a single deterministic zero-shot run. S OG-R1-Z ERO 
+
+tests whether SFT warm-up is necessary; S OG-SFT isolates the cold-start contribution. The gap from S OG-SFT to S OG-R1 is the uplift RL adds on top of SFT; the gap from S OG-R1-Z ERO to S OG-R1 is what SFT warm-up adds on top of RL alone. 
+
+Table 3 shows the contribution of each stage. We make three observations. (i) SFT contributes the largest single jump: cold-start alone lifts the model to 90 .9/86 .3/88 .8, a gain of +41 .7/+54 .1/+34 .7
+
+over Base, confirming that the SPARQL-scaffolded traces transfer a strong navigation prior. (ii) RL further improves SFT policy: the full pipeline reaches 91 .7/88 .7/90 .0, improving over SFT-only by +0 .8/+2 .4/+1 .2. The uplift is largest on CWQ, the deepest multi-hop benchmark, consistent with RL primarily teaching the recovery and re-search behaviors that matter most when a single canoni-cal path is insufficient. (iii) RL-only is worse than SFT-only: GRPO applied directly to the base model (S OG-R1-Z ERO ) reaches only 81 .9/63 .0/60 .0, be-low SFT-only on every benchmark, and the order-ing of SOG-R1-Z ERO < SOG-SFT < SOG-R1 in regards to performance. 
+
+5.4 Path Compression: RL Discovers Shorter Paths than SFT 
+
+A central claim of S OG-R1 is that the RL stage teaches the agent to navigate the KG more con-cisely than its SFT initialization. We measure trajectory compactness as the average number of Search tool calls per question, computed on correctly-answered test rollouts (Table 4). The RL stage shortens paths on every bench-mark: WebQSP 2.68 → 2.28 (−15% ), CWQ 
+
+4.98 → 4.80 (−4% ), and GrailQA 2.08 → 1.88 
+
+(−10% ). Accuracy rises in all three cases, by 
+
++0 .8/+2 .4/+1 .2 EM (Table 3), so the agent is not reaching answers in fewer tool calls by abandoning the questions that need more. This shortening is the opposite of the response-7Configuration WebQSP CWQ GrailQA SOG-SFT (SFT only) 2.68 4.98 2.08 SOG-R1 (SFT + RL) 2.28 4.80 1.88 
+
+Table 4: Average Search calls per correctly-answered question. RL shortens trajectories relative to its SFT initialization on all three benchmarks while accuracy rises (Table 3), so the compression is not bought with correctness. 2.7k 4.7k 6.7k 8.7k   
+
+> Training pool size
+> 78
+> 80
+> 82
+> 84
+> 86
+> 88
+> 90
+> Test EM (%)
+> 86.9 87.4
+> 88.4 88.7
+> 79.1
+> 81.1
+> 85.2
+> 86.3
+> SoG-R1
+> SoG-SFT
+
+Figure 2: Data-scale ablation on CWQ: test-set EM as the post-training pool grows, for the cold-start stage alone (S OG-SFT) and for the full SFT-then-RL pipeline (S OG-R1). Both stages draw from the same pool at ev-ery size, and the backbone, tool, prompts, validation-set size, and all hyperparameters are held fixed. The 8,700 
+
+point is the main S OG-R1 configuration of Table 2; the 
+
+2,700 point matches the pool size of the smallest dataset (WebQSP). 
+
+length growth reported in Search-R1’s web-search setting (Jin et al., 2025); where their agent learns to issue more search calls over training, ours learns to issue fewer. Each KG Search is costly in la-tency and context, and the turn-count factor re-wards reaching the answer in fewer hops among correct trajectories. 
+
+5.5 Data-Scale Ablation 
+
+WebQSP’s main configuration already uses every retained trajectory, but CWQ and GrailQA retain far more than the pipeline consumes, leaving head-room to vary the pool size. We re-run the full SFT-then-RL pipeline on CWQ at increasing pool sizes (only the pool grows, with both stages draw-ing from it and all else held fixed) and report each stage separately. GrailQA is omitted; its EM was unchanged from 2,700 to 8,700 questions, so it is already saturated at the main configuration. Figure 2 separates the two stages. S OG-SFT’s EM climbs steeply, from 79 .1 to 86 .3 (+7 .2), and                       
+
+> Backbone Stage WebQSP CWQ GrailQA Llama-3.1-8B-Inst Base 49.2 32.2 54.1 SOG-SFT 90.9 86.3 88.8 SOG-R1 91.7 88.7 90.0
+> Qwen3-4B-Inst Base 55.5 32.5 60.9 SOG-SFT 89.4 82.9 86.8 SOG-R1 91.5 89.4 88.1
+
+Table 5: Backbone generality. The full pipeline is re-run on Qwen3-4B-Instruct-2507 with identical data, tool, prompt, and hyperparameters. Base is the untrained in-struction model with the Search tool; S OG-SFT is the SFT-only stage and S OG-R1 the full pipeline. Llama-3.1-8B rows repeat Table 3. 
+
+is still rising at 8,700 questions. SOG-R1 rises from 86 .9 to 88 .7 (+1 .8), plateauing by 8,700 
+
+where the final 2,000 questions add only +0 .3.RL compensates for scarce cold-start data. The uplift RL adds over its initialization shrinks as the pool grows, from +7 .8 EM at 2,700 questions to 
+
++2 .4 at 8,700 . With a small pool, RL recovers most of the accuracy SFT alone cannot reach; with a large pool, SFT is already strong and RL adds little. This matters most where annotation is scarce. WebQSP’s entire pool is only 2,707 questions, ex-actly where RL is most valuable. The pipeline also plateaus early. The last 2,000 CWQ questions add only +0.3 EM, so we never use the full 24,680-trajectory pool. Combined with the high trace retention of §4.2 (96–99%), this means only a few thousand annotated questions, distilled once, are needed to come close to the best accuracy this approach can achieve. 
+
+5.6 Backbone Generality 
+
+Our main results use a single backbone, leaving open whether S OG-R1’s gains come from the train-ing approach or from one model family’s tool-use ability. We re-run the full pipeline on Qwen3-4B-Instruct-2507 (Yang et al., 2025), a different family at roughly half the scale. Table 5 reports the comparison and we make two observations here. (i) The approach transfers across model fami-lies. On both backbones the ordering of BASE <
+
+SOG-SFT < SOG-R1 holds and the shape is the same. SPARQL-scaffolded SFT sets a strong prior and RL adds a smaller refinement. Neither stage depends on model family. (ii) RL contributes more when the SFT ini-tialization is weaker. On Qwen3-4B, RL adds +2 .1/+6 .5/+1 .3 EM over SFT, against 
+
++0 .8/+2 .4/+1 .2 on Llama-3.1-8B. The stronger 8backbone reaches a higher SFT plateau, leaving RL less to recover. This is the same substitution seen in §5.5, where the RL uplift shrinks as the cold-start pool grows. We nonetheless headline Llama-3.1-8B for a reason unrelated to accuracy; the closest concur-rent systems, EoG (Yan et al., 2026) and KG-Hopper (Wang and Yu, 2026), both post-train it, so matching the backbone makes those comparisons controlled for base model. 
+
+6 Conclusion 
+
+We present S OG-R1, a two-stage post-training pipeline that internalizes live KG navigation into a compact 8B agent. We scaffold a frontier teacher with each question’s gold SPARQL query so it tra-verses the answer path with a live Search tool, producing cold-start trajectories that are grounded in the KG by construction. The student is then fine-tuned on these trajectories and refined with GRPO under a deterministic outcome reward. On WebQSP, CWQ, and GrailQA, the resulting agent surpasses every frozen frontier-LLM system in our comparison and posts the strongest CWQ accu-racy of any system we compare against. Ablations show SFT and RL contribute complementary gains and the approach transfers across model families. RL also makes navigation more efficient, reaching answers in fewer Search calls than its SFT initial-ization. 
+
+Limitations 
+
+We evaluate S OG-R1 only on Freebase, the KG underlying WebQSP, CWQ, and GrailQA, and our pipeline assumes a KG that exposes 1-hop neigh-bour retrieval and a per-question gold SPARQL query at training time. Whether SPARQL-scaffolded grounding transfers to graphs without such annotations (e.g., Wikidata) is untested. We further follow standard practice for these bench-marks in providing gold topic entities (oracle entity linking): the student receives the linked entity IDs 
+
+Eq rather than performing entity linking itself, and performance under self-linking is presumed to be lower. 
+
+References 
+
+Kurt Bollacker, Colin Evans, Praveen Paritosh, Tim Sturge, and Jamie Taylor. 2008. Freebase: a collabo-ratively created graph database for structuring human knowledge. In Proceedings of the 2008 ACM SIG-MOD international conference on Management of data , pages 1247–1250. Liyi Chen, Panrong Tong, Zhongming Jin, Ying Sun, Jieping Ye, and Hui Xiong. 2024. Plan-on-graph: Self-correcting adaptive planning of large language model on knowledge graphs. Advances in Neural Information Processing Systems , 37:37665–37691. Nicola De Cao, Wilker Aziz, and Ivan Titov. 2021. Editing factual knowledge in language models. In 
+
+Proceedings of the 2021 conference on empirical methods in natural language processing , pages 6491– 6506. Zixuan Dong, Baoyun Peng, Yufei Wang, Jia Fu, Xi-aodong Wang, Xin Zhou, Yongxue Shan, Kangchen Zhu, and Weiguo Chen. 2025. EffiQA: Efficient question-answering with strategic multi-model col-laboration on knowledge graphs. In Proceedings of the 31st International Conference on Computational Linguistics , pages 7180–7194, Abu Dhabi, UAE. As-sociation for Computational Linguistics. Tengfei Feng and Liang He. 2025. RGR-KBQA: Gen-erating logical forms for question answering using knowledge-graph-enhanced large language model. In 
+
+Proceedings of the 31st International Conference on Computational Linguistics , pages 3057–3070, Abu Dhabi, UAE. Association for Computational Linguis-tics. Guangze Gao, Zixuan Li, Chunfeng Yuan, Jiawei Li, Wu Jianzhuo, Yuehao Zhang, Xiaolong Jin, Bing Li, and Weiming Hu. 2025. D-RAG: Differentiable retrieval-augmented generation for knowledge graph question answering. In Proceedings of the 2025 Con-ference on Empirical Methods in Natural Language Processing , pages 35398–35417, Suzhou, China. As-sociation for Computational Linguistics. Aaron Grattafiori, Abhimanyu Dubey, Abhinav Jauhri, Abhinav Pandey, Abhishek Kadian, Ahmad Al-Dahle, Aiesha Letman, Akhil Mathur, Alan Schel-ten, Alex Vaughan, Amy Yang, Angela Fan, Anirudh Goyal, Anthony Hartshorn, Aobo Yang, Archi Mi-tra, Archie Sravankumar, Artem Korenev, Arthur Hinsvark, and 542 others. 2024. The llama 3 herd of models. Preprint , arXiv:2407.21783. Yu Gu, Sue Kase, Michelle Vanni, Brian Sadler, Percy Liang, Xifeng Yan, and Yu Su. 2021. Beyond iid: three levels of generalization for question answer-ing on knowledge bases. In Proceedings of the web conference 2021 , pages 3477–3488. Edward J Hu, yelong shen, Phillip Wallis, Zeyuan Allen-Zhu, Yuanzhi Li, Shean Wang, Lu Wang, and Weizhu Chen. 2022. LoRA: Low-rank adaptation of large language models. In International Conference on Learning Representations .Ziwei Ji, Nayeon Lee, Rita Frieske, Tiezheng Yu, Dan Su, Yan Xu, Etsuko Ishii, Ye Jin Bang, Andrea 
+
+9Madotto, and Pascale Fung. 2023. Survey of hal-lucination in natural language generation. ACM com-puting surveys , 55(12):1–38. Jinhao Jiang, Kun Zhou, Wayne Xin Zhao, Yang Song, Chen Zhu, Hengshu Zhu, and Ji-Rong Wen. 2025. KG-agent: An efficient autonomous agent frame-work for complex reasoning over knowledge graph. In Proceedings of the 63rd Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers) , pages 9505–9523, Vienna, Austria. Association for Computational Linguistics. Bowen Jin, Hansi Zeng, Zhenrui Yue, Jinsung Yoon, Ser-can O Arik, Dong Wang, Hamed Zamani, and Jiawei Han. 2025. Search-r1: Training LLMs to reason and leverage search engines with reinforcement learning. In Second Conference on Language Modeling .Woosuk Kwon, Zhuohan Li, Siyuan Zhuang, Ying Sheng, Lianmin Zheng, Cody Hao Yu, Joseph E. Gonzalez, Hao Zhang, and Ion Stoica. 2023. Effi-cient memory management for large language model serving with pagedattention. In Proceedings of the ACM SIGOPS 29th Symposium on Operating Systems Principles .Kun Li, Tianhua Zhang, Xixin Wu, Hongyin Luo, James R. Glass, and Helen M. Meng. 2025. De-coding on graphs: Faithful and sound reasoning on knowledge graphs through generation of well-formed chains. In Proceedings of the 63rd Annual Meeting of the Association for Computational Linguistics (Vol-ume 1: Long Papers) , pages 24349–24364, Vienna, Austria. Association for Computational Linguistics. Tianle Li, Xueguang Ma, Alex Zhuang, Yu Gu, Yu Su, and Wenhu Chen. 2023. Few-shot in-context learning on knowledge base question answering. In Proceed-ings of the 61st Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers) ,pages 6966–6980, Toronto, Canada. Association for Computational Linguistics. Yading Li, Dandan Song, Changzhi Zhou, Yuhang Tian, Hao Wang, Ziyi Yang, and Shuhao Zhang. 2024. A framework of knowledge graph-enhanced large language model based on question decomposition and atomic retrieval. In Findings of the Association for Computational Linguistics: EMNLP 2024 , pages 11472–11485, Miami, Florida, USA. Association for Computational Linguistics. Can Lin, Zhengwang Jiang, Ling Zheng, Qi Zhao, Yuhang Zhang, Qi Song, and Wangqiu Zhou. 2025. RJE: A retrieval-judgment-exploration framework for efficient knowledge graph question answering with LLMs. In Proceedings of the 2025 Conference on Empirical Methods in Natural Language Processing ,pages 17277–17294, Suzhou, China. Association for Computational Linguistics. Runxuan Liu, Bei Luo, Jiaqi Li, Baoxin Wang, Ming Liu, Dayong Wu, Shijin Wang, and Bing Qin. 2025. Ontology-guided reverse thinking makes large lan-guage models stronger on knowledge graph question answering. In Proceedings of the 63rd Annual Meet-ing of the Association for Computational Linguistics (Volume 1: Long Papers) , pages 15269–15284, Vi-enna, Austria. Association for Computational Lin-guistics. Haoran Luo, Haihong E, Guanting Chen, Qika Lin, Yikai Guo, Fangzhi Xu, Zemin Kuang, Meina Song, Xiaobao Wu, Yifan Zhu, and Luu Anh Tuan. 2026. Graph-r1: Towards agentic graphrag framework via end-to-end reinforcement learning. Preprint ,arXiv:2507.21892. Haoran Luo, Haihong E, Zichen Tang, Shiyao Peng, Yikai Guo, Wentai Zhang, Chenghao Ma, Guant-ing Dong, Meina Song, Wei Lin, Yifan Zhu, and Anh Tuan Luu. 2024a. ChatKBQA: A generate-then-retrieve framework for knowledge base question an-swering with fine-tuned large language models. In 
+
+Findings of the Association for Computational Lin-guistics: ACL 2024 , pages 2039–2056, Bangkok, Thailand. Association for Computational Linguistics. Linhao Luo, Yuan-Fang Li, Reza Haffari, and Shirui Pan. 2024b. Reasoning on graphs: Faithful and in-terpretable large language model reasoning. In In-ternational Conference on Learning Representations ,volume 2024, pages 14400–14423. Linhao Luo, Zicheng Zhao, Gholamreza Haffari, Yuan-Fang Li, Chen Gong, and Shirui Pan. 2025. Graph-constrained reasoning: Faithful reasoning on knowl-edge graphs with large language models. In Pro-ceedings of the 42nd International Conference on Machine Learning , volume 267 of Proceedings of Machine Learning Research , pages 41540–41565. PMLR. Jie Ma, Zhitao Gao, Qi Chai, Wangchun Sun, Pinghui Wang, Hongbin Pei, Jing Tao, Lingyun Song, Jun Liu, Chen Zhang, and 1 others. 2025. Debate on graph: a flexible and reliable reasoning framework for large language models. In Proceedings of the AAAI Con-ference on Artificial Intelligence , volume 39, pages 24768–24776. Costas Mavromatis, Soji Adeshina, Vassilis N. Ioanni-dis, Zhen Han, Qi Zhu, Ian Robinson, Bryan Thomp-son, Huzefa Rangwala, and George Karypis. 2025. BYOKG-RAG: Multi-strategy graph retrieval for knowledge graph question answering. In Proceed-ings of the 2025 Conference on Empirical Methods in Natural Language Processing , pages 27881–27898, Suzhou, China. Association for Computational Lin-guistics. Shirui Pan, Linhao Luo, Yufei Wang, Chen Chen, Ji-apu Wang, and Xindong Wu. 2024. Unifying large language models and knowledge graphs: A roadmap. 
+
+IEEE Transactions on Knowledge and Data Engi-neering , 36(7):3580–3599. Yujia Qin, Shihao Liang, Yining Ye, Kunlun Zhu, Lan Yan, Yaxi Lu, Yankai Lin, Xin Cong, Xiangru Tang, Bill Qian, Sihan Zhao, Lauren Hong, Runchu Tian, 
+
+10 Ruobing Xie, Jie Zhou, Mark Gerstein, dahai li, Zhiyuan Liu, and Maosong Sun. 2024. ToolLLM: Facilitating large language models to master 16000+ real-world APIs. In The Twelfth International Con-ference on Learning Representations .Timo Schick, Jane Dwivedi-Yu, Roberto Dessi, Roberta Raileanu, Maria Lomeli, Eric Hambro, Luke Zettle-moyer, Nicola Cancedda, and Thomas Scialom. 2023. Toolformer: Language models can teach themselves to use tools. In Thirty-seventh Conference on Neural Information Processing Systems .Zhihong Shao, Peiyi Wang, Qihao Zhu, Runxin Xu, Junxiao Song, Xiao Bi, Haowei Zhang, Mingchuan Zhang, Y. K. Li, Y. Wu, and Daya Guo. 2024. Deepseekmath: Pushing the limits of mathemati-cal reasoning in open language models. Preprint ,arXiv:2402.03300. Tiesunlong Shen, Jin Wang, Xuejie Zhang, and Erik Cambria. 2025. Reasoning with trees: Faithful ques-tion answering over knowledge graph. In Proceed-ings of the 31st International Conference on Compu-tational Linguistics , pages 3138–3157, Abu Dhabi, UAE. Association for Computational Linguistics. Guangming Sheng, Chi Zhang, Zilingfeng Ye, Xibin Wu, Wang Zhang, Ru Zhang, Yanghua Peng, Haibin Lin, and Chuan Wu. 2024. Hybridflow: A flexible and efficient rlhf framework. arXiv preprint arXiv: 2409.19256 .Yuxin Shi, Han Fu, Zhuo Li, Chenghao Liu, Xiaoxue Ren, and Jianling Sun. 2026. Plan-answer-refine-on-graph: Structured planning and self-refinement for large language model reasoning on knowledge graphs. In The Fourteenth International Conference on Learning Representations .Yuan Sui, Yufei He, Nian Liu, Xiaoxin He, Kun Wang, and Bryan Hooi. 2025. FiDeLiS: Faithful reason-ing in large language models for knowledge graph question answering. In Findings of the Association for Computational Linguistics: ACL 2025 , pages 8315–8330, Vienna, Austria. Association for Compu-tational Linguistics. Jia Ao Sun, Hao Yu, Fabrizio Gotti, Fengran Mo, Yi-hong Wu, Yuchen Hui, and Jian-Yun Nie. 2025. Search-on-graph: Iterative informed navigation for large language model reasoning on knowledge graphs. arXiv preprint arXiv:2510.08825 .Jiashuo Sun, Chengjin Xu, Lumingyuan Tang, Saizhuo Wang, Chen Lin, Yeyun Gong, Lionel Ni, Heung-Yeung Shum, and Jian Guo. 2024. Think-on-graph: Deep and responsible reasoning of large language model on knowledge graph. In International Con-ference on Learning Representations , volume 2024, pages 3868–3898. Alon Talmor and Jonathan Berant. 2018. The web as a knowledge-base for answering complex questions. In Proceedings of the 2018 Conference of the North American Chapter of the Association for Computa-tional Linguistics: Human Language Technologies, Volume 1 (Long Papers) , pages 641–651, New Or-leans, Louisiana. Association for Computational Lin-guistics. Yuhang Tian, Dandan Song, Zhijing Wu, Pan Yang, Changzhi Zhou, Jun Yang, Hao Wang, Huipeng Ma, Chenhao Li, and Luan Zhang. 2025. CompKBQA: Component-wise task decomposition for knowledge base question answering. In Proceedings of the 2025 Conference on Empirical Methods in Natural Lan-guage Processing , pages 293–309, Suzhou, China. Association for Computational Linguistics. Junhong Wan, Tao Yu, Kunyu Jiang, Yao Fu, Weihao Jiang, and Jiang Zhu. 2025. Digest the knowledge: Large language models empowered message pass-ing for knowledge graph question answering. In 
+
+Proceedings of the 63rd Annual Meeting of the As-sociation for Computational Linguistics (Volume 1: Long Papers) , pages 15426–15442, Vienna, Austria. Association for Computational Linguistics. Shuai Wang and Yinan Yu. 2025. iQUEST: An itera-tive question-guided framework for knowledge base question answering. In Proceedings of the 63rd An-nual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers) , pages 15616– 15628, Vienna, Austria. Association for Computa-tional Linguistics. Shuai Wang and Yinan Yu. 2026. Kg-hopper: Em-powering compact open llms with knowledge graph reasoning via reinforcement learning. Preprint ,arXiv:2603.21440. Xuezhi Wang, Jason Wei, Dale Schuurmans, Quoc Le, Ed Chi, Sharan Narang, Aakanksha Chowdhery, and Denny Zhou. 2022. Self-consistency improves chain of thought reasoning in language models. arXiv preprint arXiv:2203.11171 .Jason Wei, Xuezhi Wang, Dale Schuurmans, Maarten Bosma, Fei Xia, Ed Chi, Quoc V Le, Denny Zhou, and 1 others. 2022. Chain-of-thought prompting elic-its reasoning in large language models. Advances in neural information processing systems , 35:24824– 24837. Shiqi Yan, Yubo Chen, Ruiqi Zhou, Zhengxi Yao, Shuai Chen, Tianyi Zhang, Shijie Zhang, Wei-Qiang Zhang, Yongfeng Huang, Haixin Duan, and Yunqi Zhang. 2026. Explore-on-graph: Incentivizing autonomous exploration of large language models on knowledge graphs with path-refined reward modeling. In The Fourteenth International Conference on Learning Representations .An Yang, Anfeng Li, Baosong Yang, Beichen Zhang, Binyuan Hui, Bo Zheng, Bowen Yu, Chang Gao, Chengen Huang, Chenxu Lv, and 1 others. 2025. Qwen3 technical report. arXiv preprint arXiv:2505.09388 .
+
+11 Xi Ye, Semih Yavuz, Kazuma Hashimoto, Yingbo Zhou, and Caiming Xiong. 2022. RNG-KBQA: Generation augmented iterative ranking for knowledge base ques-tion answering. In Proceedings of the 60th Annual Meeting of the Association for Computational Lin-guistics (Volume 1: Long Papers) , pages 6032–6043, Dublin, Ireland. Association for Computational Lin-guistics. Wen-tau Yih, Matthew Richardson, Chris Meek, Ming-Wei Chang, and Jina Suh. 2016. The value of se-mantic parse labeling for knowledge base question answering. In Proceedings of the 54th Annual Meet-ing of the Association for Computational Linguistics (Volume 2: Short Papers) , pages 201–206, Berlin, Germany. Association for Computational Linguis-tics. Donghan Yu, Sheng Zhang, Patrick Ng, Henghui Zhu, Alexander Hanbo Li, Jun Wang, Yiqun Hu, William Yang Wang, Zhiguo Wang, and Bing Xiang. 2023. DecAF: Joint decoding of answers and log-ical forms for question answering over knowledge bases. In The Eleventh International Conference on Learning Representations .Zhiqiang Zhang, Liqiang Wen, and Wen Zhao. 2025. Rule-KBQA: Rule-guided reasoning for complex knowledge base question answering with large lan-guage models. In Proceedings of the 31st Inter-national Conference on Computational Linguistics ,pages 8399–8417, Abu Dhabi, UAE. Association for Computational Linguistics. Zhiqiang Zhang and Wen Zhao. 2025. A collabora-tive reasoning framework powered by reinforcement learning and large language models for complex ques-tions answering over knowledge graph. In Proceed-ings of the 31st International Conference on Compu-tational Linguistics , pages 10672–10684, Abu Dhabi, UAE. Association for Computational Linguistics. Yaowei Zheng, Richong Zhang, Junhao Zhang, Yanhan Ye, and Zheyan Luo. 2024. LlamaFactory: Unified efficient fine-tuning of 100+ language models. In 
+
+Proceedings of the 62nd Annual Meeting of the As-sociation for Computational Linguistics (Volume 3: System Demonstrations) , pages 400–410, Bangkok, Thailand. Association for Computational Linguistics. 
+
+A Tool Definition 
+
+Tool schema. The student and teacher both in-teract with the KG through a single tool, Search ,defined in OpenAI function-calling JSON schema:    
+
+> {"name": "Search", "description": "Execute a SPARQL query on Freebase that retrieves adjacent properties, property labels, values, and value labels in the specified direction for one or more entities. Supports batch querying: pass a list of entity IDs to query multiple entities at once.", "parameters": { "type": "object", "properties": { "entities": { "type": "array", "description": "List of entity IDs to query (e.g. [ 'm.04yd0fh '] for a single entity; [ 'm.02tbdk9 ',
+> 'm.0jy1jy '] for batch). Use batch querying when querying multiple entities with the same property filter." }, "direction": { "type": "string", "enum": ["incoming", "outgoing"], "description": " 'outgoing 'for relations where the entity is the subject; 'incoming 'for relations where the entity is the object." }, "properties": { "type": "array", "description": "Optional list of specific properties to filter by (e.g. [ 'film.actor.film ']). Use to reduce results when too many are returned." }}, "required": ["entities", "direction"] }}
+
+The executor parses each call, dispatches a SPARQL query to a Freebase Virtuoso server, and returns a Markdown table of (property, propertyLabel, value, valueLabel) rows; for batched calls over multiple entities, each row addi-tionally carries entity and entityLabel columns identifying the input entity it came from. When the result exceeds 50 rows, the executor instead returns a paged property summary that prompts the agent to retry with a narrowed properties .
+
+System prompts. The teacher and student use different system prompts, reflecting their different inputs: the teacher is given the gold SPARQL query and asked to translate it into tool calls, while the student receives only the question. 
+
+Teacher system prompt (trace generation). 
+
+> You are a SPARQL query to knowledge graph path converter. Your task is to interpret the provided SPARQL query and translate it into a series of calls to the Search() tool, which retrieves adjacent relations and 1-hop neighbouring entities from a knowledge graph. You may call the tool "Search(entity, direction, properties)" to retrieve adjacent relations and 1-hop neighbouring entities to the entity given in the input. - direction must be "incoming" or "outgoing". - The first time you call Search() for an entity and a specific direction, do
+
+12 not provide any properties (i.e., leave it empty) since you do not know what properties are available. You may only call Search() again for the same entity and direction with properties specified if the first call returned too many results and showed you only the available properties instead of the actual values. Furthermore, - Always follow the CORRECT format whenever you want to make a tool call. - When you receive multiple entity IDs from a previous query (e.g., CVT nodes), batch query them together instead of making individual calls for each entity. This is much more efficient. - Every time you call Search on a new entity or set of entities, you must make the first call WITHOUT properties to see what properties are available. After seeing what properties are available, only then can you make a second call WITH the specific properties you need. Do not assume any properties before making the first call. - Whenever Search returns multiple entities for a single relevant relation, you must examine every single one of those entities, even if there are tens or hundreds. Do not skip any; each could be relevant to the question. Use batch querying to examine them efficiently. - In your final answer, you must 1) write 
+
+'Final answer: ' immediately before providing your final answer, 2) enclose the answer entity (or entities) in curly braces, and 3) use each entity name exactly as returned by the Search tool. For example, if the tool 's output shows "English Language", you must produce {English Language} (keeping the exact phrase) rather than shortening it to "English.". 
+
+Student system prompt (SFT, RL, and inference). 
+
+You are a knowledgeable question-answering agent specializing in knowledge-graph question answering. You will receive a question and may call a tool to navigate the knowledge graph, collect information, and then formulate an answer. You may call the tool "Search(entity, direction, properties)" to retrieve adjacent relations and 1-hop neighbouring entities to the entity given in the input. - direction must be "incoming" or "outgoing". - The first time you call Search() for an entity and a specific direction, do not provide any properties (i.e., leave it empty) since you do not know what properties are available. You may only call Search() again for the same entity and direction with properties specified if the first call returned too many results and showed you only the available properties instead of the actual values. Furthermore, - Always follow the CORRECT format whenever you want to make a tool call. - When you receive multiple entity IDs from a previous query (e.g., CVT nodes), batch query them together instead of making individual calls for each entity. This is much more efficient. - Every time you call Search on a new entity or set of entities, you must make the first call WITHOUT properties to see what properties are available. After seeing what properties are available, only then can you make a second call WITH the specific properties you need. Do not assume any properties before making the first call. - Whenever Search returns multiple entities for a single relevant relation, you must examine every single one of those entities, even if there are tens or hundreds. Do not skip any; each could be relevant to the question. Use batch querying to examine them efficiently. - In your final answer, you must 1) write 
+
+'Final answer: ' immediately before providing your final answer, 2) enclose the answer entity (or entities) in curly braces, and 3) use each entity name exactly as returned by the Search tool. For example, if the tool 's output shows "English Language", you must produce {English Language} (keeping the exact phrase) rather than shortening it to "English.". 
+
+Few-shot exemplars (trace generation only). 
+
+During cold-start trace generation (§4.2), the teacher additionally receives K = 5 hand-curated worked examples covering single-hop queries, two-hop queries through compound-value-type (CVT) nodes, multi-answer queries that require enumerat-ing every returned entity, and batched multi-entity queries. Each exemplar is a complete trajectory: the entity dictionary, the gold SPARQL query, a step-by-step reading of that query into directed KG hops, the corresponding Search calls in Ope-nAI function-calling JSON, the returned tables, and the final-answer commitment. The exemplars also demonstrate the probe-then-filter discipline the sys-tem prompt requires: an initial unfiltered Search 
+
+call surfaces the available properties, after which a second call filters to the relevant one. Tool re-sponses in the exemplars are synthetic but format-faithful, matching the Markdown tables the execu-tor returns at run time. We pair exemplars with the dataset being generated, using WebQSP exemplars for WebQSP traces, CWQ exemplars for CWQ, and GrailQA exemplars for GrailQA. The exem-plars are not provided to the SFT or RL student at 13 any point. 
+
+B Training Details 
+
+Hardware. All SFT and RL training runs use a single 8×NVIDIA H200 141GB SXM node (1,128 GB aggregate GPU memory, NVLink). Teacher-trace generation queries a Qwen3-235B-A22B-Thinking-2507-FP8 endpoint hosted on a separate 4×H100 node via vLLM. The Freebase SPARQL backend is OpenLink Virtuoso 7.2.14 running inside an Apptainer container (image 
+
+openlink/virtuoso-opensource-7:7.2.14 ). 
+
+SFT hyperparameters. 
+
+LoRA rank r 64 LoRA α 128 LoRA dropout 0.1 LoRA target all linear Weight decay 0.01 Learning rate 2 × 10 −4
+
+LR schedule cosine Warmup ratio 0.1 (linear) Effective batch size 64 Per-device batch 1Gradient accumulation steps 8GPUs per node 8Number of epochs 5Context length (cutoff_len) 32,768 (WebQSP); 65,536 (CWQ, GrailQA) Precision bf16 DeepSpeed config ZeRO-3 Attention FlashAttention-2 Framework LLaMA-Factory Base model Llama-3.1-8B-Instruct 
+
+RL hyperparameters. 
+
+Algorithm GRPO Rollouts per prompt ( n) 8Sampling temperature 1.0 Top-p / top-k 0.8 / 20 KL coefficient ( β) 0.05 Actor learning rate 2 × 10 −7
+
+PPO mini-batch size 8PPO micro batch (per GPU) 1Max assistant turns 15 Max response tokens 32,768 Rollout backend vLLM (mode=async) Rollout GPU memory util. 0.7 GPUs per node 8Framework verl 
+
+14
