@@ -1,0 +1,1103 @@
+Title: PSG: Pair-Space Generation for Efficient Generative Reranking
+
+URL Source: https://arxiv.org/pdf/2607.26427v1
+
+Published Time: Thu, 30 Jul 2026 00:23:25 GMT
+
+Number of Pages: 13
+
+Markdown Content:
+# PSG: Pair-Space Generation for Efficient Generative Reranking 
+
+# Chao Feng 
+
+Kuaishou Tech Beijing, China fengchao08@kuaishou.com 
+
+# Li Ma 
+
+Kuaishou Tech Beijing, China maili06@kuaishou.com 
+
+# Xiancheng Gao 
+
+Kuaishou Tech Beijing, China gaoxiancheng@kuaishou.com 
+
+# Chenghao Zhang 
+
+Kuaishou Tech Beijing, China zhangchenghao03@kuaishou.com 
+
+# Yuanhao Pu 
+
+Kuaishou Tech Beijing, China puyuanhao@kuaishou.com 
+
+# Xiang Li 
+
+Kuaishou Tech Beijing, China lixiang44@kuaishou.com 
+
+## Abstract 
+
+Modern recommender systems adopt Generator-Evaluator (G-E) for list-wise reranking: a generator produces sequences from can-didates and an evaluator scores them at sequence-level to filter out the optimal one for exposure. Auto-Regressive(AR), working as the backbone for generative recommendation, suffers two limitations. First, its complexity grows linearly with list length, forcing the system to generate fewer lists under rigorous latency constraints and thus limiting exploration. Second, teacher-forcing creates a train–test mismatch; cumulative errors worsen with length and degrade quality. To address these problems, we propose Pair-Space Generation (PSG), a reformulation that elevates the generation atom from indi-vidual items to ordered item pairs. Given 𝑛 candidate items, PSG operates over pair vocabulary of size 𝑛 (𝑛 − 1) per request, generates only 𝐿 /2 tokens. Pair token representations are produced on-the-fly by a pretrained pair-token representation module optimized over large scale exposure logs, eliminating the data sparsity that would otherwise plague a quadratic sized vocabulary. We establish three theoretical guarantees: (i) PSG is bijective with item-space generation and induces an equivalent family of sequence distri-butions, thus incurring no loss of expressiveness; (ii) generation in pair-token space achieves approximately a 2× to 4× speedup theoretically under moderate settings and 1.83 × in the real indus-trial environmental settings; and (iii) under outcome-only rewards, the worst-case suboptimality of PSG is bounded by 𝑂 (( 𝐿 /2)2 ¯𝜖 ),representing a nearly 4× improvement over item-space generation. Beyond benchmark-based validation, PSG has also been deployed on Kuaishou, delivering a 0.178% lift in per-user stay time on the platform, which serves over 400 million daily active users. 
+
+## CCS Concepts 
+
+• Information systems → Recommender systems ; Learning to rank . 
+
+> Permission to make digital or hard copies of all or part of this work for personal or classroom use is granted without fee provided that copies are not made or distributed for profit or commercial advantage and that copies bear this notice and the full citation on the first page. Copyrights for components of this work owned by others than the author(s) must be honored. Abstracting with credit is permitted. To copy otherwise, or republish, to post on servers or to redistribute to lists, requires prior specific permission and/or a fee. Request permissions from permissions@acm.org.
+> Conference acronym ’XX, June 0305, 2018, Woodstock, NY
+> ©2024 Copyright held by the owner/author(s). Publication rights licensed to ACM. ACM ISBN 97814503XXXXX/18/06 https://doi.org/XXXXXXX.XXXXXXX
+
+## Keywords 
+
+Recommendation, Generative re-ranking, Generator-Evaluator, Pair-Token, Efficiency, Accumulative Error reduction 
+
+ACM Reference Format: 
+
+Chao Feng, Li Ma, Xiancheng Gao, Chenghao Zhang, Yuanhao Pu, and Xiang Li. 2024. PSG: Pair-Space Generation for Efficient Generative Reranking. In 
+
+Proceedings of Make sure to enter the correct conference title from your rights confirmation email (Conference acronym ’XX). ACM, New York, NY, USA, 13 pages. https://doi.org/XXXXXXX.XXXXXXX 
+
+## 1 Introduction 
+
+Reranking is the final stage of industrial recommender pipelines. Given a candidate set of 𝑛 items returned by upstream retrieval and ranking, reranking produces an ordered list of length 𝐿 that maxi-mizes a composite list-level utility (e.g., engagement, dwell time, monetization). In contrast to pointwise scoring, the defining char-acteristic of reranking is the dominance of item–item interactions: complementary items lift each other, redundant items diminish diversity, and position cascades amplify exposure asymmetries. The solution space of reranking consists of all ordered permu-tations of 𝐿 items selected from 𝑛 candidates, with size 𝑃 (𝑛, 𝐿 ) = 
+
+> 𝑛 !
+> (𝑛 −𝐿 )!
+
+, which grows exponentially with both 𝐿 and 𝑛 . Unlike up-stream ranking, reranking utility must account for combinatorial effects (e.g., diversity) among items. To capture such inter-item influ-ences within a list, early works address this via context-aware point-wise scoring (e.g., DLCM[ 1 ] and PRM[ 34 ], Set-Rank[ 33 ], PEAR[ 26 ], MIR[ 53 ]), yet such methods only partially explore the combinato-rial solution space. In contrast to pointwise scoring with contextual refinement, the G-E[ 56 ] framework decouples generation from eval-uation, thereby naturally expanding the search space. The generator produces candidate sequences from the exponential solution space via sequential decoding or sampling strategies; the evaluator scores each sequence on diversity, engagement, and revenue, and selects the top-1 for final exposure. Evaluator feedback, in turn, steers the generator toward regions of higher utility. In this paper, we primarily focus on the generator’s efficiency and quality within the G-E framework. To satisfy stringent online latency constraints, a line of Non-Autoregressive (NAR) works, including NAR4Rec[ 36 ], NLGR[ 49 ], JDRec[ 60 ] and OMGRec[ 55 ], directly predict positional probabilities for each item in parallel. However, this sacrifices accuracy by overlooking the sequential arXiv:2607.26427v1 [cs.IR] 29 Jul 2026 Conference acronym ’XX, June 0305, 2018, Woodstock, NY Chao F, et al. 
+
+behavioral dependencies of users browsing the sequence. In con-trast, Auto-Regressive (AR) models (e.g., Transformer) deliver su-perior quality but incur heavy model footprints and step-by-step generation overhead[ 62 ]. Furthermore, the evaluator-guided AR generator faces a fundamental tension: the evaluator emits a sin-gle scalar reward at the end of a length 𝐿 trajectory, while the generator must commit to 𝐿 sequential decisions. This induces two coupled difficulties: (i). Decoding latency: Industrial Genera-tor operates under stringent end-to-end latency budgets (typically 
+
+𝑡𝑖𝑚𝑒 _𝑐𝑜𝑠𝑡 ≤ 30 ms total). AR decoding of 𝐿 ≈ 3 ∼ 8 items, even with KV cache, consumes a nontrivial share. (ii). Error accumu-lation: The teacher-forcing training paradigm feeds ground-truth sequences as inputs, yet inference relies on previously generated subsequences, inevitably accumulating prediction errors. Moreover, such errors amplify as the decoding path extends. A natural question arises: can the generation horizon be reduced without sacrificing the expressiveness of the generator? We answer in the affirmative. Our key observation is that the semantic unit of rerank utility is not the individual item but the interactions between items. Co-occurrence effects, complementarity, and list-level diversity are inherently pairwise phenomena; item-level action granularity is an artifact of the autoregressive abstraction, not a property of the reward structure. We thus propose to elevate the generation atom from items to ordered item pairs. In concrete terms, the proposed Pair-Space Generation (PSG) treats each ordered pair (𝑣 𝑖 , 𝑣 𝑗 ) ∈ [ 𝑛 ] × [ 𝑛 ] (𝑖 ≠ 𝑗 ) as a generation token. The generator produces 𝐿 /2 pair tokens autoregressively; the resulting sequence is then unfolded deterministically into the original length-
+
+𝐿 item sequence. Three design components make this practical at industrial scale. First, a pretrained pair encoder computes pair token representations on-the-fly from the per-request candidate set, sidestepping the data sparsity that would otherwise plague a static 𝑛 2-sized embedding table. Second, a dynamic-vocabulary decoder scores pair tokens via inner product with the encoder output, allowing the same generator to serve arbitrary candidate sets without retraining. Third, a pair-space reinforcement learning algorithm operates natively over 𝐿 /2-step trajectories, with action-mask constraints enforcing item non-repetition and group sampling tuned for the expanded action space. Formally, we summarize our contributions: 
+
+• We propose Pair-Space Generation, a reformulation of gener-ative rerank that elevates the action granularity from items to ordered pairs while preserving full expressiveness. 
+
+• We prove that PSG enjoys a provable nearly 4× reduction in the worst-case sub-optimality bound under outcome-only rewards, owing to the quadratic dependence of error com-pounding on the decoding horizon, and achieves nearly 2×
+
+to 4× inference speedup theoretically by shifting computa-tion from the sequential KV-cache bottleneck to the parallel output-projection path. 
+
+• We demonstrate the superiority of PSG against state-of-the-art baselines on public benchmarks, achieving significant and consistent improvements. Beyond offline evaluation, we empirically validate PSG on a production short-video platform (Kuaishou) reranking workload serving over 400 million daily active users, where it delivers a 0.178% lift in stay-time utility and a 1.83 × decoding speedup over a strong item-space G-E baseline. 
+
+## 2 Related Work 
+
+Our discussion of related work falls into three categories. First, we cover generative recommendation. Second, we examine accelera-tion techniques for AR paradigms. Third, we review existing efforts on mitigating error accumulation in AR generation. 
+
+## 2.1 Generative recommendation 
+
+Retrieval has recently shifted from discriminative to generative paradigms. RecForest[ 12 ] and DSI[ 8, 44 ] pioneer seq-to-seq re-trieval by encoding items into discrete code lists via indexing structures, which are then reconstructed by generative models. TIGER[ 35 ] adopts Semantic IDs (SIDs), discrete representations derived from quantization, to denote items, employing generative reconstruction to recover SID sequences. The HSTU[ 58 ] primar-ily addresses efficiency and scaling-law properties in generative recommendation, while OneRec[ 45 ] incorporates reward-guided reinforcement learning (e.g., GRPO[ 40 ]) to align generated results with user preferences. For sequence-level reranking, generator-only approaches such as Seq2Slate[ 3 ], miRNN[ 63 ], List-CVAE[ 21 ] and SortGen[ 31 ] directly approximate the optimal sequence by gener-ative models. To improve the robustness, FSC[ 51 ] and GRN[ 14 ]introduce critics to evaluate generated lists, which marks the emer-gence of the Generator-Evaluator (G-E) paradigm. Other works, like PIER[ 42 ], PRS[ 13 ], GFN4Rec[ 30 ], CGA[ 62 ] and YOLOR[ 48 ], follow this G-E paradigm, driving continued improvements in both efficiency and accuracy. Specifically, among existing methods, GoalRank[ 59 ] is most similar to the proposed PSG: it also employs an evaluator to guide generation via reinforcement learning, yet operates in item space rather than pair-token space under the same Generator-Evaluator paradigm. 
+
+## 2.2 Acceleration of auto-regressive generation 
+
+Typical AR generation decodes step-by-step with complexity lin-ear to sequence length. To meet stringent latency, extensive ef-forts have focused on accelerating decoding. Decoder Architec-ture: Speculative decoding[ 6 , 24 , 54 ] verifies multi-token predic-tions against AR outputs, reducing forward passes and adopted in LLMs. Similar techniques appear in generative recommendation (RPG[ 19 ], HiCoGen[ 25 ], GReF[ 28 ], OneRanker[ 43 ]). N-gram[ 39 ]assumes dependence on the preceding 𝑛 − 1 states, shortening context and cutting attention costs[ 7, 32 ]. Efficient Attention: 
+
+PagedAttention[ 23 ] eliminates KV cache fragmentation; GQA[ 2]reduce KV size via shared heads; FlashAttention[ 10 , 11 ] acceler-ates via tiling. Constrained decoding cuts softmax overhead for closed-set tasks[ 28 ]. In generative recommendation, HSTU[ 58 ]adopts M-FALCON KV cache for faster inference. Additionally, architecture and attention optimizations are compatible. LazyDe-coder (OneRec-V2)[ 61 ] and NEZHA[ 50 ] replace the deep encoder with a lightweight processor using lazy cross-attention and KV sharing. Different from these module-level modifications, our PSG offers a complementary direction: it shortens the decoding horizon by packing multiple items into one token, and can be seamlessly integrated with all existing acceleration techniques. PSG: Pair-Space Generation for Efficient Generative Reranking Conference acronym ’XX, June 0305, 2018, Woodstock, NY 
+
+## 2.3 Accumulative error reduction in AR 
+
+Exposure bias, the distribution mismatch between teacher-forcing training and free-running inference, is a primary cause of error accumulation in autoregressive generation. Existing solutions fall into three categories. Training-side approaches bridge the gap via curriculum-based sampling[ 4 ], adversarial distribution matching[ 15 ], sequence-level objectives[ 41 ], or reinforcement learning[ 57 ]. De-coding side strategies, such as beam search, retain multiple candi-dates to curb error propagation without retraining. Architectural innovations, including non-autoregressive models[ 38 ], eliminate causal dependencies to prevent error accumulation structurally. Recent advances extend this direction further: self-forcing train-ing achieves full train-inference alignment[ 20 ]; process reward models[ 27 ] enable step-level error detection and test-time prun-ing for hierarchical AR generation[ 16 ]; iterative refinement and masked generation paradigms[ 5 ] offer alternatives to left-to-right decoding. Our PSG is orthogonal to these efforts: it operates at the representation level by mapping items into pair tokens, shortening the generation horizon without sacrificing expressiveness. 
+
+## 3 Method 
+
+In this section, we begin with the problem formulation. We then describe the mapping from item space to pair-token space. Finally, we present the model architecture and training methodology. 
+
+## 3.1 Reranking formulation 
+
+At each request, given a user context 𝒖 (e.g. user click logs) and a candidate set V = {𝑣 1, . . . , 𝑣 𝑛 } of size 𝑛 , let Π ⊂ V 𝐿 denote the set of all ordered permutations of 𝐿 items from V, with |Π| =
+
+𝑃 (𝑛, 𝐿 ) = 𝑛 ! 
+
+> (𝑛 −𝐿 )!
+
+. The reranking task is to produce an ordered list 
+
+𝝅 = (𝜋 1, . . . , 𝜋 𝐿 ) ∈ Π that maximizes the list-level utility 𝑅 (𝒖 , 𝝅 ):
+
+𝝅 ∗ = arg max  
+
+> 𝝅 ∈Π
+
+𝑅 (𝒖 , 𝝅 ).
+
+Following recent generative recommendation paradigms, we adopt the Generator-Evaluator (G-E) framework for reranking. Concretely, given 𝒖 and V, a generator G( 𝝅 |𝒖 , V) produces 𝑚 
+
+candidate permutations of length 𝐿 . The evaluator 𝑅 (𝒖 , ·) scores each permutation at the sequence level, and the highest-scoring one is selected for exposure. The Auto-Regressive (AR) architecture (e.g., Transformer[ 46 ]) fits this generator naturally, producing the permutation item by item: 
+
+G𝜽 (𝝅 |𝒖 , V) =
+
+> 𝐿
+
+Ö
+
+> 𝑡 =1
+
+𝑝 𝜽 (𝜋 𝑡 |𝜋 <𝑡 , 𝒖 , V) , (1) where 𝜽 denotes the learnable parameters and 𝑝 𝜽 (·) is the pre-dicted probability at each decoding step. As we focus primarily on the generator, we treat the evaluator 𝑅 (· , ·) as an external plug-in module that provides supervisory signals to guide generation. Our framework is agnostic to the specific form of the evaluator; any sequence-level scoring function can be readily incorporated. Despite AR’s success in LLMs and recommendation systems, it suffers from linearly increasing latency and accumulated decoding errors along the decoding horizon, as discussed earlier. To address these issues, we propose PSG, which shortens the decoding path without sacrificing expressiveness while further reducing decoding errors for reranking. 
+
+## 3.2 Tokenization in Pair-Space 
+
+We assume 𝐿 is even (odd 𝐿 is handled by a trailing single-item slot; see Appendix A ). We map the item space into pair-token space by combining two items into one token per request. Specifically, for a candidate set V, we define the per-request pair-token vocabulary 
+
+P (V) = {( 𝑣 𝑖 , 𝑣 𝑗 ) : 𝑖, 𝑗 ∈ [ 𝑛 ], 𝑖 ≠ 𝑗 }, |P (V)| = 𝑛 (𝑛 − 1).
+
+The decoding process in the item space of size 𝑛 is thus transferred to decoding in the pair-token space of size 𝑛 (𝑛 − 1) over 𝐿 /2 steps. The superscript 𝒊𝒕𝒆𝒎 or 𝒑𝒂𝒊𝒓 is used to distinguish the correspond-ing solution space. In principle, any 𝑘 items can be combined into one token, yielding a token space of size 𝑛 !  
+
+> (𝑛 −𝑘 )!
+
+. Specifically, A choice of 𝑘 = 2 is adopted for our online deployment setting. The discussion of the choice of 𝑘 under various constraints is deferred to later sections. A natural concern is whether this reformulation sacrifices any expressive power. We address this with one theoretical guarantee, collectively certifying PSG as a strict structural refactoring of item-space generation rather than an approximation. First, for any per-mutation 𝝅 item ∈ Πitem , there exists a corresponding 𝝅 pair ∈ Πpair 
+
+that unfolds to the same item sequence, and vice versa. Hence, the mapping between Πitem and Πpair is bijective. Second, for any item-space generator Gitem , there exists a pair-space generator Gpair that produces identical output distributions. Constructively, define 
+
+𝑝 (( 𝑣 𝑖 , 𝑣 𝑗 ) | 𝜋 pair  
+
+> <𝑡
+
+, 𝒖 , P (V)) = 𝑝 (𝑣 𝑖 | 𝜋 item  
+
+> <2𝑡 −1
+
+, 𝒖 , V) · 𝑝 (𝑣 𝑗 | 𝜋 item   
+
+> <2𝑡 −1
+
+∪ { 𝑣 𝑖 }, 𝒖 , V) .
+
+The product over 𝑡 = 1, . . . , 𝐿 /2 telescopes to 
+
+> 𝐿 /2
+
+Ö 
+
+> 𝑡 =1
+
+𝑝 (𝜋 pair  
+
+> 𝑡
+
+|𝜋 pair  
+
+> <𝑡
+
+, 𝒖 , P (V)) =
+
+> 𝐿
+
+Ö
+
+> 𝑠 =1
+
+𝑝 (𝜋 item  
+
+> 𝑠
+
+|𝜋 item  
+
+> <𝑠
+
+, 𝒖 , V) .
+
+The reverse direction follows symmetrically. 
+
+Corollary 1 (No expressiveness loss). The set of list distribu-tions realizable by pair-space autoregressive policies equals that of item-space policies. 
+
+## 3.3 Model architecture 
+
+The PSG framework consists of two core modules: Pair-Token Rep-resentation and Token-Level Generator. The overall architecture is depicted in Figure 1 and will be elaborated in what follows. 
+
+Pair-Token Representation: Each item 𝑣 is first mapped into a vector embedding 𝒆 (𝑣 ) ∈ R𝑑 ′
+
+from multimodal features (content embeddings, statistical features, taxonomy IDs). Pair-token repre-sentations are then computed by a position-aware fusion module: 
+
+𝒆 (𝑣 𝑖 , 𝑣 𝑗 ) = MLP  [𝒆 (𝑣 𝑖 ) + 𝒑 1; 𝒆 (𝑣 𝑗 ) + 𝒑 2] ∈ R𝑑 , (2) where 𝒑 1, 𝒑 2 ∈ R𝑑 ′
+
+are learnable role embeddings, ensuring that 
+
+𝒆 (𝑣 𝑖 , 𝑣 𝑗 ) ≠ 𝒆 (𝑣 𝑗 , 𝑣 𝑖 ) (𝑖 ≠ 𝑗 ) in general. 
+
+Token-Level Generator: A standard Transformer Encoder-Decoder architecture is adopted. In RecSys, user behaviors serve as the most critical user features; accordingly, the user 𝒖 is represented via their sequential behavior history. Specifically, the behavior sequence 𝑿 
+
+is constructed as: 
+
+𝑿 = [𝒙 1; 𝒙 2; · · · ; 𝒙 𝑏 ] ∈ R𝑏 ×𝑑 ,Conference acronym ’XX, June 0305, 2018, Woodstock, NY Chao F, et al. Pair-Space Representation      
+
+> Final Output
+> Given ncandidate items
+> nitems
+> ▷▷▷
+
+… …                    
+
+> v1v2vn
+> Construct ordered pairs ( i, j ), i≠j
+> (1,2) (1,3) …(1,n)
+> (2,1) (2,3) …(2,n)
+> ⋮⋮⋱⋮
+> (n,1) (n,2) …(n,n−1)
+> Pair vocabulary size: n(n−1)
+> Pair Token
+> Representation
+> Pair Embedding Table
+> E∈ℝn(n−1)×d
+> e(1,2)
+> e(1,3)
+
+⋮        
+
+> e(n,n−1)
+> Reconstruct Item Lists
+> (De-pairing)
+> List 1
+> List K
+> ▷▷▷▷▷
+> ▷▷▷▷▷
+
+⋮
+
+⋮
+
+> User Sequence Modeling
+> Transformer Encoder
+> User History
+> Beam Search
+
+… …       
+
+> Pair-Space Generation (Transformer Decoder)
+> Step 1
+> (t= 1)
+> Step T
+> (t=T = L/2 )
+> Generate T = L/2 pair tokens
+> Start Token
+> <SOS>
+
+…  
+
+> p̂ 1
+> Decoder Decoder
+> p̂ T
+> Step 2
+> (t= 2)
+> p̂ 2
+> Decoder
+> Cross
+> Attention
+
+Figure 1: PSG: Left part denotes the Pair-Token Representation and right part denotes the Transformer Enc-Dec module. 
+
+where each 𝒙 𝑖 corresponds to the 𝑖 -th historical behavior. Each behavior representation 𝒙 𝑖 is derived by fusing the interacted item embedding with contextual action signals (e.g., dwell time, inter-action type, position) through an MLP: 𝒙 𝑖 = MLP ([ 𝒆 𝑖 ; 𝒂 𝑖 ]) , where 
+
+𝒆 𝑖 ∈ R𝑑 𝑒 denotes the item embedding and 𝒂 𝑖 ∈ R𝑑 𝑎 encodes the action signals (e.g., click type). The encoder maps 𝑿 to a hidden representation via self-attention followed by a position-wise feed-forward network (FFN). Formally, given 𝑿 :
+
+SelfAttention (𝑸 , 𝑲 , 𝑽 ) = softmax 
+
+ 𝑸 𝑲 ⊤
+
+√𝑑 
+
+
+
+𝑽 , (3) where 𝑸 = 𝑿𝑾 𝑄 , 𝑲 = 𝑿𝑾 𝐾 , 𝑽 = 𝑿𝑾 𝑉 , with 𝑾 𝑄 , 𝑾 𝐾 , 𝑾 𝑉 ∈ R𝑑 ×𝑑 
+
+being learnable projections. The self-attention output is then trans-formed by a two-layer FFN with ReLU activation. The encoder output is Enc (𝒖 ) ∈ R𝑏 ×𝑑 , where 𝑏 is the number of historical behav-iors. For the decoder, let < SOS > denote the start token. During training, the decoder input is {< SOS >, 𝜋 pair  
+
+> 1
+
+, . . . , 𝜋 pair  
+
+> 𝐿 /2−1
+
+}, where 
+
+𝝅 pair is the pair-token sequence from the exposed permutation. The decoder hidden states serve as queries 𝑸 , while the encoder output serves as keys 𝑲 and values 𝑽 . The cross-attention is computed as: 
+
+CrossAttention (𝑸 , 𝑲 , 𝑽 ) = softmax 
+
+ 𝑸 𝑲 ⊤
+
+√𝑑 
+
+
+
+𝑽 , (4) where 𝑸 is linearly projected from decoder states, and 𝑲 , 𝑽 are derived from Enc (𝒖 ). The cross-attention output is also passed through an FFN. The final decoder output is: 
+
+𝑯 = EncDec (𝒖 , 𝝅 pair ) = [𝒉 1; . . . ; 𝒉 𝐿 /2] ∈ R 𝐿   
+
+> 2×𝑑
+
+. (5) 
+
+## 3.4 Training 
+
+Pair-Token Pretrain. To enhance the representation ability of pair-token, PSG pretrains the token embeddings. Given the expo-sure permutation 𝝅 = [𝜋 1, . . . , 𝜋 𝐿 ] and the corresponding action (e.g. click) 𝒚 𝝅 = [𝑦 1, . . . , 𝑦 𝐿 ] ∈ { 0, 1}𝐿 , we construct the pretrain instances as follows. First, we construct the pair-token by the ex-posure time, namely 𝑆 = {( 𝜋 𝑖 , 𝜋 𝑗 )}| 𝑖 < 𝑗 . Each pair of 𝑆 has a pair-level label: if 𝑦 𝑖 = 1 and 𝑦 𝑗 = 1, 𝑦 (𝜋 𝑖 , 𝜋 𝑗 ) = 1; if either 𝑦 𝑖 or 
+
+𝑦 𝑗 equals one, 𝑦 (𝜋 𝑖 , 𝜋 𝑗 ) = 0.5; otherwise 𝑦 (𝜋 𝑖 , 𝜋 𝑗 ) = 0, the point-wise average of pair-token embedding(i.e. eq(2)) approximate the pair-level label trained by mean-square-error. Formally 
+
+𝐿 𝑝𝑟𝑒𝑡𝑟𝑎𝑖𝑛 = 2
+
+𝑛 (𝑛 − 1)∑︁ 𝑖 < 𝑗 
+
+"
+
+𝜎 1
+
+𝑑 
+
+> 𝑑
+
+∑︁  
+
+> 𝑡 =1
+
+𝑒 (𝜋 𝑖 , 𝜋 𝑗 )𝑡 
+
+!
+
+− 𝑦 (𝜋 𝑖 , 𝜋 𝑗 )
+
+#2
+
+,
+
+where 𝜎 (·) means sigmoid function. 
+
+Next-Token Prediction. The next-token prediction (NTP) para-digm is adopted to maintain consistency with training objectives commonly used in online recommender systems. At decoding step 
+
+𝑡 ∈ { 1, . . . , 𝐿 /2}, the decoder output 𝒉 𝑡 from Eq. (5) is scored against all valid pair-tokens via inner product, followed by a softmax oper-ation to yield the sampling probability over the token vocabulary. Each decoding step naturally corresponds to a multi-classification task, with the training objective defined as: 
+
+LNTP = − 2
+
+𝐿 
+
+> 𝐿 /2
+
+∑︁ 
+
+> 𝑡 =1
+
+log exp 
+
+
+
+𝒉 ⊤ 
+
+> 𝑡
+
+emb (𝜋 pair  
+
+> 𝑡
+
+)
+
+Í𝑛 (𝑛 −1) 
+
+> 𝑗 =1
+
+exp  𝒉 ⊤ 
+
+> 𝑡
+
+emb (token 𝑗 ) ,
+
+Exploration by reinforcement. The pretrain and NTP task mainly address the exploitation of online logs. Here, we utilize the evaluator 
+
+𝑅 (· , ·) to guide the generator by reinforcement, which improves the consistency and exploration ability. We adopt Group Relative Policy Optimization (GRPO) [ 40 ] which exhibits excellent performance in LLM tasks. First, we sample a group permutation 𝑆 = {𝒔 1, . . . , 𝒔 𝐺 }
+
+of size 𝐺 by the generator G𝜃 𝑜𝑙𝑑 , where 𝜃 𝑜𝑙𝑑 means the former parameters. Then call the evaluator to estimate the corresponding reward 𝒓 = {𝑟 1, . . . , 𝑟 𝐺 }. The relative advantage for each sample can be calculated by 
+
+𝐴 𝑖 = 𝑟 𝑖 − 𝑎𝑣𝑔 (𝒓 )
+
+𝑠𝑡𝑑 (𝒓 ) + 𝜖 1 ≤ 𝑖 ≤ 𝐺, 
+
+where 𝑎𝑣𝑔 (·) and 𝑠𝑡𝑑 (·) mean average and standard deviation over reward vector respectively. A small 𝜖 guarantees non-zero denomi-nator for numerical stability. Then the GRPO loss can be formed PSG: Pair-Space Generation for Efficient Generative Reranking Conference acronym ’XX, June 0305, 2018, Woodstock, NY 
+
+as 
+
+𝐿 𝐺𝑅𝑃𝑂 = 1
+
+𝐺 
+
+> 𝐺
+
+∑︁ 
+
+> 𝑖 =1
+
+min 
+
+ 𝜋 𝜃 
+
+𝜋 𝜃 𝑜𝑙𝑑 
+
+· 𝐴 𝑖 , 𝑐𝑙𝑖𝑝 
+
+ 𝜋 𝜃 
+
+𝜋 𝜃 𝑜𝑙𝑑 
+
+, 1 − 𝛿, 1 + 𝛿 
+
+ 
+
+−𝛽𝐷 𝐾𝐿 (𝜋 𝜃 || 𝜋 𝜃 𝑜𝑙𝑑 ),
+
+(6) where 𝑐𝑙𝑖𝑝 () means clipping operation and 𝐷 𝐾𝐿 () means the Kullback-LeiBler distance which avoids too much shift of current policy and the former policy. 𝛽 is a tunable hyper-parameter. Finally, the training loss is 
+
+𝐿 𝑙𝑜𝑠𝑠 = 𝐿 𝑝𝑟𝑒𝑡𝑟𝑎𝑖𝑛 + 𝜆 1 · 𝐿 𝑛𝑡𝑝 + 𝜆 2 · 𝐿 𝐺𝑅𝑃𝑂 ,
+
+where 𝜆 1 and 𝜆 2 are tunable hyper-parameters to control the influ-ence of each task. Input 
+
+> Candidate items &
+> User context
+> Explicit Pair-Space
+> Representation
+> Generate pair embeddings
+> User Context
+> Modeling
+> output Enc(u)
+> Autoregressive Decoder
+> Generate pair tokens
+> T = L/2 steps
+> The pair branch and the context branch run in parallel.
+> Cross Attention
+> between <SOS> and
+> encoder Enc(u)
+
+Figure 2: Workflow of inference. 
+
+## 4 Analysis for inference 
+
+During inference, at each decoding step, the decoder hidden state is scored against all valid pair-tokens via inner product, followed by softmax to obtain token probabilities. Beam search is then applied to generate candidate pair-token sequences, which are subsequently unfolded into item lists of length 𝐿 .
+
+## 4.1 Complexity analysis 
+
+Compared with item-space generation, PSG introduces an extra Pair-Token Representation (PTR) module (Figure 1) that maps item pairs into token embeddings. Crucially, both the user-encoder com-putation and the first decoder step (cross-attention with < SOS >)are independent of the PTR output, the decoder requires Enc (𝒖 ) for cross-attention but not the pair embeddings until output projection at step 1. Since the user encoder and PTR operate on disjoint inputs, they execute concurrently on separate streams (Figure 2), and the PTR overhead is absorbed within the user-encoder latency window. Even when executed serially, the PTR accounts for only around 3% of total inference latency, rendering it negligible. Therefore, in the following complexity analysis, we omit the PTR module. We formalize this argument below and validate it empirically in Section 5.1.4. 
+
+proposition 1 (Pair Encoder Wall-Clock Absorption). The Pair-Token Representation (PTR) and the user context encoder are data-independent and thus execute concurrently. PTR is a single batch GEMM with arithmetic intensity ≫ 1, making it compute-bound with near-peak tensor-core throughput [ 52 ]; the user context encoder comprises attention kernels with arithmetic intensity ≈ 1, which is memory-bandwidth-bound [ 11 ]. For 𝑛 ≤ 400 and 𝑏 ≥ 50 , the PTR completes within the user encoder window plus Decoder Step 1, which requires Enc (𝒖 ) for cross-attention. Hence, the PTR adds no marginal wall-clock latency and is excluded from the complexity analysis. 
+
+A notable property of the Transformer decoder is that its param-eter count, comprising QKV projection matrices, FFN weights, and layer norms, is independent of the input sequence length. This inde-pendence ensures a fair complexity comparison between item-space and pair-space generation under identical model capacity. Beyond the decoder, overall time complexity is also affected by the encoder. In cases where the encoder processes a very long user history, it may dominate the entire procedure and become the latency bottleneck. Conversely, when the encoder is lightweight, halving the decoding horizon from 𝐿 to 𝐿 /2 yields a near-2× reduc-tion in FLOPs for the weight-matrix and cross-attention terms, and a 4× reduction for the KV-cache read term. Since the KV-cache term is memory-bandwidth-bound and accounts for a disproportionate share of wall-clock latency, the overall decode speedup falls be-tween 2× and 4×, reaching 1.83 × in real deployment (Section 5). A detailed breakdown of each computational component is provided in the theorem below; the complete proof is deferred to Appendix B. 
+
+Theorem 4.1 (Generation Complexity). Let the user encoder be an 𝐻 enc -layer transformer with hidden size 𝑑 and FFN width 𝑑 ff ,operating on a user-history sequence of length 𝑏 . The decoder is an 
+
+𝐻 -layer transformer with hidden size 𝑑 and FFN width 𝑑 ff , operating over a per-request vocabulary of size |V | . At each autoregressive step 
+
+𝑡 , the decoder performs self-attention over its own KV cache (length 
+
+𝑡 ) and cross-attention over the user-encoder output Henc ∈ R𝑏 ×𝑑 ,then projects its hidden state ℎ𝑡 ∈ R𝑑 over the vocabulary. The total per-request FLOPs decompose as 
+
+𝑇 = 𝑇 user + 𝑇 dec (𝑆 ) (7) 
+
+𝑇 user = 𝑂  𝐻 enc (𝑑 2 + 𝑑 · 𝑑 ff ) · 𝑏 + 𝐻 enc · 𝑑 · 𝑏 2  (8) 
+
+𝑇 dec (𝑆 ) = 𝑂  𝐻 (𝑑 2 + 𝑑 · 𝑑 ff + 𝑏 · 𝑑 ) · 𝑆 | {z } 
+
+> 𝑇 fixed :weight-matrix + cross-attn (per-step fixed)
+
++ 𝑂 (𝐻 · 𝑑 · 𝑆 2)
+
+| {z } 
+
+> 𝑇 kv :KV-cache read (sequential)
+
++ 𝑂 (|V | · 𝑑 · 𝑆 )
+
+| {z } 
+
+> 𝑇 proj :output projection (parallel)
+
+(9) 
+
+The user-encoder cost 𝑇 user is identical in item space and pair space (computed once per request). The decoder cost differs by generation horizon 𝑆 and vocabulary size |V | :
+
+Table 1: Per-request FLOPs: item space vs. pair space. 
+
+Term Item ( 𝑆 =𝐿 , | V | =𝑛 ) Pair ( 𝑆 =𝐿 /2, | V | =𝑛 2) Factor 
+
+𝑇 fixed 𝑂 (𝐻 (𝑑 2 +𝑑𝑑 ff +𝑏𝑑 )𝐿 ) 𝑂 (𝐻 (𝑑 2 +𝑑𝑑 ff +𝑏𝑑 )𝐿 /2) 2× ↓
+
+𝑇 kv 𝑂 (𝐻𝑑𝐿 2 ) 𝑂 (𝐻𝑑𝐿 2/4) 4× ↓
+
+𝑇 proj 𝑂 (𝑛𝑑𝐿 ) 𝑂 (𝑛 2𝑑𝐿 /2) 𝑛 /2× ↑
+
+## 4.2 Decoding Error reduction 
+
+Intuitively, shortening the decoding horizon reduces error accumu-lation, yet expanding the vocabulary from 𝑛 to 𝑛 2 may increase per-step error due to both a larger action space and training over 𝑛 2 clas-sification labels. The net effect is governed by the ratio ¯𝜖 item / ¯𝜖 pair :the 4× gain from horizon reduction is partially offset by any in-crease in per-step mismatch. Under the encoder-saturated regime ( ¯𝜖 pair ≈ ¯𝜖 item ), which holds for typical deployment configurations, Conference acronym ’XX, June 0305, 2018, Woodstock, NY Chao F, et al. 
+
+PSG achieves a nearly 4× error reduction. A formal statement is given below, with the proof deferred to Appendix C .
+
+Theorem 4.2 (Error Compounding in Autoregressive Decod-ing). Consider an autoregressive rerank policy generating a length-𝐿 
+
+list. At each step 𝑡 , the policy’s action distribution deviates from the optimal distribution by at most ¯𝜖 in total variation. In item space, the per-step vocabulary size is 𝑛 ; in pair space, the per-step vocabulary size is 𝑛 (𝑛 −1) ≈ 𝑛 2. Denote the per-step mismatches as ¯𝜖 item and ¯𝜖 pair 
+
+respectively, where 
+
+¯𝜖 pair = ¯𝜖 base + ¯𝜖 enc (2) + ¯𝜖 cov (2)
+
+accounts for three error channels: (i) ¯𝜖 base , baseline training noise (weakly dependent on vocabulary size); (ii) ¯𝜖 enc (2), pair-encoder gen-eralization error on 𝑛 2 representations; (iii) ¯𝜖 cov (2), coverage error from finite GRPO group size 𝐺 over 𝑛 2 actions. The trajectory-level and reward-level error bounds are: 
+
+Table 2: Error compounding: item space vs. pair space.                     
+
+> Bound Item Space ( 𝐻 =𝐿 )Pair Space ( 𝐻 =𝐿 /2)Trajectory TV mismatch 𝐿 ·¯𝜖 item (𝐿 /2) · ¯𝜖 pair
+> Reward sub-optimality 𝑂 (𝑅 max 𝐿 2¯𝜖 item )𝑂 (𝑅 max (𝐿 /2)2¯𝜖 pair )
+
+The net improvement ratio is 
+
+SubOpt item 
+
+SubOpt pair 
+
+= 4 · ¯𝜖 item 
+
+¯𝜖 pair 
+
+.
+
+When ¯𝜖 pair ≤ ¯𝜖 item (encoder-saturated regime), the full 4× dividend is realized. When ¯𝜖 pair > ¯𝜖 item , the dividend is partially offset. For the deployment regime 𝑛 ≤ 400 , pretrain density 𝜌 2 ≫ 10 3, and 𝐺 = 32 :
+
+¯𝜖 pair ≈ ¯𝜖 item , yielding ≈ 4× improvement. 
+
+## 4.3 Action-Space Operability 
+
+Currently, a token consists of 𝑘 = 2 items; here we illustrate this choice is adopted due to 𝑘 = 2 get the suitable trade-off between accuracy and efficiency. The vocabulary size is |P 𝑘 | ≈ 𝑛 𝑘 , which grows exponentially with 𝑘 . At each decoding step, the generator compute logits 𝒉 ⊤ 
+
+> 𝑡
+
+𝐸 vocab over the full vocabulary for masked soft-max, incurring 𝑂 (𝑛 𝑘 𝑑 ) inner products per step. Meanwhile, the Pair-Token Representation module may exceed the user history encoder in computational cost, potentially becoming a bottleneck for certain combinations of 𝑘 and 𝑛 (𝑛 = 60 in our online setting). Table 3 illustrates the growth pattern. At 𝑘 = 2, the vocabulary size is 3,540 for 𝑛 = 60 and 160 ,000 for 𝑛 = 400 , which remains manageable. At 𝑘 = 3, however, the vocabulary grows to 216 ,000 for 
+
+𝑛 = 60 and 64M for 𝑛 = 400 , already straining the sub-30ms latency budget in industrial reranking, particularly given the additional overhead of PTR encoding and beam search decoding. For 𝑘 ≥ 4, the vocabulary becomes infeasible (e.g., ≥ 13M for 𝑛 = 60 and ≥ 2.6B for 
+
+𝑛 = 400 ). In this regime, the computational cost of output projection and PTR encoding dominates, effectively neutralizing the benefit of shortened decoding horizons. We further demonstrate that 𝑘 = 2
+
+achieves the best trade-off through empirical studies, with detailed results presented in Section 5.3. 
+
+Table 3: Per-step vocabulary size and output-projection cost. 
+
+𝑘 𝑛 = 60 𝑛 = 400 Verdict 1 60 400 Trivial 2 3,540 160k Comfortable 3 216k 64M Borderline / Infeasible 
+
+≥ 4 ≥ 13 M ≥ 2.6B Infeasible 
+
+Table 4: Statistics of the datasets used in the experiments. 
+
+Dataset # Requests # Items Candidate Pool Size ML-1M 161,646 3,043 50 Amazon-Books 309,917 38,121 50 RecFlow 3,308,233 14,181,768 120 
+
+## 5 Experiment 5.1 Offline Experiments 
+
+5.1.1 Datasets. We conduct offline experiments on two public datasets, ML-1M [ 17 ] and Amazon-Books [18 ], as well as one industrial dataset collected from a short-video platform, namely 
+
+RecFlow [29]. Detailed dataset statistics are provided in Table 4. Since ML-1M and Amazon-Books do not provide request-level candidate pools for standard reranking instances, we first train a Matrix Factorization (MF) model as the retriever. Specifically, the retriever computes relevance scores between each user and all items, from which we select the top-200 items as the retrieval pool. For each training instance, we then randomly sample 50 items from this top-200 pool as candidate items for reranking. The last six interactions in each user’s historical behavior sequence are used as the ground-truth target list for reranking. The maximum historical sequence length is set to 100 for both ML-1M and Amazon-Books .
+
+RecFlow dataset directly provides request-level candidate sets and associated features. For each request, we retain 60 candidate items, and the target reranked list is also set to length 6. The maximum historical sequence length for RecFlow is set to 50. 
+
+5.1.2 Baselines. We compare PSG against two categories of base-lines. The first category consists of Generator-Only methods, in-cluding pointwise models ( DNN [9], DCN [ 47 ]), context-aware re-finement models ( DLCM [1], PRM [ 34 ]), and sequence generation models ( Seq2Slate [3], SetRank [33 ]). The second category con-sists of Generator-Evaluator methods ( PIER [42 ], NAR4Rec [ 36 ], 
+
+JDRec [60], OMGRec [55], GoalRank [59]). For PSG, we adopt the same listwise evaluator design as Goal-Rank (i.e., the OCPM module in PIER). For the generator, we employ a Transformer encoder-decoder architecture, where both the en-coder and decoder consist of one layer with one attention head. We first warm up PSG with supervised training for 20 epochs, followed by GRPO optimization. In GRPO, the group size is set to 16, where 16 rerank lists are sampled for each input to compute group-relative advantages. The clipping ratio 𝜖 is set to 0.2, and the KL penalty coefficient 𝛽 is set to 0.01. The weights of the NTP loss and GRPO loss are set to 𝜆 1 = 1 and 𝜆 2 = 0.1, respectively. During inference, PSG: Pair-Space Generation for Efficient Generative Reranking Conference acronym ’XX, June 0305, 2018, Woodstock, NY 
+
+Table 5: Performance comparison on three datasets. N@6, P@6, R@6 denotes NDCG@6, Precision@6 and Recall@6. 
+
+Category Model ML-1M Amazon-Books RecFlow N@6 P@6 R@6 F1@6 N@6 P@6 R@6 F1@6 N@6 P@6 R@6 F1@6 Generator-Only DNN 0.5950 0.4539 0.5542 0.4876 0.6448 0.5072 0.6125 0.5472 0.1584 0.0793 0.2069 0.1084 DCN 0.5981 0.4561 0.5573 0.4901 0.6683 0.5298 0.6461 0.5701 0.1597 0.0795 0.2083 0.1088 Seq2Slate 0.6222 0.4867 0.5927 0.5225 0.6952 0.5654 0.6871 0.6078 0.1693 0.0821 0.2134 0.1130 DLCM 0.6061 0.4643 0.5667 0.4988 0.6597 0.5242 0.6396 0.5641 0.1747 0.0861 0.2240 0.1169 SetRank 0.7154 0.5720 0.6933 0.6132 0.8014 0.6635 0.8145 0.7156 0.1823 0.0896 0.2344 0.1225 PRM 0.7081 0.5639 0.6843 0.6049 0.7992 0.6603 0.8107 0.7122 0.1840 0.0905 0.2368 0.1238 Generator-Evaluator PIER 0.7146 0.5721 0.6932 0.6134 0.7987 0.6610 0.8120 0.7131 0.1910 0.0935 0.2431 0.1277 NAR4Rec 0.7348 0.5915 0.7168 0.6342 0.8188 0.6786 0.8351 0.7323 0.1792 0.0880 0.2297 0.1203 JDRec 0.7399 0.5972 0.7233 0.6402 0.8255 0.6832 0.8409 0.7528 0.1832 0.0898 0.2345 0.1227 OMGRec 0.7319 0.5886 0.7131 0.6310 0.8040 0.6642 0.8145 0.7160 0.1866 0.0913 0.2385 0.1247 GoalRank 0.7232 0.6135 0.7381 0.6701 0.8247 0.6905 0.8302 0.7539 0.1981 0.0942 0.2456 0.1285 Ours PSG 0.7548 0.6431 0.7733 0.7022 0.8652 0.7725 0.8435 0.8063 0.2147 0.1024 0.2668 0.1396 Improvement +2.01% +4.83% +4.77% +4.79% +4.81% +11.88% +0.31% +6.95% +8.38% +8.70% +8.63% +8.64% 0 2 4 6 8 10 12 14 16 18 20                  
+
+> Number of Generated Items
+> 10
+> 20
+> 30
+> 40
+> Inference Latency (ms)
+> 20 30 40 50 60 70 80 90 100
+> Number of Candidate Items
+> 10
+> 12
+> 14
+> Inference Latency (ms)
+> 0.005
+> 0.010
+> 0.015
+> MFU
+> 0.005
+> 0.010
+> MFU
+> k= 1 Latency PSG Latency k= 1 MFU PSG MFU
+
+Figure 3: Inference latency and hardware utilization of PSG (k = 2) vs. item-space (k = 1). 
+
+beam search with a beam size of 4 is employed. Settings of other baselines follow their corresponding papers. 
+
+5.1.3 Main Results. As shown in Table 5, PSG achieves the best overall performance across all three datasets. On ML-1M, it im-proves NDCG@6, Precision@6, Recall@6, and F1@6 over the strongest competing baselines by 2.01%, 4.83%, 4.77%, and 4.79%, respectively. On RecFlow, PSG achieves consistent gains on all four metrics, with improvements ranging from 8.38% to 8.70%. On Amazon-Books, PSG attains the highest NDCG@6, Precision@6, and F1@6, with a marginal improvement in Recall@6 over the best-performing base-line. We attribute the performance gains to three factors. First, the superior results of Generator-Evaluator methods over Generator-Only baselines highlight the importance of evaluator guidance in reranking. Second, PSG benefits from richer pair-level semantics. It jointly determines two consecutive positions as a single token, so the selection of the first position is implicitly conditioned on the second. This provides a one-step look-ahead that item-space gen-eration structurally lacks. Third, reducing the generation horizon from 𝐿 to 𝐿 /2 directly suppresses error compounding. 
+
+5.1.4 Inference Efficiency. To better evaluate the inference effi-ciency advantage of PSG, we additionally train a 𝑘 = 1 variant (where each token consists of a single item) and compare it with PSG ( 𝑘 = 2) in Figure 3. We measure both Inference Latency and MFU 
+
+Table 6: Pair-Token Representation (PTR) Overhead Ratio in Total Inference Latency (6 Generated Items)                 
+
+> Candidate Size 𝑛 PTR (ms) Inference Latency(ms) Overhead Ratio 20 0.332 9.74 3.4% 50 0.335 9.71 3.4% 80 0.337 10.72 3.1% 100 0.329 11.62 2.8%
+
+for the two models. All inference experiments are conducted on an GPU with FP32 precision, which provides a peak computational throughput of 59.8 TFLOPS. The left subfigure studies the impact of the number of generated items under the default setting of 50 candidate items. As expected, the inference latency of both methods increases almost linearly with the number of generated items. PSG consistently achieves lower latency, with the 𝑘 = 1 variant being roughly 1.5 × slower on average, while PSG also attains higher MFU (Model FLOPs Utilization) throughout. The right subfigure exam-ines the effect of candidate pool size while fixing the number of generated items to 6. The 𝑘 = 1 variant is relatively insensitive to the number of candidates, whereas PSG exhibits a mild increase in latency as the candidate pool size grows, due to the expansion of the pair-token vocabulary. Nevertheless, PSG still maintains a clear latency advantage, with the 𝑘 = 1 variant remaining around 1.5 ×
+
+slower overall. In addition, PSG consistently achieves higher MFU than the 𝑘 = 1 variant under different candidate sizes, indicating better hardware utilization during decoding. In Table 6, we empiri-cally validate that the time cost of the Pair-Token Representation (PTR) module remains negligible even when executed serially with the Transformer encoder–decoder, accounting for only about 3% of the total inference latency and thus exerting no measurable impact on the overall runtime. 
+
+5.1.5 Ablation study. Our method has three training stages: pair-token pretraining, next-token prediction (NTP), and exploration by Conference acronym ’XX, June 0305, 2018, Woodstock, NY Chao F, et al. 
+
+Table 7: Ablation study of PSG on ML-1M and Amazon-Books. N@6, P@6, R@6 and F1@6 denote NDCG@6, Precision@6, Recall@6 and F1@6, respectively.                                          
+
+> Variant ML-1M Amazon-Books N@6 P@6 R@6 F1@6 N@6 P@6 R@6 F1@6 PSG 0.7548 0.6431 0.7733 0.7022 0.8652 0.7725 0.8345 0.8023
+> w/o Pair Pretrain 0.7463 0.6329 0.7616 0.6913 0.8527 0.7586 0.8194 0.7878 w/o NTP 0.6452 0.5243 0.6363 0.5749 0.7595 0.6428 0.7022 0.6712 w/o GRPO 0.7232 0.6135 0.7381 0.6701 0.8175 0.6816 0.8132 0.7416
+
+Table 8: Online comparison GoalRank (baseline) VS PSG. 
+
+Metric GoalRank PSG Improvement ST (relative lift) – 0.178% –QPS per cloud container 734 1320 +79.8% Generator Latency (ms) 38.42 20.99 1.83 × speedup reinforcement learning. We evaluate their contributions by remov-ing each corresponding objective, demonstrated in Table 7. The ablation results show that all three objectives are beneficial. Removing NTP causes the largest performance degradation. This indicates that token-level autoregressive supervision is essential for learning stable sequential item generation. Pair-token pretrain-ing improves performance by capturing local item co-occurrence patterns as item-level relation priors, which provides better initial-ization for subsequent autoregressive training. Removing GRPO also degrades performance, indicating its importance in policy re-finement after supervised training. By leveraging group-relative feedback, GRPO further improves the quality of generated recom-mendation slates beyond sequence imitation. 
+
+## 5.2 Online A/B test 
+
+PSG is additionally deployed in the reranking stage of the single-column recommendation feed on the Kuaishou main app, which serves over 400 million daily active users with an average daily time spent exceeding two hours per user, providing a large-scale and latency-sensitive production environment. The online base-line is GoalRank[ 59 ], which takes 60 candidate items and a user behavior sequence of length 100 as input, and generates 50 candi-date sequences each of length 𝐿 = 6. PSG and GoalRank share all environment settings, including the online evaluator; as the eval-uator design is not the focus of this work, its details are omitted. Two disjoint 10% traffic buckets are allocated for seven days dur-ing the online test. Following the platform’s latency budget, 50 ms is assigned to the G-E paradigm, with 30 ms for the generator to produce candidate sequences and 20 ms for the evaluator to select the optimal one. The primary online metrics are the Stay Time (ST) per user on the platform. Additionally, latency and online QPS (queries per second) are reported, both measured on the same Cloud Container equipped with 120 CPU threads and 500 GB of memory. These metrics collectively reflect the online efficiency of the system. Results are exhibited in Table 8. Such a relative 0.178% lift in stay time is particularly significant, as on a web-scale platform like Kuaishou, a 0.1% improvement is typically the threshold for rolling out a new online model to full 
+
+Table 9: Average inference latency (ms) over 6 generated items under different numbers of items per token ( 𝑘 ) and candidate size ( 𝑛 ). 𝑘 = 3 runs out of memory at 𝑛 = 100 on a 48GB GPU.                                     
+
+> 𝑘 Candidate Size ( 𝑛 )20 30 40 50 60 70 80 90 100 125.3 24.9 24.8 24.9 25.0 25.0 25.1 25.0 25.0 215.7 15.5 15.5 15.9 15.9 16.3 17.1 17.8 18.7
+> 314.0 20.7 34.6 62.7 106.5 164.8 241.3 340.7 OOM
+
+traffic. Notably, PSG can handle nearly 80% additional traffic under the same container configuration, implying substantial savings in computational budget and thus significant economic benefits for the company in supporting full online service. However, the online environment is inherently complex. The latency budget is not solely consumed by model execution; a considerable portion is allocated to request parsing, workflow preparation, logging, response construc-tion, and other overheads. Once the total cost exceeds the generator budget (30 ms), the system terminates the request process. To avoid degrading user experience during testing, we evaluate latency on dry-run traffic, which replicates real online requests but does not affect actual user exposure. Under the same QPS (e.g. 1320 QPS) load on a single cloud container, PSG achieves a 1.83 × speedup over GoalRank and successfully handles all incoming requests. 
+
+## 5.3 Pair-Token ( 𝑘 = 2) is reasonable 
+
+We further examine the 𝑘 = 3 variant under the same beam size setting (beam size = 4) and evaluate its inference latency in Ta-ble 9. When the candidate set size is relatively small (e.g., 𝑛 = 20 ), the inference time is further reduced due to the shorter decoding sequence. However, as the candidate pool size increases, the com-putational cost of processing the vocabulary grows rapidly, the per-step vocabulary size expands to 𝑛 3, and this overhead eventu-ally outweighs the latency reduction brought by fewer decoding steps. These results demonstrate that pair-token modeling with 
+
+𝑘 = 2 strikes the best balance between decoding efficiency and com-putational tractability. This is particularly critical for our online environment ( 𝑛 = 60 , CPU-based inference on Cloud Container), where 𝑘 = 3 would push the generator beyond the 30 ms budget. 
+
+## 6 Conclusion 
+
+We presented Pair-Space Generation (PSG), which replaces item-level autoregressive decoding with pair-level decoding for RL-based reranking. PSG is provably as expressive as item-space generation, halves the decoding horizon to yield a near-2× speedup (empirically 
+
+1.83 ×), and reduces the worst-case suboptimality bound by 4×
+
+under outcome-only rewards, all confirmed by online A/B tests in a production system serving hundreds of millions of daily active users. A pretrained pair-token representation module with order-aware objectives addresses the cold-start challenge that would otherwise plague an 𝑛 2-scale vocabulary. Extending PSG to triple-space is theoretically feasible, yet as our analysis shows, 𝑘 = 2 remains the industrial sweet spot; tighter instance-dependent error bounds and stochastic transition extensions are left for future work. PSG: Pair-Space Generation for Efficient Generative Reranking Conference acronym ’XX, June 0305, 2018, Woodstock, NY 
+
+## References 
+
+[1] Qingyao Ai, Keping Bi, Jiafeng Guo, and W. Bruce Croft. 2018. Learning a Deep Listwise Context Model for Ranking Refinement. In The 41st International ACM SIGIR Conference on Research & Development in Information Retrieval, SIGIR 2018, Ann Arbor, MI, USA, July 08-12, 2018 , Kevyn Collins-Thompson, Qiaozhu Mei, Brian D. Davison, Yiqun Liu, and Emine Yilmaz (Eds.). ACM, 135–144. https://doi.org/10.1145/3209978.3209985 [2] Joshua Ainslie, James Lee-Thorp, Michiel de Jong, Yury Zemlyanskiy, Federico Lebrón, and Sumit Sanghai. 2023. GQA: Training Generalized Multi-Query Transformer Models from Multi-Head Checkpoints. In Proceedings of the 2023 Conference on Empirical Methods in Natural Language Processing, EMNLP 2023, Singapore, December 6-10, 2023 , Houda Bouamor, Juan Pino, and Kalika Bali (Eds.). Association for Computational Linguistics, 4895–4901. https://doi.org/10.18653/ V1/2023.EMNLP-MAIN.298 [3] Irwan Bello, Sayali Kulkarni, Sagar Jain, Craig Boutilier, Ed Huai-hsin Chi, Elad Eban, Xiyang Luo, Alan Mackey, and Ofer Meshi. 2018. Seq2Slate: Re-ranking and Slate Optimization with RNNs. CoRR abs/1810.02019 (2018). arXiv:1810.02019 http://arxiv.org/abs/1810.02019 [4] Samy Bengio, Oriol Vinyals, Navdeep Jaitly, and Noam Shazeer. 2015. Scheduled sampling for sequence prediction with recurrent Neural networks. In Proceedings of the 29th International Conference on Neural Information Processing Systems - Vol-ume 1 (Montreal, Canada) (NIPS’15) . MIT Press, Cambridge, MA, USA, 1171–1179. [5] Huiwen Chang, Han Zhang, Lu Jiang, Ce Liu, and William T. Freeman. 2022. MaskGIT: Masked Generative Image Transformer. In IEEE/CVF Conference on Computer Vision and Pattern Recognition, CVPR 2022, New Orleans, LA, USA, June 18-24, 2022 . IEEE, 11305–11315. https://doi.org/10.1109/CVPR52688.2022.01103 [6] Charlie Chen, Sebastian Borgeaud, Geoffrey Irving, Jean-Baptiste Lespiau, Lau-rent Sifre, and John Jumper. 2023. Accelerating Large Language Model Decoding with Speculative Sampling. CoRR abs/2302.01318 (2023). https://doi.org/10.48550/ ARXIV.2302.01318 arXiv:2302.01318 [7] Jinglin Chen, Qiwei Li, Zuchao Li, Baoyuan Qi, Guoming Liu, Haojun Ai, Hai Zhao, and Ping Wang. 2025. Faster In-Context Learning for LLMs via N-Gram Trie Speculative Decoding. In Proceedings of the 2025 Conference on Empirical Methods in Natural Language Processing, EMNLP 2025, Suzhou, China, November 4-9, 2025 , Christos Christodoulopoulos, Tanmoy Chakraborty, Carolyn Rose, and Violet Peng (Eds.). Association for Computational Linguistics, 18040–18051. https://doi.org/10.18653/V1/2025.EMNLP-MAIN.911 [8] Xiaoyang Chen, Yanjiang Liu, Ben He, Le Sun, and Yingfei Sun. 2023. Under-standing differential search index for text retrieval. In Findings of the association for computational linguistics: ACL 2023 . 10701–10717. [9] Paul Covington, Jay Adams, and Emre Sargin. 2016. Deep Neural Networks for YouTube Recommendations. In Proceedings of the 10th ACM Conference on Recommender Systems, Boston, MA, USA, September 15-19, 2016 , Shilad Sen, Werner Geyer, Jill Freyne, and Pablo Castells (Eds.). ACM, 191–198. https://doi.org/10. 1145/2959100.2959190 [10] Tri Dao. 2024. FlashAttention-2: Faster Attention with Better Parallelism and Work Partitioning. In The Twelfth International Conference on Learning Representations, ICLR 2024, Vienna, Austria, May 7-11, 2024 . OpenReview.net. https://openreview.net/forum?id=mZn2Xyh9Ec [11] Tri Dao, Daniel Y. Fu, Stefano Ermon, Atri Rudra, and Christopher Ré. 2022. FlashAttention: Fast and Memory-Efficient Exact Attention with IO-Awareness. In Advances in Neural Information Processing Systems 35: Annual Conference on Neural Information Processing Systems 2022, NeurIPS 2022, New Orleans, LA, USA, November 28 - December 9, 2022 , Sanmi Koyejo, S. Mohamed, A. Agarwal, Danielle Belgrave, K. Cho, and A. Oh (Eds.). http://papers.nips.cc/paper_files/paper/2022/ hash/67d57c32e20fd0a7a302cb81d36e40d5-Abstract-Conference.html [12] Chao Feng, Wuchao Li, Defu Lian, Zheng Liu, and Enhong Chen. 2022. Recommender Forest for Efficient Retrieval. In Advances in Neural Informa-tion Processing Systems 35: Annual Conference on Neural Information Process-ing Systems 2022, NeurIPS 2022, New Orleans, LA, USA, November 28 - De-cember 9, 2022 , Sanmi Koyejo, S. Mohamed, A. Agarwal, Danielle Belgrave, K. Cho, and A. Oh (Eds.). http://papers.nips.cc/paper_files/paper/2022/hash/ fe2fe749d329627f161484876630c689-Abstract-Conference.html [13] Yufei Feng, Yu Gong, Fei Sun, Qingwen Liu, and Wenwu Ou. 2021. Revisit Recommender System in the Permutation Prospective. CoRR abs/2102.12057 (2021). arXiv:2102.12057 https://arxiv.org/abs/2102.12057 [14] Yufei Feng, Binbin Hu, Yu Gong, Fei Sun, Qingwen Liu, and Wenwu Ou. 2021. GRN: Generative Rerank Network for Context-wise Recommendation. CoRR 
+
+abs/2104.00860 (2021). arXiv:2104.00860 https://arxiv.org/abs/2104.00860 [15] Anirudh Goyal, Alex Lamb, Ying Zhang, Saizheng Zhang, Aaron C. Courville, and Yoshua Bengio. 2016. Professor Forcing: A New Algorithm for Training Recurrent Networks. In Advances in Neural Information Processing Systems 29: Annual Conference on Neural Information Processing Systems 2016, December 5-10, 2016, Barcelona, Spain , Daniel D. Lee, Masashi Sugiyama, Ulrike von Luxburg, Isabelle Guyon, and Roman Garnett (Eds.). 4601–4609. https://proceedings. neurips.cc/paper/2016/hash/16026d60ff9b54410b3435b403afd226-Abstract.html [16] Chengcheng Guo, Kuo Cai, Yu Zhou, Qiang Luo, Ruiming Tang, Han Li, Kun Gai, and Guorui Zhou. 2026. PROMISE: Process Reward Models Unlock Test-Time Scaling Laws in Generative Recommendations. arXiv preprint arXiv:2601.04674 
+
+(2026). [17] F. Maxwell Harper and Joseph A. Konstan. 2016. The MovieLens Datasets: History and Context. ACM Trans. Interact. Intell. Syst. 5, 4 (2016), 19:1–19:19. https://doi.org/10.1145/2827872 [18] Ruining He and Julian J. McAuley. 2016. Ups and Downs: Modeling the Vi-sual Evolution of Fashion Trends with One-Class Collaborative Filtering. In 
+
+Proceedings of the 25th International Conference on World Wide Web, WWW 2016, Montreal, Canada, April 11 - 15, 2016 , Jacqueline Bourdeau, Jim Hendler, Roger Nkambou, Ian Horrocks, and Ben Y. Zhao (Eds.). ACM, 507–517. https: //doi.org/10.1145/2872427.2883037 [19] Yupeng Hou, Jiacheng Li, Ashley Shin, Jinsung Jeon, Abhishek Santhanam, Wei Shao, Kaveh Hassani, Ning Yao, and Julian J. McAuley. 2025. Generating Long Semantic IDs in Parallel for Recommendation. In Proceedings of the 31st ACM SIGKDD Conference on Knowledge Discovery and Data Mining, V.2, KDD 2025, Toronto ON, Canada, August 3-7, 2025 , Luiza Antonie, Jian Pei, Xiaohui Yu, Flavio Chierichetti, Hady W. Lauw, Yizhou Sun, and Srinivasan Parthasarathy (Eds.). ACM, 956–966. https://doi.org/10.1145/3711896.3736979 [20] Xun Huang, Zhengqi Li, Guande He, Mingyuan Zhou, and Eli Shechtman. 2025. Self Forcing: Bridging the Train-Test Gap in Autoregressive Video Diffusion. In Advances in Neural Information Processing Systems 38: Annual Conference on Neural Information Processing Systems 2025, NeurIPS 2025, San Diego, CA, USA, December 2-7, 2025 / Mexico City, Mexico, November 30 - December 5, 2025 , Danielle Belgrave, Cheng Zhang, Laura N. Montoya, Hsuan-Tien Lin, Razvan Pascanu, Piotr Koniusz, Marzyeh Ghassemi, Nancy Chen, Iván Vladimir Meza Ruíz, and Arturo Loaiza-Bonilla (Eds.). http://papers.nips.cc/paper_files/paper/2025/hash/ f4823f831af67a3ef15e41a85434422a-Abstract-Conference.html [21] Ray Jiang, Sven Gowal, Yuqiu Qian, Timothy A. Mann, and Danilo J. Rezende. 2019. Beyond Greedy Ranking: Slate Optimization via List-CVAE. In 7th International Conference on Learning Representations, ICLR 2019, New Orleans, LA, USA, May 6-9, 2019 . OpenReview.net. https://openreview.net/forum?id=r1xX42R5Fm [22] Sham Kakade and John Langford. 2002. Approximately Optimal Approximate Reinforcement Learning. In Proceedings of the Nineteenth International Conference on Machine Learning (ICML ’02) . Morgan Kaufmann Publishers Inc., San Francisco, CA, USA, 267–274. [23] Woosuk Kwon, Zhuohan Li, Siyuan Zhuang, Ying Sheng, Lianmin Zheng, Cody Hao Yu, Joseph Gonzalez, Hao Zhang, and Ion Stoica. 2023. Efficient Memory Management for Large Language Model Serving with PagedAtten-tion. In Proceedings of the 29th Symposium on Operating Systems Principles, SOSP 2023, Koblenz, Germany, October 23-26, 2023 , Jason Flinn, Margo I. Seltzer, Pe-ter Druschel, Antoine Kaufmann, and Jonathan Mace (Eds.). ACM, 611–626. https://doi.org/10.1145/3600006.3613165 [24] Yaniv Leviathan, Matan Kalman, and Yossi Matias. 2023. Fast Inference from Transformers via Speculative Decoding. In International Conference on Machine Learning, ICML 2023, 23-29 July 2023, Honolulu, Hawaii, USA (Proceedings of Ma-chine Learning Research, Vol. 202) , Andreas Krause, Emma Brunskill, Kyunghyun Cho, Barbara Engelhardt, Sivan Sabato, and Jonathan Scarlett (Eds.). PMLR, 19274–19286. https://proceedings.mlr.press/v202/leviathan23a.html [25] Wuchao Li, Shiyao Wang, Kuo Cai, Jiaxin Deng, Xingmei Wang, Qigen Hu, Defu Lian, and Guorui Zhou. 2025. Taming Ultra-Long Behavior Sequence in Session-wise Generative Recommendation. In Proceedings of the 34th ACM International Conference on Information and Knowledge Management, CIKM 2025, Seoul, Republic of Korea, November 10-14, 2025 , Meeyoung Cha, Chanyoung Park, Noseong Park, Carl Yang, Senjuti Basu Roy, Jessie Li, Jaap Kamps, Kijung Shin, Bryan Hooi, and Lifang He (Eds.). ACM, 5839–5846. https://doi.org/10.1145/3746252.3761564 [26] Yi Li, Jieming Zhu, Weiwen Liu, Liangcai Su, Guohao Cai, Qi Zhang, Ruiming Tang, Xi Xiao, and Xiuqiang He. 2022. PEAR: Personalized Re-ranking with Contextualized Transformer for Recommendation. In Companion of The Web Conference 2022, Virtual Event / Lyon, France, April 25 - 29, 2022 , Frédérique Laforest, Raphaël Troncy, Elena Simperl, Deepak Agarwal, Aristides Gionis, Ivan Herman, and Lionel Médini (Eds.). ACM, 62–66. https://doi.org/10.1145/3487553. 3524208 [27] Hunter Lightman, Vineet Kosaraju, Yuri Burda, Harrison Edwards, Bowen Baker, Teddy Lee, Jan Leike, John Schulman, Ilya Sutskever, and Karl Cobbe. 2024. Let’s Verify Step by Step. In The Twelfth International Conference on Learning Representations, ICLR 2024, Vienna, Austria, May 7-11, 2024 . OpenReview.net. https://openreview.net/forum?id=v8L0pN6EOi [28] Zhijie Lin, Zhuofeng Li, Chenglei Dai, Wentian Bao, Shuai Lin, Enyun Yu, Haox-iang Zhang, and Liang Zhao. 2025. GReF: A Unified Generative Framework for Efficient Reranking via Ordered Multi-token Prediction. In Proceedings of the 34th ACM International Conference on Information and Knowledge Manage-ment, CIKM 2025, Seoul, Republic of Korea, November 10-14, 2025 , Meeyoung Cha, Chanyoung Park, Noseong Park, Carl Yang, Senjuti Basu Roy, Jessie Li, Jaap Kamps, Kijung Shin, Bryan Hooi, and Lifang He (Eds.). ACM, 5879–5887. https://doi.org/10.1145/3746252.3761540 Conference acronym ’XX, June 0305, 2018, Woodstock, NY Chao F, et al. 
+
+[29] Qi Liu, Kai Zheng, Rui Huang, Wuchao Li, Kuo Cai, Yuan Chai, Yanan Niu, Yiqun Hui, Bing Han, Na Mou, Hongning Wang, Wentian Bao, Yunen Yu, Guorui Zhou, Han Li, Yang Song, Defu Lian, and Kun Gai. 2025. RecFlow: An Industrial Full Flow Recommendation Dataset. In The Thirteenth International Conference on Learning Representations, ICLR 2025, Singapore, April 24-28, 2025 . OpenReview.net. https://openreview.net/forum?id=vVHc8bGRns [30] Shuchang Liu, Qingpeng Cai, Zhankui He, Bowen Sun, Julian J. McAuley, Dong Zheng, Peng Jiang, and Kun Gai. 2023. Generative Flow Network for Listwise Recommendation. In Proceedings of the 29th ACM SIGKDD Conference on Knowl-edge Discovery and Data Mining, KDD 2023, Long Beach, CA, USA, August 6-10, 2023 , Ambuj K. Singh, Yizhou Sun, Leman Akoglu, Dimitrios Gunopulos, Xifeng Yan, Ravi Kumar, Fatma Ozcan, and Jieping Ye (Eds.). ACM, 1524–1534. https://doi.org/10.1145/3580305.3599364 [31] Yue Meng, Cheng Guo, Yi Cao, Tong Liu, and Bo Zheng. 2025. A Generative Re-ranking Model for List-level Multi-objective Optimization at Taobao. In Pro-ceedings of the 48th International ACM SIGIR Conference on Research and Develop-ment in Information Retrieval, SIGIR 2025, Padua, Italy, July 13-18, 2025 , Nicola Ferro, Maria Maistro, Gabriella Pasi, Omar Alonso, Andrew Trotman, and Suzan Verberne (Eds.). ACM, 4213–4218. https://doi.org/10.1145/3726302.3731935 [32] Jie Ou, Yueming Chen, and Wenhong Tian. 2024. Lossless Acceleration of Large Language Model via Adaptive N-gram Parallel Decoding. In Proceedings of the 2024 Conference of the North American Chapter of the Association for Computational Linguistics: Human Language Technologies: Industry Track, NAACL 2024, Mexico City, Mexico, June 16-21, 2024 , Yi Yang, Aida Mostafazadeh Davani, Avi Sil, and Anoop Kumar (Eds.). Association for Computational Linguistics, 10–22. https: //doi.org/10.18653/V1/2024.NAACL-INDUSTRY.2 [33] Liang Pang, Jun Xu, Qingyao Ai, Yanyan Lan, Xueqi Cheng, and Jirong Wen. 2020. SetRank: Learning a Permutation-Invariant Ranking Model for Information Retrieval. In Proceedings of the 43rd International ACM SIGIR conference on research and development in Information Retrieval, SIGIR 2020, Virtual Event, China, July 25-30, 2020 , Jimmy X. Huang, Yi Chang, Xueqi Cheng, Jaap Kamps, Vanessa Murdock, Ji-Rong Wen, and Yiqun Liu (Eds.). ACM, 499–508. https://doi.org/10. 1145/3397271.3401104 [34] Changhua Pei, Yi Zhang, Yongfeng Zhang, Fei Sun, Xiao Lin, Hanxiao Sun, Jian Wu, Peng Jiang, Junfeng Ge, Wenwu Ou, and Dan Pei. 2019. Personalized re-ranking for recommendation. In Proceedings of the 13th ACM Conference on Recommender Systems, RecSys 2019, Copenhagen, Denmark, September 16-20, 2019 ,Toine Bogers, Alan Said, Peter Brusilovsky, and Domonkos Tikk (Eds.). ACM, 3–11. https://doi.org/10.1145/3298689.3347000 [35] Shashank Rajput, Nikhil Mehta, Anima Singh, Raghunandan Hulikal Kesha-van, Trung Vu, Lukasz Heldt, Lichan Hong, Yi Tay, Vinh Q. Tran, Jonah Samost, Maciej Kula, Ed H. Chi, and Mahesh Sathiamoorthy. 2023. Rec-ommender Systems with Generative Retrieval. In Advances in Neural Infor-mation Processing Systems 36: Annual Conference on Neural Information Pro-cessing Systems 2023, NeurIPS 2023, New Orleans, LA, USA, December 10 - 16, 2023 , Alice Oh, Tristan Naumann, Amir Globerson, Kate Saenko, Moritz Hardt, and Sergey Levine (Eds.). http://papers.nips.cc/paper_files/paper/2023/hash/ 20dcab0f14046a5c6b02b61da9f13229-Abstract-Conference.html [36] Yuxin Ren, Qiya Yang, Yichun Wu, Wei Xu, Yalong Wang, and Zhiqiang Zhang. 2024. Non-autoregressive Generative Models for Reranking Recommendation. In Proceedings of the 30th ACM SIGKDD Conference on Knowledge Discovery and Data Mining (Barcelona, Spain) (KDD ’24) . Association for Computing Machinery, New York, NY, USA, 5625–5634. https://doi.org/10.1145/3637528.3671645 [37] Stephane Ross and Drew Bagnell. 2010. Efficient Reductions for Imitation Learn-ing. In Proceedings of the Thirteenth International Conference on Artificial Intelli-gence and Statistics (Proceedings of Machine Learning Research, Vol. 9) , Yee Whye Teh and Mike Titterington (Eds.). PMLR, Chia Laguna Resort, Sardinia, Italy, 661–668. https://proceedings.mlr.press/v9/ross10a.html [38] Robin Schmidt, Telmo Pires, Stephan Peitz, and Jonas Lööf. 2022. Non-Autoregressive Neural Machine Translation: A Call for Clarity. In Proceed-ings of the 2022 Conference on Empirical Methods in Natural Language Pro-cessing , Yoav Goldberg, Zornitsa Kozareva, and Yue Zhang (Eds.). Association for Computational Linguistics, Abu Dhabi, United Arab Emirates, 2785–2799. https://doi.org/10.18653/v1/2022.emnlp-main.179 [39] Claude E. Shannon. 1948. A mathematical theory of communication. Bell Syst. Tech. J. 27, 3 (1948), 379–423. https://doi.org/10.1002/J.1538-7305.1948.TB01338.X [40] Zhihong Shao, Peiyi Wang, Qihao Zhu, Runxin Xu, Junxiao Song, Mingchuan Zhang, Y. K. Li, Y. Wu, and Daya Guo. 2024. DeepSeekMath: Pushing the Limits of Mathematical Reasoning in Open Language Models. CoRR abs/2402.03300 (2024). https://doi.org/10.48550/ARXIV.2402.03300 arXiv:2402.03300 [41] Shiqi Shen, Yong Cheng, Zhongjun He, Wei He, Hua Wu, Maosong Sun, and Yang Liu. 2016. Minimum Risk Training for Neural Machine Translation. In Proceedings of the 54th Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers) , Katrin Erk and Noah A. Smith (Eds.). Association for Computa-tional Linguistics, Berlin, Germany, 1683–1692. https://doi.org/10.18653/v1/P16-1159 [42] Xiaowen Shi, Fan Yang, Ze Wang, Xiaoxu Wu, Muzhi Guan, Guogang Liao, Yongkang Wang, Xingxing Wang, and Dong Wang. 2023. PIER: Permutation-Level Interest-Based End-to-End Re-ranking Framework in E-commerce. In Proceedings of the 29th ACM SIGKDD Conference on Knowledge Discovery and Data Mining, KDD 2023, Long Beach, CA, USA, August 6-10, 2023 , Ambuj K. Singh, Yizhou Sun, Leman Akoglu, Dimitrios Gunopulos, Xifeng Yan, Ravi Kumar, Fatma Ozcan, and Jieping Ye (Eds.). ACM, 4823–4831. https://doi.org/10.1145/3580305.3599886 [43] Dekai Sun, Yiming Liu, Jiafan Zhou, Xun Liu, Chenchen Yu, Yi Li, Jun Zhang, Huan Yu, and Jie Jiang. 2026. OneRanker: Unified Generation and Ranking with One Model in Industrial Advertising Recommendation. CoRR abs/2603.02999 (2026). https://doi.org/10.48550/ARXIV.2603.02999 arXiv:2603.02999 [44] Yi Tay, Vinh Tran, Mostafa Dehghani, Jianmo Ni, Dara Bahri, Harsh Mehta, Zhen Qin, Kai Hui, Zhe Zhao, Jai Prakash Gupta, Tal Schuster, William W. Cohen, and Donald Metzler. 2022. Transformer Memory as a Differentiable Search Index. In Advances in Neural Information Processing Systems 35: Annual Conference on Neural Information Processing Systems 2022, NeurIPS 2022, New Orleans, LA, USA, November 28 - December 9, 2022 , Sanmi Koyejo, S. Mohamed, A. Agarwal, Danielle Belgrave, K. Cho, and A. Oh (Eds.). http://papers.nips.cc/paper_files/paper/2022/ hash/892840a6123b5ec99ebaab8be1530fba-Abstract-Conference.html [45] OneRec Team. 2025. OpenOneRec Technical Report. CoRR abs/2512.24762 (2025). https://doi.org/10.48550/ARXIV.2512.24762 arXiv:2512.24762 [46] Ashish Vaswani, Noam Shazeer, Niki Parmar, Jakob Uszkoreit, Llion Jones, Aidan N. Gomez, Łukasz Kaiser, and Illia Polosukhin. 2017. Attention is all you need. In Proceedings of the 31st International Conference on Neural Information Processing Systems (Long Beach, California, USA) (NIPS’17) . Curran Associates Inc., Red Hook, NY, USA, 6000–6010. [47] Ruoxi Wang, Bin Fu, Gang Fu, and Mingliang Wang. 2017. Deep & Cross Network for Ad Click Predictions. In Proceedings of the ADKDD’17, Halifax, NS, Canada, August 13 - 17, 2017 . ACM, 12:1–12:7. https://doi.org/10.1145/3124749.3124754 [48] Shuli Wang, Yinqiu Huang, Changhao Li, Yuan Zhou, Yonggang Liu, Yongqiang Zhang, Yinhua Zhu, Haitao Wang, and Xingxing Wang. 2025. You Only Evaluate Once: A Tree-based Rerank Method at Meituan. In Proceedings of the 34th ACM International Conference on Information and Knowledge Management (Seoul, Re-public of Korea) (CIKM ’25) . Association for Computing Machinery, New York, NY, USA, 6136–6143. https://doi.org/10.1145/3746252.3761539 [49] Shuli Wang, Xue Wei, Senjie Kou, Chi Wang, Wenshuai Chen, Qi Tang, Yinhua Zhu, Xiong Xiao, and Xingxing Wang. 2025. NLGR: Utilizing Neighbor Lists for Generative Rerank in Personalized Recommendation Systems. In Companion Proceedings of the ACM on Web Conference 2025, WWW 2025, Sydney, NSW, Aus-tralia, 28 April 2025 - 2 May 2025 , Guodong Long, Michale Blumestein, Yi Chang, Liane Lewin-Eytan, Zi Helen Huang, and Elad Yom-Tov (Eds.). ACM, 530–537. https://doi.org/10.1145/3701716.3715251 [50] Yejing Wang, Shengyu Zhou, Jinyu Lu, Ziwei Liu, Langming Liu, Maolin Wang, Wenlin Zhang, Feng Li, Wenbo Su, Pengjie Wang, Jian Xu, and Xiangyu Zhao. 2026. NEZHA: A Zero-sacrifice and Hyperspeed Decoding Architecture for Generative Recommendations. In Proceedings of the ACM Web Conference 2026, WWW 2026, Dubai, United Arab Emirates, originally scheduled for April 13-17, 2026, rescheduled for June 29 - July 3, 2026 , Hakim Hacid, Yoelle Maarek, Francesco Bonchi, Ido Guy, and Emine Yilmaz (Eds.). ACM, 8073–8082. https://doi.org/10. 1145/3774904.3792797 [51] Jianxiong Wei, Anxiang Zeng, Yueqiu Wu, Peng Guo, Qingsong Hua, and Qingpeng Cai. 2020. Generator and Critic: A Deep Reinforcement Learning Approach for Slate Re-ranking in E-commerce. CoRR abs/2005.12206 (2020). arXiv:2005.12206 https://arxiv.org/abs/2005.12206 [52] Samuel Williams, Andrew Waterman, and David Patterson. 2009. Roofline: an insightful visual performance model for multicore architectures. Commun. ACM 
+
+52, 4 (April 2009), 65–76. https://doi.org/10.1145/1498765.1498785 [53] Yunjia Xi, Weiwen Liu, Jieming Zhu, Xilong Zhao, Xinyi Dai, Ruiming Tang, Weinan Zhang, Rui Zhang, and Yong Yu. 2022. Multi-Level Interaction Reranking with User Behavior History. In SIGIR ’22: The 45th International ACM SIGIR Conference on Research and Development in Information Retrieval, Madrid, Spain, July 11 - 15, 2022 , Enrique Amigó, Pablo Castells, Julio Gonzalo, Ben Carterette, J. Shane Culpepper, and Gabriella Kazai (Eds.). ACM, 1336–1346. https://doi.org/ 10.1145/3477495.3532026 [54] Heming Xia, Tao Ge, Peiyi Wang, Si-Qing Chen, Furu Wei, and Zhifang Sui. 2023. Speculative Decoding: Exploiting Speculative Execution for Accelerating Seq2seq Generation. In Findings of the Association for Computational Linguistics: EMNLP 2023, Singapore, December 6-10, 2023 (Findings of ACL, Vol. EMNLP 2023) ,Houda Bouamor, Juan Pino, and Kalika Bali (Eds.). Association for Computational Linguistics, 3909–3925. https://doi.org/10.18653/V1/2023.FINDINGS-EMNLP.257 [55] Junwei Xu, Zhibo Xiao, Chuxin Chen, Chengyu Lai, Qijie Shen, Jiuning Lin, Dimin Wang, Jialin Zhu, and Xiao-Ping Zhang. 2026. OMGRec: One-time Matching-based Generative Rerank with Permutation-level Modeling in E-commerce. In 
+
+Proceedings of the ACM Web Conference 2026, WWW 2026, Dubai, United Arab Emirates, originally scheduled for April 13-17, 2026, rescheduled for June 29 - July 3, 2026 , Hakim Hacid, Yoelle Maarek, Francesco Bonchi, Ido Guy, and Emine Yilmaz (Eds.). ACM, 8421–8424. https://doi.org/10.1145/3774904.3792875 [56] Hailan Yang, Zhenyu Qi, Shuchang Liu, Xiaoyu Yang, Xiaobei Wang, Xiang Li, Lantao Hu, Han Li, and Kun Gai. 2025. Comprehensive List Generation for Multi-Generator Reranking. In Proceedings of the 48th International ACM PSG: Pair-Space Generation for Efficient Generative Reranking Conference acronym ’XX, June 0305, 2018, Woodstock, NY 
+
+SIGIR Conference on Research and Development in Information Retrieval, SIGIR 2025, Padua, Italy, July 13-18, 2025 , Nicola Ferro, Maria Maistro, Gabriella Pasi, Omar Alonso, Andrew Trotman, and Suzan Verberne (Eds.). ACM, 2298–2308. https://doi.org/10.1145/3726302.3729933 [57] Lantao Yu, Weinan Zhang, Jun Wang, and Yong Yu. 2017. SeqGAN: sequence generative adversarial nets with policy gradient. In Proceedings of the Thirty-First AAAI Conference on Artificial Intelligence (San Francisco, California, USA) 
+
+(AAAI’17) . AAAI Press, 2852–2858. [58] Jiaqi Zhai, Lucy Liao, Xing Liu, Yueming Wang, Rui Li, Xuan Cao, Leon Gao, Zhaojie Gong, Fangda Gu, Jiayuan He, Yinghai Lu, and Yu Shi. 2024. Actions Speak Louder than Words: Trillion-Parameter Sequential Transducers for Generative Recommendations. In Forty-first International Conference on Machine Learning, ICML 2024, Vienna, Austria, July 21-27, 2024 (Proceedings of Machine Learning Research, Vol. 235) , Ruslan Salakhutdinov, Zico Kolter, Katherine A. Heller, Adrian Weller, Nuria Oliver, Jonathan Scarlett, and Felix Berkenkamp (Eds.). PMLR / OpenReview.net, 58484–58509. https://proceedings.mlr.press/v235/zhai24a.html [59] Kaike Zhang, Xiaobei Wang, Shuchang Liu, Hailan Yang, Xiang Li, Lantao Hu, Han Li, Qi Cao, Fei Sun, and Kun Gai. 2026. GoalRank: Group-Relative Optimiza-tion for a Large Ranking Model. In The Fourteenth International Conference on Learning Representations . https://openreview.net/forum?id=gTMzRm8fb0 [60] Xin Zhao, Jiaxin Li, Zhiwei Fang, Yuchen Guo, Jinyuan Zhao, Jie He, Wenlong Chen, Changping Peng, and Guiguang Ding. 2024. JDRec: Practical Actor-Critic Framework for Online Combinatorial Recommender System. In Proceedings of the 23rd International Conference on Autonomous Agents and Multiagent Sys-tems, AAMAS 2024, Auckland, New Zealand, May 6-10, 2024 , Mehdi Dastani, Jaime Simão Sichman, Natasha Alechina, and Virginia Dignum (Eds.). Inter-national Foundation for Autonomous Agents and Multiagent Systems / ACM, 2612–2614. https://doi.org/10.5555/3635637.3663244 [61] Guorui Zhou, Hengrui Hu, Hongtao Cheng, Huanjie Wang, Jiaxin Deng, Jing-hao Zhang, Kuo Cai, Lejian Ren, Lu Ren, Liao Yu, Pengfei Zheng, Qiang Luo, Qianqian Wang, Qigen Hu, Rui Huang, Ruiming Tang, Shiyao Wang, Shujie Yang, Tao Wu, Wuchao Li, Xinchen Luo, Xingmei Wang, Yi Su, Yunfan Wu, Zexuan Cheng, Zhanyu Liu, Zixing Zhang, Bin Zhang, Boxuan Wang, Chaoyi Ma, Chengru Song, Chenhui Wang, Chenglong Chu, Di Wang, Dongxue Meng, Dunju Zang, Fan Yang, Fangyu Zhang, Feng Jiang, Fuxing Zhang, Gang Wang, Guowang Zhang, Han Li, Honghui Bao, Hongyang Cao, Jiaming Huang, Jiapeng Chen, Jiaqiang Liu, Jinghui Jia, Kun Gai, Lantao Hu, Liang Zeng, Qiang Wang, Qi-dong Zhou, Rongzhou Zhang, Shengzhe Wang, Shihui He, Shuang Yang, Siyang Mao, Sui Huang, Tiantian He, Tingting Gao, Wei Yuan, Xiao Liang, Xiaoxiao Xu, Xugang Liu, Yan Wang, Yang Zhou, Yi Wang, Yiwu Liu, Yue Song, Yufei Zhang, Yunfeng Zhao, Zhixin Ling, and Ziming Li. 2025. OneRec-V2 Technical Report. CoRR abs/2508.20900 (2025). https://doi.org/10.48550/ARXIV.2508.20900 arXiv:2508.20900 [62] Ruitao Zhu, Yangsu Liu, Dagui Chen, Zhenjia Ma, Chufeng Shi, Zhenzhe Zheng, Jie Zhang, Jian Xu, Bo Zheng, and Fan Wu. 2025. Contextual Generative Auction with Permutation-level Externalities for Online Advertising. In Proceedings of the 31st ACM SIGKDD Conference on Knowledge Discovery and Data Mining, V.1, KDD 2025, Toronto, ON, Canada, August 3-7, 2025 , Yizhou Sun, Flavio Chierichetti, Hady W. Lauw, Claudia Perlich, Wee Hyong Tok, and Andrew Tomkins (Eds.). ACM, 2171–2181. https://doi.org/10.1145/3690624.3709313 [63] Tao Zhuang, Wenwu Ou, and Zhirong Wang. 2018. Globally Optimized Mutual Influence Aware Ranking in E-Commerce Search. In Proceedings of the Twenty-Seventh International Joint Conference on Artificial Intelligence, IJCAI 2018, July 13-19, 2018, Stockholm, Sweden , Jérôme Lang (Ed.). ijcai.org, 3725–3731. https: //doi.org/10.24963/IJCAI.2018/518 
+
+## A Odd L Extension 
+
+The main paper assumes 𝐿 is even for notational simplicity. Here we show that all theoretical guarantees extend to odd 𝐿 with negligible degradation. 
+
+## A.1 Generation Protocol 
+
+When 𝐿 is odd, the pair-space generator produces ⌊𝐿 /2⌋ pair tokens followed by a single item token at the final step: 
+
+𝑆 =
+
+ 𝐿 
+
+2
+
+
+
++ 1 = 𝐿 + 12 .
+
+At the final step, the output projection switches from the 𝑛 2-sized pair vocabulary to the remaining 𝑛 − ( 𝐿 − 1) items, costing 𝑂 (𝑛𝑑 )
+
+— strictly less than the 𝑂 (𝑛 2𝑑 ) of a pair step. The decoder’s self-attention and cross-attention mechanisms remain unchanged. 
+
+## A.2 Generation Complexity (Theorem 4.1 Extension) 
+
+proposition 2 (Odd-𝐿 complexity). Under the same setting as Theorem 4.1, for odd 𝐿 the per-request FLOPs satisfy: 
+
+𝑇 (pair ) 
+
+> fixed
+
+= 𝑂  𝐻 (𝑑 2 + 𝑑𝑑 ff + 𝑏𝑑 )( 𝐿 + 1)/ 2, Ratio: 2𝐿 𝐿 + 1 × ↓ 
+
+𝑇 (pair ) 
+
+> kv
+
+= 𝑂  𝐻𝑑 (( 𝐿 + 1)/ 2)2 , Ratio: 4𝐿 2
+
+(𝐿 + 1)2 × ↓ 
+
+𝑇 (pair ) 
+
+> proj
+
+= 𝑂  𝑛 2𝑑 ⌊𝐿 /2⌋ + 𝑛𝑑 , Ratio: ≈ 𝑛 
+
+2 × ↑ 
+
+where the ratios are relative to item-space generation at horizon 𝑆 = 𝐿 .
+
+Proof. The decoder executes ⌊𝐿 /2⌋ = (𝐿 − 1)/ 2 pair steps and one item step. 
+
+Fixed cost + cross-attention. Each of the 𝑆 = (𝐿 + 1)/ 2 steps incurs the same per-step fixed cost 𝑂 (𝐻 (𝑑 2 + 𝑑𝑑 ff + 𝑏𝑑 )) . Total: 
+
+𝑇 (pair ) 
+
+> fixed
+
+= 𝑂  𝐻 (𝑑 2 + 𝑑𝑑 ff + 𝑏𝑑 )( 𝐿 + 1)/ 2.
+
+The ratio to item-space is 𝐿 /(( 𝐿 + 1)/ 2) = 2𝐿 /( 𝐿 + 1).
+
+KV-cache read. The KV cache grows from length 1 to 𝑆 =
+
+(𝐿 + 1)/ 2 over the 𝑆 decoding steps. Total: 
+
+𝑇 (pair ) 
+
+> kv
+
+= 𝑂  𝐻𝑑 · 𝑆 (𝑆 + 1)/ 2 = 𝑂  𝐻𝑑 (( 𝐿 + 1)/ 2)2 .
+
+The ratio to item-space is 𝐿 2/(( 𝐿 + 1)/ 2)2 = 4𝐿 2/( 𝐿 + 1)2.
+
+Output projection. The first (𝐿 − 1)/ 2 steps project over 𝑛 2
+
+pair tokens, costing 𝑂 (𝑛 2𝑑 · ( 𝐿 − 1)/ 2). The final step projects over 
+
+𝑛 − ( 𝐿 − 1) remaining items, costing 𝑂 (𝑛𝑑 ). Total: 
+
+𝑇 (pair ) 
+
+> proj
+
+= 𝑂 (𝑛 2𝑑 (𝐿 − 1)/ 2 + 𝑛𝑑 ) = 𝑂 (𝑛 2𝑑 ⌊𝐿 /2⌋ + 𝑛𝑑 ).
+
+Since 𝑛𝑑 ≪ 𝑛 2𝑑 ⌊𝐿 /2⌋ for 𝑛 ≥ 30 and 𝐿 ≥ 3, this is ≈ 𝑂 (𝑛 2𝑑𝐿 /2),same as the even-𝐿 case. The ratio to item-space is ≈ 𝑛 /2. □
+
+The deviation from the even-𝐿 ratios is: 
+
+Table 10: Speedup ratios for even vs. odd 𝐿 .
+
+𝐿 Fixed-cost 2𝐿 /( 𝐿 +1) KV-cache 4𝐿 2/( 𝐿 +1)2 Deviation from 4×
+
+6 (even) 2.00 × 4.00 × 0% 9 (odd) 1.80 × 3.24 × 19% 10 (even) 2.00 × 4.00 × 0% 11 (odd) 1.83 × 3.36 × 16% 20 (even) 2.00 × 4.00 × 0% 21 (odd) 1.91 × 3.61 × 10% 
+
+𝐿 → ∞ → 2× → 4× → 0% 
+
+For the typical industrial range 𝐿 ∈ [ 6, 12 ], the deviation is under 20%, well within experimental noise. 
+
+## A.3 Error Compounding (Theorem 4.2 Extension) 
+
+proposition 3 (Odd-𝐿 error compounding). Under the same setting as Theorem 4.2, for odd 𝐿 the reward sub-optimality bound is: 
+
+SubOpt pair ≤ 𝑂 
+
+
+
+𝑅 max · (𝐿 + 1)2
+
+4 · ¯𝜖 pair 
+
+
+
+,
+
+and the net improvement ratio satisfies: 
+
+SubOpt item 
+
+SubOpt pair 
+
+= 4𝐿 2
+
+(𝐿 + 1)2 · ¯𝜖 item 
+
+¯𝜖 pair 
+
+≤ 4 · ¯𝜖 item 
+
+¯𝜖 pair 
+
+.Conference acronym ’XX, June 0305, 2018, Woodstock, NY Chao F, et al. 
+
+Proof. The generation horizon is 𝐻 = (𝐿 + 1)/ 2 steps. By the same argument as Theorem 4, the sub-optimality under per-step error ¯𝜖 and horizon 𝐻 is 𝑂 (𝑅 max 𝐻 2 ¯𝜖 ).We refine the per-step error assignment. The first (𝐿 − 1)/ 2
+
+steps generate pair tokens, each with per-step mismatch ¯𝜖 pair . The final step generates a single item token with per-step mismatch 
+
+¯𝜖 item ≤ ¯𝜖 pair . The telescoping argument gives: 
+
+SubOpt pair ≤ 𝑅 max ·
+
+> (𝐿 +1)/ 2
+
+∑︁ 
+
+> 𝑡 =1
+> 𝑡
+
+∑︁  
+
+> 𝑡 ′=1
+
+¯𝜖 (𝑡 ′)≤ 𝑅 max ·
+
+> (𝐿 +1)/ 2
+
+∑︁ 
+
+> 𝑡 =1
+
+𝑡 · ¯𝜖 pair (since ¯𝜖 item ≤ ¯𝜖 pair )
+
+= 𝑅 max · ¯𝜖 pair · (𝐿 + 1)/ 2 · (( 𝐿 + 1)/ 2 + 1)
+
+2
+
+= 𝑂 
+
+
+
+𝑅 max · (𝐿 + 1)2
+
+4 · ¯𝜖 pair 
+
+
+
+.
+
+The ratio to item-space sub-optimality 𝑂 (𝑅 max 𝐿 2 ¯𝜖 item ) is: 
+
+SubOpt item 
+
+SubOpt pair 
+
+= 𝐿 2
+
+(( 𝐿 + 1)/ 2)2 · ¯𝜖 item 
+
+¯𝜖 pair 
+
+= 4𝐿 2
+
+(𝐿 + 1)2 · ¯𝜖 item 
+
+¯𝜖 pair 
+
+.
+
+Since 4𝐿 2/( 𝐿 + 1)2 < 4 for all finite 𝐿 , the odd-𝐿 ratio is strictly below the even-𝐿 ratio of 4 · ¯𝜖 item / ¯𝜖 pair , recovering it as 𝐿 → ∞ .
+
+Remark. The bound above uses the conservative estimate ¯𝜖 (𝑡 ′) ≤ 
+
+¯𝜖 pair for all steps. In practice, the final item-space step has strictly lower per-step error ( ¯𝜖 item ≤ ¯𝜖 pair ), which slightly tightens the bound. The effect is 𝑂 (1/𝐿 ) and negligible for 𝐿 ≥ 6. □
+
+## A.4 Summary 
+
+All theoretical guarantees extend to odd 𝐿 with the substitution 
+
+𝐿 /2 → ( 𝐿 + 1)/ 2. The resulting speedup and error-reduction ratios are 4𝐿 2/( 𝐿 + 1)2 ≤ 4, recovering the 4× factor asymptotically. For the industrial deployment regime 𝐿 ∈ [ 6, 12 ], the deviation from the even-𝐿 bound is under 20%, well within experimental variance. No special architectural modifications are required: the generator simply appends one item-space decoding step after the pair sequence. 
+
+## B Proof of time complexity 
+
+Proof. User encoder. Each of the 𝐻 enc layers processes 𝑏 tokens with full self-attention. For a single layer: (1) QKV projections: 3𝑑 2 per token × 𝑏 tokens = 𝑂 (3𝑑 2𝑏 ).(2) Output projection: 𝑑 2 per token × 𝑏 tokens = 𝑂 (𝑑 2𝑏 ).(3) Attention scores: query × key over all 𝑏 2 pairs = 𝑂 (𝑑 · 𝑏 2).(4) Weighted sum (value aggregation): 𝑂 (𝑑 · 𝑏 2).(5) FFN: 2𝑑𝑑 ff per token × 𝑏 tokens = 𝑂 (2𝑑𝑑 ff 𝑏 ).Per-layer total: 𝑂 (4𝑑 2𝑏 + 2𝑑𝑏 2 + 2𝑑𝑑 ff 𝑏 ) = 𝑂  (𝑑 2 + 𝑑𝑑 ff )𝑏 + 𝑑𝑏 2 .Over 𝐻 enc layers: 
+
+𝑇 user = 𝑂  𝐻 enc (𝑑 2 + 𝑑𝑑 ff )𝑏 + 𝐻 enc 𝑑𝑏 2 .
+
+This cost depends only on the user-history length 𝑏 and the en-coder architecture. It is independent of the decoding horizon 𝑆 and vocabulary size |V | , hence identical in item space and pair space. 
+
+Decoder. At step 𝑡 , each of the 𝐻 decoder layers computes three sub-modules: 
+
+(a) Self-attention over the decoder’s own KV cache of length 𝑡 :
+
+• QKV projections: 3𝑑 2 (for the single query token at step 𝑡 ). 
+
+• Attention scores: query × 𝑡 cached keys = 𝑂 (𝑡𝑑 ).
+
+• Weighted sum: 𝑂 (𝑡𝑑 ).
+
+• Output projection: 𝑑 2.Self-attention cost: 𝑂 (𝑑 2 + 𝑡𝑑 ).
+
+(b) Cross-attention over the user-encoder output Henc ∈ R𝑏 ×𝑑 :
+
+• Q projection: 𝑑 2 (for the query token). 
+
+• K, V projections: 2𝑑 2 (cached after the first step; amortized 
+
+𝑂 (1) per step). 
+
+• Attention scores: query × 𝑏 encoder keys = 𝑂 (𝑏𝑑 ).
+
+• Weighted sum: 𝑂 (𝑏𝑑 ).
+
+• Output projection: 𝑑 2.Cross-attention cost: 𝑂 (𝑑 2 + 𝑏𝑑 ).
+
+(c) FFN: 𝑂 (2𝑑𝑑 ff ).Per-layer cost at step 𝑡 :
+
+𝐶 layer (𝑡 ) = 𝑂 (𝑑 2 + 𝑡𝑑 + 𝑏𝑑 + 𝑑𝑑 ff ).
+
+Over 𝐻 layers: 
+
+𝐶 dec (𝑡 ) = 𝑂  𝐻 (𝑑 2 + 𝑡𝑑 + 𝑏𝑑 + 𝑑𝑑 ff ).
+
+Summing over 𝑡 = 1, . . . , 𝑆 :
+
+𝑇 core dec =
+
+> 𝑆
+
+∑︁  
+
+> 𝑡 =1
+
+𝐶 dec (𝑡 ) = 𝑂  𝐻 (𝑑 2 + 𝑑𝑑 ff + 𝑏𝑑 ) · 𝑆 + 𝐻𝑑𝑆 2 
+
+= 𝑂  𝐻 (𝑑 2 + 𝑑𝑑 ff + 𝑏𝑑 ) · 𝑆 | {z }
+
+> 𝑇 fixed
+
++ 𝑂 (𝐻𝑑𝑆 2)
+
+| {z }
+
+> 𝑇 kv
+
+.
+
+Output projection. At step 𝑡 , the decoder hidden state ℎ𝑡 ∈ R𝑑 
+
+is projected over the vocabulary: 
+
+logits 𝑡 = ℎ⊤ 
+
+> 𝑡
+
+𝐸 vocab , 𝐸 vocab ∈ R| V | × 𝑑 ,
+
+costing 𝑂 (|V | 𝑑 ) per step. Over 𝑆 steps: 
+
+𝑇 proj = 𝑂 (|V | 𝑑𝑆 ).
+
+This yields the comparison table in the theorem statement. □
+
+## C Proof of Error reduction 
+
+Proof. Step 1: Per-step error and state perturbation. At step 𝑡 , the policy 𝜋 samples action 𝑎 𝑡 ∼ 𝜋 (·| 𝑠 𝑡 ). Under the optimal policy 𝜋 ∗, the same state induces distribution 𝜋 ∗ (·| 𝑠 𝑡 ). The per-step TV mismatch is 
+
+TV  𝜋 (·| 𝑠 𝑡 ), 𝜋 ∗ (·| 𝑠 𝑡 ) ≤ ¯𝜖, 
+
+where ¯𝜖 = ¯𝜖 item in item space and ¯𝜖 = ¯𝜖 pair in pair space. In an autoregressive (deterministic-transition) MDP, the next state 𝑠 𝑡 +1 =
+
+𝑓 (𝑠 𝑡 , 𝑎 𝑡 ) is a deterministic function of the current state and action, so a distributional shift in 𝑎 𝑡 propagates directly to 𝑠 𝑡 +1.
+
+Step 2: Linear compounding in trajectory TV. By the chain rule for total variation under deterministic transitions: 
+
+TV  𝜋 (𝑠 1: 𝐻 ), 𝜋 ∗ (𝑠 1: 𝐻 ) ≤
+
+> 𝐻
+
+∑︁ 
+
+> 𝑡 =1
+
+TV  𝜋 (𝑎 𝑡 |𝑠 𝑡 ), 𝜋 ∗ (𝑎 𝑡 |𝑠 𝑡 ) ≤ 𝐻 · ¯𝜖. 
+
+Each step contributes at most ¯𝜖 to the trajectory mismatch; the contributions accumulate additively because each per-step error shifts the subsequent state distribution. Item space: 𝐻 = 𝐿 , bound 
+
+= 𝐿 · ¯𝜖 item . Pair space: 𝐻 = 𝐿 /2, bound = (𝐿 /2) · ¯𝜖 pair .PSG: Pair-Space Generation for Efficient Generative Reranking Conference acronym ’XX, June 0305, 2018, Woodstock, NY 
+
+Step 3: Quadratic compounding in reward sub-optimality. 
+
+By the Performance Difference Lemma [22]: 
+
+E[𝑅 (𝜋 ∗)] − E[𝑅 (𝜋 )] =
+
+> 𝐻
+
+∑︁ 
+
+> 𝑡 =1
+
+E𝑠 𝑡 ∼𝜋 
+
+𝐴 ∗ (𝑠 𝑡 , 𝑎 𝑡 ),
+
+where 𝐴 ∗ is the advantage function of 𝜋 ∗. The expectation is under 
+
+𝜋 ’s state visitation, not 𝜋 ∗’s. The state distribution at step 𝑡 has already been perturbed by errors at steps 1, . . . , 𝑡 −1. By a telescop-ing argument [ 37 ], each step 𝑡 ’s contribution is bounded by the cumulative state drift up to step 𝑡 :
+
+E𝑠 𝑡 ∼𝜋 
+
+𝐴 ∗ (𝑠 𝑡 , 𝑎 𝑡 ) ≤ 𝑅 max ·
+
+> 𝑡
+
+∑︁  
+
+> 𝑡 ′=1
+
+¯𝜖 = 𝑅 max · 𝑡 · ¯𝜖. 
+
+Summing over 𝑡 = 1, . . . , 𝐻 :
+
+E[𝑅 (𝜋 ∗)]− E[𝑅 (𝜋 )] ≤ 𝑅 max · ¯𝜖 ·
+
+> 𝐻
+
+∑︁ 
+
+> 𝑡 =1
+
+𝑡 = 𝑅 max · ¯𝜖 · 𝐻 (𝐻 + 1)
+
+2 = 𝑂  𝑅 max 𝐻 2 ¯𝜖  .
+
+The quadratic dependence arises because: (i) step 𝑡 ’s own error contributes ¯𝜖 to the reward gap; (ii) step 𝑡 ’s state was already shifted by the cumulative errors of steps 1, . . . , 𝑡 −1, each contributing an additional ¯𝜖 factor; (iii) total: ¯𝜖 + 2 ¯ 𝜖 + · · · + 𝐻 ¯𝜖 = ¯𝜖 · 𝐻 (𝐻 + 1)/ 2.Item space: 𝑂 (𝑅 max 𝐿 2 ¯𝜖 item ). Pair space: 𝑂 (𝑅 max (𝐿 /2)2 ¯𝜖 pair ).
+
+Step 4: Net improvement ratio. 
+
+SubOpt item 
+
+SubOpt pair 
+
+= 𝐿 2 ¯𝜖 item 
+
+(𝐿 /2)2 ¯𝜖 pair 
+
+= 4 · ¯𝜖 item 
+
+¯𝜖 pair 
+
+.
+
+The 4× comes from the quadratic compounding: halving the horizon squares the benefit. The offset ¯𝜖 pair / ¯𝜖 item reflects whether the pair space’s larger vocabulary degrades per-step accuracy. 
+
+Step 5: Verifying ¯𝜖 pair ≈ ¯𝜖 item in the deployment regime. (i) ¯𝜖 base : Baseline training noise. Softmax over 𝑛 2 vs. 𝑛 logits differs in concentration, but temperature scaling and top-𝑘 trun-cation (standard in GRPO) neutralize this effect. ¯𝜖 base is effectively 
+
+𝑘 -independent. 
+
+(ii) ¯𝜖 enc (2): Pair-encoder generalization error. For 𝑘 = 2:pretrain data density 𝜌 2 = 𝑁 logs /𝑛 2 ≈ 10 10 /1.6 × 10 5 ≈ 6 × 10 4 — the pair encoder is heavily over-determined. The cold-start fraction for reverse pairs is 1/2, addressed by the OAR pretraining loss (§3.4). Encoder error on 𝑛 2 pairs is comparable to the item-embedding error on 𝑛 items: ¯𝜖 enc (2) ≈ ¯𝜖 enc (1).
+
+(iii) ¯𝜖 cov (2): Coverage error from finite 𝐺 . GRPO group size 
+
+𝐺 = 32 (pair space) vs. 𝐺 = 16 (item space) compensates for the larger action space. GRPO’s advantage is a ranking statistic over 𝐺 
+
+samples, not a density estimate over |V | ; the coverage threshold is far below 𝐺 /𝑛 2. Empirically (§5.1.5), gradient variance at 𝐺 = 32 
+
+(pair) matches 𝐺 = 16 (item), giving ¯𝜖 cov (2) ≈ ¯𝜖 cov (1).Combining: ¯𝜖 pair ≈ ¯𝜖 item in the deployment regime, and the net improvement is ≈ 4×. □
+
+Remark 1 (Why the 4× dividend is conditional, not un-conditional). An unconditional claim “pair space always yields 4×
+
+improvement” would require ¯𝜖 pair ≤ ¯𝜖 item for all 𝑛 — which is false. As 𝑘 grows (beyond 𝑘 = 2), the vocabulary explodes ( 𝑛 𝑘 ), the encoder sees sparser pretrain data ( 𝜌 𝑘 ↓), and the cold-start fraction increases ((𝑘 ! − 1)/ 𝑘 !). Theorem 4.2 is honest about this: the 𝑘 2 factor is the horizon-reduction dividend; whether it survives in practice depends on 
+
+Table 11: Detailed comparison: item space vs. pair space.                                                                
+
+> Item Space ( 𝐻 =𝐿 , vocab =𝑛 )Pair Space ( 𝐻 =𝐿 /2, vocab =𝑛 2)Per-step TV mismatch ¯𝜖 item ¯𝜖 pair ≈¯𝜖 item
+> Trajectory TV bound 𝐿 ·¯𝜖 item (𝐿 /2) · ¯𝜖 pair →2×↓
+> Reward sub-optimality 𝑂 (𝑅 max 𝐿 2¯𝜖 item )𝑂 (𝑅 max (𝐿 /2)2¯𝜖 pair ) → 4×↓
+> Compounding mechanism Errors at step 𝑡 poison Fewer steps →shorter all steps 𝑡 ′>𝑡 ; drift ∝𝑡 compounding chain →less drift Source of quadratic gain —Horizon halving: 𝐻 2/( 𝐻 /2)2=4
+> Source of offset —¯𝜖 pair /¯𝜖 item (vocab expansion) Net ratio 14·¯𝜖 item /¯𝜖 pair
+
+the encoder regime. The framework’s value is that it exposes the trade-off — ¯𝜖 (𝑘 ) vs. (𝐿 /𝑘 )2 — allowing principled deployment decisions, rather than hiding it behind an unconditional but false guarantee. 
+
+Received 20 February 2024; revised 12 March 2024; accepted 5 June 2024

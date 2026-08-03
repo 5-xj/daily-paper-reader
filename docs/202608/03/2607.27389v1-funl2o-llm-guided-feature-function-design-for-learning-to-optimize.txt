@@ -1,0 +1,503 @@
+Title: FunL2O: LLM-Guided Feature Function Design for Learning to Optimize
+
+URL Source: https://arxiv.org/pdf/2607.27389v1
+
+Published Time: Fri, 31 Jul 2026 00:08:35 GMT
+
+Number of Pages: 16
+
+Markdown Content:
+# FunL2O: LLM-Guided Feature Function Design for Learning to Optimize 
+
+## Bingheng Li 1, Junyang Cai 2, Yupeng Zhang 3, Bistra Dilkina 2,Jayant Kalagnanam 4, Dzung T. Phan 4 
+
+> 1
+
+Michigan State University 2 University of Southern California  
+
+> 3
+
+University of Wisconsin–Madison 4 IBM Research libinghe@msu.edu, caijunya@usc.edu, yupeng.zhang@wisc.edu, dilkina@usc.edu, jayant@us.ibm.com,phandu@us.ibm.com 
+
+Abstract 
+
+Learning-to-optimize (L2O) methods accelerate repeated op-timization by training models to predict solutions, warm starts, branching decisions, or other forms of solver guidance. A crit-ical yet largely overlooked component of these pipelines is the feature function that maps problem instances to inputs for ma-chine learning models. Existing L2O methods typically rely on hand-crafted features, making representation design manual and largely fixed across domains. We introduce FunL2O, the 
+
+first unified framework for automating feature design through LLM-driven program evolution for L2O. In a FunSearch-style loop, an LLM proposes executable feature functions, while a fixed evaluation process retrains the original L2O model and measures downstream optimization performance. We evalu-ate FunL2O on linear and quadratic programming tasks in-volving solution prediction and warm-starting, as well as on mixed-integer optimization tasks using GNN-guided back-door branching and Predict-and-Search. Across continuous and discrete optimization tasks and four LLMs, the evolved features consistently outperform hand-crafted representa-tions. These results establish LLM-driven feature evolution as a general and effective approach to automating representa-tion design in L2O. 
+
+## Introduction 
+
+Many optimization problems are solved repeatedly with the same mathematical structure but different numerical data. Learning-to-optimize (L2O) methods exploit this regularity by training neural networks on previously solved instances (Andrychowicz et al. 2016; Chen et al. 2022). Depending on the pipeline, the learned component may predict a solu-tion, initialize an iterative algorithm, select a simplex basis or pivot, or guide mixed-integer search (Qian, Chételat, and Morris 2024; Li et al. 2024; Fan et al. 2023; Liu et al. 2024b; Han et al. 2023; Cai, Huang, and Dilkina 2025). Despite these varied roles, every L2O method begins with the same fun-damental design decision: how to represent an optimization instance using features that enable a learning model to train more effectively and capture the relevant problem structure. The feature function determines what information is di-rectly available to the model and how that information is structured. For linear and mixed-integer programs, the repre-sentation may encode objective coefficients, variable bounds 
+
+Copyright © 2027, Association for the Advancement of Artificial Intelligence (www.aaai.org). All rights reserved. 
+
+and types, graph structure, and properties of the LP relax-ation. When a useful relationship is made explicit, the model can exploit it directly; otherwise, it must infer that relation-ship from the available inputs. Consequently, changing only the input representation can affect both the model’s expres-sive power and its downstream performance (Sun et al. 2023; Chen et al. 2025; Cai et al. 2025b). Despite its importance, the feature function is typically hand-designed and fixed across problem domains before training. Most L2O research then focuses on the model archi-tecture, learning objective, or solver interface while leaving the input representation unchanged. Automating feature de-sign, however, is not simply a matter of feature selection. An L2O feature function is an executable program over struc-tured optimization data: it must preserve a model-specific tensor interface, satisfy semantic and dimensional invariants, and rely only on information available at deployment time. Moreover, its quality can be evaluated only after retraining the learner and measuring downstream performance. The rel-evant metric is role-dependent: prediction methods prioritize feasibility and objective quality, whereas solver policies seek to reduce iterations, pivots, search effort, or wall-clock time. To address this problem, we introduce FunL2O , the first LLM-guided framework for automatically designing exe-cutable feature functions for L2O. The framework defines clear rules for what information a feature function may use at deployment, what output format it must produce, and what conditions it must satisfy. Each valid candidate re-places the original fixed hand-crafted feature function in the L2O pipeline. The model is then retrained, and its downstream optimization performance is used to guide the search toward better feature functions. All other parts of the pipeline—including the model architecture, loss function, la-bels, training schedule, data, and solver—remain unchanged. This allows us to isolate the effect of the input representa-tion. After the best feature function is selected, it is used as standard preprocessing code and does not require an LLM at deployment. Our contributions are threefold. First, we formulate feature-function design as a program-search problem within the original L2O pipeline. We also introduce semantic con-tracts that define valid inputs and outputs for heterogeneous graphs, dense tensors, and solver states. Second, we de-velop an L2O-in-the-loop search process in which executable arXiv:2607.27389v1 [cs.LG] 29 Jul 2026 Figure 1: FunL2O searches over executable feature functions. Each proposal must satisfy a pipeline-specific semantic contract, after which the original L2O model is retrained and evaluated. Measured optimization outcomes determine the elite programs supplied to the next generation. feature functions are selected based on measured feasibil-ity and downstream optimization performance, rather than on LLM judgments. Third, we evaluate the framework on eight L2O pipelines covering LP and QP solution prediction, constrained nonlinear prediction, primal–dual warm start-ing, simplex basis initialization, pivot selection, and MILP search. Across these settings, the evolved features consis-tently outperform hand-crafted representations, improving solution quality, feasibility, and solver efficiency without changing the learned model or the optimization pipeline. 
+
+## Background 
+
+Learning to optimize. Learning-to-optimize (L2O) trains a model on related problem instances to predict a solution or guide an optimization algorithm (Andrychowicz et al. 2016; Chen et al. 2022). Given an instance x, an L2O pipeline can be written as 
+
+x ϕ
+
+−→ X M
+
+−→ a S
+
+−→ by, (1) where ϕ is the feature function, M is the learned model, a is a predicted solution or solver directive, and S is the down-stream solver. Depending on the learned role, the outcome by
+
+is evaluated by feasibility, objective quality, iterations, pivots, or wall time. 
+
+Feature functions. The feature function transforms struc-tured optimization data into tensors consumed by the model. For an LP or MILP, 
+
+min c⊤x : Ax ≤ b, ℓ ≤ x ≤ u, x j ∈ Z (j ∈ I ) , (2) a common representation is a bipartite graph with variable and constraint nodes and an edge for each nonzero coefficient of A (Gasse et al. 2019). Features may encode objective coefficients, bounds, variable types, constraint statistics, and LP-relaxation information. These choices determine which numerical and structural relations are directly available to the learner. 
+
+Learned solver guidance. Some L2O models predict so-lutions directly, while others guide a classical solver through warm starts, simplex bases, pivot scores, partial assignments, or branching priorities. For solver-facing roles, prediction ac-curacy is only an intermediate metric: the primary objective is to reduce the work performed by the solver. Accordingly, 
+
+FunL2O evaluates each feature function using the native downstream metric of its host pipeline. 
+
+Mixed-integer Prediction. We consider two MILP-related prediction tasks. Predict-and-Search predicts binary-variable marginals and searches a trust region around the result-ing partial assignment (Han et al. 2023; Huang et al. 2024). Learned backdoors rank important variables and as-sign higher branching priorities to the top predictions (Cai, Huang, and Dilkina 2024). In both cases, FunL2O changes only the feature function, leaving the model, training proce-dure, and solver fixed. 
+
+## Methodology 
+
+FunL2O takes an existing L2O pipeline P and its handcrafted feature function ϕ0, and returns an evolved feature function as executable code. The search changes only the representation: the model architecture, training procedure, hyperparameters, data, learned role, and downstream solver remain fixed. As shown in Figure 1, an LLM proposes candidate functions, a semantic contract checks their validity, and the original pipeline evaluates valid candidates by retraining the model and measuring the native optimization outcome. The highest-ranked programs guide subsequent proposals. Feature-Function Search 
+
+Consider an L2O pipeline P with a learned model Mθ , a training procedure, and an optional downstream solver oper-ation SP . Let x ∈ X P denote an optimization instance or a solver state. A feature function 
+
+ϕ : XP → Z P (dϕ) (3) maps x to a representation of width dϕ. The model uses this representation to produce a learned output: 
+
+zϕ(x) = ϕ(x),aϕ(x) = M (dϕ)
+
+> θ⋆ϕ
+
+ zϕ(x). (4) The learned output is then passed to the remaining optimiza-tion pipeline: 
+
+byϕ(x) = SP
+
+ x, a ϕ(x). (5) The output aϕ(x) may be a predicted solution, a primal– dual initialization, a basis-status prediction, or a pivot score. When the model directly predicts the final solution, SP is the identity map. Existing L2O methods provide a handcrafted feature func-tion ϕ0. FunL2O keeps the rest of P fixed and searches for a replacement ϕ. A model trained with one representation can-not be reused to evaluate another representation. Therefore, every candidate induces a new training problem: 
+
+θ⋆ϕ = Train P (ϕ; Dtr ) . (6) If dϕ differs from the width of the handcrafted representation, the input layer is instantiated at the corresponding width. This is a mechanical interface change: the model template, hidden architecture, loss, optimizer, training schedule, and other hyperparameters are not searched. After training, the candidate is evaluated on the validation set. We write 
+
+mP (ϕ) = Agg x∈D val μP (x, byϕ(x)) (7) for its measured outcome, where μP is defined by the original pipeline. Depending on the learned role, mP may contain feasibility rate, constraint violation, objective gap, iteration count, running time, or pivot count. These outcomes are compared through a pipeline-specific ranking key 
+
+ρP (ϕ) = ( bP (ϕ), v P (ϕ), q P (ϕ)) , (8) ordered lexicographically with lower values preferred. The first component bP indicates whether the required feasibility condition is violated. The second component vP measures the degree of infeasibility, and the third component qP mea-sures objective quality or solver work. For tasks without a feasibility condition, the first two components are set to zero. The sign of qP is chosen so that lower is always better; for example, it may be objective gap, iteration count, pivot count, or the negative of iteration saving. The feature-design problem is therefore 
+
+ϕ⋆ ∈ arg min 
+
+> ϕ∈ΦP
+
+ρP (ϕ). (9) The minimization in Equation 9 follows the lexicographic or-der. It prevents an infeasible prediction from being preferred only because it has a better objective value. It also allows the same outer problem to represent prediction quality, warm-start effectiveness, and learned solver decisions. Equation 9 presents two difficulties. First, the admissi-ble space ΦP differs across pipelines because their inputs and model interfaces differ. Second, the outer objective is an expensive black box because evaluating one candidate re-quires model training and may also require a complete solver run. FunL2O addresses the first difficulty through semantic feature contracts and the second through a feedback-driven search over measured outcomes. 
+
+Semantic Feature Contracts 
+
+A semantic feature contract specifies which feature functions belong to ΦP . For pipeline P, we define 
+
+CP = ( UP , ZP , IP , V P ) . (10) Here, UP contains the instance fields or solver-state informa-tion available at deployment. The output specification ZP
+
+defines the required return type, orientation, and maximum feature width. The invariants IP describe properties that must be preserved, such as determinism, finite outputs, and required handcrafted channels. Finally, VP is an executable validator for these requirements. The contract defines the intended admissible space 
+
+ΦP =
+
+
+
+ϕ ∈ H safe    
+
+> Fields( ϕ)⊆U P,ϕ(x)∈Z P(dϕ),
+> IP(ϕ,x )=1
+
+
+
+. (11) Here, Hsafe denotes executable functions allowed by the re-stricted environment. A candidate may combine information already available to the original method, but it cannot ac-cess reference solutions, training labels, files, networks, or external solvers. The output specification remains pipeline-specific. Agraph model may require separate variable and constraint features, whereas a constrained predictor may expect a dense tensor and a pivot model may expect one feature vector per solver-state node. This allows FunL2O to share one search procedure without forcing different L2O methods into a com-mon representation. Table 1 summarizes how the seman-tic contract and native evaluation criterion are instantiated across the host pipelines. Although the feature interface and learned role vary, the proposal, validation, retraining, and selection procedure remains unchanged. When the original representation must be retained, the contract requires the candidate to preserve its channels. In the common append-only case, the candidate has the form 
+
+ϕ(x) = Concat ( ϕ0(x), ψ (x)) , (12) where ψ contains the newly proposed features. For structured outputs, the same requirement is applied separately to the relevant variable, constraint, edge, or global channels. In implementation, VP first applies a static guard to the candidate source and then executes it on a small probe in-stance. The validator checks the function signature, output Table 1: Instantiation of FunL2O across the host L2O pipelines. In every case, the feature function is searched while the learned output, training procedure, and downstream solver interface remain fixed.                                                              
+
+> Host method Training signal Problem class Learned output Primary metric Secondary metric IPM-MPNN (Qian, Chételat, and Morris 2024) supervised LP primal solution objective gap ↓feasibility ↑
+> FSNet (Nguyen and Donti 2026) self-supervised QP/QCQP/SOCP constrained solution optimality gap ↓feasibility@ 10 −4↑
+> DC3 (Donti, Rolnick, and Kolter 2021) self-supervised constrained QP corrected solution optimality gap ↓feasibility@ 10 −4↑
+> PDHG-Net (Li et al. 2024) supervised PageRank LP primal–dual warm start iteration saving ↑time saving ↑
+> Smart Initial Basis (Fan et al. 2023) supervised set-cover LP initial basis status iteration saving ↑node accuracy ↑
+> Learning to Pivot (Liu et al. 2024b) supervised set-cover LP pivot scores pivot-count gmean ↓top-1 accuracy ↑
+> Predict-and-Search (Han et al. 2023) supervised MILP partial assignment primal gap ↓primal integral ↓
+> Learned Backdoors (Cai, Huang, and Dilkina 2024) supervised MILP branching priorities wall time ↓win rate ↑
+
+structure, feature dimensions, numerical finiteness, and re-quired seed channels. A failed check returns the violated con-dition to the proposal model. Passing VP establishes interface validity only; whether a function is useful is determined by retraining and evaluating it according to Equations 6–8. 
+
+Standardized Prompt Construction 
+
+The semantic contract determines whether a feature function can be used by the original pipeline. To propose a useful func-tion, the LLM must also know how candidates are evaluated and which relations have already been explored. FunL2O or-ganizes this information through one prompt template shared by all pipelines. At generation g, the prompt is constructed as 
+
+pg = T (R, CP , G, Eg , Fg ) . (13) The shared instructions R state that only the feature function may change and that the returned function must be determin-istic and executable. The contract CP supplies the available inputs, function signature, output structure, and pipeline-native evaluation rule. The shared vocabulary G describes broad relations that may be useful in optimization representations, including raw problem quantities, scale, residual, curvature, bound, cone, and graph statistics. These groups guide the proposal model but do not define a fixed library of allowed features. The generation-specific context Eg contains the source code, feature width, and validation outcome of the current elite functions. The feedback Fg contains a contract error or a summary of whether the preceding generation improved the current best. Given this prompt, the proposal model Qω generates a population of candidate feature functions: 
+
+eΦg ∼ Qω ( · | pg ) . (14) The model is asked to identify a useful relation that the cur-rent representation may not expose and to implement it as one feature function. It receives aggregate validation outcomes and candidate source code, but it does not receive validation instances, target solutions, or test results. The LLM there-fore proposes feature computations; it does not predict their performance. 
+
+L2O-in-the-Loop Search 
+
+The search begins by evaluating the handcrafted function 
+
+ϕ0. Its source code, feature width, measured outcome, and ranking key initialize the search memory: 
+
+M0 = {(ϕ0, d ϕ0 , mP (ϕ0), ρ P (ϕ0)) } . (15) The handcrafted function therefore serves both as the perfor-mance baseline and as the first valid example of the semantic contract. At generation g, FunL2O constructs pg from the contract and the current memory, and samples the proposed popula-tion eΦg . Candidates that pass the validator form 
+
+Φg =
+
+n
+
+ϕ ∈ eΦg : VP (ϕ) = 1 
+
+o
+
+. (16) If validation fails, the violated condition is appended to the prompt and the proposal model is asked to repair the function. A function is submitted for training only after it passes the contract. Every ϕ ∈ Φg replaces ϕ0 in a fresh copy of the origi-nal pipeline. The corresponding model is trained using the original data, loss, optimizer, and schedule, and its outcome is measured by μP . Candidates within a generation are in-dependent given the current memory and can therefore be trained and evaluated in parallel. After evaluation, the search memory is updated as 
+
+Mg+1 = Mg ∪ (ϕ, d ϕ, mP (ϕ),ρP (ϕ)) : ϕ ∈ Φg . (17) The elite functions supplied to the next prompt are selected by 
+
+Eg+1 = TopK ρP (Mg+1 ) , (18) where TopK ρP returns the K entries with the lowest pipeline-specific ranking keys. The same proposal, valida-tion, evaluation, and memory update are used for every L2O pipeline. Only the contract CP , outcome measure μP , and ranking key ρP change. After the final generation, FunL2O returns the lowest-ranked valid feature function in the mem-ory. The selected function is ordinary executable preprocess-ing code. Neither the proposal model nor the search memory is required during deployment. Table 2: Results across continuous-optimization L2O pipelines. Prediction gaps and solver costs are lower-is-better; saving metrics and accuracy are higher-is-better. Prediction results show clean-test medians over four paired searches. Feasibility is reported as handcrafted to FunL2O . Positive IR always denotes improvement. Host Task or metric Handcrafted FunL2O Improvement Feasibility (H → F) 
+
+Panel A: LP solution prediction 
+
+IPM-MPNN Independent set objective gap 0.00365 0.00306 16.4% 0.914 → 0.920 Set cover objective gap 0.01207 0.00611 49.4% 0.957 → 0.942 Combinatorial auction objective gap 0.02217 0.01660 25.1% 0.874 → 0.883 Facility location objective gap 0.02303 0.01813 21.3% 0.988 → 0.941 GNNLP objective gap 0.00499 0.00383 23.2% 0.979 → 0.979 
+
+Panel B: Constrained solution prediction 
+
+FSNet Convex QP gap 0.685 0.363 47.0% 0.938 → 1.000 Convex QCQP gap 14.09 8.61 38.9% 1.000 → 1.000 Convex SOCP gap 42.33 22.52 46.8% 1.000 → 1.000 Nonconvex QP gap 5.46 5.46 0.0% 1.000 → 1.000 Nonconvex QCQP gap 26.42 19.26 27.1% 1.000 → 1.000 Nonconvex SOCP gap 933.85 141.28 84.9% 0.250 → 1.000 Nonsmooth nonconvex QP gap 5.20 5.20 0.0% 1.000 → 1.000 Nonsmooth nonconvex QCQP gap 22.69 22.69 0.0% 1.000 → 1.000 Nonsmooth nonconvex SOCP gap 332.33 159.38 52.0% 0.750 → 1.000 DC3 Convex QP gap 13.01 12.65 2.8% 0.986 → 0.986 Nonconvex QP gap 15.62 15.31 2.0% 0.848 → 0.849 Nonsmooth nonconvex QP gap 15.96 15.28 4.3% 0.855 → 0.861 
+
+Panel C: Solver-facing learned roles 
+
+PDHG-Net Iteration saving ↑ 42.44% 51.05% 20.3% –Time saving ↑ 34.03% 39.28% 15.4% –Smart Initial Basis Iteration saving ↑ 59.28% 60.24% 1.62% –Learning to Pivot Pivot-count geometric mean ↓ 1162.86 857.78 26.2% –Top-1 accuracy ↑ 0.5264 0.5313 0.9% –
+
+## Experiments 
+
+Experimental Setup 
+
+Table 1 summarizes the eight host pipelines. The continuous-optimization study includes IPM-MPNN for LP solution pre-diction (Qian, Chételat, and Morris 2024); FSNet and DC3 for constrained prediction (Donti, Rolnick, and Kolter 2021; Nguyen and Donti 2026); PDHG-Net for PageRank LP warm starts (Li et al. 2024); and Smart Initial Basis and Learning to Pivot for set-cover simplex decisions (Fan et al. 2023; Liu et al. 2024b). The MILP study includes Predict-and-Search and learned backdoor branching on CA, MIS, and MVC in-stances (Han et al. 2023; Cai, Huang, and Dilkina 2024). In every experiment, FunL2O modifies only the feature func-tion. For all pipelines, candidate feature functions are selected on validation instances and evaluated on a disjoint test set, with no overlap among the training, validation, and test in-stances. Each search consists of eight iterations with six pro-posal slots. We repeat every experiment with three differ-ent random seeds and report the mean. For the continuous-optimization experiments, we run FunL2O with four frontier LLMs: Claude-Opus-4.8 (Anthropic 2026), GPT-5.5 (Ope-nAI 2026), Gemini-3.1-Pro Preview (Google DeepMind 2026), and DeepSeek-Math-V2 (Shao et al. 2025). For the MILP experiments, we use Claude-Opus-4.8 and GPT-5.5. Predict-and-Search runs CPLEX (Manual 1987) with a 1000-second time limit, whereas the backdoor-branching experi-ments use a 600-second CPLEX time limit. 
+
+Metrics. Solution-prediction hosts retain their original ob-jective gap and feasibility criteria. IPM-MPNN reports the relative objective gap, while FSNet and DC3 report the gap in percent and measure feasibility using a constraint-violation threshold of 10 −4.For solver-facing pipelines, iteration saving is 100 C−HC ,
+
+where C and H are the cold-start and learned-start itera-tion counts; time saving is defined analogously. Learning to Pivot reports the geometric mean pivot count. For a lower-is-better metric with handcrafted result B and FunL2O result 
+
+F , the improvement rate is IR = 100 B−F 
+
+> |B|
+
+. For higher-is-better metrics, the numerator is F − B, so positive IR always denotes improvement. For P&S, final primal gap and primal integral are lower-is-better, with the primal integral additionally rewarding meth-ods that find strong incumbents earlier. Learned backdoors Table 3: Results for mixed-integer search. For Predict-and-Search, final primal gap and primal integral are lower-is-better. For learned backdoors, mean wall time is lower-is-better and win rate is higher-is-better. Bold indicates the better evolved feature function in each row. Domain Metric Default Solver Handcrafted FunL2O -Claude FunL2O -GPT 
+
+Panel A: Predict-and-Search 
+
+CA final primal gap (%) 0.841 0.423 0.350 1.023 primal integral 11.23 10.61 9.00 14.18 MIS final primal gap (%) 1.317 0.699 0.213 0.095 
+
+primal integral 25.64 20.89 12.78 14.27 MVC final primal gap (%) 0.032 0.018 0.013 0.015 primal integral 20.08 13.85 7.40 3.69 
+
+Panel B: Learned backdoor branching 
+
+CA mean wall time (s) 167.2 154.6 148.4 147.6 
+
+win rate (%) 8 20 31 41 
+
+MIS mean wall time (s) 102.6 59.1 50.2 46.0 
+
+win rate (%) 0 21 30 49 
+
+MVC mean wall time (s) 24.7 31.6 18.9 20.4 win rate (%) 13 4 37 46 
+
+are evaluated by mean wall time. We also report the percent-age of instances on which each method is the fastest. 
+
+Results Across L2O Pipelines 
+
+Continuous optimization. Table 2 summarizes all continuous-optimization results. On IPM-MPNN, FunL2O 
+
+reduces the median objective gap on all five LP distribu-tions. The reductions range from 16 .4% on independent set to 49 .4% on set cover, demonstrating consistent gains across structurally different LP families. The improvements extend to self-supervised constrained prediction. On the nine 1000-variable FSNet tasks, FunL2O 
+
+improves six displayed medians and matches the remaining three. The largest gains occur on SOCP-constrained prob-lems, where the gap decreases by 46 .8% , 84 .9% , and 52 .0% 
+
+across the convex, nonconvex, and nonsmooth nonconvex ob-jectives. On nonconvex SOCP, the gap falls from 933 .85% to 
+
+141 .28% , while feasibility increases from 0.25 to 1.00 . DC3 also improves across all three QP variants, with reductions of 2.0% –4.3% .The evolved features also improve solver-facing learned roles. For PDHG-Net, iteration saving increases from 
+
+42 .44% to 51 .05% , and time saving increases from 34 .03% to 
+
+39 .28% . Learning to Pivot reduces the geometric mean pivot count from 1162 .86 to 857 .78 , a 26 .2% improvement. Its top-1 accuracy changes only modestly, indicating that down-stream solver progress can improve substantially even when local prediction accuracy changes little. Smart Initial Basis also increases iteration saving, from 59 .28% to 60 .24% .
+
+Mixed-integer Prediction. Table 3 evaluates evolved fea-ture functions for two learned MILP search strategies. For Predict-and-Search, the best FunL2O variant outperforms the handcrafted features on both metrics across all three domains. The final primal gap decreases from 0.423% to 
+
+0.350% on CA, from 0.699% to 0.095% on MIS, and from 
+
+0.018% to 0.013% on MVC. The corresponding primal in-tegrals decrease from 10 .61 to 9.00 , from 20 .89 to 12 .78 ,and from 13 .85 to 3.69 , respectively. These results indicate that the evolved representations help Predict-and-Search find stronger incumbents earlier. For learned backdoor branching, both FunL2O -Claude and FunL2O -GPT reduce mean wall time relative to the handcrafted features on all three domains. The best evolved functions achieve mean wall times of 147 .6 seconds on CA, 
+
+46 .0 seconds on MIS, and 18 .9 seconds on MVC. Relative to the default solver, these results correspond to reductions of 
+
+11 .7% , 55 .2% , and 23 .5% , respectively. The evolved func-tions also achieve the highest win rates on every domain, reaching 41% on CA, 49% on MIS, and 46% on MVC. To-gether, these results show that feature evolution extends be-yond continuous optimization to learned partial assignments and branching priorities for MILP search. 
+
+Analysis of the Evolved Features 
+
+Semantic structure versus feature width. We compare evolved functions with matched-width random projections wherever the host interface supports an append-only con-trol. On PDHG-Net, iteration saving rises from 35 .59% with handcrafted features to 45 .19% with random features and 
+
+47 .99% with FunL2O . Evolved functions also outperform matched-width random controls on four of the five IPM-MPNN distributions. These comparisons indicate that the gains often reflect optimization-relevant structure beyond the effect of increasing the input dimension. 
+
+Inspecting the evolved programs. The returned pro-grams expose recognizable optimization relationships. For set cover, they normalize variable costs by column coverage and constraint signals by row coverage. For PageRank LPs, they compare row and column mass and degree, exposing asymmetry in the directed graph. For nonlinear problems, they construct multiscale representations using magnitude, sign, logarithmic, squared, normalized, and local-difference transformations. The MILP programs combine variable types and objective coefficients with LP-relaxation values, frac-tionality, reduced costs, row and column statistics, and nor-malized constraint signals. Because the selected functions are ordinary preprocessing code, these transformations can be inspected directly and deployed without an LLM. 
+
+Proposal-model dependence. Across the continuous ex-periments shared by all four LLMs, Claude-Opus-4.8 , GPT-5.5, Gemini-3.1-Pro Preview, and DeepSeek-Math-V2 im-prove 15, 17, 17, and 6 cells, respectively. In the MILP exper-iment, Claude-Opus-4.8 and GPT-5.5 both produce feature functions that reduce backdoor-branching wall time across CA, MIS, and MVC, while the best proposal-model variant also improves both Predict-and-Search metrics on all three domains. These results show that FunL2O is not tied to a single LLM provider, although stronger proposal models generate successful feature functions more reliably. 
+
+## Related Work 
+
+Learning to optimize. Learning-to-optimize replaces or augments part of an optimization procedure with a model trained on related instances (Andrychowicz et al. 2016; Chen et al. 2022). Prior work learns update rules, predicts solu-tions, or guides classical solvers through warm starts, basis selection, pivoting, partial assignments, and branching deci-sions (Wichrowska et al. 2017; Chen et al. 2020; Harrison, Metz, and Sohl-Dickstein 2022; Yang et al. 2023; Donti, Rolnick, and Kolter 2021; Nguyen and Donti 2026; Qian, Chételat, and Morris 2024; Sambharya et al. 2024; Li et al. 2024; Fan et al. 2023; Liu et al. 2024b; Han et al. 2023; Cai, Huang, and Dilkina 2024). These methods typically keep the input representation fixed. In contrast, FunL2O searches over executable feature functions while leaving the model, training procedure, prediction target, and solver interface un-changed. 
+
+Representations for optimization. Optimization prob-lems are often represented as variable–constraint bipartite graphs (Gasse et al. 2019). Their node and edge features determine what information is available to the model and can limit expressiveness even when the architecture is fixed (Chen et al. 2025). Prior work has proposed specialized or manually designed features for particular problem classes and applications (Qian, Chételat, and Morris 2024; Cai et al. 2025b,a). FunL2O instead automates representation design by evaluating executable feature functions through the com-plete L2O pipeline. 
+
+LLM-guided program and feature search. FunSearch and related systems use LLMs to generate executable pro-grams that are selected by an external evaluator (Romera-Paredes et al. 2024; Liu et al. 2024a; Ye et al. 2024; Van Stein and Bäck 2024; Novikov et al. 2025). LLMs have also been used to construct features for tabular prediction (Hollmann, Müller, and Hutter 2023; Abhyankar, Shojaee, and Reddy 2025). FunL2O applies this idea to structured optimization data and solver states: candidates must satisfy a pipeline-specific semantic contract and are evaluated only after re-training the unchanged L2O model and measuring down-stream optimization performance. 
+
+## Discussion 
+
+FunL2O automates a previously fixed component of the L2O pipeline: the feature function. Whereas existing meth-ods learn solver actions from hand-designed representations, 
+
+FunL2O optimizes the representation itself using down-stream optimization performance. This enables a unified framework to improve pipelines with different model archi-tectures, training objectives, and learned outputs. The evolved programs are especially effective when hand-crafted features omit useful structural relationships. They often combine problem-specific quantities, such as cost and coverage, PageRank imbalance, nonlinear transformations, or LP-relaxation statistics. Because the output is executable code, each evolved program serves both as a deployable fea-ture function and as an interpretable hypothesis about what information the original representation lacked. We inten-tionally use a simple evolutionary loop so that performance gains can be attributed primarily to feature quality rather than to search-engineering choices. More sophisticated selection, mutation, and crossover mechanisms are complementary to our contribution and could be incorporated in future work. A natural concern is that program search may overfit the finite set of instances used during evolution. To reduce this risk, all candidate selection is performed on validation in-stances, while final performance is reported only on disjoint test sets. The consistent test-set gains suggest that the evolved features generalize beyond the instances used for candidate ranking. The main limitation is the offline search cost, since each valid candidate requires retraining the host model and evaluating downstream performance. However, the LLM is not needed after the search, so deployment cost remains un-changed. In repeated-optimization settings, this offline cost can be amortized over many future instances (Chen et al. 2022). 
+
+## Conclusion 
+
+L2O methods learn how to act on optimization problems, but typically inherit a handcrafted representation of those prob-lems. FunL2O makes this representation searchable. Within a semantic contract, an LLM proposes executable feature functions whose value is determined by retraining the un-changed L2O pipeline and measuring downstream optimiza-tion performance. Across LP, QP, constrained nonlinear, and mixed-integer optimization, evolved features improve solu-tion prediction, warm starting, simplex decisions, and MILP search without changing the underlying models or solvers. The selected programs require no LLM at deployment and ex-pose interpretable relations that the original representations omitted. These results establish feature-function design as a distinct and automatable component of learning to optimize. Acknowledgment 
+
+This paper reports on research conducted while Bingheng Li, Junyang Cai, and Yupeng Zhang interned at IBM Research, Yorktown Heights, New York, US. 
+
+## References 
+
+Abhyankar, N.; Shojaee, P.; and Reddy, C. K. 2025. Llm-fe: Automated feature engineering for tabular data with llms as evolutionary optimizers. arXiv preprint arXiv:2503.14434 .Andrychowicz, M.; Denil, M.; Gomez, S.; Hoffman, M. W.; Pfau, D.; Schaul, T.; Shillingford, B.; and De Freitas, N. 2016. Learning to learn by gradient descent by gradient descent. 
+
+Advances in neural information processing systems , 29. Anthropic. 2026. Introducing Claude Opus 4.8. https://www. anthropic.com/news/claude-opus-4-8. Cai, J.; Huang, T.; and Dilkina, B. 2024. Learning Back-doors for Mixed Integer Linear Programs with Contrastive Learning. In ECAI 2024 , 2418–2425. IOS Press. Cai, J.; Huang, T.; and Dilkina, B. 2025. Multi-task Repre-sentation Learning for Mixed Integer Linear Programming. In International Conference on the Integration of Constraint Programming, Artificial Intelligence, and Operations Re-search , 134–151. Cai, J.; Huang, W.; Long, B.; Cleaveland, M.; Deshmukh, J. V.; Lindemann, L.; and Dilkina, B. 2025a. Neuro-symbolic acceleration of milp motion planning with temporal logic and chance constraints. arXiv preprint arXiv:2508.07515 .Cai, J.; Raqabi, E. M. E.; Van Hentenryck, P.; and Dilk-ina, B. 2025b. ID-PaS: Identity-Aware Predict-and-Search for General Mixed-Integer Linear Programs. arXiv preprint arXiv:2512.10211 .Chen, Q.; Li, L.; Li, Q.; Wu, J.; Wang, A.; Sun, R.; Luo, X.; Chang, T.-H.; and Shi, Q. 2025. When GNNs meet symme-try in ILPs: an orbit-based feature augmentation approach. In 
+
+The Thirteenth International Conference on Learning Rep-resentations .Chen, T.; Chen, X.; Chen, W.; Heaton, H.; Liu, J.; Wang, Z.; and Yin, W. 2022. Learning to optimize: A primer and a benchmark. Journal of Machine Learning Research ,23(189): 1–59. Chen, T.; Zhang, W.; Jingyang, Z.; Chang, S.; Liu, S.; Amini, L.; and Wang, Z. 2020. Training stronger baselines for learn-ing to optimize. Advances in Neural Information Processing Systems , 33: 7332–7343. Donti, P. L.; Rolnick, D.; and Kolter, J. Z. 2021. DC3: A Learning Method for Optimization with Hard Constraints. In International Conference on Learning Representations .Fan, Z.; Wang, X.; Yakovenko, O.; Sivas, A. A.; Ren, O.; Zhang, Y.; and Zhou, Z. 2023. Smart initial basis selection for linear programs. In International conference on machine learning , 9650–9664. PMLR. Gasse, M.; Chételat, D.; Ferroni, N.; Charlin, L.; and Lodi, A. 2019. Exact combinatorial optimization with graph con-volutional neural networks. Advances in neural information processing systems , 32. Google DeepMind. 2026. Gemini 3.1 Pro. https://deepmind. google/models/model-cards/gemini-3-1-pro/. Han, Q.; Yang, L.; Chen, Q.; Zhou, X.; Zhang, D.; Wang, A.; Sun, R.; and Luo, X. 2023. A GNN-Guided Predict-and-Search Framework for Mixed-Integer Linear Programming. In The Eleventh International Conference on Learning Rep-resentations .Harrison, J.; Metz, L.; and Sohl-Dickstein, J. 2022. A closer look at learned optimization: Stability, robustness, and in-ductive biases. Advances in neural information processing systems , 35: 3758–3773. Hollmann, N.; Müller, S.; and Hutter, F. 2023. Large lan-guage models for automated data science: Introducing caafe for context-aware automated feature engineering. Advances in Neural Information Processing Systems , 36: 44753– 44775. Huang, T.; Ferber, A. M.; Zharmagambetov, A.; Tian, Y.; and Dilkina, B. 2024. Contrastive predict-and-search for mixed integer linear programs. In Forty-first International Conference on Machine Learning .Li, B.; Yang, L.; Chen, Y.; Wang, S.; Mao, H.; Chen, Q.; Ma, Y.; Wang, A.; Ding, T.; Tang, J.; et al. 2024. PDHG-unrolled learning-to-optimize method for large-scale linear program-ming. In Proceedings of the 41st International Conference on Machine Learning , 29164–29180. Liu, F.; Xialiang, T.; Yuan, M.; Lin, X.; Luo, F.; Wang, Z.; Lu, Z.; and Zhang, Q. 2024a. Evolution of Heuristics: Towards Efficient Automatic Algorithm Design Using Large Language Model. In Forty-first International Conference on Machine Learning .Liu, T.; Pu, S.; Ge, D.; and Ye, Y. 2024b. Learning to pivot as a smart expert. In Proceedings of the aaai conference on artificial intelligence , volume 38, 8073–8081. Manual, C. U. 1987. Ibm ilog cplex optimization studio. 
+
+Version , 12(1987-2018): 1. Nguyen, H.; and Donti, P. 2026. Fsnet: Feasibility-seeking neural network for constrained optimization with guaran-tees. Advances in neural information processing systems ,38: 39670–39708. Novikov, A.; V˜ u, N.; Eisenberger, M.; Dupont, E.; Huang, P.-S.; Wagner, A. Z.; Shirobokov, S.; Kozlovskii, B.; Ruiz, F. J.; Mehrabian, A.; et al. 2025. Alphaevolve: A coding agent for scientific and algorithmic discovery. arXiv preprint arXiv:2506.13131 .OpenAI. 2026. Introducing GPT-5.5. https://openai.com/ index/introducing-gpt-5-5/. Qian, C.; Chételat, D.; and Morris, C. 2024. Exploring the power of graph neural networks in solving linear optimiza-tion problems. In International conference on artificial in-telligence and statistics , 1432–1440. PMLR. Romera-Paredes, B.; Barekatain, M.; Novikov, A.; Balog, M.; Kumar, M. P.; Dupont, E.; Ruiz, F. J.; Ellenberg, J. S.; Wang, P.; Fawzi, O.; et al. 2024. Mathematical discoveries from program search with large language models. Nature ,625(7995): 468–475. Sambharya, R.; Hall, G.; Amos, B.; and Stellato, B. 2024. Learning to warm-start fixed-point optimization algorithms. 
+
+Journal of Machine Learning Research , 25(166): 1–46. Shao, Z.; Luo, Y.; Lu, C.; Ren, Z.; Hu, J.; Ye, T.; Gou, Z.; Ma, S.; and Zhang, X. 2025. Deepseekmath-v2: To-wards self-verifiable mathematical reasoning. arXiv preprint arXiv:2511.22570 .Sun, J.; Zhang, L.; Chen, G.; Xu, P.; Zhang, K.; and Yang, Y. 2023. Feature expansion for graph neural networks. In Inter-national Conference on Machine Learning , 33156–33176. PMLR. Van Stein, N.; and Bäck, T. 2024. Llamea: A large language model evolutionary algorithm for automatically generating metaheuristics. IEEE Transactions on Evolutionary Compu-tation , 29(2): 331–345. Wichrowska, O.; Maheswaranathan, N.; Hoffman, M. W.; Colmenarejo, S. G.; Denil, M.; Freitas, N.; and Sohl-Dickstein, J. 2017. Learned optimizers that scale and gen-eralize. In International conference on machine learning ,3751–3760. PMLR. Yang, J.; Chen, X.; Chen, T.; Wang, Z.; and Liang, Y. 2023. M-l2o: Towards generalizable learning-to-optimize by test-time fast self-adaptation. arXiv preprint arXiv:2303.00039 .Ye, H.; Wang, J.; Cao, Z.; Berto, F.; Hua, C.; Kim, H.; Park, J.; and Song, G. 2024. Reevo: Large language models as hyper-heuristics with reflective evolution. Advances in neural information processing systems , 37: 43571–43608. Experimental and Reproducibility Details 
+
+This appendix documents the final experimental protocol used throughout the paper. The same principle is applied to every host pipeline: FunL2O replaces the executable feature function while retaining the host model, learning objective, training schedule, data generator or instance lists, learned output, and downstream solver interface. Candidate quality is determined by the host evaluator rather than by the proposal model, and the returned feature function is used as ordinary deterministic preprocessing code at deployment. Unless stated otherwise, every reported handcrafted–selected comparison is the arithmetic mean of three independent, seed-paired repetitions of the corresponding host training and evaluation protocol. 
+
+Computational cost. Each FunL2O search evaluates 48 candidate feature functions. The average LLM API cost is approxi-mately $4 per proposal, resulting in a total LLM cost of 48 ×$4=$192 per search. Retraining each candidate takes approximately 15 GPU-minutes, for a total of 48 ×15=720 GPU-minutes, or 12 GPU-hours. Downstream CPU-based evaluation takes ap-proximately 1000 seconds per candidate, resulting in 48,000 CPU-seconds, or 13.3 CPU-hours, per search. With one GPU and one CPU worker and no parallelization, a complete search requires approximately 25.3 hours of computation, excluding LLM response latency and pipeline overhead. These costs scale linearly with the number of pipeline–task–proposal-model combinations, although candidate evaluations can be parallelized in practice. Once the search is complete, the selected feature function incurs no additional LLM cost and only standard preprocessing overhead at deployment. 
+
+Host Pipelines and Training Configurations 
+
+Table 4 summarizes the eight pipeline instantiations. The continuous study covers solution prediction, primal–dual warm starts, and simplex decisions. The mixed-integer study applies the same feature-search interface to Predict-and-Search and learned backdoor branching. Table 4: Host configurations. Only the feature function is searched. The learned output, network template, training objective, and solver interface remain those of the corresponding host implementation.                                                                           
+
+> Host Tasks Searched function Training configuration Learned role Primary metric Secondary metric IPM-MPNN five LP distributions compute_features 80 epochs; hidden size 128 primal solution objective gap ↓feasibility ↑
+> FSNet nine main QP/QCQP/SOCP tasks (+ three auxiliary size checks) compute_fsnet_input_features 40 epochs; hidden size 1024 constrained solution optimality gap ↓feasibility ↑
+> DC3 three constrained QPs compute_dc3_extra 200 epochs corrected solution optimality gap ↓feasibility ↑
+> PDHG-Net PageRank LP compute_pdhg_features 300 epochs primal–dual warm start iteration saving ↑time saving ↑
+> Smart Initial Basis set-cover LP compute_sib_extra 200 epochs initial basis status iteration saving ↑node accuracy ↑
+> Learning to Pivot set-cover LP compute_ltp_extra 20 epochs pivot scores pivot-count gmean ↓top-1 accuracy ↑
+> Predict-and-Search CA/MIS/MVC compute_variable_features 300 epochs; k= 8 partial assignment primal gap ↓primal integral ↓
+> Learned Backdoors CA/MIS/MVC compute_variable_features 300 epochs; k= 8 branching priorities wall time ↓win rate ↑
+
+Data and Evaluation Splits 
+
+Every host follows the same separation principle. A candidate feature program is trained using the host training split and ranked exclusively by its validation outcome. After the search terminates, the selected program is frozen and evaluated on a disjoint test split that is never exposed to the search loop or the proposal model. Training, validation, and test instances are disjoint. Different proposal-model runs use the same split definition, so their paired outcomes are directly comparable. Within each reported comparison, the handcrafted feature and the validation-selected feature are evaluated with the same three training seeds, initialization seeds, data-order seeds, instance splits, and solver settings. This pairing removes training-seed variation from the method difference before the three paired outcomes are averaged. 
+
+## Search Procedure 
+
+Budget and Elitism 
+
+The handcrafted feature function is evaluated once before program generation and remains in the search memory as the fixed baseline. Each search then runs eight proposal generations with six proposal slots per generation, giving a budget of 48 LLM-proposed candidate programs for every pipeline, task, and proposal model. The two highest-ranked programs form the elite context for the next generation. The same eight-generation, six-proposal, two-elite protocol is used for the continuous and mixed-integer hosts. Each proposal is compiled and checked against the host contract. A rejected proposal receives the localized validation error and may be repaired up to three times. Valid candidates within a generation are independent conditioned on the current elite memory and are therefore trained and evaluated in parallel. Table 5: Data organization used by the host evaluators. “Selection” denotes the data used to rank candidate feature programs; “reporting” denotes the data used for the displayed outcome. 
+
+Host Training data Selection data Reporting data IPM-MPNN 70% of each LP distribution 15% validation holdout disjoint 15% test holdout FSNet official training split official validation split official disjoint test split DC3 host training split held-out validation split disjoint test split PDHG-Net host training records disjoint validation records 20 held-out test records Smart Initial Basis 60% of 1,400 set-cover instances 15% validation split disjoint 25% test split Learning to Pivot 50,000 training pivot states 10,000 validation states 50 held-out test instances Predict-and-Search 160 domain-specific MILP training list 40 disjoint domain validation list disjoint 100-instance test list Learned Backdoors 160 domain-specific MILP training list 40 disjoint domain validation list disjoint 100-instance test list 
+
+Table 6: Feature-function interfaces and output requirements. m and n denote the numbers of constraints and variables, respectively; B denotes batch size.                                                             
+
+> Host Function signature Required output Preserved interface IPM-MPNN compute_features(A,b,c,sense,lb,ub) variable, constraint, and global tensors first two channels of each node type FSNet compute_fsnet_input_features(problem,state) B×Fdense tensor raw state tensor as leading channels DC3 compute_dc3_extra(instance) B×K,K≤64 appended to the host input PDHG-Net compute_pdhg_features(A,b,c,sense,lb,ub) variable and constraint tensors 3 variable and 4 constraint seed channels Smart Initial Basis compute_sib_extra(lp) n×Kand m×K,K≤32 appended to locked seed channels Learning to Pivot compute_ltp_extra(base) (n+m)×K,K≤32 appended to the 11-dimensional host input MILP hosts compute_variable_features(model,relaxation) per-variable n×Ftensor host graph and solver interface unchanged
+> memory = [train_and_validate(handcrafted_seed)] for generation in range(8): elites = top_two_by_validation(memory) context = contract +elites +validation_scores(elites) for program in propose(context, count=6): program = validate_or_repair(program, max_repairs=3) if program is valid: val = train_and_validate(program) memory.append((program, val)) selected = best_by_validation(memory) test_result = evaluate_once_on_disjoint_test(selected) return selected, test_result
+
+The proposal model receives the semantic contract, complete source of the elite feature programs, and aggregate validation outcomes. It never receives validation instances, targets, or test outcomes, and it does not assign fitness. The final-test evaluator is called only after validation-based program selection. After search, neither the proposal model nor the evolutionary memory is needed for inference. 
+
+Ranking 
+
+For prediction hosts with feasibility requirements, ranking is lexicographic: feasibility acceptance, degree of violation, and then objective quality. This prevents an objective-only improvement from displacing a feasible program. For solver-facing hosts, the native host metric determines the ordering. The handcrafted seed remains in the memory throughout search and is returned whenever no proposal ranks above it. 
+
+## Semantic Feature Contracts 
+
+A semantic feature contract defines the callable interface, permitted deployment-time information, tensor orientation, feature-width limit, and required handcrafted prefix. Table 6 lists the principal interfaces. The contracts permit deterministic transfor-mations of information already exposed by the host and exclude training labels, reference solutions, evaluation outcomes, file or network access, and additional solver calls inside the feature function. 
+
+Static validation. Candidate source is restricted to the requested function and a safe execution environment. Imports are sanitized, and the validator prevents external I/O, dynamic code execution, mutable global state, and unavailable information sources. Dynamic validation. A host-specific probe checks the function signature, return structure, row or batch alignment, feature width, numerical finiteness, and required seed channels. Passing the probe establishes interface validity; utility is determined only by retraining and downstream evaluation. 
+
+## Prompt and Proposal-Model Configuration 
+
+The same run-independent prompt structure is instantiated with a host-specific function signature, metric, and contract. The complete prompt files are included in the accompanying source artifact. The central template is:                                            
+
+> You design input features for aFIXED learning-to-optimize pipeline. The model, data, training procedure, solver, and seed baseline are fixed. Change only {function_name}. Use only fields listed in the semantic feature contract. Return deterministic, finite features with the required shape and preserved seed channels. Do not access targets, reference solutions, files, networks, or additional solvers. Metric and direction: {host_metric} Function signature and typed output: {contract} Elite programs and measured outcomes: {elite_memory} Return exactly one Python code block defining the function.
+
+The recorded API model identifiers are claude-opus-4-8 , azure/gpt-5.5 , gcp/gemini-3.1-pro-preview ,and rits/deepseek-ai/DeepSeek-Math-V2 . The continuous study uses all four proposal models; the displayed MILP study reports Claude and GPT-5.5 runs separately. The maximum completion length is 16,000 tokens. Temperature and top-p are not explicitly overridden in the search client and therefore follow the provider defaults associated with the recorded endpoints. 
+
+## Metrics and Aggregation 
+
+Prediction metrics. IPM-MPNN reports relative objective gap. FSNet and DC3 report the host optimality gap in percent and feasibility at maximum constraint violation 10 −4. Candidate selection for constrained prediction is feasibility-first. 
+
+Solver metrics. For cold-start work C and learned-start work H, iteration saving is 
+
+100 C − HC ,
+
+and time saving is defined analogously. Learning to Pivot reports the geometric mean of pivot counts. Predict-and-Search reports final primal gap and primal integral; learned backdoors report mean wall time and the percentage of instances on which a method is fastest. 
+
+Improvement rate. For a lower-is-better metric with handcrafted value B and searched value F ,
+
+IR = 100 B − F
+
+|B| .
+
+For a higher-is-better metric, the numerator is F − B. Positive values therefore always denote improvement. 
+
+Selection and reporting. All search-time ranking fields are validation metrics. Final-test metrics are produced only for the validation-selected program and are not available to candidate ranking, elite updates, prompt construction, or proposal-model comparison. 
+
+Three-repeat evaluation protocol. Each reported handcrafted–selected pair is obtained from three independent repetitions. In repetition r ∈ { 1, 2, 3}, the handcrafted baseline and the selected feature program use the same host initialization, minibatch or data-order seed, train/validation/test split, solver parameters, and stopping rule. Let mH 
+
+> r
+
+and mF 
+
+> r
+
+denote the resulting test metrics. The reported values are 
+
+¯mH = 13
+
+> 3
+
+X
+
+> r=1
+
+mH 
+
+> r
+
+, ¯mF = 13
+
+> 3
+
+X
+
+> r=1
+
+mF 
+
+> r
+
+.
+
+Thus, the displayed difference is the mean of three paired feature effects rather than a difference between unrelated training runs. The four proposal models are distinct search configurations and are not treated as statistical repetitions. For the MILP hosts, wall time is first averaged over the 40 test instances within each repetition and then averaged over the three repetitions. Win rate is computed analogously from the fraction of the 40 instances on which a method is fastest; displayed percentages are rounded to the nearest percentage point. Consequently, the reported MILP values summarize 3 × 40 paired instance evaluations per domain while preserving the original 40-instance benchmark in each repetition. Table 7: IPM-MPNN final-test objective gap by LP distribution and proposal model (lower is better). Values are means over three independent, seed-paired repetitions. 
+
+Task Claude GPT-5.5 Gemini DeepSeek indset 0.00249 →0.0024 ✓ 0.00249 →0.00218 ✓ 0.00267 →0.00186 ✓ 0.00414 →0.00238 ✓
+
+setcover 0.0106 →0.00476 ✓ 0.00873 →0.00551 ✓ 0.0189 →0.00459 ✓ 0.0154 →0.00662 ✓
+
+cauction 0.0166 →0.0156 ✓ 0.0132 →0.0113 ✓ 0.0158 →0.0123 ✓ 0.0243 →0.0243 =
+
+fac 0.0172 →0.0136 ✓ 0.0158 →0.0138 ✓ 0.0203 →0.0153 ✓ 0.0214 →0.0144 ✓
+
+gnnlp 0.00537 →0.00328 ✓ 0.0119 →0.00222 ✓ 0.00397 →0.00293 ✓ 0.00431 →0.00248 ✓
+
+Table 8: FSNet final-test optimality gap for all 12 evaluated tasks (lower is better). Values are means over three independent, seed-paired repetitions. The 1,000-variable tasks form the main-paper grid; the 100-variable tasks provide the corresponding smaller-scale evaluation.                                         
+
+> Task Claude GPT-5.5 Gemini DeepSeek convex_qp_var1000 0.4264 →0.3583 ✓0.6846 →0.3534 ✓0.6846 →0.3480 ✓0.6846 →0.6846 =
+> convex_qcqp_var1000 14.09 →14.09 =14.09 →3.132 ✓14.09 →2.013 ✓14.09 →14.09 =
+> convex_socp_var1000 42.33 →6.760 ✓42.33 →4.674 ✓42.33 →38.28 ✓42.33 →42.33 =
+> nonconvex_qp_var1000 5.459 →5.459 =5.459 →4.229 ✓5.459 →5.459 =5.459 →5.459 =
+> nonconvex_qcqp_var1000 26.42 →26.42 =26.42 →7.315 ✓26.42 →12.09 ✓26.42 →26.42 =
+> nonconvex_socp_var1000 934 →148 ✓934 →135 ✓934 →129 ✓934 →934 =
+> nonsmooth_nonconvex_qp_var1000 5.198 →5.198 =5.198 →5.198 =5.198 →5.198 =5.198 →5.198 =
+> nonsmooth_nonconvex_qcqp_var1000 22.69 →22.69 =22.69 →22.69 =22.69 →12.93 ✓22.69 →22.69 =
+> nonsmooth_nonconvex_socp_var1000 332 →161 ✓332 →125 ✓332 →158 ✓332 →332 =
+
+Across-model summaries. The continuous headline table reports the median across the four independently executed proposal-model configurations after each configuration has itself been averaged over three paired repetitions. This median is a robustness summary across proposal mechanisms; it is not used as a substitute for the three training repetitions and does not select a proposal model using test performance. The mixed-integer table retains Claude and GPT-5.5 as separate columns; boldface is descriptive only and is not a row-wise oracle used by the method. 
+
+## Complete Results 
+
+Tables 7–11 provide the proposal-model-level continuous results. Every displayed value is the arithmetic mean of three inde-pendent, seed-paired repetitions. Each cell is written as handcrafted → returned program. A check mark denotes improvement on the reported primary metric, while an equality sign denotes retention of the seed value. 
+
+## Controlled Analyses 
+
+What the Equal-Budget Controls Establish 
+
+The purpose of the controls is to distinguish the paper’s mechanism-level claims from the generic benefit of evaluating many candidate representations. The paper does not claim that FunL2O dominates every possible AutoML, genetic-programming, or fixed-library system. It claims that LLM-proposed executable features, selected by the unchanged L2O evaluator and refined with measured feedback, provide an effective and general way to improve heterogeneous L2O representations. The available controls test the two principal alternative explanations for the reported gains: best-of-many sampling and feature-width expansion. These controls provide convergent evidence. The equal-budget PDHG comparison isolates evolutionary feedback from the number of LLM calls; the matched-width experiments isolate searched semantic structure from simple feature expansion; and the cross-model results show that successful programs are not an artifact of one proposal provider. Together with disjoint test reporting and three seed-paired repetitions, the current results support the paper-level conclusion that LLM-guided feature evolution is a meaningful contributor to performance, rather than merely a consequence of selecting the best among many wider inputs. The experiments are not intended to establish universal dominance over every conceivable program-search baseline. Table 9: DC3 final-test optimality gap by proposal model (lower is better). Values are means over three independent, seed-paired repetitions. 
+
+Task Claude GPT-5.5 Gemini DeepSeek convex_qp 13.01 →12.77 ✓ 13.01 →12.53 ✓ 13.01 →10.07 ✓ 13.01 →13.01 =
+
+nonconvex_qp 15.62 →15.32 ✓ 15.62 →15.31 ✓ 15.62 →14.32 ✓ 15.62 →15.62 =
+
+nonsmooth_nonconvex_qp 15.96 →13.61 ✓ 15.96 →15.24 ✓ 15.96 →15.32 ✓ 15.96 →15.96 =
+
+Table 10: PDHG-Net iteration saving by proposal model (higher is better). Values are means over three independent, seed-paired repetitions. 
+
+Task Claude GPT-5.5 Gemini DeepSeek pagerank 35.89 →52.23 ✓ 41.95 →50.40 ✓ 44.23 →51.70 ✓ 42.94 →48.16 ✓
+
+Matched-Width Features 
+
+When a feature program changes the input width, only the corresponding input projection is resized mechanically; the hidden architecture, learning objective, optimizer, schedule, and solver remain fixed. The append-only control replaces the searched additional channels with a fixed random projection of the same width while retaining the host training setup. Across the six supported LP and PDHG settings, the searched programs attain the best value in five. Because the random control matches the added width, input projection size, paired training seeds, and evaluation protocol, this comparison rules out simple width expansion as a sufficient explanation in these controlled settings. 
+
+Measured Evolutionary Feedback 
+
+On PDHG-Net, the independent-sampling baseline uses the same proposal model, the same 48 LLM calls, the same 48 candidate retraining budget, the same semantic contract, and the same validation evaluator, but every proposal is conditioned only on the handcrafted seed and receives no elite programs or measured outcome feedback. Independent sampling increases iteration saving from 35.89% to 44.42%. Retaining high-performing programs and returning their measured outcomes to later generations reaches 52.23%. The additional 7.81 percentage points under an equal budget isolate the contribution of measured evolutionary feedback from the generic best-of-48 effect. 
+
+Seed-Preserving Selection 
+
+The handcrafted function remains an eligible program throughout search. This safeguard makes replacement evidence-based: a proposed program is returned only when it improves the host ranking criterion. It also makes the displayed equality cases interpretable as successful preservation of a strong original representation rather than as a forced modification. 
+
+## Representative Feature Programs 
+
+The source artifact contains the complete executable programs collected for every continuous host–task–proposal-model cell. The following excerpts illustrate three recurring structures discovered by the search. 
+
+Set Cover: Coverage-Aware Scaling                                                
+
+> row_deg =(A. abs () >eps). float (). sum (1, keepdim=True) col_deg =(A. abs () >eps). float (). sum (0, keepdim=True).T row_norm =torch.sqrt((A * A). sum (1, keepdim=True) +eps) col_norm =torch.sqrt((A * A). sum (0, keepdim=True) +eps).T cover_ratio =torch.tanh(b.reshape(-1, 1) /(A. sum (1, keepdim=True) +eps)) obj_eff =torch.tanh(c.reshape(-1, 1) /(col_deg +eps)) cons =torch.cat([cons_seed, torch.log1p(row_deg), torch.log1p(row_norm), cover_ratio], dim=1) vals =torch.cat([vals_seed, torch.log1p(col_deg), torch.log1p(col_norm), obj_eff], dim=1)
+
+The program exposes column coverage, row load, coefficient scale, and objective cost relative to coverage while preserving the handcrafted mean and standard-deviation channels. Table 11: Simplex-oriented host results, averaged over three independent, seed-paired repetitions. Learning to Pivot reports pivot-count geometric mean (lower is better); Smart Initial Basis reports iteration saving (higher is better).                 
+
+> Learning to Pivot
+> Task Claude GPT-5.5 Gemini DeepSeek setcover_co 1314 →877 ✓1151 →1151 =1174 →838 ✓934 →710 ✓
+> Smart Initial Basis
+> Task Claude GPT-5.5 Gemini DeepSeek setcover_co 61.67 →67.23 ✓61.67 →64.26 ✓61.67 →61.67 =61.67 →61.67 =
+
+Table 12: Mixed-integer final-test outcomes for the two independently reported proposal-model runs. Each value averages three independent repetitions of the 40-instance domain benchmark. Bold marks the stronger displayed value in each row for readability; no row-wise proposal-model selection is used by the method. 
+
+Domain Metric Default Solver Handcrafted FunL2O -Claude FunL2O -GPT 
+
+Panel A: Predict-and-Search 
+
+CA final primal gap (%) 0.841 0.423 0.350 1.023 primal integral 11.23 10.61 9.00 14.18 MIS final primal gap (%) 1.317 0.699 0.213 0.095 
+
+primal integral 25.64 20.89 12.78 14.27 MVC final primal gap (%) 0.032 0.018 0.013 0.015 primal integral 20.08 13.85 7.40 3.69 
+
+Panel B: Learned backdoor branching 
+
+CA mean wall time (s) 167.2 154.6 148.4 147.6 
+
+win rate (%) 8 20 31 41 
+
+MIS mean wall time (s) 102.6 59.1 50.2 46.0 
+
+win rate (%) 0 21 30 49 
+
+MVC mean wall time (s) 24.7 31.6 18.9 20.4 win rate (%) 13 4 37 46 
+
+PageRank: Directed Mass and Degree                                             
+
+> absA =torch. abs (A.to_dense() if A.is_sparse else A) col_l1, row_l1 =absA. sum (0), absA. sum (1) col_deg =(absA >eps). float (). sum (0) row_deg =(absA >eps). float (). sum (1) col_share =torch.tanh(col_l1 /(col_l1.mean() +eps)) row_share =torch.tanh(row_l1 /(row_l1.mean() +eps)) var =torch.stack([lb, ub, c, torch.log1p(col_l1), torch.log1p(col_deg), col_share], dim=1) con =torch.stack([sense_le, sense_eq, sense_ge, b, torch.log1p(row_l1), torch.log1p(row_deg), row_share], dim=1)
+
+These channels distinguish row and column mass, exposing the directed asymmetry relevant to PageRank while preserving the original primal–dual inputs. 
+
+SOCP: Normalized Dense Parameters Table 13: Equal-budget and matched-capacity evidence. Each comparison retains the host evaluator, validation rule, split, and training protocol. 
+
+Control Evidence and supported conclusion Independent LLM sampling Same proposal model, 48 calls and retrainings, contract, and evaluator; only elite memory and measured feedback are removed. PDHG reaches 44.42% without feedback and 52.23% with evolution, isolating a 7.81-point feedback gain. Matched-width random Same added width, input-layer size, paired seeds, split, host, and solver. FunL2O is best in five of six LP/PDHG settings, so width alone is not sufficient in these controls. Multiple proposal models Claude, GPT, and Gemini improve 15/20, 17/20, and 17/20 shared cells under the same external evaluator, showing that gains are not tied to one provider. Seed preservation The handcrafted seed remains eligible and is returned when no candidate improves validation, so best-of-many search does not force a replacement. 
+
+Table 14: Matched-width controls. Lower is better for LP objective gap; higher is better for PDHG iteration saving. 
+
+# Host Task Handcrafted Matched random FunL2O 
+
+# IPM-MPNN set cover 0.00855 0.00588 0.00300 
+
+# IPM-MPNN independent set 0.00305 0.00259 0.00243 
+
+# IPM-MPNN combinatorial auction 0.02011 0.01221 0.01398 IPM-MPNN facility location 0.01829 0.01979 0.01494 
+
+# IPM-MPNN GNNLP 0.00282 0.00303 0.00253 
+
+# PDHG-Net PageRank 35.59 45.19 47.99 
+
+X = fs_state["X"] row_norm = torch.sqrt(torch. sum (X * X, dim=-1, keepdim=True) + 1e-6) x_scaled = X / row_norm features = torch.cat([X, x_scaled, row_norm], dim=-1) 
+
+The returned representation retains the raw dense parameter vector and augments it with a scale-invariant view and its norm. Table 15: Principal software environments. CUDA versions correspond to the PyTorch builds used by the GPU jobs. 
+
+Hosts Runtime Solver/library IPM-MPNN, PDHG-Net Python 3.10.20; PyTorch 2.0.0; CUDA 11.8 OR-Tools 9.10.4067 FSNet, DC3 Python 3.11.15; PyTorch 2.6.0; CUDA 12.4 CVXPY 1.7.5 Smart Initial Basis, Learning to Pivot Python 3.10.20; PyTorch 2.0.0; CUDA 11.8 SciPy 1.10.1 MILP hosts Python 3.12.13 CPLEX 22.2.0.0; DOcplex 2.32.264
