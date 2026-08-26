@@ -1,0 +1,769 @@
+Title: Polaris: Learning to Generate Table Descriptions from Retrieval Feedback
+
+URL Source: https://arxiv.org/pdf/2608.17171v1
+
+Published Time: Wed, 19 Aug 2026 00:16:10 GMT
+
+Number of Pages: 22
+
+Markdown Content:
+# Polaris: Learning to Generate Table Descriptions from Retrieval Feedback 
+
+Ting Cai, Tuan Minh Phan, AnHai Doan 
+
+University of Wisconsin-Madison 
+
+{tingcai, minhrua, anhai}@cs.wisc.edu 
+
+Abstract 
+
+Many table-centric NLP tasks such as NL2SQL first retrieve relevant tables from large collec-tions using keyword search. Recent work uses LLMs to generate natural-language table de-scriptions to improve retrieval, but they are typ-ically optimized for fluency rather than retrieval effectiveness. We present Polaris, a system that trains an LLM to generate table descriptions directly from retrieval feedback. Our key in-sight is that existing table retrieval benchmarks already contain the supervision needed for this task: given query–table relevance judgments, we generate multiple candidate descriptions for each table, rank them by their BM25 retrieval effectiveness, and use the resulting preference pairs to fine-tune the LLM with Direct Prefer-ence Optimization (DPO). Polaris further ex-pands abbreviated table and column names be-fore generation to reduce vocabulary mismatch. Extensive experiments show that Polaris outper-forms the state-of-the-art AutoDDG solution, often by a significant margin. More broadly, our results demonstrate that retrieval bench-marks can be repurposed as supervision for training LLMs to generate retrieval-oriented metadata. 
+
+1 Introduction 
+
+Tabular data is ubiquitous in companies, sciences, government agencies, and others (Zhang et al., 2023; Hanson, 2025). As a result, the emerging direction of NLP tasks for tabular data has grown significantly in the past ten years. Examples of such tasks include NL2SQL, table QA, schema-based relation detection, and more (Liu et al., 2025; Zhou et al., 2026; Koutras et al., 2021). Many of these tasks rely on a fundamental prim-itive, which is keyword search over tables. This is because the set of tables under consideration is of-ten very large in practice. So given the user intent, often expressed in natural language or keywords, we must first perform keyword search (KWS) over 
+
+> ACTEMPS(EID, FN, LN, SAL) This table stores the records of currently active employees, where each row gives an employee's first name, last name, and salary. It supports HR and payroll analyses such as staff compensation, wage distribution, and headcount reporting.
+
+Figure 1: A tiny example of table description. 
+
+these tables to find a relatively small set of rele-vant tables, before we can perform task-specific reasoning. Consider for example NL2SQL. Given a natural language query such as “show quarterly sales for 2025”, many NL2SQL solutions perform KWS to retrieve the relevant tables, then generate a SQL query over these tables (Liu et al., 2025). While important, KWS over tables is difficult be-cause the table and column names are often cryptic and short (e.g., “DTPh”, “ActEmployees”), mak-ing it hard to search on. In response, many recent works have proposed using LLMs to generate table descriptions in natural language, then performing KWS over these descriptions to find relevant tables (see Figure 1) (Zhang et al., 2026; Balaka et al., 2025; Singh et al., 2025). As far as we can tell, the most advanced work in this direction is AutoDDG, which is shown empirically to outperform six other solutions (Zhang et al., 2026). While promising, the AutoDDG work has several major limitations, as we discuss below. In this paper we describe Polaris, which addresses these limitations and sig-nificantly advances the state of the art. First, AutoDDG employs a relatively complex pipeline with multiple LLM calls to analyze a ta-ble’s metadata (e.g., table name, column names) and tuples before generating its description. We show that a much simpler pipeline, requiring only a single LLM call, achieves comparable or even better performance, and we explain why. Second, AutoDDG uses the table names and col-umn names “as is”. In practice, these names are 1arXiv:2608.17171v1 [cs.CL] 17 Aug 2026 often cryptic or abbreviated, e.g., DTPh for “day-time phone” (Cai et al., 2025). Such names give the LLM little to work with, producing generic descrip-tions that miss important vocabulary. We show that by expanding these names into full English phrases, using the solution in (Cai et al., 2025), we can pro-vide richer input to the LLM and can substantially improve the quality of the generated descriptions. Third, AutoDDG uses the LLM “as is”, without fine tuning. We show how to fine tune the LLM to produce better table descriptions for keyword search. Our approach is inspired by reinforcement learning with human feedback (RLHF) (Ziegler et al., 2019), in which a provider such as ChatGPT asks the user to rank alternative answers to the same question, uses the rankings to learn a reward function, then uses the reward function in a rein-forcement learning process to fine tune the LLM to produce better answers. We adapt this paradigm in two ways. First, we do not have access to many human users, and even if we do, they typically cannot tell which table description is better for KWS. So we use labeled data, in which given a set of tables and a set of key-word queries, we know which tables are relevant to which queries. Several such labeled datasets already exist, and are widely used to train and eval-uate KWS solutions (see the experiment section). We show how to use these labeled datasets to rank table descriptions. Then instead of RLHF, we use the rankings to fine tune the LLM via direct pref-erence optimization (DPO), a recent popular tech-nique (Rafailov et al., 2023). The fourth limitation is that AutoDDG uses only the generated table descriptions in KWS over ta-bles. We show that, while useful, these descrip-tions are not perfect, so using them together with other table metadata (e.g., table/column name ex-pansions, contexts, etc.) can significantly improve KWS accuracy. Finally, the AutoDDG work uses only two la-beled datasets for evaluation. We have cleaned 3 major labeled datasets that have been used in research on KWS over tables, and created 3 new labeled datasets. This produces a benchmark of 6 datasets consisting of (table, query, relevance score) triplets. As far as we can tell, this is the largest benchmark to date for evaluating KWS over tables. In summary, we make the following contri-butions: • We develop Polaris, a solution that signifi-cantly improves upon AutoDDG. Polaris uses a simpler pipeline to generate table descrip-tions, expands cryptic table and column names into full English phrases, uses labeled data to fine tune LLMs to produce better descriptions, and exploits these descriptions as well as other table metadata for KWS. • We develop a benchmark of six labeled datasets, the largest benchmark to date for evaluating KWS solutions over tables. • Extensive experiments show that Polaris out-performs AutoDDG on the above benchmark, often by a large margin (e.g., up to 44.6% in-crease of NDCG@100). Further, Polaris gen-erates much shorter table descriptions than AutoDDG, reducing the average description length by 47-59%. More broadly, our results suggest that re-trieval benchmarks can be reused as supervi-sion for training LLMs to generate retrieval-oriented metadata. The code is available at github.com/anhaidgroup/polaris, and the datasets at hf.co/collections/anhaidgroup/polaris-v1. 
+
+2 Preliminaries 
+
+In this section we describe AutoDDG then build on that to describe the problem setting of Polaris. 
+
+AutoDDG: This solution uses a complex multi-step pipeline to generate table descriptions (Zhang et al., 2026). For a particular table T , the pipeline takes as input the table name and column names, additional metadata if any, sample tuple values (if available). It generates table statistics, table topics, and column summaries, then uses these to generate a table description d(T ) geared toward KWS. This pipeline makes at least four LLM calls, often many more. Given a keyword query Q, AutoDDG performs KWS to return a ranked list of tables. Here each ta-ble T is ranked based on a similarity score between its description d(T ) and query Q. This similarity score is the BM25 TF/IDF score widely used in today’s KWS engines (Robertson and Zaragoza, 2009). The paper (Zhang et al., 2026) shows that Au-toDDG outperforms six solutions, including two that are pre-trained data-to-text models (Tang et al., 2023; Zhao et al., 2022), and Pneuma (Balaka et al., 2025), which uses LLMs to summarize the schema and sampled rows for RAG-style table discovery. 2Initial Description Generation Tables T Candidate Descriptions KWS-based Ranking Labeled Table-Query Pairs Preference Pairs DPO Training Trained LLM M Trained Description Generation Descriptions F Tables N Trained LLM M Table/Column Name Expansion Expanded Table/Column Names Table Context (optional), Untrained LLM M Table/Column Name Expansion Figure 2: The overall architecture of Polaris. 
+
+Table Description Generation in Polaris: Sim-ilar to AutoDDG, to generate a description d(T )
+
+for a table T , we also use its metadata: table name, column names, and additional context if any (e.g., table caption, Web page title). Unlike AutoDDG, however, we do not use the tu-ples of T in description generation. Such tuples are often not available, for privacy and legal reasons. Furthermore, we show later that even without using the tuples Polaris already outperforms AutoDDG with tuples (see Section 4). As discussed in the introduction, another distin-guishing aspect of Polaris is that we use labeled datasets, each of which consists of tables, queries, and relevance scores, to fine tune the LLM to pro-duce better descriptions for KWS (see Section 3). 
+
+Keyword Search in Polaris: We adopt the same KWS setting as AutoDDG. Specifically, given a keyword query Q, we return a ranked list of tables, where each table T is ranked based on the popular BM25 TF/IDF score between its description d(T )
+
+and query Q. Considering other similarity scores (e.g., embedding vectors, hybrid (Karpukhin et al., 2020; Bruch et al., 2023; Formal et al., 2021)) is left for future work. Since the generated table descriptions are not perfect (see Section 4), unlike AutoDDG, we will also consider a KWS setting where the BM25 score uses both the descriptions and other table metadata. We show that this new score can significantly im-prove KWS accuracy. 
+
+3 The Polaris Solution 
+
+We now describe how Polaris generates table de-scriptions in two stages: fine tuning an LLM and 
+
+using the LLM to generate descriptions .In the first stage (see the top part of Figure 2), given a set of tables (used for training, as we dis-cuss later), we expand the table/column names into full English phrases (e.g., “eSal” into “employee salary”). An untrained LLM then uses these expan-sions and table contexts (if any) to generate for each table multiple candidate descriptions. Next, we use labeled datasets to rank these descriptions (regard-ing their quality for KWS over tables). Finally, we use these rankings to train, i.e., fine tune the LLM, using direct preference optimization (DPO). In the second stage (see the bottom part of Fig-ure 2), given a corpus of tables N (over which we want to enable KWS), we expand the table/column names. The trained LLM then uses these expan-sions and table contexts (if any) to generate for each table a description. We now describe the main components of Polaris in detail. 
+
+3.1 Table/Column Name Expansion 
+
+We assume Polaris has access to a set of labeled datasets D = {D1, . . . , D n}. Each dataset consists of (table, query, relevance score) triplets. Higher score indicates more relevance, and a score of 0 in-dicates no relevance. Several such labeled datasets already exist and have been widely used in research on KWS over tables. Let T be the set of all tables in D. Later we will generate alternative descriptions for these tables, then rank them. To generate good descriptions, here we will expand the table/column names in 
+
+T into English phrases (e.g., “DTPh” to “daytime phone”, “russ_ind” to “russell index”). This is be-cause the original names are often short and cryptic. So when fed these names, the LLM often produces vague descriptions, hurting KWS. To expand the table/column names, we use Columbo (Cai et al., 2025), a state-of-the-art so-lution that uses an LLM on the original names. Appendix A.1 describes how we adapt Columbo to the Polaris context. 
+
+3.2 Initial Table Description Generation 
+
+Next, we generate descriptions for the tables in the labeled datasets. For each table T , we send a 3T1 (d 11 )T2 (d 2)T3 (d 3)T1          
+
+> T2
+> T3
+> Q1: T 1
+> T1→d11 , d 12
+> T2→d2
+> T3→d3
+> T1(d 12 )T2(d 2)T3(d 3)Q1
+> T2
+> T1
+> T3
+> Q1
+> T2
+> T3
+> T1
+> d11 > d 12
+> for T 1
+> Dataset S 1
+> Corpus C 1
+> Corpus C 2
+
+Figure 3: Using a labeled dataset to generate rankings. 
+
+prompt to an LLM M (with no fine tuning). The prompt provides M with the table/column name expansions, the context (if any), and an one-shot example adapted from (Zhang et al., 2026). Inspired by the descriptions in AutoDDG, we ask the LLM to produce similar descriptions, which are JSON objects with six fields: data set overview, key themes/topics, applications/use cases, con-cepts/synonyms, keywords/themes, and additional context. See Appendix A.2 for the prompt and a sample description. Recall that each labeled dataset consists of (ta-ble, query, score) triplets. If a table has a relevance score greater than 0, we call it a gold table, because it is a “gold” answer to at least one query. For each gold table we generate k ≥ 2 table descriptions, by sampling with non-zero temperature and top-p sampling, so that the LLM produces diverse out-puts from the same prompt. For each remaining (non-gold) table, we generate a single description. The reason why we treat these two kinds of tables differently will be clear in the next subsection. 
+
+3.3 Ranking the Table Descriptions 
+
+We now rank the table descriptions. Human users typically cannot tell which description is better for a table KWS-wise. So our key idea is to use the labeled datasets to rank. The following example illustrates this idea. 
+
+Example 1 Consider the labeled dataset S1 in Fig-ure 3, which has 3 tables T1, T 2, T 3 and 1 query Q1.Suppose T1 is the only “gold” answer to Q1 (i.e., having a relevance score greater than 0). Suppose that we have used an LLM to generate 2 descrip-tions d11 , d 12 for the gold table T1 and 1 descrip-tion each for the non-gold tables T2 and T3 (see Figure 3). Then our goal is to rank descriptions d11 and 
+
+d12 , i.e., deciding which one is better KWS-wise for the gold table T1. To do so, we construct two corpora C1 and C2, as shown in Figure 3. These corpora are identical, except that table T1 uses different descriptions: d11 in C1, and d12 in C2.All other tables are non-gold, each of them uses the single description that we have generated. Suppose performing query Q1 on corpus C1 and corpus C2 produces the ranking R1 = ⟨T2, T 1, T 3⟩
+
+and R2 = ⟨T2, T 3, T 1⟩, respectively (see Figure 3). Then T1 is ranked higher in R1 compared to R2,suggesting that in this case description d11 is better than description d12 for table T1.
+
+We realize the above idea as follows. First, for each gold table we combine all of its cor-pora into one corpus. For example, for gold table T1 in Figure 3, we combine the two cor-pora C1 and C2 into a single corpus C12 =
+
+{T1(d11 ), T 1(d12 ), T 2(d2), T 3(d3)}. This corpus has 2 copies for table T1, each with a different de-scription, and 1 copy for each remaining table, each with a randomly selected description. Second, we score the two descriptions of the gold table and rank them based on their scores. Continuing with the above example, the score of description d11 (for table T1) is the BM25 score between query Q1 (for which T1 is a gold answer) and d11 . If T1 is a gold answer for multiple queries ,then the score for d11 is the average of its scores for these queries. We compute the score of description 
+
+d12 in a similar fashion. Suppose the score of d11 is greater than that of 
+
+d12 . Intuitively this means that for the queries for which T1 is a correct answer, using description d11 
+
+will place T1 higher in the ranked list of tables, compared to using description d12 . As a result, we rank d11 higher, denoted as d11 > d 12 .Finally, we generate 3 descriptions for each gold table, not 2. For example, for gold table T1, we generate d11 , d 12 , d 13 . Now suppose we can rank 
+
+d13 > d 11 > d 12 , as previously discussed. Then we keep only the ranking that we judge to be the most reliable, namely d13 > d 12 , to be used in fine tuning the LLM. (Thus, we do not use the other two rankings d13 > d 11 , d 11 > d 12 .) Algorithm 1 provides the pseudo code of our complete solution. As discussed earlier, this solu-tion uses one “unified” corpus for each gold table, not multiple “individual” corpora. Using multi-ple corpora incurs a significant cost in creating the corpora and indexing them for querying. So we ap-proximate this process with just one corpus. Since this “unified” corpus is identical to each “individ-4Algorithm 1 The training procedure of Polaris.                                                                                                                  
+
+> Input:
+> D— labeled datasets, each D= ( T,Q, R ):
+> T— tables
+> Q— keyword queries
+> R:Q×T → { 0,1, . . . }— relevance judgments (0= not relevant)
+> M— untrained LLM
+> K— number of candidate descriptions per table
+> Output:
+> M∗— trained LLM 1: P← ∅ ▷preference pairs 2: For each dataset D∈ D do
+> 3: Expand table and column names in D
+> 4: G←tables with a relevant query ( ∃q:R(q, T )>0)5: C0← ∅ ▷default corpus 6: For each table T∈ T do
+> 7: If T∈Gthen
+> 8: Generate Kcandidate descriptions CTwith M
+> 9: Add a random description from CTto C0
+> 10: Else
+> 11: Generate one description with M
+> 12: Add it to C0
+> 13: For each table T∈Gdo
+> 14: C ← C0∪CT▷table T’s corpus 15: For each candidate description c∈CTdo
+> 16: s(c)←mean BM25 C(q, c )over relevant queries 17: cbest ←arg max c∈CTs(c)▷best description 18: cworst ←arg min c∈CTs(c)▷worst description 19: Add (prompt( T), c best , c worst )to P
+> 20: M∗← M trained with DPO on P
+> 21: Return M∗
+
+ual” corpus, except that it has 2 extra copies for the target gold table, we found the approximation to produce negligible loss in BM25 scores. Further, our solution assigns a random descrip-tion to each non-target table in the corpus (e.g., assigning d2 to T2 and d3 to T3 in Figure 3). Ide-ally, we should run this solution multiple times. Each time we assign the best description (i.e., the one with top rank) found so far to each non-target table in the corpus. For example, suppose we have determined d11 >d12 for T1 (see Figure 3). Now suppose that T2 is also a gold table. Then when creating a corpus for 
+
+T2, we should assign description d11 to T1. We should repeat this process until a convergence con-dition. Doing this however is very time consuming. As a result, currently we run the above solution only once for each gold table (in which all remain-ing tables in the same corpus are assigned random descriptions). The experiments show that this is already effective in generating good descriptions for KWS. Exploring running the above solution multiple times is ongoing work. 
+
+3.4 DPO Training with the Rankings 
+
+We now use the rankings of the descriptions to fine tune the base LLM via DPO. Recall that in the previous steps, for each gold table T , we have generated and ranked 3 descriptions dπ1 > d π2 >dπ3 . This yields the following preference pair: 
+
+  prompt (T ), dwin = dπ1 , dlose = dπ3
+
+,
+
+where prompt (T ) is the prompt used for generating the description of table T .Let P be the set of all preference pairs, one per gold table (from all labeled datasets). We then fine tune the base LLM M using direct preference optimization (DPO) (Rafailov et al., 2023), which trains the LLM to increase the likelihood of dwin rel-ative to dlose without a separate reward model. The DPO loss is LDPO = −E[log σ(β log πθ (dwin |x) 
+
+> πref (dwin |x)
+
+−
+
+β log πθ (dlose |x) 
+
+> πref (dlose |x)
+
+)] , where πθ is the model being trained, πref is the frozen base model, x is the prompt, and β controls regularization strength. We use Llama 3.1 8B Instruct as the base model, with 4-bit quantization and LoRA (Hu et al., 2022) for parameter-efficient fine-tuning. The adapter targets all attention and feed-forward projections (q_proj , k_proj , v_proj , o_proj , gate_proj ,
+
+up_proj , and down_proj ), with rank r = 64 and 
+
+α = 64 . This gives 167M trainable parameters out of 8.2B total (2.05%). We train for one epoch with 
+
+β = 0 .1, learning rate 5 × 10 −6, a linear schedule with 10% warmup, effective batch size 8, and the AdamW 8-bit optimizer. See Appendix A.4 for details. 
+
+3.5 Description Generation for New Tables 
+
+Once fine tuned, the LLM M is ready to use. Given a new corpus of tables on which we want to perform KWS, for each table in the corpus, we first expand the table/column names, then feed these together with other metadata into the LLM M to generate a table description, using the same prompt described in Section 3.2. 
+
+4 Experiments 
+
+We now evaluate Polaris, using the six labeled datasets described in Table 1. We created the first three datasets, while the last three have been used in prior research on KWS over tables. Appendix A.5 describes these datasets, as well as the LLM, DPO, and KWS settings of our experiments. We perform each experiment in a leave-one-out 
+
+fashion. For example, for the AW dataset, Polaris 5Dataset Domain #Tables #Queries #Gold AW Enterprise 96 15 41 Arctic Science 251 20 121 LTER Science 2,015 15 374 ECIR Government 2,100 12 1,411 WTR Web 4,634 60 2,190 WikiTables Web 3,361 57 845 
+
+Table 1: Datasets for our experiments. #Gold is the number of gold tables.                                                                         
+
+> Dataset Method @5 @10 @20 @50 @100 AW AutoDDG .5551 .6192 .6692 .6969 .7030 Polaris .7312 .7582 .7869 .7869 .7869 Arctic AutoDDG .6274 .5942 .5942 .6360 .6812 Polaris .7133 .6743 .6939 .7416 .7678 LTER AutoDDG .4372 .4194 .4011 .3656 .3559 Polaris .7218 .6546 .6013 .5239 .5145 ECIR AutoDDG .4215 .4429 .4512 .4408 .4180 Polaris .4946 .5050 .4981 .4873 .4672 WTR AutoDDG .3748 .3548 .3767 .4159 .4884 Polaris .3840 .3840 .3894 .4449 .5309 WikiTables AutoDDG .4139 .4085 .4398 .5176 .5811 Polaris .4111 .4215 .4407 .5171 .5727
+
+Table 2: NDCG@K of AutoDDG vs. Polaris 
+
+fine tunes the LLM using the remaining five la-beled datasets , uses it to generate descriptions for the tables in AW, performs KWS for the queries in AW (using the generated descriptions), and reports the aggregated accuracies over these queries (using their gold tables). We consider two accuracy mea-sures widely used in KWS research: NDCG@K (ranking quality with graded relevance) and Re-call@K (Järvelin and Kekäläinen, 2002; Manning et al., 2008). 
+
+Overall Performance: Tables 2-3 compare Po-laris with AutoDDG in terms of NDCG@K and Recall@K, respectively. They show that Polaris outperforms AutoDDG on the first five datasets for nearly all K-s and for both measures, often by a significant margin (e.g., NDCG@100 on LTER: 
+
+0.356 → 0.515 , +44 .6% relative, and NDCG@5 on AW: 0.555 → 0.731 , +31 .7% relative). On the last dataset, WikiTables, both methods perform similarly (e.g., AutoDDG leads at R@100 by 0.02 
+
+while Polaris leads at NDCG@10 by 0.01 ). Interestingly, we found that Polaris generates much shorter table descriptions than AutoDDG, reducing the average description length by 47-59% (see Appendix A.6). 
+
+Ablation Studies: We now evaluate the major components of Polaris. 
+
+Prompt Quality: First, we disable DPO training and                                                                         
+
+> Dataset Method @5 @10 @20 @50 @100 AW AutoDDG .49 .64 .76 .83 .85 Polaris .66 .77 .83 .83 .83 Arctic AutoDDG .24 .34 .48 .68 .77 Polaris .29 .41 .58 .77 .82 LTER AutoDDG .08 .14 .22 .32 .35 Polaris .18 .25 .32 .39 .43 ECIR AutoDDG .01 .02 .04 .08 .12 Polaris .01 .03 .04 .08 .13 WTR AutoDDG .08 .14 .25 .43 .59 Polaris .08 .15 .26 .48 .66 WikiTables AutoDDG .21 .29 .41 .66 .83 Polaris .21 .32 .42 .67 .81
+
+Table 3: Recall@K of AutoDDG vs. Polaris. 
+
+table/column name expansion, by modifying the prompt (see Appendix A.2) to use only the original table/column names, then use this prompt on the base LLM (without fine tuning) to generate table descriptions. The results show that the “disabled” Polaris still substantially outperforms AutoDDG on 4 datasets (AW, LTER, Arctic, ECIR), and per-forms similarly on 2 datasets (WTR, WikiTables). See Tables 9-10 in Appendix A.7. This suggests our simpler prompt can already perform better or competitive with AutoDDG. This is likely because of the multi-step “lossy” nature of AutoDDG’s prompt. Specifically, Au-toDDG (1) uses the LLM to generate column sum-maries, table topics, etc., then (2) feeds these into the LLM again to generate a table description. Step 1 is “lossy” due to the imperfection of the LLM and the length limitations of the summaries/topics. So the description generated from the output of Step 1 is not as accurate as it can be. 
+
+Effect of DPO Training: Tables 11-12 in Ap-pendix A.7 compare the full Polaris with “P-DPO”, the Polaris version without DPO training (i.e., base LLM with name expansion). The tables show that DPO training improves AW ( +9 .4% at @5), LTER (+10 .4% at @5), and WTR ( +5 .0% at @5). The exception is ECIR, where accuracy decreases (e.g., 
+
+.495 vs. .570 at @5). This is probably due to the very high density of relevant tables per query: al-most any reasonable description retrieves a large fraction of relevant tables, so the preference sig-nal from DPO adds little in this low-discrimination regime. 
+
+Effect of Table/Column Name Expansion: Ta-bles 11-12 in Appendix A.7 compare the full Po-laris with “P-exp”, the Polaris version without name expansion (i.e., using DPO-trained LLM, 6with only original table/column names). The tables show that expansion improves LTER ( +21 .2% at @5), AW ( +5 .4% at @5), Arctic ( +6 .6% at @5), and WTR ( +8 .0% at @5). The benefit for ECIR and WikiTables (which rely on external context rather than table names) exists but is small. 
+
+Sensitivity Analysis: Next we examine how Po-laris’s accuracy changes regarding four major de-sign choices: the LLM, the DPO regularization parameter β, the number of candidate descriptions per table, and the number of training epochs. For space reasons we only briefly summarize the find-ings here (see Appendices A.8-A.11 for detail). Regarding LLMs, we replace Llama 3.1 8B In-struct with Qwen2.5-7B-Instruct for both Polaris and AutoDDG, keeping all other settings identi-cal. Table 13 shows that Polaris with Qwen out-performs Polaris with Llama on AW, Arctic, and WikiTables, but underperforms on LTER, while ECIR and WTR show mixed results across cut-offs. Table 15 shows that Polaris with Qwen outperforms AutoDDG with Qwen on all datasets, confirming that Polaris remains superior to AutoDDG under a different LLM. Next, we increase the DPO regularization param-eter β from 0.1 (default) to 0.5, making the DPO objective more conservative (closer to the refer-ence model). Tables 17-18 show that Polaris with 
+
+β = 0 .5 improves AW (the smallest dataset) but hurts LTER and has negligible effect elsewhere. The default β = 0 .1 provides a better balance across datasets. Next, we increase the number of candidate de-scriptions per gold table from K = 3 (default) to 
+
+K = 5 . Even with K = 5 , we still select only the best and worst performing descriptions and form one training pair per table. Tables 19-20 show that the new Polaris substantially improves AW ( +9 .7% 
+
+at @5) and WikiTables ( +5 .3% at @5) but hurts LTER ( −11 .8% at @5) and Arctic ( −4.1% at @5). More candidates provide a wider range of prefer-ence pairs but may also introduce noise when the best and worst candidates are harder to distinguish. Finally, we increase training from 1 epoch (de-fault) to 3 epochs. Tables 21-22 show that the new Polaris substantially improves Arctic ( +13 .3% 
+
+at @5) but hurts ECIR, WTR, and WikiTables. AW shows mixed results (worse at early cut-offs, better at deep ones). Additional training helps datasets with many gold tables in training (Arctic contributes many preference pairs) but risks overfit-0.7 0.8 0.9 @5 @10 @20 @50 @100                 
+
+> AW
+> 0.6 0.7 0.8 0.9 @5 @10 @20 @50 @100
+> Arctic
+> 0.5 0.6 0.7 0.8 @5 @10 @20 @50 @100
+> LTER
+> 0.4 0.5 0.6 @5 @10 @20 @50 @100
+> ECIR
+> 0.3 0.4 0.5 0.6 @5 @10 @20 @50 @100
+> WTR
+> 0.4 0.5 0.6 @5 @10 @20 @50 @100
+> WikiTables
+> Multi-field Polaris Single-field Polaris
+
+Figure 4: NDCG@K of multi-field Polaris vs. single-field Polaris. 
+
+ting on smaller training sets, supporting our default of 1 epoch. 
+
+Multi-Field KWS with Polaris: So far Polaris uses only the generated table descriptions for KWS. Since these descriptions are not perfect, we hypoth-esize that using more fields can improve KWS. So we create P(multi), a Polaris version that uses 3 fields: the description, the table/column name ex-pansions (concatenated into a string), and the table context. P(multi) uses the following BM25 score 
+
+BM25( q, d ) = max f ∈F BM25 f (q, d ) +0.1P  
+
+> f′∈F\{ f∗}
+
+BM25 f ′ (q, d ), where F is the set of the above 3 fields, f ∗ = arg max f BM25 f (q, d )
+
+is the best-matching field, and the second term acts as a tiebreaker (weighted by 0.1) over the remaining fields. This “best field plus tiebreaker” formulation lets the strongest signal dominate while still rewarding tables that match across multiple fields. Figure 4 shows that P(multi) outperforms Po-laris using a single field on 5 datasets, often by a large margin, and is competitive on 1 dataset. In a detailed ablation study, we found that the table de-scription remains the most critical field (removing it causes significant NDCG drop). We also found that the table/column name expansions are critical for datasets with a lot of abbreviated table/column names (e.g., AW, LTER, Arctic). Finally, we found that the table context matters for Web and gov-ernment data, e.g., removing it substantially hurts WTR, where the page-level metadata provides im-portant topical signals. See Appendix A.12 for detail. 
+
+5 Related Work 
+
+Metadata Generation for Tables: A growing body of work has been focusing on generating metadata for tables, such as table and dataset de-scriptions (Zhang et al., 2026; Balaka et al., 2025; 7Singh et al., 2025; Gan et al., 2026; Giancotti et al., 2026), column and database descriptions (Wret-blad et al., 2024; Gao and Luo, 2025; Cai et al., 2026), table or column name expansion (Cai et al., 2025; Zhang et al., 2023; Luoma and Kumar, 2025; Xia et al., 2025), semantic column types (Hulse-bos et al., 2019; Zhang et al., 2020; Feuer et al., 2024; Kayali et al., 2024), and spatial and temporal coverage summaries for columns (Castelo et al., 2021). This is to target a variety of downstream tasks, including KWS, NL2SQL, data catalog, and more. Among these works, the closest to Polaris is Au-toDDG (Zhang et al., 2026), which also generates table descriptions. But AutoDDG (and many prior works) does not train the LLM using retrieval feed-back, nor uses table/column name expansion, as Polaris does. 
+
+Keyword Search over Tables: Prior Keyword Search work has largely focused on improving 
+
+retrieval and ranking models . Zhang and Balog (2018) propose semantic matching between queries and tables using sparse and dense representations within a learning-to-rank framework. Chen et al. (2020b) train a BERT-based neural ranker with con-tent selection to encode tables under BERT’s input constraints, while StruBERT (Trabelsi et al., 2022) further incorporates row and column structure into the matching model. Chen et al. (2020a) generate schema labels from table content and incorporate the labels into a ranking model to improve dataset search. In contrast, Polaris improves the table represen-tation by generating descriptions optimized for key-word search. Our approach is complementary to these retrieval models, since the generated descrip-tions can serve as input to any of them. Existing benchmarks for table retrieval have been discussed in (Zhang and Balog, 2018; Bha-gavatula et al., 2015; Chen et al., 2021, 2020a), providing the labeled relevance data that enables our DPO training. More recently, TARGET (Ji et al., 2025) shows that dense retrievers substan-tially outperform BM25 but remain highly sensi-tive to metadata quality, while PIPER (Terrenzi et al., 2026) addresses poor metadata by generat-ing pseudo-queries from table contents for dense retrieval. Similar to Polaris, PIPER generates tex-tual representations of tables, but it targets dense retrieval and does not optimize the generator using retrieval feedback. 
+
+Preference Learning and DPO: Reinforcement Learning from Human Feedback (RLHF) (Ziegler et al., 2019) aligns language models with human preferences by learning a reward model and op-timizing the policy via reinforcement learning. Direct Preference Optimization (DPO) (Rafailov et al., 2023) simplifies this process by directly train-ing on preference pairs, achieving comparable per-formance without a reward model. DPO has since been widely applied to tasks such as dialogue align-ment (Tunstall et al., 2024) and summarization, while RLAIF (Lee et al., 2024) shows that AI-generated preference labels can effectively replace human annotations. Our work applies DPO in a different setting: preference pairs are derived automatically from keyword retrieval performance rather than human or AI judgments. The closest concurrent work is Coelho et al. (2025), who optimize query gener-ation using retrieval feedback. Other work simi-larly uses retrieval signals to optimize query gen-eration (Zhou et al., 2023; Yao et al., 2025) or document rewriting (Uzan et al., 2026). In con-trast, Polaris optimizes table description genera-tion . Preference pairs are constructed from human relevance judgments in table retrieval benchmarks, using BM25 retrieval effectiveness as the optimiza-tion signal. 
+
+6 Conclusion 
+
+We presented Polaris, a system for generating table descriptions optimized for keyword search. Our key idea is to close the loop between metadata gen-eration and retrieval: instead of relying on human or AI judgments, we use retrieval performance on existing table retrieval benchmarks to automatically construct preference pairs and fine-tune an LLM via DPO. Combined with table and column name expansion, this produces descriptions that better match users’ search vocabulary. Experiments on six datasets spanning enterprise, scientific, government, and web domains show that Polaris consistently outperforms the state of the art while using a simpler generation pipeline. More broadly, our results suggest that retrieval bench-marks can serve not only to evaluate retrieval sys-tems, but also to train metadata generators. We hope this idea will prove useful beyond keyword search, for example in optimizing metadata for dense retrieval, NL2SQL, table question answering, and other downstream tasks. 87 Limitations 
+
+Polaris requires query–table relevance judgments to construct preference pairs for DPO training. While several table retrieval benchmarks already provide such labels and new ones can often be collected from user logs or relevance annotation, our ap-proach is less applicable to domains where no re-trieval supervision is available. In such settings, the untrained variant of Polaris remains applicable, although it does not benefit from retrieval-guided optimization. Our current training objective derives prefer-ences solely from BM25 retrieval scores. Con-sequently, the learned descriptions are optimized for lexical retrieval and may not transfer to retrieval systems based primarily on dense embeddings or hybrid ranking. Extending our preference construc-tion framework to optimize for dense or hybrid retrieval objectives is an important direction for future work. More generally, Polaris optimizes the metadata generation component rather than the retrieval model itself. As such, it is complementary to ad-vances in retrieval architectures, including dense retrievers and learned ranking models, which could potentially benefit from improved table descrip-tions. Polaris generates descriptions using only table schemas and metadata. This design targets prac-tical settings where table contents are unavailable because of privacy, legal, or computational con-straints. However, when representative table rows are available, incorporating table contents may yield richer descriptions for certain datasets. De-veloping methods that selectively exploit row-level data while preserving the simplicity and broad ap-plicability of Polaris is an interesting direction for future work. Finally, our experiments cover six benchmark datasets spanning enterprise, scientific, govern-ment, and Web domains, and leave-one-dataset-out evaluation demonstrates encouraging cross-domain generalization. Nevertheless, the benefit of retrieval-guided training varies across datasets, suggesting that the effectiveness of retrieval-based preference learning depends on characteristics of the underlying corpus. Better understanding when retrieval feedback is most informative remains an important direction for future work. 
+
+References 
+
+Muhammad Imam Luthfi Balaka, David Alexander, Qiming Wang, Yue Gong, Adila Krisnadhi, and Raul Castro Fernandez. 2025. Pneuma: Leveraging LLMs for tabular data representation and retrieval in an end-to-end system. Proceedings of the ACM on Management of Data , 3(3). Chandra Sekhar Bhagavatula, Thanapon Noraset, and Doug Downey. 2015. TabEL: Entity linking in web tables. In Proceedings of the International Semantic Web Conference (ISWC) , pages 425–441. Sebastian Bruch, Siyu Gai, and Amir Ingber. 2023. An analysis of fusion functions for hybrid retrieval. ACM Transactions on Information Systems , 42(1):20:1– 20:35. Ting Cai, Rakesh R. Menon, Yiru Chen, Zifan Liu, Yuan Tian, Fei Wu, Anudeep Chimakurthi, Prashan-thi Ramamurthy, Sunav Choudhary, Kun Qian, and Yunyao Li. 2026. TACO: Task-aware column de-scription generation using LLMs. arXiv preprint arXiv:2606.21685 .Ting Cai, Stephen Sheen, and AnHai Doan. 2025. Columbo: Expanding abbreviated column names for tabular data using large language models. In Find-ings of the Association for Computational Linguistics: EMNLP 2025 , pages 24774–24792. Sonia Castelo, Rémi Rampin, Aécio Santos, Aline Bessa, Fernando Chirigati, and Juliana Freire. 2021. Auctus: A dataset search engine for data discovery and augmentation. Proceedings of the VLDB Endow-ment , 14(12):2791–2794. Zhiyu Chen, Haiyan Jia, Jeff Heflin, and Brian D. Davi-son. 2020a. Leveraging schema labels to enhance dataset search. In Proceedings of the European Con-ference on Information Retrieval (ECIR) , pages 267– 280. Zhiyu Chen, Mohamed Trabelsi, Jeff Heflin, Yinan Xu, and Brian D. Davison. 2020b. Table search using a deep contextualized language model. In Proceedings of the ACM SIGIR Conference on Research and De-velopment in Information Retrieval , pages 589–598. Zhiyu Chen, Shuo Zhang, and Brian D. Davison. 2021. WTR: A test collection for web table retrieval. In 
+
+Proceedings of the ACM SIGIR Conference on Re-search and Development in Information Retrieval ,pages 2514–2520. João Coelho, Bruno Martins, João Magalhães, and Chenyan Xiong. 2025. Aligning web query gener-ation with ranking objectives via direct preference optimization. In Proceedings of the ACM SIGIR Con-ference on Research and Development in Information Retrieval , pages 2982–2986. Tim Dettmers, Artidoro Pagnoni, Ari Holtzman, and Luke Zettlemoyer. 2023. QLoRA: Efficient finetun-ing of quantized LLMs. In Advances in Neural Infor-mation Processing Systems , volume 36. 
+
+9Benjamin Feuer, Yurong Liu, Chinmay Hegde, and Ju-liana Freire. 2024. ArcheType: A novel framework for open-source column type annotation using large language models. Proceedings of the VLDB Endow-ment , 17(9):2279–2292. Thibault Formal, Benjamin Piwowarski, and Stéphane Clinchant. 2021. SPLADE: Sparse lexical and ex-pansion model for first stage ranking. In Proceedings of the 44th International ACM SIGIR Conference on Research and Development in Information Retrieval (SIGIR) , pages 2288–2292. Lisa-Yao Gan, Arunav Das, Johanna Walker, Klaus Diepold, and Elena Simperl. 2026. Less is more? when dataset context hurts LLM-generated dataset descriptions. arXiv preprint arXiv:2606.02334 .Yingqi Gao and Zhiling Luo. 2025. Automatic database description generation for text-to-SQL. arXiv preprint arXiv:2502.20657 .Raffaele Giancotti, Rajna Fani, Rafi Al Attrach, Pierangelo Veltri, and Tom Pollard. 2026. DataAtlas: Automatic generation of data dictionaries using large language models. JAMIA Open , 9(3):ooag119. Paul Hanson. 2025. Environmental data initiative. Edward J. Hu, Yelong Shen, Phillip Wallis, Zeyuan Allen-Zhu, Yuanzhi Li, Shean Wang, Lu Wang, and Weizhu Chen. 2022. LoRA: Low-rank adaptation of large language models. In International Conference on Learning Representations .Madelon Hulsebos, Kevin Hu, Michiel Bakker, Emanuel Zgraggen, Arvind Satyanarayan, Tim Kraska, Ca-gatay Demiralp, and Cesar Hidalgo. 2019. Sherlock: A deep learning approach to semantic data type de-tection. In Proceedings of the 25th ACM SIGKDD International Conference on Knowledge Discovery and Data Mining .Kalervo Järvelin and Jaana Kekäläinen. 2002. Cumu-lated gain-based evaluation of IR techniques. ACM Transactions on Information Systems , 20(4):422– 446. Xingyu Ji, Parker Glenn, Aditya G. Parameswaran, and Madelon Hulsebos. 2025. TARGET: Benchmarking table retrieval for generative tasks. arXiv preprint arXiv:2505.11545 .Vladimir Karpukhin, Barlas O˘ guz, Sewon Min, Patrick Lewis, Ledell Wu, Sergey Edunov, Danqi Chen, and Wen-tau Yih. 2020. Dense passage retrieval for open-domain question answering. In Proceedings of the 2020 Conference on Empirical Methods in Natural Language Processing (EMNLP) , pages 6769–6781. Moe Kayali, Anton Lykov, Ilias Fountalis, Nikolaos Vasiloglou, Dan Olteanu, and Dan Suciu. 2024. CHORUS: Foundation models for unified data dis-covery and exploration. Proceedings of the VLDB Endowment , 17(8):2104–2114. Christos Koutras, George Siachamis, Andra Ionescu, Kyriakos Psarakis, Jerry Brons, Marios Fragkoulis, Christoph Lofi, Angela Bonifati, and Asterios Kat-sifodimos. 2021. Valentine: Evaluating matching techniques for dataset discovery. In Proceedings of the IEEE International Conference on Data Engi-neering (ICDE) , pages 468–479. Harrison Lee, Samrat Phatale, Hassan Mansoor, Thomas Mesnard, Johan Ferret, Kellie Lu, Colton Bishop, Ethan Hall, Victor Carbune, Abhinav Rastogi, and Sushant Prakash. 2024. RLAIF vs. RLHF: Scaling reinforcement learning from human feedback with AI feedback. In Proceedings of the 41st International Conference on Machine Learning (ICML) , volume 235, pages 26874–26901. Xinyu Liu, Shuyu Shen, Boyan Li, Peixian Ma, Runzhi Jiang, Yuxin Zhang, Ju Fan, Guoliang Li, Nan Tang, and Yuyu Luo. 2025. A survey of text-to-SQL in the era of LLMs: Where are we, and where are we going? IEEE Transactions on Knowledge and Data Engineering , 37(10):5735–5754. Llama Team, AI @ Meta. 2024. The Llama 3 herd of models. arXiv preprint arXiv:2407.21783 .Kyle Luoma and Arun Kumar. 2025. SNAILS: Schema naming assessments for improved LLM-based SQL inference. Proceedings of the ACM on Management of Data , 3(1):77:1–77:26. Christopher D. Manning, Prabhakar Raghavan, and Hin-rich Schütze. 2008. Introduction to Information Re-trieval . Cambridge University Press. Qwen Team. 2024. Qwen2.5 technical report. arXiv preprint arXiv:2412.15115 .Rafael Rafailov, Archit Sharma, Eric Mitchell, Christo-pher D. Manning, Stefano Ermon, and Chelsea Finn. 2023. Direct preference optimization: Your language model is secretly a reward model. In Advances in Neural Information Processing Systems , volume 36, pages 53728–53741. Stephen Robertson and Hugo Zaragoza. 2009. The probabilistic relevance framework: BM25 and be-yond. Foundations and Trends in Information Re-trieval , 3(4):333–389. Mayank Singh, Abhijeet Kumar, Sasidhar Donaparthi, and Gayatri Karambelkar. 2025. Leveraging retrieval augmented generative LLMs for automated meta-data description generation to enhance data catalogs. 
+
+arXiv preprint arXiv:2503.09003 .Tianyi Tang, Junyi Li, Wayne Xin Zhao, and Ji-Rong Wen. 2023. MVP: Multi-task supervised pre-training for natural language generation. In Findings of the Association for Computational Linguistics: ACL 2023 , pages 8758–8794. Riccardo Terrenzi, Matteo Falconi, Serkan Ayvaz, and Pierluigi Plebani. 2026. PIPER: Content-based table search via profiling and LLM-generated 
+
+10 pseudoqueries. In International Conference on Database and Expert Systems Applications (DEXA) .ArXiv:2605.18199. Mohamed Trabelsi, Zhiyu Chen, Shuo Zhang, Brian D. Davison, and Jeff Heflin. 2022. StruBERT: Structure-aware BERT for table search and matching. In Pro-ceedings of the Web Conference (WWW) , pages 442– 451. Lewis Tunstall, Edward Beeching, Nathan Lambert, Nazneen Rajani, Kashif Rasul, Younes Belkada, Shengyi Huang, Leandro von Werra, Clémentine Fourrier, Nathan Habib, Nathan Sarrazin, Omar San-seviero, Alexander M. Rush, and Thomas Wolf. 2024. Zephyr: Direct distillation of LM alignment. In Con-ference on Language Modeling (COLM) .Omri Uzan, Ron Polonsky, Douwe Kiela, and Christo-pher Potts. 2026. Document optimization for black-box retrieval via reinforcement learning. arXiv preprint arXiv:2604.05087 .Niklas Wretblad, Oskar Holmström, Erik Larsson, Axel Wiksäter, Oscar Söderlund, Hjalmar Öhman, Ture Pontén, Martin Forsberg, Martin Sörme, and Fredrik Heintz. 2024. Synthetic SQL column descriptions and their impact on text-to-SQL performance. arXiv preprint arXiv:2408.04691 .Yikuan Xia, Jiazun Chen, Sujian Li, and Jun Gao. 2025. Realistic training data generation and rule enhanced decoding in LLM for NameGuess. In Proceedings of the 2025 Conference on Empirical Methods in Natural Language Processing (EMNLP) , pages 6990– 7007. Sijia Yao, Pengcheng Huang, Zhenghao Liu, Yu Gu, Yukun Yan, Shi Yu, and Ge Yu. 2025. ExpandR: Teaching dense retrievers beyond queries with LLM guidance. In Proceedings of the 2025 Conference on Empirical Methods in Natural Language Processing (EMNLP) , pages 19036–19054. Dan Zhang, Yoshihiko Suhara, Jinfeng Li, Madelon Hulsebos, Cagatay Demiralp, and Wang-Chiew Tan. 2020. SATO: Contextual semantic type detection in tables. Proceedings of the VLDB Endowment ,13(11):1835–1848. Haoxiang Zhang, Yurong Liu, Aécio Santos, Wei-Lun Hung, and Juliana Freire. 2026. AutoDDG: Auto-mated dataset description generation using large lan-guage models. Proceedings of the ACM on Manage-ment of Data , 4(1):1–27. Jiani Zhang, Zhengyuan Shen, Balasubramaniam Srini-vasan, Shen Wang, Huzefa Rangwala, and George Karypis. 2023. NameGuess: Column name expan-sion for tabular data. In Proceedings of the 2023 Conference on Empirical Methods in Natural Lan-guage Processing (EMNLP) , pages 13276–13290. Shuo Zhang and Krisztian Balog. 2018. Ad hoc table retrieval using semantic similarity. In Proceedings of the Web Conference (WWW) , pages 1553–1562. Yilun Zhao, Linyong Nan, Zhenting Qi, Rui Zhang, and Dragomir Radev. 2022. ReasTAP: Injecting ta-ble reasoning skills during pre-training via synthetic reasoning examples. In Proceedings of the 2022 Con-ference on Empirical Methods in Natural Language Processing (EMNLP) , pages 9006–9018. Wei Zhou, Bolei Ma, Annemarie Friedrich, and Mohsen Mesgar. 2026. Table question answering in the era of large language models: A comprehensive survey of tasks, methods, and evaluation. In Proceedings of the 64th Annual Meeting of the Association for Com-putational Linguistics (ACL) , pages 12161–12189. Yujia Zhou, Zhicheng Dou, and Ji-Rong Wen. 2023. Enhancing generative retrieval with reinforcement learning from relevance feedback. In Proceedings of the 2023 Conference on Empirical Methods in Nat-ural Language Processing (EMNLP) , pages 12481– 12490. Daniel M. Ziegler, Nisan Stiennon, Jeffrey Wu, Tom B. Brown, Alec Radford, Dario Amodei, Paul Chris-tiano, and Geoffrey Irving. 2019. Fine-tuning lan-guage models from human preferences. arXiv preprint arXiv:1909.08593 .
+
+A.1 Table/Column Name Expansion 
+
+This section provides additional detail on the name expansion step (Section 3.1). 11 (a) Table name: Address (b) Table name: FactCallCenter (c) Table name: PurchaseOrderHeader 
+
+> Figure 5: Example column names and expansions.
+
+Figure 5 shows examples of original column names and their gold expansions. 
+
+Column Name Expansion: Table 4 shows the prompt for column name expansion. It has three parts. First, a system message that fixes the assis-tant role and asks the model to reply in the same format as the examples. Second, a task statement with eight guidelines: expand every abbreviation, including chemical symbols and units; leave numbers untouched; add nothing beyond the expansion; preserve token or-der; keep expansions short; commit to exactly one expansion per token rather than hedging with al-ternatives; and leave non-abbreviated tokens un-changed. Third, four few-shot examples ( Prchs_info ,
+
+Emp_info , AirQ_data , and Pop_census ), each written as a question, a chain-of-thought reason-ing block, and a final answer. The reasoning block first reads the table name for domain context, then splits each column name into tokens and expands them one at a time. The final answer is a token-level mapping, e.g., 
+
+sal_amt: sal → Salary, amt → Amount ,which we concatenate into a single expanded string per column. The target table’s name and a batch of its column names are appended in the same question format, and the model continues from 
+
+[Answer] . We use the default batch size of 10 column names per prompt. 
+
+Table Name Expansion: Table 5 shows the prompt for table name expansion. It reuses the system message and the eight guidelines verbatim, changing only “column names” to “table names” in the task statement, and it uses the same four tables as few-shot examples. The difference is in the input: each question supplies the table name together with its column names , so the model can use the columns as ev-idence for what the table is about (e.g., hh_id ,
+
+age_grp , edu_lvl support reading Pop_census as “Population Census”). At inference we pass the already-expanded col-umn names rather than the original ones, and in-clude at most the first 25 of them to bound prompt length. The output is again a token-level mapping, e.g., 
+
+Prchs_info: Prchs → Purchase, info →
+
+Information , concatenated into one expanded ta-ble name. Tables without a name skip this step. 12 Column Name Expansion Prompt System: You are a helpful assistant, answer the question from the user and reply in the same format. 
+
+User: Your task is to expand abbreviated column names into full-form phrases. You should return the tokens of each column name and their associated expansions. First reason step by step and then return your final answer. Follow the guidelines below when you expand: 1. Expand all abbreviations in the column names. 2. Expand chemical symbols and units of measure to their full names. 3. Do not expand or mutate numbers. 4. Do not add extra words or explanations. 5. Maintain the original order of tokens in the expansion. 6. The tokens should be as concise and simple as possible. 7. Only provide 1 expansion for each token, even if you are uncertain, output the most possible one. Do not put ambiguous or need context after your expansion. 8. If the token is not abbreviated, the expansion should be itself, do not paraphrase or add other words around it. [Question] As abbreviations of column names from a table named Prchs_info, c_name | pCd | dt stand for? Think step by step [Answer] ### Reasoning 1. Identify the table name context: 
+
+• The table is named “Prchs_info” , which likely stands for “Purchase Information” .• This suggests that the column names are related to purchase details. 2. Break down each column name into tokens and infer meanings: 
+
+• c_name → c, name 
+
+– c is commonly used for Customer in business contexts. 
+
+– name clearly refers to Name .
+
+– Together, c_name most likely means Customer Name .• pCd → p, Cd 
+
+– p is frequently used for Product in sales or inventory tables. 
+
+– Cd is a common abbreviation for Code .
+
+– Together, pCd most likely means Product Code .• dt → dt 
+
+– dt is a standard abbreviation for Date .
+
+– In the context of a purchase table, it likely refers to Purchase Date .### Final Answer c_name: c → Customer, name → Name pCd: p → Product, Cd → Code dt: dt → Date 
+
+(3 more few-shot examples omitted for brevity) 
+
+[Question] As abbreviations of column names from a table named {table_name}, {column_name_1} | {column_name_2} | . . . | {column_name_k} stand for [Answer] 
+
+Table 4: Column name expansion prompt. The prompt uses four few-shot examples (first shown in full above; three omitted for brevity) followed by the target input. Input placeholders are shown in red. 
+
+13 Table Name Expansion Prompt System: You are a helpful assistant, answer the question from the user and reply in the same format. 
+
+User: Your task is to expand abbreviated table names into full-form phrases. You should return the tokens of each table name and their associated expansions. First reason step by step and then return your final answer. Follow the guidelines below when you expand: 1. Expand all abbreviations in the table names. 2. Expand chemical symbols and units of measure to their full names. 3. Do not expand or mutate numbers. 4. Do not add extra words or explanations. 5. Maintain the original order of tokens in the expansion. 6. The tokens should be as concise and simple as possible. 7. Only provide 1 expansion for each token, even if you are uncertain, output the most possible one. Do not put ambiguous or need context after your expansion. 8. If the token is not abbreviated, the expansion should be itself, do not paraphrase or add other words around it. [Question] Given the following table information: Table name: Prchs_info Column names: c_name | pCd | dt What is the full form of the table name Prchs_info? Think step by step [Answer] ### Reasoning 1. Understand the context from the table name: 
+
+• The table name is “Prchs_info” .• The suffix _info clearly suggests “Information” .• The prefix “Prchs” is a shortened form, likely representing “Purchase” .2. Tokenize the table name: 
+
+• Tokens: Prchs , info 
+
+• Prchs → common abbreviation for Purchase .• info → abbreviation for Information .### Final Answer Prchs_info: Prchs → Purchase, info → Information 
+
+(3 more few-shot examples omitted for brevity) 
+
+[Question] Given the following table information: Table name: {table_name} Column names: {expanded_column_name_1} | {expanded_column_name_2} | . . . | {expanded_column_name_k} What is the full form of the table name {table_name}? Think step by step [Answer] 
+
+Table 5: Table name expansion prompt. The prompt uses four few-shot examples (first shown in full above; three omitted for brevity) with expanded column names as additional context. Input placeholders are shown in red. 
+
+14 A.2 Initial Table Description Generation 
+
+This section provides additional detail on the initial table description generation step: the prompt used to generate descriptions, a sample generated de-scription, and the LLM and decoding configuration used at this step. 
+
+Description Generation: Table 6 shows the de-scription generation prompt. 
+
+Description Generation Prompt System: You are a careful, concise data documentation assistant. You ONLY use the provided table information, which may include table name, column names and table context, to infer high-level information. If something is not obvious from the schema, say ‘unknown’ instead of guessing. You do NOT need to restate the table name, column names, or table context in the JSON. Your output MUST be valid JSON, wrapped in triple backticks with the language tag json . Do NOT include any text outside the JSON code fence. Follow the schema exactly—no extra keys. 
+
+JSON schema (instructions, not to be echoed verbatim): 
+
+{"dataset_overview": str, "key_themes_or_topics": [str], "applications_and_use_cases": [str], "concepts_and_synonyms": [{"concept": str, "synonyms": [str]}], "keywords_and_themes": [str], "additional_context": [str]} 
+
+Formatting rules: 
+
+1. Return only a JSON object inside a “‘json code fence. 2. Include no explanations, headers, or markdown outside the code fence. 3. Maintain the key order in the schema if possible. 4. For concepts_and_synonyms , include 3–6 items, each with 1–4 synonyms. 
+
+User (one-shot example): 
+
+Given the table information below: Table Name: insurers Column Names: company_name, year, insurer_type, total_assets, liabilities, premiums_written Produce documentation following the JSON schema in the system message. Keep it concise and truthful. If unsure, use ‘unknown’. 
+
+Assistant (one-shot example): 
+
+“‘json {"dataset_overview": "Financial attributes of health insurers by company and year, including insurer type, assets, liabilities, and written premiums.", "key_themes_or_topics": ["Health insurance finance", "Insurer types", "Financial metrics"], "applications_and_use_cases": ["Evaluate insurer financial health", "Benchmark insurer types", "Analyze market trends"], "concepts_and_synonyms": [{"concept": "Premiums Written", "synonyms": ["Premium Income", "Gross Written Premium"]}, {"concept": "Liabilities", "synonyms": ["Financial Obligations", "Reserves"]}, {"concept": "Assets", "synonyms": ["Total Assets", "Asset Valuation"]}], "keywords_and_themes": ["health insurance", "premiums", "assets", "liabilities", "yearly financials"], "additional_context": ["Values are organized by company and year."]} “‘ 
+
+User (actual query): 
+
+Using the table information below, generate JSON that follows the schema in the system message. Write 2–5 sentences for 
+
+dataset_overview . Provide specific, schema-derived items; avoid speculation. If information is unclear, use ‘unknown’. Output JSON only, wrapped in “‘json fences. Table Name: {expanded_table_name} (optional) Column Names: {expanded_col_1}, {expanded_col_2}, . . . , {expanded_col_k} Table Context: {table_context} (optional) 
+
+Table 6: Prompt for initial table-description generation. Input placeholders are shown in red. 
+
+15 Sample Generated Table Description              
+
+> {"dataset_overview": "Quarterly language-preference data for Social Security Disability Insurance claimants from fiscal year 2016 onward. The table supports analysis of how claimant language preferences change across quarters and years.", "key_themes_or_topics": ["Social Security Disability Insurance", "Language preferences", "Quarterly data"], "applications_and_use_cases": ["Analyze quarterly language trends", "Compare claimant language preferences across fiscal years"], "concepts_and_synonyms": [ {"concept": "Language Preference", "synonyms": ["Spoken Language", "Preferred Language"]}, {"concept": "Disability Insurance", "synonyms": ["SSDI", "Disability Benefits"]}, {"concept": "Quarterly Data", "synonyms": ["Periodic Data", "Time Series"]}], "keywords_and_themes": ["language preferences", "SSDI", "quarterly data", "claimant demographics", "fiscal year"], "additional_context": ["Data is organized by fiscal year and quarter."] }
+
+Table 7: Example output of the initial description-generation stage. 
+
+Sample Description: Table 7 shows an out-put description produced by the prompt. The input schema contains fiscal-year, quarter, and language-preference columns for Disability Insur-ance claimants. 
+
+The Generator: We use Llama 3.1 8B Instruct as the base model. At this initial stage, the model has not yet been fine-tuned with DPO. For each table, the model receives the expanded table name, expanded column names, and table context, and returns the six-field description illustrated above. For each gold table—a table relevant to at least one training query— we sample K = 3 descrip-tions with temperature 0.5, top_p = 0.9, top_k =50, and seed 42. The non-zero temperature gives the candidates enough variation to create a useful ranking signal. For every other table, we generate one description using the same model, prompt, and decoding settings. 
+
+A.3 Ranking the Table Descriptions 
+
+We rank the K candidate descriptions of each gold table by how well they support retrieval for the queries related to that table. Let Q(T ) = {q :
+
+R(q, T ) > 0} be the set of queries for which ta-ble T is relevant. We construct a unified corpus CT
+
+containing K copies of T , one with each candidate description, and one copy of every other table. A gold table other than T is represented by one ran-domly selected candidate. Thus, the K copies of T
+
+differ only in their descriptions. For query q and candidate description d, define the BM25 length-normalization factor 
+
+ℓ(d) = 1 − b + b |d|
+
+avgdl .
+
+BM25 then assigns 
+
+BM25 CT (q, d ) = X
+
+> t∈q
+
+IDF( t) tf( t, d )( k1 + 1) tf( t, d ) + k1ℓ(d) ,
+
+IDF( t) = log 
+
+
+
+1 + N − nt + 0 .5
+
+nt + 0 .5
+
+
+
+,
+
+where tf( t, d ) is the frequency of term t in d, |d| is the description length, avgdl is the average docu-ment length in CT , N = |CT |, and nt is the number of documents containing t. We use Elasticsearch’s BM25 defaults, k1 = 1 .2 and b = 0 .75 .The score of candidate description dj is its BM25 score averaged over all queries for which T
+
+is relevant: 
+
+sT (dj ) = 1
+
+|Q(T )|
+
+X 
+
+> q∈Q(T)
+
+BM25 CT (q, d j ).
+
+This averaging gives equal weight to every rel-evant query and produces one retrieval-oriented score per description. We order the candidates as dπ1 ≻ dπ2 ≻ · · · ≻ dπK , where sT (dπ1 ) ≥
+
+sT (dπ2 ) ≥ · · · ≥ sT (dπK ). Intuitively, a higher-ranked description uses language that makes the correct table score more highly for its relevant queries. 
+
+A.4 DPO Training with the Rankings 
+
+With K = 3 , each gold table has ranked candidates 
+
+dπ1 ≻ dπ2 ≻ dπ3 . We retain the most separated pair and construct one training example 16  prompt( T ), d win = dπ1 , d lose = dπ3
+
+.
+
+Direct Preference Optimization trains the model to increase the likelihood of the winning descrip-tion relative to the losing one, without fitting a separate reward model. Its loss is 
+
+LDPO = −E
+
+
+
+log σ
+
+
+
+β log πθ(dwin | x)
+
+πref (dwin | x)
+
+− β log πθ(dlose | x)
+
+πref (dlose | x)
+
+ 
+
+,
+
+where x = prompt( T ), πθ is the model being trained, πref is the frozen base model, and β con-trols regularization. We use Llama 3.1 8B Instruct with 4-bit quan-tization and LoRA for parameter-efficient DPO training. The adapter targets all attention and feed-forward projections ( q_proj , k_proj , v_proj ,
+
+o_proj , gate_proj , up_proj , and down_proj ), with rank r = 64 and α = 64 . This gives 167M trainable parameters out of 8.2B total (2.05%). We train for one epoch with β = 0 .1, learning rate 
+
+5 × 10 −6, a linear schedule with 10% warmup, effective batch size 8, and the AdamW 8-bit opti-mizer. Training uses leave-one-dataset-out cross-validation: for each held-out dataset, preference pairs from the other five datasets form the training set.                
+
+> Parameter Value
+> Base model Llama 3.1 8B Instruct Quantization 4-bit LoRA rank / α64 / 64 Trainable parameters 167M / 8.2B (2.05%) DPO β0.1 Learning rate 5×10 −6
+> Epochs 1Effective batch size 8Optimizer AdamW 8-bit LR schedule Linear; 10% warmup
+> Table 8: DPO training configuration.
+
+A.5 Datasets and Experimental Settings 
+
+We evaluate on six datasets spanning four domains. The datasets vary in scale (96 to 4,634 tables), do-main (enterprise, scientific, government, web), and the number of relevant tables per query. Three datasets are curated from prior work and three are newly created. 
+
+WikiTables: Derived from a large corpus of Wikipedia tables used for entity linking (Bhagavat-ula et al., 2015). The original benchmark contains 60 queries and 1.6 million tables, with graded rel-evance on a 0–2 scale (0: irrelevant, 1: partially relevant, 2: fully relevant). As these are web tables, they lack meaningful table names; each table con-sists of column names and table context (page title, caption, and surrounding text). Generating descriptions for all 1.6M tables is computationally prohibitive, so we apply a BM25-based downsampling strategy (see below). After downsampling and removing queries with no con-firmed positive tables, we retain 3,361 tables and 57 queries. 
+
+WTR: Built over English web tables from Com-monCrawl (Chen et al., 2021), using the same 60 queries as WikiTables but with different table cov-erage. The original benchmark contains approxi-mately 3 million tables, also with graded relevance on a 0–2 scale. Tables include page titles, captions, and surrounding text as context but no table names. We apply the same downsampling strategy, yield-ing 4,634 tables across 60 queries. 
+
+Downsampling Strategy: Both WikiTables and WTR contain millions of tables, making it imprac-tical to generate descriptions for all of them. We downsample each corpus deterministically using a BM25-based strategy. For each query, we retrieve the top-50 tables from the full corpus via BM25, using only the available metadata fields (column names with the trigram analyzer and table context with the word analyzer, both with equal weight); no descriptions or table names are used, as descrip-tions have not yet been generated at this stage and these datasets do not have table names. We then take the union of these retrieved tables with all gold-relevant tables (relevance score > 0). This strategy does not reduce task difficulty; rather, it focuses the corpus on hard cases by retaining the most competitive non-relevant tables (hard nega-tives that BM25 would actually surface) alongside all truly relevant tables. 
+
+ECIR: Built from the U.S. government open data portal (Chen et al., 2020a). The original benchmark defines 6 search tasks, each with 20 queries, and provides task–table relevance judgments on a 0–3 scale from multiple annotators. Prior work (Zhang et al., 2026) treats all 120 queries independently. Upon careful inspection, we identify two issues: 17 (1) the 20 queries within each task are highly simi-lar and lack diversity, with some queries unrelated to the task; and (2) the relevance labels suffer from false positives—many table–task pairs labeled as highly relevant ( ≥ 2) are not actually relevant upon manual inspection, while pairs labeled as irrelevant (0) are generally correct. To address these issues, we manually re-label all table–query pairs originally scored as highly relevant ( ≥ 2), keeping labels of 0 as-is. To reduce redundancy across queries within a task, we select 2 representative and maximally distinct queries per task. We also remove tables that are not in CSV format and cannot be opened, yielding 12 queries across 2,100 parseable tables with relevance on a 0–3 scale. 
+
+AW: Based on the AdventureWorks sample database (Microsoft), a well-known enterprise schema with 96 tables that use many abbreviated names (e.g., BusEntId , DTPh , STRGUID ). We cre-ated 15 queries for enterprise data discovery tasks, such as “employee phone number” and “discounted products”, and manually labeled the relevance of all 96 tables for each query. The relevance score is binary (0 or 1). 
+
+Arctic: A random sample of 251 tables from the Environmental Data Initiative (EDI), a scientific data repository storing long-term ecological and environmental research data. We created 20 queries covering topics such as “precipitation,” “species di-versity,” and “nitrous oxide” and manually labeled the table–query pairs. Relevance is binary (0 or 1). 
+
+LTER: A larger sample of 2,015 tables from the top-downloaded EDI collections, representing a more focused subset of frequently used scientific datasets. We created 15 queries and manually la-beled relevance as in Arctic. Relevance is binary (0 or 1). 
+
+Relevance Annotation: For all three new datasets, we use a pooling-based annotation work-flow: for each query, we run multiple retrieval con-figurations (varying BM25 field weights, tokeniza-tion strategies, and dense retrieval) and collect the union of candidate tables. A domain expert then manually verifies whether each candidate is rele-vant to the query, producing binary relevance labels used for both training and evaluation. This pooling approach reduces the chance of missing relevant tables that any single retrieval method would over-look. 
+
+The Generators: We use Llama 3.1 8B In-struct (Llama Team, AI @ Meta, 2024) as the base model for description generation, with 4-bit quantization (QLoRA (Dettmers et al., 2023)) for parameter-efficient DPO fine-tuning. For name expansion, we use Llama 4 Maver-ick 17B Instruct via AWS Bedrock with tempera-ture 0.2, top_p 0.9, and max_tokens 4196. Table 8 summarizes the DPO training hyper-parameters. The LoRA adapter targets all at-tention and feed-forward projections ( q_proj ,
+
+k_proj , v_proj , o_proj , gate_proj , up_proj ,
+
+down_proj ), with rank r = 64 and α = 64 , re-sulting in 167M trainable parameters out of 8.2B total (2.05%). We train for one epoch with DPO β = 0 .1, learn-ing rate 5 × 10 −6 with linear schedule and 10% warmup, effective batch size 8, and AdamW 8-bit optimizer. For each held-out dataset, we train on preference pairs from the remaining five datasets (leave-one-dataset-out cross-validation). 
+
+Keyword Search: We use Elasticsearch with BM25 scoring ( k1 = 1 .2, b = 0 .75 ). The word-level analyzer applies standard tokenization (split-ting on whitespace and punctuation), lowercasing, and English stemming (Porter), so that query and document terms are matched after normalization. Unless otherwise noted (§A.12), we index each ta-ble as a single description field with this analyzer, isolating the effect of description quality from in-dexing configuration differences. 
+
+Evaluation Metrics: We report NDCG@ K
+
+(ranking quality with graded relevance) and Recall@ K (fraction of relevant tables retrieved in the top K) for K ∈ { 5, 10 , 20 , 50 , 100 }. For Re-call, all tables with relevance score > 0 are treated as relevant. 
+
+A.6 Overall Performance 
+
+Figure 6 shows the average length of the descrip-tions generated by AutoDDG and Polaris. 
+
+A.7 Ablation Studies 
+
+Table 9 shows NDCG@K and Table 10 shows Re-call@K for prompt quality evaluation. Table 11 reports NDCG@K and Table 12 reports Recall@K for the effect of DPO training and the effect of name expansion. 18 3,099 2,964 2,977 3,206 3,036 3,000 1,288 1,561 1,535 1,618 1,458 1,243       
+
+> 01,000 2,000 3,000
+> AW Arctic LTER ECIR WTR WikiTables
+> AutoDDG Polaris
+
+Figure 6: Average length of the descriptions generated by AutoDDG and Polaris on each dataset.                                                                               
+
+> Dataset Method @5 @10 @20 @50 @100 AW AutoDDG .5551 .6192 .6692 .6969 .7030
+> P−(exp+DPO) .7667 .7948 .8129 .8129 .8129 Arctic AutoDDG .6274 .5942 .5942 .6360 .6812
+> P−(exp+DPO) .7041 .6651 .6700 .7008 .7226 LTER AutoDDG .4372 .4194 .4011 .3656 .3559
+> P−(exp+DPO) .6042 .5856 .5353 .4358 .4188 ECIR AutoDDG .4215 .4429 .4512 .4408 .4180
+> P−(exp+DPO) .5390 .5555 .5385 .5141 .4927 WTR AutoDDG .3748 .3548 .3767 .4159 .4884
+> P−(exp+DPO) .3693 .3688 .3684 .4335 .5155 WikiTables AutoDDG .4139 .4085 .4398 .5176 .5811
+> P−(exp+DPO) .3999 .4027 .4456 .5189 .5721
+
+Table 9: Prompt quality ablation (NDCG@ K): Au-toDDG vs. P −(exp+DPO) . P −(exp+DPO) = Po-laris without DPO training and table/column name ex-pansion. Blue = better per cell. 
+
+A.8 Sensitivity Analysis with Different LLMs 
+
+Table 13 shows NDCG@K and Table 14 shows Recall@K for the effect of replacing the underly-ing LLM with Qwen2.5-7B-Instruct (Qwen Team, 2024). Table 15 reports NDCG@K and Table 16 reports Recall@K for the comparison between Polaris and AutoDDG, both using Qwen2.5-7B-Instruct. 
+
+A.9 Sensitivity Analysis with Different DPO β
+
+Table 17 shows NDCG@K and Table 18 shows Recall@K for the effect of increasing the DPO regularization parameter β from 0.1 to 0.5. 
+
+A.10 Sensitivity Analysis with Different Numbers of Descriptions 
+
+Table 19 shows NDCG@K and Table 20 shows Recall@K for the effect of increasing the number of candidate descriptions per gold table from 3 to 5. 
+
+Dataset Method @5 @10 @20 @50 @100 AW AutoDDG .49 .64 .76 .83 .85 
+
+P −(exp+DPO) .69 .78 .82 .82 .82 Arctic AutoDDG .24 .34 .48 .68 .77 
+
+P −(exp+DPO) .29 .40 .55 .74 .78 LTER AutoDDG .08 .14 .22 .32 .35 
+
+P −(exp+DPO) .12 .18 .26 .33 .37 ECIR AutoDDG .01 .02 .04 .08 .12 
+
+P −(exp+DPO) .02 .02 .04 .09 .14 WTR AutoDDG .08 .14 .25 .43 .59 
+
+P −(exp+DPO) .08 .14 .24 .47 .64 WikiTables AutoDDG .21 .29 .41 .66 .83 
+
+P −(exp+DPO) .20 .28 .44 .68 .82 
+
+Table 10: Prompt quality ablation (Recall@ K): Au-toDDG vs. P −(exp+DPO) . P −(exp+DPO) = Po-laris without DPO training and table/column name ex-pansion. Blue = better per cell. 
+
+Dataset Method @5 @10 @20 @50 @100 AW Polaris .7312 .7582 .7869 .7869 .7869 
+
+P −DPO .6681 .7287 .7794 .7794 .7794 
+
+P −exp .6940 .7485 .7847 .7847 .7847 Arctic Polaris .7133 .6743 .6939 .7416 .7678 
+
+P −DPO .7209 .6785 .6891 .7334 .7535 
+
+P −exp .6690 .6493 .6737 .6872 .7106 LTER Polaris .7218 .6546 .6013 .5239 .5145 
+
+P −DPO .6538 .6187 .5639 .4743 .4488 
+
+P −exp .5957 .5750 .5257 .4434 .4230 ECIR Polaris .4946 .5050 .4981 .4873 .4672 
+
+P −DPO .5696 .5894 .5502 .5114 .4941 
+
+P −exp .4912 .4968 .4954 .5048 .4726 WTR Polaris .3840 .3840 .3894 .4449 .5309 
+
+P −DPO .3657 .3635 .3740 .4402 .5226 
+
+P −exp .3554 .3781 .3820 .4390 .5208 WikiTables Polaris .4111 .4215 .4407 .5171 .5727 
+
+P −DPO .4162 .4094 .4396 .5229 .5722 
+
+P −exp .3818 .3930 .4377 .5200 .5725 
+
+Table 11: Effect of DPO training and table/column name expansion (NDCG@ K): Polaris vs. P −DPO 
+
+vs. P −exp . P −DPO = Polaris without DPO training, 
+
+P −exp = Polaris without name expansion. Blue = best per cell. 
+
+A.11 Sensitivity Analysis with Different Numbers of Training Epochs 
+
+Table 21 shows NDCG@K and Table 22 shows Recall@K for the effect of increasing DPO training from 1 epoch to 3 epochs. 
+
+A.12 Multi-Field Keyword Search 
+
+Table 23 shows NDCG@K and Table 24 shows Re-call@K for multi-field Polaris, compared to single-field Polaris and AutoDDG. Table 25 shows NDCG@K for the effect of re-moving each of the three fields (description, ta-ble/column name expansions, and table context) from multi-field Polaris. 19 Dataset Method @5 @10 @20 @50 @100 AW Polaris .66 .77 .83 .83 .83 
+
+P −DPO .61 .76 .89 .89 .89 
+
+P −exp .65 .79 .87 .87 .87 Arctic Polaris .29 .41 .58 .77 .82 
+
+P −DPO .30 .40 .56 .76 .80 
+
+P −exp .27 .39 .57 .72 .77 LTER Polaris .18 .25 .32 .39 .43 
+
+P −DPO .12 .19 .28 .36 .38 
+
+P −exp .13 .18 .25 .33 .36 ECIR Polaris .01 .03 .04 .08 .13 
+
+P −DPO .01 .03 .04 .09 .14 
+
+P −exp .01 .02 .04 .09 .13 WTR Polaris .08 .15 .26 .48 .66 
+
+P −DPO .08 .14 .25 .47 .65 
+
+P −exp .08 .15 .26 .48 .65 WikiTables Polaris .21 .32 .42 .67 .81 
+
+P −DPO .20 .28 .41 .68 .81 
+
+P −exp .21 .29 .45 .70 .86 
+
+Table 12: Effect of DPO training and table/column name expansion (Recall@ K): Polaris vs. P −DPO 
+
+vs. P −exp . P −DPO = Polaris without DPO train-ing, P −exp = Polaris without name expansion. Blue = best per cell. 
+
+Dataset Method @5 @10 @20 @50 @100 AW P (Qwen) .8265 .8390 .8733 .8733 .8733 Polaris .7312 .7582 .7869 .7869 .7869 Arctic P (Qwen) .7303 .6952 .7071 .7425 .7690 Polaris .7133 .6743 .6939 .7416 .7678 LTER P (Qwen) .6269 .5964 .5393 .4439 .4259 Polaris .7218 .6546 .6013 .5239 .5145 ECIR P (Qwen) .5188 .5117 .4935 .4834 .4577 Polaris .4946 .5050 .4981 .4873 .4672 WTR P (Qwen) .4346 .3961 .3957 .4430 .5123 Polaris .3840 .3840 .3894 .4449 .5309 WikiTables P (Qwen) .4250 .4383 .4692 .5403 .5971 Polaris .4111 .4215 .4407 .5171 .5727 
+
+Table 13: Polaris with different LLMs (NDCG@ K): 
+
+P (Qwen) vs. Polaris. P (Qwen) = Polaris with Qwen2.5-7B, Polaris = Polaris with Llama 3.1 8B. Blue = better per cell. 
+
+Dataset Method @5 @10 @20 @50 @100 AW P (Qwen) .73 .81 .88 .88 .88 Polaris .66 .77 .83 .83 .83 Arctic P (Qwen) .29 .42 .60 .77 .82 Polaris .29 .41 .58 .77 .82 LTER P (Qwen) .11 .18 .27 .34 .36 Polaris .18 .25 .32 .39 .43 ECIR P (Qwen) .01 .02 .04 .08 .12 Polaris .01 .03 .04 .08 .13 WTR P (Qwen) .09 .15 .25 .46 .61 Polaris .08 .15 .26 .48 .66 WikiTables P (Qwen) .19 .30 .45 .69 .84 Polaris .21 .32 .42 .67 .81 
+
+Table 14: Polaris with different LLMs (Recall@ K): 
+
+P (Qwen) vs. Polaris. P (Qwen) = Polaris with Qwen2.5-7B, Polaris = Polaris with Llama 3.1 8B. Blue = better per cell. 
+
+Dataset Method @5 @10 @20 @50 @100 AW A(Qwen) .4853 .5286 .5946 .6306 .6306 
+
+P (Qwen) .8265 .8390 .8733 .8733 .8733 Arctic A(Qwen) .6861 .6586 .6786 .7055 .7437 
+
+P (Qwen) .7303 .6952 .7071 .7425 .7690 LTER A(Qwen) .3379 .3269 .3275 .3380 .3440 
+
+P (Qwen) .6269 .5964 .5393 .4439 .4259 ECIR A(Qwen) .3660 .4175 .4200 .4033 .3989 
+
+P (Qwen) .5188 .5117 .4935 .4834 .4577 WTR A(Qwen) .3541 .3714 .3691 .4164 .5010 
+
+P (Qwen) .4346 .3961 .3957 .4430 .5123 WikiTables A(Qwen) .4414 .4493 .4718 .5479 .6036 
+
+P (Qwen) .4250 .4383 .4692 .5403 .5971 
+
+Table 15: Polaris vs. AutoDDG under Qwen2.5-7B (NDCG@ K): A(Qwen) vs. P (Qwen) . A(Qwen) =AutoDDG with Qwen2.5-7B, P (Qwen) = Polaris with Qwen2.5-7B. Blue = better per cell. 
+
+Dataset Method @5 @10 @20 @50 @100 AW A(Qwen) .42 .55 .73 .83 .83 AutoDDG .49 .64 .76 .83 .85 
+
+P (Qwen) .73 .81 .88 .88 .88 Polaris .66 .77 .83 .83 .83 Arctic A(Qwen) .29 .41 .58 .74 .81 AutoDDG .24 .34 .48 .68 .77 
+
+P (Qwen) .29 .42 .60 .77 .82 Polaris .29 .41 .58 .77 .82 LTER A(Qwen) .05 .08 .17 .31 .36 AutoDDG .08 .14 .22 .32 .35 
+
+P (Qwen) .11 .18 .27 .34 .36 Polaris .18 .25 .32 .39 .43 ECIR A(Qwen) .01 .02 .04 .07 .11 AutoDDG .01 .02 .04 .08 .12 
+
+P (Qwen) .01 .02 .04 .08 .12 Polaris .01 .03 .04 .08 .13 WTR A(Qwen) .08 .15 .24 .44 .62 AutoDDG .08 .14 .25 .43 .59 
+
+P (Qwen) .09 .15 .25 .46 .61 Polaris .08 .15 .26 .48 .66 WikiTables A(Qwen) .24 .34 .47 .70 .86 AutoDDG .21 .29 .41 .66 .83 
+
+P (Qwen) .19 .30 .45 .69 .84 Polaris .21 .32 .42 .67 .81 
+
+Table 16: Polaris vs. AutoDDG under different LLMs (Recall@ K): A(Qwen) vs. AutoDDG vs. P (Qwen) 
+
+vs. Polaris. A(Qwen) = AutoDDG with Qwen2.5-7B, 
+
+P (Qwen) = Polaris with Qwen2.5-7B; AutoDDG and Polaris use Llama 3.1 8B. Blue = best per cell. 
+
+20 Dataset Method @5 @10 @20 @50 @100 AW P (β=0 .5) .7398 .7662 .8051 .8051 .8051 Polaris .7312 .7582 .7869 .7869 .7869 Arctic P (β=0 .5) .7266 .6874 .6837 .7380 .7585 Polaris .7133 .6743 .6939 .7416 .7678 LTER P (β=0 .5) .6760 .6151 .5806 .4929 .4732 Polaris .7218 .6546 .6013 .5239 .5145 ECIR P (β=0 .5) .4914 .5158 .4837 .4956 .4784 Polaris .4946 .5050 .4981 .4873 .4672 WTR P (β=0 .5) .3728 .3820 .3868 .4455 .5275 Polaris .3840 .3840 .3894 .4449 .5309 WikiTables P (β=0 .5) .4040 .4116 .4368 .5123 .5728 Polaris .4111 .4215 .4407 .5171 .5727 
+
+Table 17: Effect of the DPO regularization parameter 
+
+β (NDCG@ K): P (β=0 .5) vs. Polaris. P (β=0 .5) =Polaris with β = 0 .5; Polaris uses the default β = 0 .1.Blue = better per cell. 
+
+Dataset Method @5 @10 @20 @50 @100 AW P (β=0 .5) .68 .77 .86 .86 .86 Polaris .66 .77 .83 .83 .83 Arctic P (β=0 .5) .30 .42 .56 .78 .82 Polaris .29 .41 .58 .77 .82 LTER P (β=0 .5) .13 .20 .29 .37 .40 Polaris .18 .25 .32 .39 .43 ECIR P (β=0 .5) .01 .02 .04 .08 .13 Polaris .01 .03 .04 .08 .13 WTR P (β=0 .5) .08 .15 .25 .47 .65 Polaris .08 .15 .26 .48 .66 WikiTables P (β=0 .5) .20 .30 .42 .67 .83 Polaris .21 .32 .42 .67 .81 
+
+Table 18: Effect of the DPO regularization parameter 
+
+β (Recall@ K): P (β=0 .5) vs. Polaris. P (β=0 .5) =Polaris with β = 0 .5; Polaris uses the default β = 0 .1.Blue = better per cell. 
+
+Dataset Method @5 @10 @20 @50 @100 AW P (5 -desc) .8019 .8313 .8601 .8601 .8601 Polaris .7312 .7582 .7869 .7869 .7869 Arctic P (5 -desc) .6843 .6593 .7013 .7446 .7645 Polaris .7133 .6743 .6939 .7416 .7678 LTER P (5 -desc) .6364 .5987 .5567 .4805 .4694 Polaris .7218 .6546 .6013 .5239 .5145 ECIR P (5 -desc) .4728 .4673 .4832 .4897 .4731 Polaris .4946 .5050 .4981 .4873 .4672 WTR P (5 -desc) .3723 .3842 .3982 .4623 .5391 Polaris .3840 .3840 .3894 .4449 .5309 WikiTables P (5 -desc) .4328 .4364 .4550 .5248 .5834 Polaris .4111 .4215 .4407 .5171 .5727 
+
+Table 19: Effect of the number of candidate descrip-tions (NDCG@ K): P (5 -desc) vs. Polaris. P (5 -desc) 
+
+= Polaris with 5 candidate descriptions per gold table; Polaris has 3 by default. Blue = better per cell. 
+
+Dataset Method @5 @10 @20 @50 @100 AW P (5 -desc) .73 .84 .90 .90 .90 Polaris .66 .77 .83 .83 .83 Arctic P (5 -desc) .29 .41 .61 .80 .84 Polaris .29 .41 .58 .77 .82 LTER P (5 -desc) .13 .20 .28 .35 .39 Polaris .18 .25 .32 .39 .43 ECIR P (5 -desc) .01 .02 .04 .08 .13 Polaris .01 .03 .04 .08 .13 WTR P (5 -desc) .08 .16 .27 .50 .67 Polaris .08 .15 .26 .48 .66 WikiTables P (5 -desc) .21 .32 .43 .66 .83 Polaris .21 .32 .42 .67 .81 
+
+Table 20: Effect of the number of candidate descrip-tions (Recall@ K): P (5 -desc) vs. Polaris. P (5 -desc) 
+
+= Polaris with 5 candidate descriptions per gold table; Polaris has 3 by default. Blue = better per cell. 
+
+Dataset Method @5 @10 @20 @50 @100 AW P (3 -epoch) .6908 .7522 .7881 .7968 .7968 Polaris .7312 .7582 .7869 .7869 .7869 Arctic P (3 -epoch) .8080 .7131 .7059 .7595 .7951 Polaris .7133 .6743 .6939 .7416 .7678 LTER P (3 -epoch) .7064 .6535 .6020 .5105 .4940 Polaris .7218 .6546 .6013 .5239 .5145 ECIR P (3 -epoch) .4532 .4813 .4763 .4702 .4584 Polaris .4946 .5050 .4981 .4873 .4672 WTR P (3 -epoch) .3810 .3505 .3571 .4095 .4859 Polaris .3840 .3840 .3894 .4449 .5309 WikiTables P (3 -epoch) .4069 .4002 .4359 .5142 .5753 Polaris .4111 .4215 .4407 .5171 .5727 
+
+Table 21: Effect of the number of training epochs (NDCG@ K): P (3 -epoch) vs. Polaris. P (3 -epoch) =Polaris trained for 3 epochs; Polaris uses 1 epoch by default. Blue = better per cell. 
+
+Dataset Method @5 @10 @20 @50 @100 AW P (3 -epoch) .65 .83 .91 .93 .93 Polaris .66 .77 .83 .83 .83 Arctic P (3 -epoch) .32 .42 .59 .80 .86 Polaris .29 .41 .58 .77 .82 LTER P (3 -epoch) .16 .23 .31 .38 .42 Polaris .18 .25 .32 .39 .43 ECIR P (3 -epoch) .01 .02 .04 .08 .13 Polaris .01 .03 .04 .08 .13 WTR P (3 -epoch) .08 .13 .22 .42 .59 Polaris .08 .15 .26 .48 .66 WikiTables P (3 -epoch) .20 .28 .44 .67 .84 Polaris .21 .32 .42 .67 .81 
+
+Table 22: Effect of the number of training epochs (Recall@ K): P (3 -epoch) vs. Polaris. P (3 -epoch) =Polaris trained for 3 epochs; Polaris uses 1 epoch by default. Blue = better per cell. 
+
+21 Dataset Method @5 @10 @20 @50 @100 AW AutoDDG .5551 .6192 .6692 .6969 .7030 Polaris .7312 .7582 .7869 .7869 .7869 
+
+P (multi) .8133 .8282 .8677 .8677 .8677 Arctic AutoDDG .6274 .5942 .5942 .6360 .6812 Polaris .7133 .6743 .6939 .7416 .7678 
+
+P (multi) .7303 .7146 .7330 .7755 .8058 LTER AutoDDG .4372 .4194 .4011 .3656 .3559 Polaris .7218 .6546 .6013 .5239 .5145 
+
+P (multi) .7962 .7074 .6567 .6278 .6384 ECIR AutoDDG .4215 .4429 .4512 .4408 .4180 Polaris .4946 .5050 .4981 .4873 .4672 
+
+P (multi) .5575 .5347 .5049 .4965 .4757 WTR AutoDDG .3748 .3548 .3767 .4159 .4884 Polaris .3840 .3840 .3894 .4449 .5309 
+
+P (multi) .3802 .3786 .3858 .4657 .5912 WikiTables AutoDDG .4139 .4085 .4398 .5176 .5811 Polaris .4111 .4215 .4407 .5171 .5727 
+
+P (multi) .4268 .4155 .4419 .5172 .5849 
+
+Table 23: Multi-field KWS (NDCG@ K): AutoDDG vs. Polaris vs. P (multi) . P (multi) = Polaris using multiple fields, Polaris = single field (description), AutoDDG = single field (description). Blue = best per cell. 
+
+Dataset Method @5 @10 @20 @50 @100 AW AutoDDG .49 .64 .76 .83 .85 Polaris .66 .77 .83 .83 .83 
+
+P (multi) .75 .83 .92 .92 .92 Arctic AutoDDG .24 .34 .48 .68 .77 Polaris .29 .41 .58 .77 .82 
+
+P (multi) .32 .46 .63 .82 .88 LTER AutoDDG .08 .14 .22 .32 .35 Polaris .18 .25 .32 .39 .43 
+
+P (multi) .24 .31 .39 .53 .61 ECIR AutoDDG .01 .02 .04 .08 .12 Polaris .01 .03 .04 .08 .13 
+
+P (multi) .01 .02 .04 .08 .13 WTR AutoDDG .08 .14 .25 .43 .59 Polaris .08 .15 .26 .48 .66 
+
+P (multi) .09 .16 .27 .52 .78 WikiTables AutoDDG .21 .29 .41 .66 .83 Polaris .21 .32 .42 .67 .81 
+
+P (multi) .20 .29 .41 .64 .84 
+
+Table 24: Multi-field KWS (Recall@ K): AutoDDG vs. Polaris vs. P (multi) . P (multi) = Polaris using multiple fields, Polaris = single field (description), AutoDDG = single field (description). Blue = best per cell. 
+
+Dataset Method @5 @10 @20 @50 @100 AW P (multi) .8133 .8282 .8677 .8677 .8677 
+
+−desc .7594 .7668 .7895 .7895 .7895 
+
+−exp .7312 .7582 .7869 .7869 .7869 Arctic P (multi) .7303 .7146 .7330 .7755 .8058 
+
+−desc .7602 .7162 .6726 .7139 .7255 
+
+−exp .7133 .6743 .6939 .7416 .7678 LTER P (multi) .7962 .7074 .6567 .6278 .6384 
+
+−desc .5938 .5639 .5236 .5084 .4959 
+
+−exp .7218 .6546 .6013 .5239 .5145 ECIR P (multi) .5575 .5347 .5049 .4965 .4757 
+
+−desc .4478 .4737 .4474 .4614 .4422 
+
+−exp .5053 .5231 .5159 .4996 .4770 
+
+−ctx .5474 .5333 .4925 .4816 .4548 WTR P (multi) .3802 .3786 .3858 .4657 .5912 
+
+−desc .3698 .3734 .3811 .4632 .5844 
+
+−exp .4053 .4003 .4150 .4816 .5993 
+
+−ctx .3583 .3581 .3559 .4296 .5254 WikiTables P (multi) .4268 .4155 .4419 .5172 .5849 
+
+−desc .3179 .3187 .3476 .4207 .4946 
+
+−exp .4214 .4146 .4403 .5233 .5812 
+
+−ctx .4168 .4135 .4369 .5091 .5706 
+
+Table 25: Field ablation (NDCG@ K) for multi-field 
+
+P (multi) . −desc = w/o description, −exp = w/o ta-ble/column name expansions, −ctx = w/o table context (ECIR, WTR, WikiTables only). Blue = best per cell. 
+
+22

@@ -1,0 +1,493 @@
+Title: Synthesizing Feature Extractors: An Agentic Approach for Algorithm Selection
+
+URL Source: https://arxiv.org/pdf/2608.17170v1
+
+Published Time: Wed, 19 Aug 2026 00:16:06 GMT
+
+Number of Pages: 23
+
+Markdown Content:
+# Synthesizing Feature Extractors: An Agentic Approach for Algorithm Selection ∗
+
+Hai Xia 1, Carlos Ans´ otegui 2, and Stefan Szeider 1
+
+> 1
+
+Algorithms and Complexity Group, TU Wien, Vienna, Austria, {hxia,sz }@ac.tuwien.ac.at 
+
+> 2
+
+Logic & Optimization Group, University of Lleida, Lleida, Spain, carlos.ansotegui@udl.cat 
+
+Abstract 
+
+Algorithm selection for constraint satisfaction problems requires extracting features that capture problem structure. Manually designing feature extractors demands deep domain expertise and quickly becomes a bottleneck when new problem classes appear. We present an automated approach that uses Large Language Models (LLMs) in an agentic check–fix–verify loop to synthesize executable Python scripts that act as interpretable, problem-specific feature extractors. Given a high-level MiniZinc model and an instance, the LLM agent generates code that constructs a typed graph representation and computes structural properties such as graph density, variable clustering, and constraint tightness. We evaluate our approach on three combinatorial problems (vehicle routing, car sequencing, fixed-length error-correcting codes) with a portfolio of five state-of-the-art solvers. The synthesized extractors yield algorithm selectors that consistently outperform both expert-curated mzn2feat features (up to 8 .3 percentage points (pp) test-set accuracy on FLECC) and the best transformer-based trans2feat variants. In the meanwhile, the synthesized feature extractors remain inspectable. 
+
+# 1 Introduction 
+
+Combinatorial problems such as vehicle routing (VRP), car sequencing (CS), and fixed-length error-correcting codes (FLECC) are computationally hard: state-of-the-art solvers can run for hours without finding proven optima, and the gap between the best and a poorly chosen solver on an instance can span orders of magnitude (Kotthoff, 2016; Kerschke et al., 2019). The difficulty of an instance depends strongly on its structure (customer density, time-window tightness, constraint coupling), and that structure determines which solver performs best (Smith-Miles and Lopes, 2012). Algorithm selection (AS) exploits this fact by mapping instances to the most effective solvers from a portfolio of complementary solvers (Rice, 1976; Kerschke et al., 2019). The standard AS pipeline depends on a feature extractor that computes an informative feature vector from the problem instance. However, designing such an extractor typically requires substantial domain expertise and insight into which structural properties correlate with solver performance. Moreover, validating an extractor’s efficiency and effectiveness across instances takes a long time. Therefore, AS has been applied primarily to domains with mature formalisms, chiefly SAT (Hoos et al., 2021; Shavit and Hoos, 2024) and constraint programming via mzn2feat (Amadini et al., 2013, 2014). When it comes to problem classes outside classical formalisms, researchers either build  
+
+> ∗Code, data, and the full reproducibility archive: https://doi.org/10.5281/zenodo.20161743 .
+
+1arXiv:2608.17170v1 [cs.AI] 17 Aug 2026 a new extractor from scratch or translate the problem into one of them, with possible structural information loss. In general, there are several sides preventing the AS pipeline from being widely used. On the design side, it requires expert-curated extractors like mzn2feat . But for these extractors, it is still possible to miss solver-relevant structural properties that our experiments expose (Section 4). The expertise-necessary design also makes feature extractors generated without full autonomy. However, LLMs (Large Language Models) are trained with diverse domain knowledge, making them suitable to curate feature extractors. On the LLM side, a naive single-shot prompt does not work in practice: weaker open-source backends fail to produce a working extractor in 10 /10 trials, and removing any step in our loop below collapses success to zero even for strong models (Sections 3 and 4.9). The technical question is how to wrap an LLM so its outputs are reliably executable, AS-relevant, and inspectable. 
+
+Our approach: automating feature extraction via LLMs We introduce an LLM-based framework that automatically generates executable Python scripts as feature extractors. The design is a two-level process : an LLM agent, wrapped in a check–fix–verify error-correcting loop, synthesizes the program, and the output program is then the extractor. The agent first reads a high-level MiniZinc problem description (Stuckey et al., 2014; Marriott et al., 2008) and produces a Python script. Then the extractor (the Python script) constructs a graph representation from an instance and outputs a vector of interpretable features. As MiniZinc is declarative formalisms with rich information, like give the LLM a compact view of the problem’s structural patterns, we use MiniZinc as our problem modeling environment. The framework produces explicit feature extractors (Python programs), and the output features are interpretable rather than opaque neural embeddings. While recent work has explored deep learning for producing latent problem representations (Pellegrino et al., 2025; Zhang et al., 2024; Loreggia et al., 2016), such approaches sacrifice transparency for automation. Our generated extractors produce graphical features, like graph density, variable clustering, constraint tightness, statistical summaries of data that domain experts can read, validate, and refine. This “gray-box” design keeps the automation accessible to human understanding and improvement. 
+
+Empirical validation We validate the approach on AS for three combinatorial problems (VRP, CS, FLECC) using a portfolio of five state-of-the-art solvers (Gurobi, CPLEX, SCIP, Gecode, OR-Tools). The synthesized extractors outperform both mzn2feat , the established expert-curated extractor for MiniZinc problems (Amadini et al., 2013, 2014), and the transformer-based trans2feat (Pellegrino et al., 2025). The gain comes from capturing high-level structural properties that flat representations and opaque embeddings miss. 
+
+Contributions 
+
+1. We demonstrate that an LLM agent can reason about combinatorial problem structure and synthesize functional, interpretable feature extractors from MiniZinc problem descriptions, reducing the manual engineering cost of building AS pipelines for problems expressible in MiniZinc. 2. We propose an agentic check–fix–verify pipeline whose intermediate artifact is an explicit Python program. Unlike opaque neural embeddings, the generated extractors expose in-spectable features. 23. Across VRP, CS, and FLECC, selectors built from our synthesized features outperform selectors built from expert-curated mzn2feat and transformer-based trans2feat . This suggests the LLM uncovers solver-aware structural patterns that expert-curated extractors and transformer-based pipelines miss. 
+
+# 2 Related Work 
+
+The Algorithm Selection Problem (AS) (Rice, 1976; Kerschke et al., 2019) considers a portfolio P of algorithms, a set of instances I, a performance metric P M (A, i ), and a resource budget B. Since the performance of an algorithm A ∈ P varies across instances, an AS strategy must predict, before solving , which A to run on a given instance. To make this tractable, each instance i ∈ I is described by a feature vector ϕ(i) ∈ Rd obtained from a feature extractor Φ : i 7 → ϕ(i). The AS task is to learn a selector S : Rd → P maximizing P 
+
+> i∈I
+
+P M (S(ϕ(i)) , i ) subject to B. Two reference points calibrate AS performance: 
+
+Definition 2.1 (Single Best Solver) . The Single Best Solver (SB) is the algorithm ASB =arg max A∈P P M (A, I ) that achieves the best overall performance across the entire instance set I.The SB strategy applies ASB to every instance. 
+
+Definition 2.2 (Virtual Best Solver) . The Virtual Best Solver (VBS) is the (hypothetical) per-instance selector that, for each i ∈ I, chooses the algorithm A ∈ P that achieves the best performance on that instance: P M (VBS , I ) = P 
+
+> i∈I
+
+max A∈P P M (A, {i}). The VBS upper-bounds the perfor-mance of any AS strategy. MiniZinc (Nethercote et al., 2007) is a high-level, declarative modeling language for constraint satisfaction and optimization. A model file ( .mzn ) defines variables, constraints, and (optionally) an objective. A data file ( .dzn ) contains instance parameters. 
+
+Expert-curated features Classical AS builds on hand-engineered feature sets such as SATzilla’s (Shavit and Hoos, 2024) and mzn2feat ’s (Amadini et al., 2013, 2014); hand-crafted features likewise drive per-instance policy selection inside solvers, e.g. in SAT-based tree decomposition (Xia and Szeider, 2024). 
+
+Graph-based features without LLMs Encoding combinatorial instances as graphs for feature extraction does not by itself require an LLM. Stone et al. (2024) convert instances from three problem domains into domain-agnostic graph and image encodings, extract generic graph metrics, and use the resulting representations for algorithm selection and other downstream tasks. Their pipeline applies one fixed, hand-specified encoding and feature set across all domains; our agent instead writes a new extractor program per problem family , deciding from the high-level MiniZinc model which typed graph to construct and which problem-adapted, solver-aware quantities to materialize as named, editable features (e.g. demand concentration and depot eccentricity for VRP, Section 4.8). The approaches are complementary: generic encodings transfer at zero synthesis cost, synthesized extractors capture semantics that fixed encodings discard. 
+
+LLM-based feature engineering and program synthesis CAAFE (Hollmann et al., 2023) uses LLMs to generate Python feature transformations for tabular ML datasets, and FeatLLM (Han et al., 2024) prompts LLMs to derive rule-based features for few-shot tabular learning. Both operate on existing tabular inputs. More broadly, LLM-driven program search can yield executable artifacts 3that are competitive in combinatorial settings (Romera-Paredes et al., 2024). Our work instead starts from declarative .mzn /.dzn specifications and synthesizes a complete, reusable extractor program that computes structural and semantic properties of the problem specification itself. 
+
+Neural embeddings for algorithm selection Wu et al. (2024) use LLMs to embed algorithm source code and documentation for AS. Zhang et al. (2024) combine graph neural networks with expert knowledge to select SAT solvers, learning embeddings of CNF formula structure. Pellegrino et al. (2025) apply transformer encoders directly to the high-level textual representation of con-straint optimization instances to learn features. These neural approaches produce high-dimensional embeddings whose individual dimensions lack clear semantic meaning and cannot easily be inspected or edited. On the FLECC and CS instance sets for which Pellegrino et al. (2025) released trans2feat 
+
+features, our LLM2feat selectors outperform the best trans2feat variant by 7 .4 and 5 .4 percentage points (pp) in test accuracy (Section 4.7). 
+
+# 3 Problem-Specific LLM-Based Agent 
+
+We build on the agentic framework that bridges LLMs and constraint satisfaction solving (Szeider, 2025). 
+
+Definition 3.1 (LLM agent) . A Large Language Model agent (Yao et al., 2023) is a tuple A =(L, T, M, π, E ), where L is a language model, T is a set of external tools, M is a memory module, π is the prompting policy that maps observations and history to model inputs, and E is the environment. The agent operates in a loop ot π
+
+−→ pt L
+
+−→ atT,E 
+
+−−→ ot+1 , where ot is the observation at time t, pt is the constructed prompt, at is the action (e.g. tool call), and ot+1 is the next observation. Our agent takes a MiniZinc problem description ( .mzn and .dzn files) and a data schema as input, and outputs a Python script that extracts a feature vector from any instance of that problem. Two prompts control the loop in Figure 1: script system prompt (a general-purpose Python-script generation prompt that defines a strict workflow, technical requirements, and the available tools) and mzn-tuning (a domain-specialized prompt that instructs the agent to extract 50 standardized structural features from constraint-programming problems suitable for AS). Problem Data (.MZN, .DZN) JSON Schema Clear Insert Check/Fix Verify 
+
+> LLM Agent Pipeline
+> Problem-Specific Extractors
+
+Figure 1: Workflow for generating problem-specific feature extractors. The agent loops over Clear ,
+
+Insert , Check/Fix , and Execute steps until an executable Python script that produces a validated feature vector is obtained. 
+
+General script prompt The general Python-script prompt ( script-system-prompt.md ) en-forces a four-step workflow: (i) Clear all previous content; (ii) Insert the complete script; 4(iii) Check/Fix syntax and structural requirements, addressing validation errors if needed; (iv) Ex-ecute the script and validate its output. The expected script structure is given in Listing 1.                                                
+
+> 1#Required script structure
+> 2import necessary_modules
+> 3#Constants and configuration
+> 4CONSTANTS =values
+> 5#Function definitions
+> 6def helper_functions () :
+> 7pass
+> 8#Main execution logic
+> 9if __name__ == " __main__ " :
+> 10 #Processing logic here
+> 11 result_dict ={ " key " : " value " , " results " : data }
+> 12 #MANDATORY : Output results
+> 13 output_results ( result_dict ) #Must be final line
+
+Listing 1: General Python script template guided by script-system-prompt.md .
+
+MiniZinc tuning prompt The specialized mzn-tuning prompt ( mzn-tuning-prompt.md ) layers AS-specific requirements on top of the general workflow: mandatory imports for framework integra-tion, no file I/O (instance data is accessed via input data() ), and a standardized output shape of exactly 50 features ready for downstream selector training. The template is given in Listing 2. The size 50 was fixed in pilot experiments as a balance between coverage and interpretability: comparable in scale to mzn2feat ’s 95 and trans2feat ’s 116 dimensions, yet small enough that each feature remains individually inspectable and selectors stay data-efficient. The identity of the 50 features is chosen anew by the agent in every run: across the 10 independent syntheses per problem (Section 4.7), core structural metrics such as graph density, degree statistics, and clustering recur consistently, while the remaining features vary in which problem-specific quantities they materialize (Section 4.8); the per-run feature lists and value tables ship with the supplement. Each step of the check–fix–verify loop is load-bearing: in pilot ablations, removing any one of the four steps produced zero executable extractors, and weaker LLM backends that drift from the protocol fail in 10 /10 trials (Section 4.9). 
+
+# 4 Experimental Analyses 
+
+We evaluate the agentic framework on three problem-specific AS benchmarks and analyze why LLM2feat features yield better selectors than mzn2feat or trans2feat , looking at feature correlation, utilization efficiency, and selector accuracy. 
+
+4.1 Experimental Settings 
+
+We use the top-performing solvers from the MiniZinc challenge 1: Gurobi (12.0.3), CPLEX (22.1.2), SCIP (9.2.3), Gecode (6.2.0), and OR-Tools (9.3.10497). The portfolio spans solver paradigms: Gurobi and CPLEX are commercial mixed-integer programming (MIP) solvers; SCIP combines CP and MIP techniques; Gecode is a constraint-programming (CP) solver used throughout the MiniZinc Challenge history; OR-Tools won gold medals across all major categories of the MiniZinc Challenge in 2023–2025. 
+
+> 1https://www.minizinc.org/challenge/2025/results/
+
+51 # MANDATORY imports ( exact format required )                                                                                                            
+
+> 2from lmtune_helpers import input_data , output_results
+> 3import networkx as nx
+> 4import numpy as np
+> 5def main () :
+> 6#Get instance data ( no file I / O allowed )
+> 7instance_data =input_data ()
+> 8#Initialize standardized results structure
+> 9results ={
+> 10 " README " : " ~200 word methodology description " ,
+> 11 " characteristic_1 " : 0.0 , #Problem size metrics
+> 12 " characteristic_2 " : 0.0 , #Graph properties
+> 13 #... ( extract exactly 50 characteristics )
+> 14 " characteristic_50 " : 0.0 #Structural complexity
+> 15 }
+> 16 #Analyze constraint optimization instance
+> 17 #Extract solver - relevant characteristics :
+> 18 #-Problem size ( variables , constraints )
+> 19 #-Graph properties ( density , clustering , centrality )
+> 20 #-Data distribution ( statistical properties )
+> 21 #-Structural complexity ( symmetries , sparsity )
+> 22 #MANDATORY : Return standardized results
+> 23 output_results ( results )
+> 24 if __name__ == " __main__ " :
+> 25 main ()
+
+Listing 2: MiniZinc instance feature extraction template guided by mzn-tuning-prompt.md .
+
+The instance set I contains minimization, maximization, and decision problems: “best solver” means the lowest/highest objective value at timeout for optimization problems, and the shortest solving time for decision problems; the performance metric is oriented so that larger values are better. We use three problems with sufficient instance diversity: VRP (Queiroga et al., 2022), CS (Pellegrino et al., 2025), and FLECC (Pellegrino et al., 2025). Each problem is split 7:3 into training/test sets; the same split is reused across all extractor comparisons. Solvers run with a 20-minute timeout per instance, in line with the MiniZinc Challenge standard 2; extractor synthesis is capped at 1 minute per attempt, with automatic restart on timeout. All experiments run on a cluster with two AMD 7403 processors (24 cores at 2.8 GHz, 32 GB RAM/core). Two performance metrics are reported: Acc , the fraction of instances on which the selector picks the truly best solver, and Rank , the average ranking of the selected solver (lower is better). For LLM model selection, we use the commercial OpenAI o4-mini-2025-04-16 as the agent backend. All LLM calls use the provider’s default generation parameters: the sampling temperature is never overridden (o4-mini is a reasoning model whose temperature is fixed at its default of 1 .0), and the reasoning effort is the API default ( medium ); the exact call sites are in the supplement (llm factory.py ). Run-to-run stochasticity is thus a property of the backend itself and is quantified through 10 independent synthesis runs per problem. The open-weight backends we evaluated (Llama 3.3, DeepSeek R1) failed to follow the check–fix–verify protocol in our setup (Section 4.9); sensitivity analyses across LLM variants and the 10 runs appear in Appendix C. 
+
+> 2https://www.minizinc.org/challenge/
+
+64.2 Algorithm-Selection Toolchains 
+
+The AS input is a feature table (instance → feature vector) and a performance table (instance →
+
+per-solver performance). We compare three feature extractors: our LLM-synthesized LLM2feat ,expert-curated mzn2feat (Amadini et al., 2013, 2014), and transformer-based trans2feat (Pellegrino et al., 2025). For selector training we use Random Forest (RF) following the standard recipe (Kerschke et al., 2019) and AutoSklearn (AutoSK) (Feurer et al., 2015, 2022); hyperparameters are in Appendix A. We also report AutoFolio (AF) (Lindauer et al., 2015) and LLAMA (Kotthoff, 2013), top-performing tools in AS surveys and challenges (Kerschke et al., 2019). RF and AutoSK are trained with two loss functions, Acc and Rank ; AF and LLAMA use their default Acc loss. All training uses 5-fold cross-validation. 
+
+4.3 Research Questions 
+
+Q1: How diverse are the features generated by LLM2feat ? Highly correlated features carry overlapping information and inflate the effective dimension of the feature space. Q2: How efficiently does each feature contribute to the AS model? Distributions over feature importance shed light on quality and potential redundancy. Q3: How accurate are the resulting AS models compared with 
+
+mzn2feat -based and trans2feat -based selectors? 
+
+4.4 Feature Correlation Analysis (Q1) 
+
+For each feature set we train an RF selector as in Section 4.1, extract the top 20 features by importance for the random forest model, and compute Pearson correlation matrices (Guyon and Elisseeff, 2003) on the selected features. Figure 2 shows the result for VRP: LLM2feat features have a 48 .5% lower average absolute correlation ( |r| = 0 .221) than mzn2feat (|r| = 0 .429). The same pattern holds for FLECC ( |r| = 0 .306 vs. 0 .330) and CS ( |r| = 0 .551 vs. 0 .725). The corresponding heatmaps for FLECC and CS are in Appendix B. LLM-generated features capture a more diverse range of structural properties, reducing redundancy with fewer overlapping features. mzn2feat (Avg |r| = 0.429) LLM (Avg |r| = 0.221) 
+
+> 0.5
+> 0.0 0.5 1.0 Correlation
+> 0.5
+> 0.0 0.5 1.0 Correlation
+
+Figure 2: Feature correlation matrices for VRP (feature names suppressed for clarity). LLM2feat 
+
+features show 48 .5% lower average correlation ( |r| = 0 .221) than mzn2feat (|r| = 0 .429). 
+
+4.5 Feature Utilization Efficiency (Q2) 
+
+For both mzn2feat +RF and LLM2feat +RF we extract feature-importance scores for the entire feature set and count features above a 0 .001 significance threshold as “effectively utilized.” mzn2feat provides 95 hand-crafted features; LLM2feat produces 50. Across the three problems, LLM2feat achieves significantly higher utilization (Figure 3): on VRP, 96% vs. 56 .8% (a 69% relative improvement); on 7FLECC, 58% vs. 23 .2%; on CS, 84% vs. 45 .1%. More of the LLM-generated dimensions contribute meaningfully to the selector’s decisions. 0-0.001 0.001-0.005 0.005-0.01 0.01-0.02 0.02-0.05 >0.05 Feature Importance Range 0.0 0.2 0.4 Ratio of Features Feature Importance Distribution Comparison mzn2feat LLM 
+
+(a) FLECC 0-0.001 0.001-0.005 0.005-0.01 0.01-0.02 0.02-0.05 >0.05 Feature Importance Range 0.0 0.2 0.4 Ratio of Features Feature Importance Distribution Comparison mzn2feat LLM (b) CS 0-0.001 0.001-0.005 0.005-0.01 0.01-0.02 0.02-0.05 >0.05 Feature Importance Range 0.00 0.25 0.50 0.75 Ratio of Features Feature Importance Distribution Comparison mzn2feat LLM (c) VRP 
+
+Figure 3: Feature-importance distribution. LLM2feat achieves better spread of importance across features than mzn2feat on all three problems. 
+
+4.6 Accuracy Analysis (Q3) 
+
+We evaluate AS accuracy as a function of feature-set size, growing the set in order of decreasing RF importance. Figure 4 shows that LLM2feat -based selectors reach higher accuracy with fewer features, and continue to benefit from additional features where mzn2feat plateaus: on VRP, mzn2feat flatlines near 81% once 10 features are used, while LLM2feat continues to improve and peaks beyond 20 features. 0 50 
+
+> Number of Top Features
+> 0.75 0.80 0.85 0.90 0.95 1.00
+> Accuracy
+> Accuracy vs Top N Features mzn2feat (train) LLM (train) mzn2feat (test) LLM (test)
+
+(a) FLECC 0 20 40  
+
+> Number of Top Features
+> 0.5 0.6 0.7 0.8 0.9
+> Accuracy
+> Accuracy vs Top N Features mzn2feat (train) LLM (train) mzn2feat (test) LLM (test)
+
+(b) CS 0 50  
+
+> Number of Top Features
+> 0.75 0.80 0.85 0.90 0.95 1.00
+> Accuracy
+> Accuracy vs Top N Features mzn2feat (train) LLM (train) mzn2feat (test) LLM (test)
+
+(c) VRP 
+
+Figure 4: AS test accuracy as a function of feature-set size on the three benchmarks. LLM2feat matches or exceeds mzn2feat at every size and reaches higher peak accuracy. 
+
+Table 1 compares the three feature extractors across four toolchains (AF, RF, LLAMA, AutoSK). With the (trivial) exception of AF (which falls back to the single best solver, SB, for all our extractors in this setting), LLM2feat achieves the highest accuracy and the lowest ranking on every problem–toolchain pair. Across VRP, CS, and FLECC, LLM2feat improves over the mzn2feat test accuracy by up to 8 .3 pp, and over the best trans2feat variant by 7 .4 pp on FLECC and 5 .4 pp on CS (see Section 4.7 for the head-to-head with all 20 trans2feat variants). Training-set results, ranking-loss results, and full LLM-sensitivity tables are in Appendix C. The three benchmarks include both classical AS regimes. On CS the single best solver is weak (49 .0%), and feature-based selection adds up to 15 .0 pp. On VRP and FLECC the SB baseline is strong (79 .5%/78 .2%), yet LLM2feat still closes roughly 30% of the remaining gap between SB and the virtual best solver (+6 .3 pp on VRP, +6 .5 pp on FLECC over SB). Because the feature extraction and selection add negligible overhead (less than 1 minute) relative to a 20-minute solve, these gains convert directly into saved solver time. 8Table 1: Test-set accuracy ( Acc ) and average ranking ( Rank ) for AS toolchains using mzn2feat 
+
+(95 features), LLM2feat (50 features), and trans2feat (116 features). Loss function = Acc (AutoFolio, LLAMA, and trans2feat use their accuracy-based defaults). Each LLM2feat row reports the strongest of the three initial synthesis runs per problem; best/mean/worst over all 10 runs appear in Table 2. ×
+
+marks combinations unavailable because no released trans2feat features exist for VRP. Best per column in bold .
+
+VRP CS FLECC 
+
+Acc Rank Acc Rank Acc Rank 
+
+SB 79.5% 1.221 49.0% 1.616 78.2% 1.420 
+
+mzn2feat +AF 79.5% 1.221 49.0% 1.616 78.2% 1.420 
+
+mzn2feat +RF 82.4% 1.195 54.7% 1.943 76.4% 1.426 
+
+mzn2feat +LLAMA 82.9% 1.184 59.4% 1.798 78.7% 1.397 
+
+mzn2feat +AutoSK 84.4% 1.166 62.1% 1.787 79.2% 1.396 
+
+trans2feat +RF × × 52.9% 2.004 77.3% 1.447 
+
+trans2feat +AutoSK × × 54.5% 1.931 78.4% 1.417 
+
+LLM2feat +AF 79.5% 1.221 49.0% 1.616 78.2% 1.420 
+
+LLM2feat +RF 85.3% 1.165 58.1% 1.862 84.7% 1.286 
+
+LLM2feat +LLAMA 85.8% 1.157 61.0% 1.773 84.2% 1.310 
+
+LLM2feat +AutoSK 85.7% 1.157 64.0% 1.735 84.6% 1.310 
+
+4.7 Head-to-Head Comparison with trans2feat 
+
+Pellegrino et al. (2025) release 20 trans2feat feature variants (one per neural-network configuration) for CS and FLECC. Table 1 compares only the best trans2feat variant per toolchain. To examine the comparison more carefully, we trained the same RF and AutoSK toolchains on every trans2feat 
+
+variant, on every LLM2feat run from 10 independent agent syntheses, and on the canonical mzn2feat 
+
+extractor. Table 2 reports the best, mean, and worst test accuracy across each group. Even the 
+
+worst LLM2feat run beats the best trans2feat variant on FLECC under RF, and clearly dominates on CS as well. Per-variant tables for both toolchains and both problems are in Appendix D. 
+
+Table 2: Head-to-head with trans2feat : test-set Acc aggregated over 10 independent LLM2feat runs and the 20 released trans2feat variants. mzn2feat is a single deterministic extractor. Best/Mean/Worst refer to the best/mean/worst test accuracy across runs within each method; runs without a valid selector (TO/F, Appendix D) are excluded, leaving n = 17 trans2feat variants and n = 9 LLM2feat runs on CS/AutoSK and n = 14 variants on FLECC/AutoSK. 
+
+Problem Toolchain mzn2feat trans2feat (Best / Mean / Worst) LLM2feat (Best / Mean / Worst) CS RF 54.7% 52.9% / 43.9% / 31.0% 58.3% / 57.8% / 57.3% CS AutoSK 62.1% 54.5% / 48.0% / 35.8% 64.0% / 60.5% / 52.8% FLECC RF 76.4% 77.3% / 51.1% / 3.1% 84.7% / 83.1% / 81.6% FLECC AutoSK 79.2% 78.4% / 68.2% / 8.3% 84.6% / 83.6% / 82.2% 
+
+4.8 Qualitative Feature Analysis 
+
+To illustrate the solver-awareness of LLM-generated features, consider VRP: the agent synthe-sizes features such as demand-distribution statistics ( avg demand ) and depot-centrality metrics (depot centrality ). Such features enable the selector to distinguish instances where MIP solvers 9excel from those better suited to CP solvers (Moreno-Scott et al., 2016), and they account for the +2 .9 pp test-accuracy gain over mzn2feat on VRP. Note that the advantage cannot stem from feature-set size: LLM2feat uses 50 features against mzn2feat ’s 95 and trans2feat ’s 116. However, the agent synthesizes relevant, complementary feature combinations that the curated list lacks, consistent with the lower feature correlation (Q1) and the higher utilization (Q2) reported above. We attribute the broader gains over classical baselines to three properties of the generated extractors. First, the extractors preserve structural information lost in flat encodings. mzn2feat (Amadini et al., 2014) flattens the constraint model into a long list of primitive constraints, discarding much of the high-level structure, whereas richer structural views often dominate cheap flat features in practice (Dalla et al., 2023; Shavit and Hoos, 2024). Second, the extractors materialize solver-aware quantities that flat features miss. The LLM reads the model and .dzn files (objective, global constraints, parameter roles) and the generated code computes proxy quantities that solvers implicitly exploit, such as tightness, propagation strength approximating domain-reduction ratios, and supports per constraint family (e.g. alldifferent ,
+
+table ), along with distributional summaries (mean/variance/skew). Third, the agent adapts feature definitions to the problem family. For VRP it instantiates domain priors as interpretable features such as demand concentration, depot eccentricity, and route-length lower bounds (e.g. MST surrogates), which separate MIP-friendly from CP-friendly instances by leveraging the solvers’ strengths (Moreno-Scott et al., 2016). 
+
+4.9 Cost Analysis 
+
+To quantify the cost of extractor synthesis, we ran the agent without a wall-clock cap on four LLM backends, two commercial and two open-weight (Table 3). As already noted in Section 4.1, o4-mini and Claude Sonnet 4 produced a working extractor in all 10 of 10 trials, while the open-weight DeepSeek R1 and Llama 3.3-8b-instruct failed in all 10 trials because they did not follow the check–fix–verify procedure. No open-weight backend we tried sustained the protocol at the time of our experiments; since the framework’s LM: interface runs local backends served via Ollama or LM Studio (see supplement), stronger future open-weight models can be plugged in directly, and we consider a systematic open-weight evaluation worthwhile future work.                    
+
+> Table 3: LLM backends evaluated as synthesis agents.
+> Backend Access Success
+> OpenAI o4-mini-2025-04-16 commercial API 10 /10 Anthropic claude-sonnet-4-20250514 commercial API 10 /10 DeepSeek R1 open weights 0/10 Llama 3.3-8b-instruct open weights 0/10
+> Table 4: Statistics from 30 LLM2feat syn-thesis runs on o4-mini.
+> Metric Value
+> Avg iterations 17 .3Avg wall time 210 .0 s Avg input tokens 259 ,913 Avg output tokens 19 ,238 Avg total tokens 279 ,150 Avg cost $0.2695
+
+Table 4 aggregates statistics over 30 o4-mini runs on different problems until an extractor is generated: the average single-extractor synthesis cost is ≈ 210 s of wall-clock time and ≈ $0 .27 in API charges, which is negligible relative to running each solver for up to 20 minutes per instance. Once synthesized, an extractor can be reused indefinitely across instances of the same problem family. 10 5 Conclusion and Future Work 
+
+We presented an LLM-based framework that synthesizes graph-theoretic, interpretable feature extractors from symbolic constraint models (MiniZinc) for algorithm selection. The agentic check– fix–verify loop produces Python scripts that human experts can refine in a “gray-box” manner, and extractor synthesis is cheap enough to be performed on demand. On three problem-specific benchmarks (VRP, CS, FLECC) with a five-solver portfolio, our synthesized extractors yield AS models that outperform both expert-curated mzn2feat and transformer-based trans2feat baselines. Four concrete limits define the current scope and the follow-up roadmap: the framework produces one extractor per problem family rather than a universal one; the agent’s loop does not yet incorporate human feedback on the generated code; the input formalism is restricted to MiniZinc; and reliable synthesis currently requires strong commercial LLM backends, as the open-weight models we evaluated failed the protocol (Section 4.9). Each of these is a concrete target for follow-up work. 
+
+# Impact Statement 
+
+This work aims to improve algorithm selection (AS) for constraint optimization by automating the creation of interpretable feature extractors from high-level MiniZinc models. The positive impact is reducing the manual feature-engineering burden that currently limits AS to a small set of well-studied domains: auditable Python extractors let practitioners build solver portfolios quickly for new problem classes, with applications in scheduling, routing, and resource allocation. The LLM-generated code may carry errors or biases if deployed without validation. Both are mitigated by the extractors’ interpretability: the code is explicit, testable, and auditable by domain experts. 
+
+Acknowledgements. The authors acknowledge the support of the European Union’s Horizon 2020 research and innovation programme under the Maria Sklodowska-Curie grant agreement No. 101034440, the support of the Austrian Science Fund (FWF), projects 10.55776/P36688, 10.55776/P36420, and 10.55776/COE12, and project PID2022-138506NB-C21 from Ministerio de Ciencia e Innovaci´ on. 
+
+# References 
+
+Amadini, R., Gabbrielli, M., and Mauro, J. (2013). Features for building CSP portfolio solvers. 
+
+CoRR , abs/1308.0227. Amadini, R., Gabbrielli, M., and Mauro, J. (2014). An enhanced features extractor for a portfolio of constraint solvers. In Cho, Y., Shin, S. Y., Kim, S., Hung, C., and Hong, J., editors, Symposium on Applied Computing, SAC 2014, Gyeongju, Republic of Korea - March 24 - 28, 2014 , pages 1357–1359. ACM. Dalla, M., Provan-Bessell, B., Visentin, A., and O’Sullivan, B. (2023). SAT feature analysis for machine learning classification tasks. In Proceedings of the Sixteenth International Symposium on Combinatorial Search, SOCS 2023 , pages 138–142. AAAI Press. Feurer, M., Eggensperger, K., Falkner, S., Lindauer, M., and Hutter, F. (2022). Auto-sklearn 2.0: Hands-free AutoML via meta-learning. Journal of Machine Learning Research , 23(261):1–61. 11 Feurer, M., Klein, A., Eggensperger, K., Springenberg, J. T., Blum, M., and Hutter, F. (2015). Efficient and robust automated machine learning. In Advances in Neural Information Processing Systems 28: Annual Conference on Neural Information Processing Systems 2015, December 7-12, 2015, Montreal, Quebec, Canada , pages 2962–2970. Guyon, I. and Elisseeff, A. (2003). An introduction to variable and feature selection. J. Mach. Learn. Res. , 3:1157–1182. Han, S., Yoon, J., Arik, S. ¨O., and Pfister, T. (2024). Large language models can automatically engineer features for few-shot tabular learning. In Forty-first International Conference on Machine Learning, ICML 2024, Vienna, Austria, July 21-27, 2024 , volume 235 of Proceedings of Machine Learning Research , pages 17454–17479. PMLR. Hollmann, N., M¨ uller, S., and Hutter, F. (2023). Large language models for automated data science: Introducing CAAFE for context-aware automated feature engineering. In Oh, A., Naumann, T., Globerson, A., Saenko, K., Hardt, M., and Levine, S., editors, Advances in Neural Information Processing Systems 36: Annual Conference on Neural Information Processing Systems 2023, NeurIPS 2023, New Orleans, LA, USA, December 10 - 16, 2023 .Hoos, H. H., Hutter, F., and Leyton-Brown, K. (2021). Automated configuration and selection of sat solvers. In Handbook of Satisfiability , pages 481–507. IOS Press. Kerschke, P., Hoos, H. H., Neumann, F., and Trautmann, H. (2019). Automated algorithm selection: Survey and perspectives. Evol. Comput. , 27(1):3–45. Kotthoff, L. (2013). LLAMA: leveraging learning to automatically manage algorithms. Technical Report arXiv:1306.1031, arXiv. Kotthoff, L. (2016). Algorithm selection for combinatorial search problems: A survey. In Data Mining and Constraint Programming: Foundations of a Cross-Disciplinary Approach , volume 10101 of Lecture Notes in Computer Science , pages 149–190. Springer. Lindauer, M., Hoos, H. H., Hutter, F., and Schaub, T. (2015). Autofolio: An automatically configured algorithm selector. Journal of Artificial Intelligence Research , 53:745–778. Loreggia, A., Malitsky, Y., Samulowitz, H., and Saraswat, V. A. (2016). Deep learning for algorithm portfolios. In Schuurmans, D. and Wellman, M. P., editors, Proceedings of the Thirtieth AAAI Conference on Artificial Intelligence, February 12-17, 2016, Phoenix, Arizona, USA , pages 1280–1286. AAAI Press. Marriott, K., Nethercote, N., Rafeh, R., Stuckey, P. J., de la Banda, M. G., and Wallace, M. (2008). The design of the zinc modelling language. Constraints An Int. J. , 13(3):229–267. Moreno-Scott, J. H., Ortiz-Bayliss, J. C., Terashima-Mar´ ın, H., and Conant-Pablos, S. E. (2016). Ex-perimental matching of instances to heuristics for constraint satisfaction problems. Computational Intelligence and Neuroscience , 2016:7349070. Nethercote, N., Stuckey, P. J., Becket, R., Brand, S., Duck, G. J., and Tack, G. (2007). Minizinc: Towards a standard CP modelling language. In Bessiere, C., editor, Principles and Practice of Constraint Programming - CP 2007, 13th International Conference, CP 2007, Providence, RI, USA, September 23-27, 2007, Proceedings , volume 4741 of Lecture Notes in Computer Science ,pages 529–543. Springer. 12 Pellegrino, A., Akg¨ un, O., Dang, N., Kiziltan, Z., and Miguel, I. (2025). Transformer-Based Feature Learning for Algorithm Selection in Combinatorial Optimisation. In de la Banda, M. G., editor, 31st International Conference on Principles and Practice of Constraint Programming (CP 2025) , volume 340 of Leibniz International Proceedings in Informatics (LIPIcs) , pages 31:1–31:22, Dagstuhl, Germany. Schloss Dagstuhl – Leibniz-Zentrum f¨ ur Informatik. Queiroga, E., Sadykov, R., Uchoa, E., and Vidal, T. (2022). 10,000 optimal CVRP solutions for testing machine learning based heuristics. In AAAI-22 Workshop on Machine Learning for Operations Research (ML4OR) .Rice, J. R. (1976). The algorithm selection problem. In Rubinoff, M. and Yovits, M. C., editors, 
+
+Advances in Computers , volume 15 of Advances in Computers , pages 65–118. Elsevier. Romera-Paredes, B., Barekatain, M., Novikov, A., Balog, M., Kumar, M. P., Dupont, E., Ruiz, F. J. R., Ellenberg, J. S., Wang, P., Fawzi, O., Kohli, P., and Fawzi, A. (2024). Mathematical discoveries from program search with large language models. Nature , 625(7995):468–475. Shavit, H. and Hoos, H. H. (2024). Revisiting satzilla features in 2024. In Chakraborty, S. and Jiang, J. R., editors, 27th International Conference on Theory and Applications of Satisfiability Testing, SAT 2024, August 21-24, 2024, Pune, India , volume 305 of LIPIcs , pages 27:1–27:26. Schloss Dagstuhl - Leibniz-Zentrum f¨ ur Informatik. Smith-Miles, K. and Lopes, L. (2012). Measuring instance difficulty for combinatorial optimization problems. Computers & Operations Research , 39(5):875–889. Stone, C., Renau, Q., Miguel, I., and Hart, E. (2024). An evaluation of domain-agnostic representa-tions to enable multi-task learning in combinatorial optimisation. In Learning and Intelligent Optimization - 18th International Conference, LION 18, Ischia Island, Italy, June 9-13, 2024, Revised Selected Papers , volume 14990 of Lecture Notes in Computer Science , pages 399–414. Springer. Stuckey, P. J., Feydy, T., Schutt, A., Tack, G., and Fischer, J. (2014). The minizinc challenge 2008–2013. AI Magazine , 35(2):55–60. Szeider, S. (2025). Bridging language models and symbolic solvers via the model context protocol. In Berg, J. and Nordstr¨ om, J., editors, 28th International Conference on Theory and Applications of Satisfiability Testing, SAT 2025, August 12-15, 2025, Glasgow, Scotland , volume 341 of LIPIcs ,pages 30:1–30:12. Schloss Dagstuhl - Leibniz-Zentrum f¨ ur Informatik. Wu, X., Zhong, Y., Wu, J., Jiang, B., and Tan, K. C. (2024). Large language model-enhanced algorithm selection: Towards comprehensive algorithm representation. In Proceedings of the Thirty-Third International Joint Conference on Artificial Intelligence, IJCAI 2024, Jeju, South Korea, August 3-9, 2024 , pages 5235–5244. ijcai.org. Xia, H. and Szeider, S. (2024). SAT-Based tree decomposition with iterative cascading policy selection. In Wooldridge, M. J., Dy, J. G., and Natarajan, S., editors, Thirty-Eighth AAAI Conference on Artificial Intelligence, AAAI 2024, Thirty-Sixth Conference on Innovative Applications of Artificial Intelligence, IAAI 2024, Fourteenth Symposium on Educational Advances in Artificial Intelligence, EAAI 2024, February 20-27, 2024, Vancouver, Canada , pages 8191–8199. AAAI Press. 13 Yao, S., Zhao, J., Yu, D., Du, N., Shafran, I., Narasimhan, K. R., and Cao, Y. (2023). ReAct: Synergizing reasoning and acting in language models. In The Eleventh International Conference on Learning Representations, ICLR 2023, Kigali, Rwanda, May 1-5, 2023 . OpenReview.net. Zhang, Z., Ch´ etelat, D., Cotnareanu, J., Ghose, A., Xiao, W., Zhen, H., Zhang, Y., Hao, J., Coates, M., and Yuan, M. (2024). Grass: Combining graph neural networks with expert knowledge for SAT solver selection. In Baeza-Yates, R. and Bonchi, F., editors, Proceedings of the 30th ACM SIGKDD Conference on Knowledge Discovery and Data Mining, KDD 2024, Barcelona, Spain, August 25-29, 2024 , pages 6301–6311. ACM. 14 A Hyperparameters 
+
+Settings shared by Random Forest training and the LLAMA random-forest classification mode are in Table 5. AutoSklearn settings are in Table 6. 
+
+Table 5: Random Forest hyperparameters.                 
+
+> Parameter Value Description
+> n estimators 300 More trees for complex constraint patterns max depth 20 Deeper trees capture CP relationships min samples split 5min samples leaf 2resampling strategy cv
+> resampling strategy arguments {folds: 5}
+> max features sqrt Standard dimensionality reduction for tree diversity class weight balanced Handles solver class imbalance random state 42
+
+Table 6: AutoSklearn standard configuration. 
+
+Parameter Value 
+
+time left for this task User-specified (300–3600 s) per run time limit time budget / 30 s initial configurations via metalearning 25 ensemble size 50 resampling strategy cv 
+
+resampling strategy arguments {folds: 5}
+
+scoring functions [accuracy, ranking] 
+
+memory limit 3072 MB tmp folder auto-generated delete tmp folder after terminate False random state 42 
+
+# B Additional Feature-Correlation Heatmaps 
+
+Figures 5–6 show the correlation matrices for the FLECC and CS problems. 15 mzn2feat (Avg |r| = 0.330) LLM (Avg |r| = 0.306) 
+
+> 0.5
+> 0.0 0.5 Correlation
+> 0.5
+> 0.0 0.5 1.0 Correlation
+
+Figure 5: Feature correlation matrices for FLECC. LLM2feat features have average absolute correlation 
+
+|r| = 0 .306 vs. |r| = 0 .330 for mzn2feat .mzn2feat (Avg |r| = 0.725) LLM (Avg |r| = 0.551) 
+
+> 0.5
+> 0.0 0.5 Correlation
+> 1.0
+> 0.5
+> 0.0 0.5 1.0 Correlation
+
+Figure 6: Feature correlation matrices for CS. LLM2feat features have |r| = 0 .551 vs. |r| = 0 .725 for 
+
+mzn2feat , a 24% improvement in diversity. 
+
+# C LLM Model Selection and Sensitivity 
+
+We evaluated several LLMs as the agent backend. Strong agentic models (o4-mini, Claude Sonnet) reliably followed the check–fix–verify protocol; smaller open-source models (Llama 3.3, DeepSeek R1) failed under our prompts (see Section 4.9). For the problem-specific framework we used OpenAI o4-mini-2025-04-16 and ran 10 independent syntheses per problem. Tables 10–15 list the three highest-scoring runs per problem and toolchain alongside mzn2feat baselines; full per-variant tables (10 LLM2feat runs vs. 20 trans2feat variants) are in Appendix D. Across the top-three runs shown here, test accuracy fluctuates within roughly 3 pp and every shown LLM2feat run outperforms the corresponding mzn2feat baseline. The full 10-run distribution is wider on CS/AutoSK in particular, where two syntheses produced under-fitting extractors (test accuracy ≈ 0.528, with correspondingly low training accuracy); the formal significance analysis on the full distributions appears in Section 4.7. 
+
+Training-set and ranking-loss results Tables 7–9 report the results omitted from the main text: training-set accuracy under Acc loss; test-set and training-set accuracy/ranking under Rank 
+
+loss. 16 Table 7: Training-set accuracy/ranking with Acc as loss (problem-specific toolchains). 
+
+VRP CS FLECC Acc Rank Acc Rank Acc Rank SB 78.7% 1.237 49.4% 1.601 80.6% 1.377 
+
+mzn2feat +AF 78.7% 1.237 49.4% 1.601 80.6% 1.377 
+
+mzn2feat +RF 94.7% 1.057 85.7% 1.339 95.9% 1.063 
+
+mzn2feat +LLAMA 92.0% 1.089 87.5% 1.248 91.5% 1.167 
+
+mzn2feat +AutoSK 87.2% 1.138 65.0% 1.723 85.0% 1.295 
+
+LLM2feat +RF 98.5% 1.016 90.6% 1.202 98.1% 1.029 
+
+LLM2feat +LLAMA 97.8% 1.025 89.9% 1.164 98.3% 1.039 
+
+LLM2feat +AutoSK 88.0% 1.131 67.1% 1.646 95.1% 1.104   
+
+> Table 8: Test-set accuracy/ranking with Rank as loss.
+
+VRP CS FLECC Acc Rank Acc Rank Acc Rank SB 79.5% 1.221 49.0% 1.616 78.2% 1.420 
+
+mzn2feat +RF 83.0% 1.184 58.5% 1.680 79.5% 1.391 
+
+mzn2feat +AutoSK 84.4% 1.166 62.1% 1.787 79.4% 1.394 
+
+LLM2feat +RF 85.7% 1.155 61.3% 1.681 83.5% 1.338 
+
+LLM2feat +AutoSK 85.4% 1.160 64.0% 1.738 84.6% 1.310   
+
+> Table 9: Training-set accuracy/ranking with Rank as loss.
+
+VRP CS FLECC Acc Rank Acc Rank Acc Rank SB 78.7% 1.237 49.4% 1.601 80.6% 1.377 
+
+mzn2feat +RF 91.7% 1.091 83.5% 1.231 88.3% 1.232 
+
+mzn2feat +AutoSK 87.2% 1.138 65.0% 1.723 85.0% 1.296 
+
+LLM2feat +RF 97.1% 1.032 87.9% 1.164 95.9% 1.083 
+
+LLM2feat +AutoSK 87.8% 1.133 68.9% 1.618 95.1% 1.103 17 Table 10: LLM2feat +RF performance for FLECC. 
+
+Extractor Loss Train Acc Test Acc Train Rank Test Rank 
+
+Single Best (gecode) 0.806 0.782 1.377 1.420 
+
+mzn2feat accuracy 0.959 0.764 1.063 1.426 
+
+mzn2feat ranking 0.883 0.795 1.232 1.391 LLM-20250908123730 accuracy 0.981 0.847 1.029 1.286 LLM-20250908123925 accuracy 0.996 0.818 1.008 1.353 LLM-20250908124149 accuracy 0.994 0.836 1.011 1.315 LLM-20250908123730 ranking 0.959 0.835 1.083 1.338 LLM-20250908123925 ranking 0.935 0.809 1.121 1.384 LLM-20250908124149 ranking 0.952 0.826 1.095 1.358  
+
+> Table 11: LLM2feat +RF performance for CS.
+
+Extractor Loss Train Acc Test Acc Train Rank Test Rank 
+
+Single Best (cplex) 0.494 0.490 1.601 1.616 
+
+mzn2feat accuracy 0.857 0.547 1.339 1.943 
+
+mzn2feat ranking 0.835 0.585 1.231 1.680 LLM-20250908123608 accuracy 0.903 0.577 1.193 1.874 LLM-20250908123905 accuracy 0.913 0.578 1.181 1.861 LLM-20250908124041 accuracy 0.906 0.581 1.202 1.862 LLM-20250908123608 ranking 0.868 0.607 1.179 1.700 LLM-20250908123905 ranking 0.879 0.613 1.165 1.681 LLM-20250908124041 ranking 0.875 0.606 1.171 1.704  
+
+> Table 12: LLM2feat +RF performance for VRP.
+
+Extractor Loss Train Acc Test Acc Train Rank Test Rank 
+
+Single Best (scip) 0.787 0.795 1.237 1.221 
+
+mzn2feat accuracy 0.947 0.824 1.057 1.195 
+
+mzn2feat ranking 0.916 0.830 1.091 1.184 LLM-20250908115627 accuracy 0.993 0.850 1.008 1.169 LLM-20250908121942 accuracy 0.994 0.848 1.007 1.170 LLM-20250908123205 accuracy 0.985 0.853 1.016 1.165 LLM-20250908115627 ranking 0.971 0.852 1.032 1.163 LLM-20250908121942 ranking 0.972 0.857 1.032 1.155 LLM-20250908123205 ranking 0.970 0.852 1.034 1.163 18 Table 13: LLM2feat +AutoSK performance for FLECC. 
+
+Extractor Loss Train Acc Test Acc Train Rank Test Rank 
+
+Single Best (gecode) 0.806 0.782 1.377 1.420 
+
+mzn2feat accuracy 0.850 0.792 1.295 1.396 
+
+mzn2feat ranking 0.850 0.794 1.296 1.394 LLM-20250908124149 accuracy 0.952 0.844 1.101 1.308 LLM-20250908123730 accuracy 0.951 0.846 1.104 1.310 LLM-20250908123925 accuracy 0.908 0.831 1.187 1.342 LLM-20250908124149 ranking 0.951 0.845 1.103 1.308 LLM-20250908123730 ranking 0.951 0.846 1.104 1.310 LLM-20250908123925 ranking 0.911 0.836 1.183 1.322  
+
+> Table 14: LLM2feat +AutoSK performance for CS.
+
+Extractor Loss Train Acc Test Acc Train Rank Test Rank 
+
+Single Best (cplex) 0.494 0.490 1.601 1.616 
+
+mzn2feat accuracy 0.650 0.621 1.723 1.787 
+
+mzn2feat ranking 0.650 0.621 1.723 1.787 LLM-20250908124041 accuracy 0.671 0.640 1.646 1.735 LLM-20250908123905 accuracy 0.679 0.634 1.667 1.781 LLM-20250908123608 accuracy 0.686 0.635 1.652 1.782 LLM-20250908124041 ranking 0.670 0.640 1.655 1.738 LLM-20250908123905 ranking 0.675 0.638 1.655 1.766 LLM-20250908123608 ranking 0.689 0.639 1.618 1.743  
+
+> Table 15: LLM2feat +AutoSK performance for VRP.
+
+Extractor Loss Train Acc Test Acc Train Rank Test Rank 
+
+Single Best (scip) 0.787 0.795 1.237 1.221 
+
+mzn2feat accuracy 0.872 0.844 1.138 1.166 
+
+mzn2feat ranking 0.872 0.844 1.138 1.166 LLM-20250908121942 accuracy 0.851 0.852 1.161 1.162 LLM-20250908123205 accuracy 0.880 0.857 1.131 1.157 LLM-20250908115627 accuracy 0.872 0.854 1.138 1.160 LLM-20250908121942 ranking 0.851 0.852 1.161 1.162 LLM-20250908123205 ranking 0.878 0.854 1.133 1.160 LLM-20250908115627 ranking 0.859 0.850 1.152 1.162 
+
+Per-extractor sensitivity tables 
+
+19 D Detailed Transformer Comparison 
+
+We obtain 20 trans2feat feature sets from the official repository 3 (one per neural-network variant in Pellegrino et al. (2025)) and train both RF and AutoSK toolchains on each. Tables 16–19 give the full per-variant results for CS and FLECC. “TO” marks runs that exceeded the AutoSklearn 1800 s training budget (Feurer et al., 2022) without producing a model; “F” marks runs whose AutoSklearn fit collapsed to a degenerate constant-class model (test accuracy <1%). Both are excluded from all aggregate statistics and significance tests; the raw result files for the F runs ship with the supplement. 
+
+Table 16: Car Sequencing: Random Forest with accuracy loss. 
+
+Type Extractor Features Accuracy Avg Rank 
+
+Train Test Train Test 
+
+LLM2feat LLM2feat-1 50 0.909 0.583 1.187 1.857 LLM2feat-2 50 0.906 0.581 1.202 1.862 LLM2feat-3 50 0.920 0.579 1.170 1.855 LLM2feat-4 50 0.908 0.579 1.188 1.867 LLM2feat-5 50 0.913 0.578 1.181 1.861 LLM2feat-6 50 0.899 0.578 1.213 1.867 LLM2feat-7 50 0.903 0.577 1.193 1.874 LLM2feat-8 50 0.915 0.577 1.180 1.872 LLM2feat-9 50 0.899 0.575 1.197 1.876 LLM2feat-10 50 0.904 0.573 1.193 1.875 
+
+mzn2feat mzn2feat 95 0.857 0.547 1.339 1.943 
+
+trans2feat com-6 116 0.869 0.529 1.344 2.004 com-9 116 0.833 0.529 1.425 1.982 com-3 116 0.861 0.521 1.384 2.030 com-2 116 0.850 0.518 1.398 2.039 com-1 116 0.840 0.512 1.422 2.048 com-5 116 0.838 0.508 1.420 2.044 com-0 116 0.857 0.502 1.391 2.081 com-7 116 0.843 0.502 1.415 2.070 com-8 116 0.773 0.501 1.569 2.083 com-4 116 0.826 0.496 1.438 2.088 neural-7 116 0.789 0.482 1.522 2.110 neural-6 116 0.558 0.418 2.394 2.637 neural-0 116 0.557 0.411 2.371 2.627 neural-4 116 0.472 0.383 2.601 2.758 neural-8 116 0.428 0.368 2.723 2.836 neural-2 116 0.343 0.333 2.861 2.886 neural-9 116 0.366 0.326 2.735 2.828 neural-3 116 0.329 0.315 2.975 3.026 neural-5 116 0.309 0.314 2.978 2.985 neural-1 116 0.319 0.310 3.009 3.039 
+
+> 3
+
+https://github.com/SeppiaBrilla/EFE_project/tree/master/data/features 
+
+20 Table 17: FLECC: Random Forest with accuracy loss. 
+
+Type Extractor Features Accuracy Avg Rank 
+
+Train Test Train Test 
+
+LLM2feat LLM2feat-1 50 0.981 0.847 1.029 1.286 LLM2feat-2 50 0.989 0.842 1.018 1.310 LLM2feat-3 50 0.984 0.842 1.025 1.305 LLM2feat-4 50 0.994 0.836 1.011 1.315 LLM2feat-5 50 0.995 0.835 1.009 1.325 LLM2feat-6 50 0.980 0.831 1.033 1.324 LLM2feat-7 50 0.989 0.826 1.019 1.334 LLM2feat-8 50 0.996 0.818 1.008 1.353 LLM2feat-9 50 0.994 0.818 1.012 1.360 LLM2feat-10 50 0.976 0.816 1.041 1.350 
+
+mzn2feat mzn2feat 95 0.959 0.764 1.063 1.426 
+
+trans2feat com-3 116 0.803 0.773 1.389 1.447 com-2 116 0.800 0.772 1.399 1.459 com-1 116 0.765 0.746 1.532 1.552 neural-9 116 0.958 0.745 1.067 1.480 neural-7 116 0.958 0.743 1.072 1.490 com-8 116 0.941 0.734 1.107 1.517 com-7 116 0.949 0.732 1.085 1.501 com-9 116 0.933 0.731 1.108 1.510 neural-8 116 0.947 0.727 1.088 1.522 com-4 116 0.727 0.708 1.637 1.660 com-5 116 0.688 0.673 1.775 1.785 neural-1 116 0.688 0.669 1.805 1.825 neural-0 116 0.612 0.590 2.103 2.136 com-6 116 0.472 0.444 2.172 2.267 neural-6 116 0.095 0.114 2.466 2.455 neural-3 116 0.095 0.111 2.510 2.496 neural-2 116 0.086 0.108 2.610 2.573 com-0 116 0.030 0.033 3.933 3.968 neural-5 116 0.027 0.031 3.957 3.985 neural-4 116 0.027 0.031 3.957 3.985 21 Table 18: Car Sequencing: AutoSklearn with accuracy loss. F = degenerate failed fit (test accuracy 
+
+<1%), excluded from all aggregates. 
+
+Type Extractor Features Accuracy Avg Rank 
+
+Train Test Train Test 
+
+LLM2feat LLM2feat-1 50 0.671 0.640 1.646 1.735 LLM2feat-2 50 0.686 0.635 1.652 1.782 LLM2feat-3 50 0.679 0.634 1.667 1.781 LLM2feat-4 50 0.709 0.630 1.578 1.756 LLM2feat-5 50 0.669 0.629 1.631 1.729 LLM2feat-6 50 0.641 0.616 1.707 1.788 LLM2feat-7 50 0.651 0.607 1.696 1.802 LLM2feat-8 50 0.660 0.529 1.738 2.011 LLM2feat-9 50 0.658 0.528 1.754 2.017 LLM2feat-10 (F) 50 — — — —
+
+mzn2feat mzn2feat 95 0.650 0.621 1.723 1.787 
+
+trans2feat com-4 116 0.867 0.545 1.271 1.931 com-7 116 0.869 0.542 1.270 1.927 neural-9 116 0.568 0.512 2.142 2.248 neural-8 116 0.521 0.499 2.435 2.492 neural-1 116 0.521 0.498 2.429 2.493 neural-6 116 0.518 0.495 2.420 2.482 neural-3 116 0.519 0.492 2.453 2.522 neural-5 116 0.511 0.491 2.493 2.553 neural-2 116 0.534 0.491 2.405 2.500 com-6 116 0.582 0.483 1.971 2.164 com-9 116 0.570 0.468 1.998 2.183 neural-4 116 0.558 0.465 2.419 2.570 com-2 116 0.570 0.462 2.015 2.224 com-5 116 0.545 0.456 2.063 2.236 com-8 116 0.523 0.452 2.133 2.270 neural-7 116 0.535 0.445 2.088 2.256 neural-0 116 0.397 0.358 2.709 2.798 com-0 (F) 116 — — — —com-1 (F) 116 — — — —com-3 (F) 116 — — — —22 Table 19: FLECC: AutoSklearn with accuracy loss. TO = 1800 s timeout without a model; F = degen-erate failed fit. 
+
+Type Extractor Features Accuracy Avg Rank 
+
+Train Test Train Test 
+
+LLM2feat LLM2feat-1 50 0.951 0.846 1.104 1.310 LLM2feat-2 50 0.946 0.845 1.113 1.311 LLM2feat-3 50 0.952 0.844 1.101 1.308 LLM2feat-4 50 0.886 0.838 1.231 1.325 LLM2feat-5 50 0.924 0.837 1.157 1.324 LLM2feat-6 50 0.904 0.836 1.195 1.330 LLM2feat-7 50 0.908 0.831 1.187 1.342 LLM2feat-8 50 0.897 0.830 1.209 1.342 LLM2feat-9 50 0.872 0.828 1.250 1.340 LLM2feat-10 50 0.919 0.822 1.164 1.356 
+
+mzn2feat mzn2feat 95 0.850 0.792 1.295 1.396 
+
+trans2feat com-7 116 0.819 0.784 1.357 1.417 com-8 116 0.809 0.783 1.371 1.418 neural-9 116 0.816 0.783 1.361 1.417 com-4 116 0.807 0.783 1.375 1.419 neural-8 116 0.826 0.783 1.345 1.417 com-2 116 0.806 0.782 1.377 1.420 neural-1 116 0.806 0.782 1.377 1.420 neural-2 116 0.806 0.782 1.377 1.420 neural-6 116 0.806 0.782 1.377 1.420 com-6 116 0.807 0.782 1.374 1.420 com-9 116 0.807 0.781 1.374 1.422 neural-7 116 0.806 0.781 1.376 1.422 neural-4 116 0.082 0.083 2.830 2.817 neural-5 116 0.082 0.083 2.830 2.817 neural-3 (TO) 116 — — — —com-0 (TO) 116 — — — —com-1 (TO) 116 — — — —com-3 (TO) 116 — — — —com-5 (TO) 116 — — — —neural-0 (TO) 116 — — — —23

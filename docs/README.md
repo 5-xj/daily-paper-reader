@@ -6,92 +6,83 @@
 </div>
 
 ## 每次日报
-- 最新运行日期：2026-08-09
-- 运行时间：2026-08-09 20:34:53 UTC
+- 最新运行日期：2026-08-26
+- 运行时间：2026-08-26 22:30:07 UTC
 - 运行状态：成功
-- 本次总论文数：24
-- 精读区：11
+- 本次总论文数：21
+- 精读区：8
 - 速读区：13
 
 ### 今日简报（AI）
-今日精读11篇、速读13篇，重点聚焦符号回归与智能体自进化方法。最值得关注的是满分论文《A-SR》，提出分层协调的自进化Agentic LLM用于符号回归；速读中《RecHarness》和《Shapes from Examples》也值得一读。建议普通读者优先浏览A-SR的层级协调机制，理解其如何提升回归任务的自适应能力。
-- 详情：[/202608/09/README](/202608/09/README)
+今日聚焦21篇论文，精读2篇、速读13篇，重点探索AI在遗传编程与科学发现中的自动化能力。最值得关注：Agentic AI实现遗传编程参数自动配置（9.0分），以及符号神经ODE从时序数据学习可解释模型（9.0分）。建议优先精读这两篇，了解AI如何提升模型可解释性与自动化研究效率。
+- 详情：[/202608/26/README](/202608/26/README)
 
 ### 精读区论文标签
-1. [A-SR: Self-Evolving Agentic LLMs for Symbolic Regression via Hierarchical Coordination](/202608/09/2608.04872v1-a-sr-self-evolving-agentic-llms-for-symbolic-regression-via-hierarchical-coordination)  
-   标签：评分：10.0/10、query:ad
-   evidence：LLM引导的符号回归，用于自动发现数学公式
-2. [A-SR: Self-Evolving Agentic LLMs for Symbolic Regression via Hierarchical Coordination](/202608/09/2608.04872v2-a-sr-self-evolving-agentic-llms-for-symbolic-regression-via-hierarchical-coordination)  
-   标签：评分：10.0/10、query:ad
-   evidence：LLM引导的符号回归，用于自动发现数学公式
-3. [Learning to Coordinate Symbolic Tools: LLM Agents for Verified Sum-of-Squares Certificates](/202608/09/2608.00326v1-learning-to-coordinate-symbolic-tools-llm-agents-for-verified-sum-of-squares-certificates)  
+1. [Automating Parent Selection Configuration in Genetic Programming with Agentic AI](/202608/26/2608.17172v1-automating-parent-selection-configuration-in-genetic-programming-with-agentic-ai)  
    标签：评分：9.0/10、query:ad
-   evidence：大模型智能体用于自动数学发现与验证
-4. [Discovering Explicit Magnetic Core Loss Equations via Learnable Symbolic Sparse Identification](/202608/09/2608.00379v1-discovering-explicit-magnetic-core-loss-equations-via-learnable-symbolic-sparse-identification)  
+   evidence：基于LLM的智能体框架自动化遗传编程父代选择设计，并以符号回归为测试平台
+2. [Symbolic Neural ODEs: Learning interpretable models from time-series data](/202608/26/2608.22112v1-symbolic-neural-odes-learning-interpretable-models-from-time-series-data)  
    标签：评分：9.0/10、query:sr
-   evidence：基于数据驱动符号回归发现显式物理方程
-5. [DGA$_2$D: Directed Graph-Guided Automated Algorithm Design with Large Language Models](/202608/09/2608.00700v1-dga2d-directed-graph-guided-automated-algorithm-design-with-large-language-models)  
+   evidence：通过神经常微分方程直接从时间序列数据识别稀疏可解释的动态系统模型
+3. [Joint Causal Structure and Cluster Discovery Using Variational Inference](/202608/26/2608.22212v1-joint-causal-structure-and-cluster-discovery-using-variational-inference)  
    标签：评分：9.0/10、query:ad
-   evidence：大模型驱动的自动启发式设计，用于组合优化问题
-6. [Tevatron Meets Megatron: Expert-Parallel LLM Reranker Training on an Academic Budget](/202608/09/2608.00916v1-tevatron-meets-megatron-expert-parallel-llm-reranker-training-on-an-academic-budget)  
+   evidence：基于变分推断从数据中自动发现因果结构与聚类
+4. [The Emergence of Relevance Through Axiomatic Attention Patterns During LoRA Fine-Tuning](/202608/26/2608.23338v1-the-emergence-of-relevance-through-axiomatic-attention-patterns-during-lora-fine-tuning)  
    标签：评分：9.0/10、query:rerank-train
-   evidence：面向大规模MoE大模型重排序器的分布式训练后端
-7. [Beyond Average Performance: Dynamic Instance Clustering and Specialized Algorithm Design in LLM-Assisted Evolutionary Search](/202608/09/2608.03129v1-beyond-average-performance-dynamic-instance-clustering-and-specialized-algorithm-design-in-llm-assisted-evolutionary-search)  
-   标签：评分：9.0/10、query:ad
-   evidence：LLM辅助进化搜索用于自动算法设计
-8. [Training Documents Reranker with Search Rubrics for Deep Research Agent](/202608/09/2608.03527v1-training-documents-reranker-with-search-rubrics-for-deep-research-agent)  
-   标签：评分：9.0/10、query:rerank-train
-   evidence：大模型合成的搜索规则指导文档重排序器训练
-9. [MuEvo: LLM-Driven Evolution of Multi-Heuristic Ensemble](/202608/09/2608.03636v1-muevo-llm-driven-evolution-of-multi-heuristic-ensemble)  
-   标签：评分：9.0/10、query:ad
-   evidence：LLM驱动的多启发式集成进化，自动发现组合优化启发式，匹配大模型+演化计算的自动发现算法
-10. [AutoSND: From Execution Evidence to Structural Policies for Automated Network Dismantling Heuristic Discovery](/202608/09/2608.03653v1-autosnd-from-execution-evidence-to-structural-policies-for-automated-network-dismantling-heuristic-discovery)  
-   标签：评分：9.0/10、query:ad
-   evidence：大模型引导的网络瓦解启发式自动发现
-11. [Relay, Don't Route: Adaptive Population Handoff for Cost-Efficient LLM-Driven Evolution](/202608/09/2608.05651v1-relay-dont-route-adaptive-population-handoff-for-cost-efficient-llm-driven-evolution)  
-   标签：评分：9.0/10、query:ad
-   evidence：利用LLM驱动演化进行算法发现，自适应种群切换降低成本
+   evidence：LoRA微调用于重排器训练
+5. [UMER: Unifying Embedding and Ranking via Pair-Aware Discriminative Reasoning for Universal Multimodal Retrieval](/202608/26/2608.18504v1-umer-unifying-embedding-and-ranking-via-pair-aware-discriminative-reasoning-for-universal-multimodal-retrieval)  
+   标签：评分：8.0/10、query:rerank-train
+   evidence：通过成对感知判别推理训练统一嵌入与排序的检索模型
+6. [Pairwise Ranking Outperforms Single-Action RL for Offline Explanation Selection: A Practical Lesson](/202608/26/2608.18531v1-pairwise-ranking-outperforms-single-action-rl-for-offline-explanation-selection-a-practical-lesson)  
+   标签：评分：8.0/10、query:rerank-train
+   evidence：比较成对排序与RL选择器，涉及排序模型训练方法
+7. [Data-Driven Dynamic Algorithm Dispatch with Large Language Models](/202608/26/2608.21584v1-data-driven-dynamic-algorithm-dispatch-with-large-language-models)  
+   标签：评分：8.0/10、query:ad
+   evidence：用大模型合成算法调度启发式，直接体现基于LLM的算法自动发现
+8. [Resilient Concurrent Causal Discovery for Topological Event Sequences](/202608/26/2608.21815v1-resilient-concurrent-causal-discovery-for-topological-event-sequences)  
+   标签：评分：8.0/10、query:ad
+   evidence：面向拓扑事件序列的因果发现算法
 
 ### 速读区论文标签
-1. [Shapes from Examples: Foundations of Shape Learning in Recursive SHACL](/202608/09/2607.27934v1-shapes-from-examples-foundations-of-shape-learning-in-recursive-shacl)  
-   标签：评分：8.0/10、query:ad
-   evidence：从正负示例自动学习知识图谱的SHACL形状，属于数据和知识中的自动发现算法
-2. [RecHarness: A Bandit-Routed Agentic Harness for Self-Evolving Recommender Systems](/202608/09/2607.29241v1-recharness-a-bandit-routed-agentic-harness-for-self-evolving-recommender-systems)  
-   标签：评分：8.0/10、query:ad
-   evidence：用大模型和老虎机路由引导搜索自动发现推荐模型改进方案
-3. [Retrieval Augmented Biomedical Question Answering with Weak Question Recovery and Neural Reranking for BioASQ Task 14b](/202608/09/2608.01468v1-retrieval-augmented-biomedical-question-answering-with-weak-question-recovery-and-neural-reranking-for-bioasq-task-14b)  
+1. [The Retriever Should Remember: Experience-Amortized Reranking for Long-Term Agent Memory](/202608/26/2608.22767v1-the-retriever-should-remember-experience-amortized-reranking-for-long-term-agent-memory)  
    标签：评分：8.0/10、query:rerank-train
-   evidence：使用微调MiniLM进行神经重排序的生物医学问答
-4. [Beyond Solution-Centric Search: Adaptive Inquiry and Knowledge Revision for Autonomous ML Engineering](/202608/09/2608.02143v1-beyond-solution-centric-search-adaptive-inquiry-and-knowledge-revision-for-autonomous-ml-engineering)  
+   evidence：经验摊销重排框架，学习可复用的大模型相关性分数
+2. [BoYueGRN: Zero-shot causal discovery of directed gene regulatory networks from single-cell transcriptomes via amortized inference over synthetic structural causal models](/202608/26/biorxiv-10-64898-2026-08-15-745056-v1-boyuegrn-zero-shot-causal-discovery-of-directed-gene-regulatory-networks-from-single-cell-transcriptomes-via-amortized-inference-over-synthetic-structural-causal-models)  
    标签：评分：8.0/10、query:ad
-   evidence：基于大模型智能体的查询-修订循环，用于自主机器学习工程探索
-5. [Fast Discovery of Inclusion Dependencies with Desbordante](/202608/09/2608.02213v1-fast-discovery-of-inclusion-dependencies-with-desbordante)  
+   evidence：从单细胞转录组进行因果发现的算法，属于数据自动发现
+3. [PerturbTrace: Evaluating Feedback Use by AI Co-Scientist Agents in Perturbation Discovery](/202608/26/biorxiv-10-64898-2026-08-18-745260-v1-perturbtrace-evaluating-feedback-use-by-ai-co-scientist-agents-in-perturbation-discovery)  
    标签：评分：8.0/10、query:ad
-   evidence：自动发现包含依赖
-6. [Approximating two-terminal network reliability](/202608/09/2608.02523v1-approximating-two-terminal-network-reliability)  
-   标签：评分：8.0/10、query:ad
-   evidence：算法核心思想由GPT-5.6 Sol Ultra发现，体现大模型用于算法自动发现
-7. [Towards a new paradigm of scientific discovery with socialized artificial intelligence](/202608/09/2608.02775v1-towards-a-new-paradigm-of-scientific-discovery-with-socialized-artificial-intelligence)  
-   标签：评分：8.0/10、query:ad
-   evidence：社会化人工智能驱动的科学发现范式BLAZE
-8. [Position Bias Undermines Preference Consistency in Listwise LLM-Based Reranking](/202608/09/2608.03091v1-position-bias-undermines-preference-consistency-in-listwise-llm-based-reranking)  
-   标签：评分：8.0/10、query:rerank-train
-   evidence：列表式LLM重排序中的位置偏差与偏好一致性
-9. [Large language models for partial differential equation workflows](/202608/09/2608.03600v1-large-language-models-for-partial-differential-equation-workflows)  
-   标签：评分：8.0/10、query:ad
-   evidence：大语言模型用于偏微分方程控制模型发现与求解流程
-10. [DEGR: Dual Exploration-Driven Generative Re-Ranking for Adaptive Cross-Request Context Bridging](/202608/09/2608.04809v1-degr-dual-exploration-driven-generative-re-ranking-for-adaptive-cross-request-context-bridging)  
-   标签：评分：8.0/10、query:rerank-train
-   evidence：生成式重排序模型的训练方法
-11. [UniHEAR: Unified Heterogeneous-Source Attentive Retrieval for Knowledge-Based Visual Question Answering](/202608/09/2608.01147v2-unihear-unified-heterogeneous-source-attentive-retrieval-for-knowledge-based-visual-question-answering)  
+   evidence：LLM智能体在扰动发现中用于闭环实验设计
+4. [Synthesizing Feature Extractors: An Agentic Approach for Algorithm Selection](/202608/26/2608.17170v1-synthesizing-feature-extractors-an-agentic-approach-for-algorithm-selection)  
+   标签：评分：7.0/10、query:ad
+   evidence：利用LLM智能体自动合成特征提取器，属于自动发现范畴
+5. [Polaris: Learning to Generate Table Descriptions from Retrieval Feedback](/202608/26/2608.17171v1-polaris-learning-to-generate-table-descriptions-from-retrieval-feedback)  
    标签：评分：7.0/10、query:rerank-train
-   evidence：针对源盲点式重排序器提出统一异构源重排序方法
-12. [Bayesian Data Reweighting Improves Multimodal Retrieval for Knowledge-Based Visual Question Answering](/202608/09/2608.02907v1-bayesian-data-reweighting-improves-multimodal-retrieval-for-knowledge-based-visual-question-answering)  
+   evidence：利用检索反馈构造排序偏好对并采用DPO训练，与重排序模型的训练方法相通
+6. [SCoRD: Semantic-Assisted Continual Retriever-Reranker Distillation for LLM-Based Recommendation](/202608/26/2608.19998v1-scord-semantic-assisted-continual-retriever-reranker-distillation-for-llm-based-recommendation)  
+   标签：评分：7.0/10、query:rerank-train
+   evidence：提出面向LLM推荐系统的持续检索器-重排序器蒸馏，直接涉及重排序器的训练与蒸馏
+7. [Profiling What Matters: Context-Aware Item Profiles from Large-Scale Metadata for LLM Recommenders](/202608/26/2608.20801v1-profiling-what-matters-context-aware-item-profiles-from-large-scale-metadata-for-llm-recommenders)  
+   标签：评分：7.0/10、query:rerank-train
+   evidence：面向大模型重排的上下文感知条目画像构建
+8. [Risk-Aware Reranking for Agentic Tool Retrieval](/202608/26/2608.22751v1-risk-aware-reranking-for-agentic-tool-retrieval)  
+   标签：评分：7.0/10、query:rerank-train
+   evidence：面向工具检索的风险感知轻量级重排序框架
+9. [Bi-Layer Ant Colony Optimization for Multi-Robot Task Allocation and Routing in Delivery Applications](/202608/26/2608.17416v1-bi-layer-ant-colony-optimization-for-multi-robot-task-allocation-and-routing-in-delivery-applications)  
+   标签：评分：6.0/10、query:atsp
+   evidence：面向路由与分配的双层蚁群优化启发方法，可迁移至ATSP
+10. [DEPT: Document Embedding Preservation Tuning for Unified Query Expansion and Retrieval](/202608/26/2608.17632v1-dept-document-embedding-preservation-tuning-for-unified-query-expansion-and-retrieval)  
    标签：评分：6.0/10、query:rerank-train
-   evidence：提出贝叶斯数据重加权训练方法，通过降低假阴性样本权重提升检索排序效果
-13. [Hyper-ES: Effective Evolution Strategies for LLM Reasoning via Descent Direction Merging](/202608/09/2608.05541v1-hyper-es-effective-evolution-strategies-for-llm-reasoning-via-descent-direction-merging)  
+   evidence：面向查询扩展与检索的LLM端到端训练方法
+11. [Difficulty-Aware Semantic-ID Optimization for Generative Recommendation](/202608/26/2608.20611v1-difficulty-aware-semantic-id-optimization-for-generative-recommendation)  
+   标签：评分：6.0/10、query:rerank-train
+   evidence：面向排名训练的难度感知优化方法
+12. [Mycelial Search: A Graph-Structured Metaheuristic for Continuous Optimisation](/202608/26/2608.23323v1-mycelial-search-a-graph-structured-metaheuristic-for-continuous-optimisation)  
    标签：评分：6.0/10、query:ad
-   evidence：提出结合进化策略与大语言模型的推理优化框架，与LLM+进化计算的自动发现方向相关
+   evidence：面向连续优化的图结构元启发式，为计算发现中的启发式搜索提供可借鉴思想
+13. [FlowNeg: GFlowNet-Guided Diverse Hard Negative Sampling for Knowledge Graph Embedding](/202608/26/2608.23849v1-flowneg-gflownet-guided-diverse-hard-negative-sampling-for-knowledge-graph-embedding)  
+   标签：评分：6.0/10、query:rerank-train
+   evidence：基于GFlowNet的难负采样方法可用于排序模型训练
 
 
 <div class="dpr-home-promo-card">

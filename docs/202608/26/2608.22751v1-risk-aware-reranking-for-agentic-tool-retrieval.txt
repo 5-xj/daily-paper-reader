@@ -1,0 +1,673 @@
+Title: Risk-Aware Reranking for Agentic Tool Retrieval
+
+URL Source: https://arxiv.org/pdf/2608.22751v1
+
+Published Time: Tue, 25 Aug 2026 01:32:35 GMT
+
+Number of Pages: 11
+
+Markdown Content:
+# Risk-Aware Reranking for Agentic Tool Retrieval 
+
+# Qinfei Li 
+
+University of Science and Technology of China Hefei, China lqfff1984@gmail.com 
+
+# Xiaoxuan Dong 
+
+University of Electronic Science and Technology of China Chengdu, China 202522010524@std.uestc.edu.cn 
+
+# Jin Zhang 
+
+Lanzhou University Lanzhou, China mjzj35723@gmail.com 
+
+# Dexu Yu 
+
+Fenz.AI Palo Alto, United States yu.dex@northeastern.edu 
+
+# Wenhao Deng 
+
+University of Glasgow Glasgow, United Kingdom w.deng.1@research.gla.ac.uk 
+
+# Junchen Fu 
+
+University of Glasgow Glasgow, United Kingdom j.fu.3@research.gla.ac.uk 
+
+# Youhua Li 
+
+City University of Hong Kong Hong Kong, China youhuali2-c@my.cityu.edu.hk 
+
+# Hanwen Du 
+
+The Ohio State University Columbus, United States du.1128@osu.edu 
+
+# Chunxiao Li ∗
+
+University of Science and Technology of China Hefei, China chunxiao.li@ustc.edu.cn 
+
+## Abstract 
+
+Tool retrieval determines which external tools are exposed to an LLM agent for a user query or task, making retrieval a critical pre-execution safety boundary. Unlike document retrieval, tool re-trieval exposes executable actions: a tool that is useful for one task may be unnecessary or risky for another. However, exist-ing tool-retrieval methods primarily optimize semantic relevance, and safety evaluations often focus on failures after tool execution rather than risks introduced during retrieval. We study risk-aware tool retrieval, where the goal is to retrieve useful tools while re-ducing exposure to higher-risk tools. We propose a lightweight reranking framework on top of a frozen first-stage retriever. The framework models query-conditioned relevance and tool-level ex-posure risk separately, combines them through an explicit param-eter controlling the tradeoff between safety and utility, smooths scores over a ToolGraph, and optionally applies rule-based safety constraints. To support retrieval-time safety evaluation, we an-notate 6,108 tools across UltraTool and Seal-Tools with five ordi-nal risk levels and define metrics that measure risky-tool expo-sure in the top-𝑘 results. Experiments on UltraTool and Seal-Tools show that our approach improves the relevance–safety tradeoff over relevance-only retrievers and reranking baselines, with the rule-filtered variant providing a conservative operating point for safety-critical deployments. These findings indicate that retrieval-stage filtering can reduce the candidate action space exposed to agents before execution, complementing downstream tool-use safe-guards. The code and supplementary materials are available at: https://github.com/qli447/risk-aware-tool-retrieval-release. 
+
+> ∗Corresponding author.
+> This work is licensed under a Creative Commons Attribution 4.0 International License.
+> CIKM ’26, Rome, Italy
+> © 2026 Copyright held by the owner/author(s). ACM ISBN 979-8-4007-2539-5/2026/11 https://doi.org/10.1145/3799682.3840706
+
+## CCS Concepts 
+
+• Information systems → Retrieval models and ranking ; • 
+
+Computing methodologies → Natural language processing ; • 
+
+Security and privacy → Software and application security .
+
+## Keywords 
+
+LLM agents, tool retrieval, risk-aware reranking, retrieval safety, agent safety 
+
+ACM Reference Format: 
+
+Qinfei Li, Xiaoxuan Dong, Jin Zhang, Dexu Yu, Wenhao Deng, Junchen Fu, Youhua Li, Hanwen Du, and Chunxiao Li. 2026. Risk-Aware Reranking for Agentic Tool Retrieval. In Proceedings of the 35th ACM International Conference on Information and Knowledge Management (CIKM ’26), November 07–11, 2026, Rome, Italy. ACM, New York, NY, USA, 11 pages. https://doi. org/10.1145/3799682.3840706 
+
+## 1 Introduction 
+
+Large language model (LLM) agents increasingly rely on external tools such as APIs, code executors, and file managers to accomplish complex real-world tasks [5, 10, 11, 14, 20]. Given a user query or task, a tool retriever selects the top-𝑘 candidate tools from a library for the agent to invoke [15]. In this sense, tool retrieval determines the agent’s task-specific tool exposure before it acts. Recent task-specific retrieval models have substantially improved retrieval accuracy; for example, ToolRet [15] fine-tunes a dense encoder on 43k tools and outperforms general-purpose retrievers by a large margin. However, unlike document retrieval, where re-sults are retrieved for the model to read, tool retrieval exposes executable actions to the agent, making retrieval errors potentially irreversible [22]. Tool retrieval should not rely solely on semantic relevance to the user query; it should also account for the opera-tional risks of retrieved tools. Once risky tools are placed in the top-𝑘 , they may lead to consequences such as unauthorized data deletion or credential exposure [25, 27]. Figure 1 illustrates this exposure gap: two top-𝑘 lists can both contain useful tools, yet expose very different numbers of higher-risk executable actions arXiv:2608.22751v1 [cs.IR] 24 Aug 2026 CIKM ’26, November 07–11, 2026, Rome, Italy Qinfei Li et al. Relevance -only Top -K  
+
+> Clean Old project Files
+> and Send the Report
+> Top -k Retrieved Tool(by relevance)
+> Search_File
+> L1
+> 2
+> 1
+> 3
+> Delete_File
+> Send_Email
+> Execute_Shell
+> Summarize_Doc
+> L1
+> L4
+> L3
+> L5 4
+> 5
+> RVR@5 = 3/5
+> Risk Before Execution
+> Risk -Aware Retrieval
+> Top -k Retrieved Tool(after Reranking)
+> 1
+> 2
+> 5
+> 3
+> 4
+> User
+> Query
+> Tool
+> Execution
+> Agent
+> Tool
+> Retrieval
+> Search_Files
+> Summarize_Doc
+> Draft_Email
+> Send_Email
+> List_Files
+> L1
+> L1
+> L1
+> L2
+> L3
+> RVR@5 = 1/5
+> User
+
+# vs 
+
+Figure 1: Tool retrieval as a pre-execution safety boundary. Relevance-only top-𝑘 retrieval exposes risky executable tools, while risk-aware reranking reduces risky-tool exposure. 
+
+to the agent. The current tool retrieval pipeline has the following limitations. 
+
+i) Existing retrievers and rerankers primarily optimize relevance, not safe tool exposure. From BM25 [2] and dense retrievers [15, 21] to recent reranking modules [23, 28], the goal is usually to rank tools that match the query. However, executable tools are not passive documents: a semantically relevant tool may still enable high-impact actions such as credential access, file deletion, or code execution. ii) Standard retrieval metrics do not capture risky-tool exposure. NDCG and MRR measure whether relevant tools appear near the top, but they do not distinguish low-risk tools from high-risk ones. As a result, two rankings can obtain similar relevance scores while exposing very different levels of operational risk in the top-𝑘 . iii) Existing safety evaluations largely check safety after tool selection or execution, rather than at the retrieval stage where the candidate set is first formed [25, 27]. If the retrieved candidates already contain many risky tools, downstream safety checking has a much harder problem; in the extreme case, most exposed options may be unsafe. Our experiments in Sections 5.2–5.5 show that relevance-only retrieval can expose substantially more higher-risk tools than risk-aware alternatives. Based on the above limitations, our goal is to make tool retrieval risk-aware without modifying the upstream retriever. 
+
+First, we introduce a dual-head reranker to move beyond relevance-only tool ranking. A frozen ToolRet-BGE encoder feeds a relevance head 𝑓 rel (𝑞, 𝑡 ) and a tool-risk head 𝑓 risk (𝑡 ), which are combined as 
+
+𝑠 (𝑞, 𝑡 ) = 𝑓 rel (𝑞, 𝑡 ) − 𝜆𝑓 risk (𝑡 ). This design exposes a controllable safety–utility tradeoff while keeping the upstream retriever fixed. 
+
+Second, we make retrieval-time safety measurable. We annotate 6,108 tools with five ordinal risk levels and define RVR, SRR, and sNDCG to quantify risky-tool exposure and safety-adjusted ranking quality in the top-𝑘 list, complementing relevance metrics such as NDCG and MRR. 
+
+Third, we add pre-execution controls at the retrieval stage. A four-type ToolGraph smooths scores among related tools, and an optional rule filter enforces risk caps, permission constraints, and redundancy removal for deployments that require stricter exposure control. The context-aware and stress-test analyses in Sections 5.5 and 5.6 further show why retrieval-stage control is needed. Our contributions are summarized as follows: 
+
+• We formulate agent tool retrieval as a pre-execution relevance– safety optimization problem, where the goal is to retrieve useful tools while reducing exposure to higher-risk executable actions. 
+
+• We propose a lightweight risk-aware reranking framework on top of a frozen first-stage retriever. The framework combines dual-head relevance–risk scoring, graph-based score smoothing, and an optional rule filter for stricter deployment-time safety control. 
+
+• We annotate 6,108 tools across UltraTool and Seal-Tools with five-level operational risk labels, and define retrieval-time safety metrics including RVR, SRR, and sNDCG to measure risky-tool exposure and safety-adjusted ranking quality in the top-𝑘 list. 
+
+• We evaluate the framework on UltraTool and Seal-Tools against 8 retrieval and reranking baselines. Across main, robustness, and stress-test settings, the proposed reranker reduces risky-tool exposure while preserving competitive retrieval quality. 
+
+## 2 Related Work 
+
+Tool Retrieval. Tool retrieval and selection have been studied through tool-augmented LLM systems and API retrieval [10, 11, 14], dense retrievers [15, 24], generative tool selection [17], query rewriting and reasoning [4, 13], and reranking methods [28]. These methods improve retrieval accuracy by better matching user queries to useful tools. For example, ToolRet [15] fine-tunes a dense encoder on large-scale tool data, while ToolRerank [28] improves ranking with cross-encoder scoring. However, existing methods primarily optimize relevance or task success, without explicitly modeling the operational risk of exposing retrieved tools. This gap is especially important for agents, where retrieved items are executable actions rather than passive documents. 
+
+Agent Safety Evaluation. Many benchmarks evaluate the safety of tool-augmented LLM agents. R-Judge [25] studies safety-risk awareness in multi-turn agent interactions, Agent-SafetyBench [27] evaluates unsafe tool-use recognition, and ToolEmu [12] tests tool-call consequences in simulated environments. Other benchmarks, such as AgentHarm [1] and SafeArena [16], evaluate agents un-der harmful or adversarial settings. These works provide valuable safety taxonomies, but they primarily evaluate downstream agent decisions or execution outcomes rather than risk exposure in the retrieved top-𝑘 tool set. In addition, Yu and Papakyriakopoulos [22] show that retrieval augmentation itself can degrade agent safety, indicating that risks are not controlled during the retrieval process. 
+
+Retrieval Reranking. Reranking is a common refinement step in retrieval pipelines. Existing rerankers include cross-encoders [18, 21], sequence-to-sequence models [9], and instruction-tuned LLM rerankers [23]. These rerankers typically optimize relevance, leav-ing safety as an external consideration rather than an explicit rank-ing objective. In contrast, our work studies retrieval-time relevance– safety optimization for executable tool candidates. 
+
+Constrained and Diversified Ranking. Our formulation is also related to ranking under constraints and tradeoffs. Diversified reranking methods such as maximal marginal relevance balance query relevance with redundancy reduction [3], while fair top-𝑘 Risk-Aware Reranking for Agentic Tool Retrieval CIKM ’26, November 07–11, 2026, Rome, Italy 
+
+ranking and exposure-aware ranking study how to optimize rank-ing utility subject to distributional or exposure constraints [26]. These works show that ranking objectives often need to balance relevance with additional deployment constraints. Our setting dif-fers in that the constraint concerns operational risk of executable tools rather than document novelty or group exposure. 
+
+## 3 Preliminaries 
+
+Let T = {𝑡 1, . . . , 𝑡 𝑁 } denote a tool corpus. Each tool 𝑡 𝑖 has a text description 𝑑 𝑖 and an operational risk label 𝑟 𝑖 ∈ { 1, 2, 3, 4, 5}, where larger values indicate higher potential impact if the tool is exposed to an agent. Given a user query 𝑞 , a first-stage retriever returns a candidate set C𝑞 ⊂ T , typically the top-100 tools by relevance. A reranker then assigns a score 𝑠 (𝑞, 𝑡 ) to each tool in the scored set—either C𝑞 or the full corpus T —and outputs a ranked top-𝑘 list 
+
+𝜎 (𝑘 ) 
+
+> 𝑞
+
+.Unlike document retrieval, the retrieved items here are exe-cutable tools. Therefore, the top-𝑘 list is not only a relevance result but also the candidate action space exposed to the downstream LLM agent. Our goal is to learn a reranking function that maintains retrieval relevance while reducing the exposure of higher-risk tools in 𝜎 (𝑘 ) 
+
+> 𝑞
+
+. This setting focuses on pre-execution safety: no tool is ex-ecuted during retrieval, but the retrieved set constrains what the agent can choose to invoke next. Formally, for each query 𝑞 with ground-truth relevant tools R𝑞 ,the reranker should rank relevant tools near the top while discour-aging unnecessary exposure of tools with high operational risk. We do not impose a hard constraint during training; instead, the method exposes an inference-time tradeoff parameter that allows practitioners to select different relevance–safety operating points. 
+
+## 4 Method 4.1 Overview and Deployment Setting 
+
+Figure 2 gives an overview of the framework. Given a query 𝑞 , a first-stage retriever returns a candidate set C𝑞 ⊂ T , typically the top-100 tools. Our method can score either this candidate set or the complete tool pool, leaving the upstream retriever unchanged. The framework has two operating modes. The core reranker uses a learned dual-head scoring model and graph-based score smooth-ing. At inference time, this core mode uses the predicted risk score 
+
+𝑓 risk (𝑡 ), not the annotated risk label itself. The rule-filtered mode adds a deployment-time filtering layer on top of the core reranker. This mode assumes an audited tool registry in which risk metadata and permission categories are available before deployment, and is intended for settings that require stricter exposure constraints. 
+
+## 4.2 Offline Risk Audit and Label Use 
+
+Risk rubric. Each tool is assigned an ordinal operational risk level 
+
+𝑟 𝑖 ∈ { 1, . . . , 5} according to the potential operational consequence of exposing the tool without considering particular calls or runtime environments: 
+
+• L1 Safe: Read-only tools with no side effects or sensitive access. 
+
+• L2 Low: Minor reversible actions or non-sensitive personal-data access. 
+
+• L3 Medium: Sensitive data access or persistent writes. 
+
+Table 1: Risk-label agreement and disagreement resolution. Span denotes the maximum pairwise difference among the three LLM annotator scores. Agreement is measured by Krip-pendorff’s 𝛼 .                  
+
+> Dataset 𝛼 K,all 𝛼 K,span ≤1span =0span =1span ≥2UltraTool 0.523 0.707 928 (45.7%) 767 (37.7%) 337 (16.6%) Seal-Tools 0.856 0.901 3440 (84.4%) 196 (4.8%) 440 (10.8%)
+
+• L4 High: Irreversible actions, security controls, or system-level permissions. 
+
+• L5 Critical: Large-scale harm, system intrusion, or severe pri-vacy loss. 
+
+Annotation procedure. Each tool is first labeled from its name and description by three LLM annotators: Claude Code, Codex, and Qwen. Let the three votes be 𝑣 1, 𝑣 2, 𝑣 3, and define span =
+
+max (𝑣 1, 𝑣 2, 𝑣 3) − min (𝑣 1, 𝑣 2, 𝑣 3). We retain the label if span = 0, use the median if span = 1, and have the authors review cases with span ≥ 2. A human researcher with expertise in LLM agents and tool use, blinded to the released labels, independently labels a uniform random sample of 150 tools from the pooled tool set. Agreement with the released labels is 60.0% exact and 77.3% within one level (quadratically weighted Cohen’s 𝜅 = 0.362). Disagree-ments of two or more levels mainly concern underspecified access to personal, financial, or health data, for which the human auditor uses a more conservative risk level. 
+
+Use of labels. The resolved labels have four roles. First, they provide offline supervision for the risk head. Second, they define risk-related metadata used to construct ToolGraph edges in audited tool libraries. Third, they support the optional rule filter when deployment-time metadata is available. Fourth, they are used for evaluation metrics such as RVR@5 and SRR@5. The core dual-head reranker does not directly look up 𝑟 𝑖 at inference time; it uses the predicted score 𝑓 risk (𝑡 ). The rule-filtered variant should therefore be read as an audited-library deployment setting. Table 1 summarizes the annotation reliability. UltraTool has lower agreement because its tools are more heterogeneous and often described at a higher level of abstraction. Seal-Tools has more standardized API-style descriptions and higher exact agreement. In both datasets, most tools fall into either exact agreement or adjacent-level disagreement; broad cross-level disagreements are manually reviewed. 
+
+## 4.3 Dual-Head Risk-Aware Reranking 
+
+Scoring heads. A frozen ToolRet-BGE encoder maps the query and each candidate tool to embeddings e𝑞 and e𝑡 . We train two lightweight heads on top of these frozen representations: 
+
+𝑓 rel (𝑞, 𝑡 ) = MLP rel 
+
+ [e𝑞 ; e𝑡 ], (1) 
+
+𝑓 risk (𝑡 ) = MLP risk 
+
+ e𝑡 
+
+, (2) where [ · ; · ] denotes concatenation. Both heads use sigmoid out-puts, so their scores lie in the same numeric range. The relevance head is query-conditioned, since the same tool may be essential for one query and irrelevant for another. The risk head receives only the tool embedding and estimates exposure risk at the tool CIKM ’26, November 07–11, 2026, Rome, Italy Qinfei Li et al. 
+
+Figure 2: Overview of the risk-aware reranking framework. Step 1: An offline risk audit assigns ordinal risk labels to tools. Step 2: A frozen encoder feeds a query-conditioned relevance head and a tool-level risk head; their outputs are combined by an inference-time tradeoff parameter. Step 3: A ToolGraph smooths scores among related candidate tools. Step 4: When audited metadata is available and stricter constraints are required, an optional rule filter produces the final top-𝑘 list. 
+
+level. It does not determine whether a particular call is safe given the query, arguments, or environment. Thus, the combined score depends on the query, while the risk estimate does not. This esti-mate does not model argument-level or environment-dependent execution hazards; those effects are outside the information avail-able to a retrieval-time reranker and remain the role of downstream execution safeguards. 
+
+Training objective. The two heads are trained jointly: 
+
+L = Lrel + 𝜇 Lrisk , (3) where 𝜇 balances relevance learning and risk prediction. The rele-vance loss is a pairwise margin loss over triplets (𝑞, 𝑡 +, 𝑡 − ):
+
+Lrel =∑︁    
+
+> (𝑞,𝑡 +,𝑡 −)
+
+max  0, 𝑚 − 𝑓 rel (𝑞, 𝑡 +) + 𝑓 rel (𝑞, 𝑡 − ) . (4) Here 𝑡 + ∈ R 𝑞 is a ground-truth relevant tool. Negatives are sam-pled from the first-stage top-100 candidate set whenever possible, excluding ground-truth tools; if too few negatives are available, we fall back to corpus-level negatives. This keeps the training objec-tive aligned with the reranking setting. For risk supervision, we normalize the ordinal label as ¯ 𝑟 𝑖 = (𝑟 𝑖 − 1)/ 4 and use mean squared error: 
+
+Lrisk = 1
+
+|B 𝑡 |∑︁ 𝑡 𝑖 ∈ B 𝑡 
+
+(𝑓 risk (𝑡 𝑖 ) − ¯𝑟 𝑖 )2 , (5) where B𝑡 is the set of tools appearing in the training batch. We use MSE because the labels are ordinal rather than nominal. 
+
+Inference-time tradeoff. At inference time, the two scores are combined as: 
+
+𝑠 (𝑞, 𝑡 ) = 𝑓 rel (𝑞, 𝑡 ) − 𝜆𝑓 risk (𝑡 ), 𝜆 ≥ 0. (6) The parameter 𝜆 is selected on the validation split and determines the desired operating point. Setting 𝜆 = 0 recovers a risk-blind reranker; increasing 𝜆 gives more weight to the learned risk esti-mate. Because 𝜆 is applied only at inference time, the same trained heads can be used for different relevance–safety operating points. 
+
+## 4.4 ToolGraph Score Smoothing 
+
+The dual-head reranker scores each candidate independently. To share ranking evidence among related tools, we construct an offline ToolGraph 𝐺 = (T , 𝐸 ) over the tool library. The graph contains four edge types: co-occurrence edges for tools appearing together in training queries, semantic edges for tools with similar descriptions, 
+
+permission edges for tools sharing high-risk permission categories, and risk-co-occurrence edges for higher-risk tools that co-occur in training queries. The graph shares query-specific ranking evidence among related tools and serves as a relational smoothing module rather than a safety constraint; the main safety control comes from the learned risk penalty and the optional rule filter. For each pair of tools (𝑡 𝑖 , 𝑡 𝑗 ), the raw edge weight is the sum of four type-specific terms: 
+
+𝑤 raw  
+
+> 𝑖 𝑗
+
+= 𝑤 co  
+
+> 𝑖 𝑗
+
++ 𝑤 sem  
+
+> 𝑖 𝑗
+
++ 𝑤 perm  
+
+> 𝑖 𝑗
+
++ 𝑤 risk  
+
+> 𝑖 𝑗
+
+. (7) Risk-Aware Reranking for Agentic Tool Retrieval CIKM ’26, November 07–11, 2026, Rome, Italy 
+
+An edge is retained if at least one term is non-zero. We normalize the retained weights within each dataset: 
+
+𝑤 𝑖 𝑗 = 𝑤 raw 
+
+> 𝑖 𝑗
+
+max (𝑢,𝑣 ) ∈ 𝐸 𝑤 raw 
+
+> 𝑢𝑣
+
+. (8) Co-occurrence and risk-co-occurrence edges are built from train-ing queries only. Semantic edges are computed from ToolRet-BGE description embeddings. Permission edges use keyword-derived categories such as shell execution, file write, network access, cre-dential handling, and code execution. Exact edge definitions and graph statistics are given in Appendix B. For a query 𝑞 , let s𝑞 be the raw score vector from Eq. (6) over the scored tool set. Propagation is restricted to the subgraph induced by this set, with the corresponding normalized adjacency matrix ˆ𝐴 𝑞 ; in the main full-pool setting this is the graph over T , and in the candidate-matched setting (Appendix E.2) it is the top-100-induced subgraph. One-hop score smoothing is then: 
+
+h0 = s𝑞 , h1 = (1 − 𝛼 )h0 + 𝛼 h0 ˆ𝐴 ⊤ 
+
+> 𝑞
+
+, s′ 
+
+> 𝑞
+
+= 12 (h0 + h1). (9) The smoothing coefficient 𝛼 is selected on a held-out validation split ( 𝛼 = 0.2 for UltraTool and 𝛼 = 0.02 for Seal-Tools). We use a single propagation step to avoid over-smoothing and to keep inference lightweight. 
+
+## 4.5 Optional Rule Filter 
+
+For deployments that require a more conservative exposure policy, we apply an optional rule filter after reranking. The filter assumes an audited tool registry with risk-level metadata and permission categories. It scans the reranked candidate list in order and accepts the first tools that satisfy three constraints. First, the final top-𝐾 list contains at most one higher-risk tool (𝑟 ≥ 3). Second, it contains at most two tools matching two or more high-risk permission categories. Third, a candidate is rejected if its normalized ToolRet-BGE embedding has cosine similarity greater than 0 .9 with any already selected tool. Accepted tools keep their reranked order. If fewer than 𝐾 tools satisfy all constraints, deferred candidates are appended in their original reranked order until the list reaches length 𝐾 . Thus all methods are evaluated with the same top-𝐾 length. Under this deployment policy, the risk and permission caps limit higher-risk exposure and privilege breadth, while the similarity threshold controls redundancy. Their values can be adjusted to deployment needs. The filter adds no trainable parameters. With fixed 𝐾 , the greedy pass scans each candidate once and compares it with at most 𝐾 accepted tools, so the per-query cost is linear in the candidate-list length. Appendix C gives the exact constraints and pseudocode. 
+
+## 5 Experiments 
+
+We conduct experiments to answer the following Research Ques-tions ( RQs ). 
+
+• RQ1: Does risk-aware reranking improve the relevance–safety trade-off compared with relevance-only retrievers and general-purpose rerankers? 
+
+• RQ2: Which components of the framework contribute to rele-vance preservation and risky-tool exposure reduction? 
+
+• RQ3: How do the tradeoff parameter 𝜆 , ToolGraph smooth-ing, and the rule filter affect different safety–utility operating points? 
+
+• RQ4: What is the tradeoff between reducing unnecessary risky-tool exposure and retaining genuinely needed high-risk tools? 
+
+• RQ5: How does the method behave in candidate-exposure and scenario-aware stress-test settings? 
+
+## 5.1 Experimental Setup 
+
+Datasets and candidate generation. We evaluate on two tool-retrieval benchmarks. UltraTool [6] contains 2,032 tools across 14 domains with 1,000 test queries and serves as the primary bench-mark. Seal-Tools [19] contains 4,076 API-style tools. We use the 
+
+test_in split with 700 queries for the main comparison and the 
+
+test_out split with 654 queries for out-of-distribution analysis. The eight general-purpose rerankers use the ToolRet-BGE top-100 results, while our end-to-end configuration scores the complete tool pool. 
+
+Baselines. We compare against the retrieval-only ToolRet-BGE baseline and eight general-purpose rerankers. The reranking base-lines include CE-MiniLM-L6, CE-MiniLM-L12, BGE-Reranker-v2-m3 [21], mxbai-rerank-large [8], MonoT5-base, MonoT5-large [9], and Qwen2-0.5B/1.5B-based rerankers [7]. The eight reranking baselines receive the same ToolRet-BGE top-100 candidates. 
+
+Metrics. We report relevance and safety metrics at 𝑘 = 5. NDCG@5 and MRR measure standard ranking quality. To measure retrieval-time risk exposure, we use RVR@5 and SRR@5. Let 𝜎 (𝑘 ) 
+
+> 𝑞
+
+be the top-𝑘 list returned for query 𝑞 . Risky-tool Violation Rate is defined as: RVR@ 𝑘 = 1
+
+|Q| ∑︁ 𝑞 ∈ Q 
+
+|{ 𝑡 ∈ 𝜎 (𝑘 ) 
+
+> 𝑞
+
+: 𝑟 𝑡 ≥ 3}| 
+
+𝑘 . (10) SRR@5 is the same metric with a stricter threshold 𝑟 𝑡 ≥ 4. Lower RVR@5 and SRR@5 indicate less exposure to higher-risk executable tools. We also report safety-adjusted NDCG, where the relevance gain of severe-risk tools is removed: ˜𝑔 (𝑡 ) = 𝑔 (𝑡 ) · 1[𝑟 𝑡 < 4]. (11) RVR@5 and SRR@5 are the primary safety metrics, while NDCG@5, MRR, and sNDCG@5 capture relevance and safety-adjusted rele-vance. The sNDCG@5 assigns zero gain to every L4–L5 tool, but it does not distinguish unnecessary exposure from tasks that gen-uinely require such tools. We report Safe-RVR@5 and NeedRisk-Hit@5 in Table 5 to show the tradeoff separately. 
+
+Implementation details. The backbone encoder is a frozen ToolRet-BGE-large model with 1024-dimensional embeddings. The relevance head takes the concatenated query–tool embedding as input, while the risk head takes only the tool embedding. Both heads are two-layer MLPs with hidden size 64 and sigmoid outputs, resulting in 196,866 trainable parameters. We train with Adam using a learning rate of 10 −3 and a batch size 64, 10 epochs, five negatives per query, margin 𝑚 = 0.1, and risk-loss weight 𝜇 = 0.5. 
+
+Risk annotation and evaluation protocol. We assign five-level operational risk labels to all 6,108 tools before training and evaluation. The labels are used as supervision for the risk head, metadata for graph construction, and evaluation labels for exposure metrics. Unless otherwise stated, trained variants are evaluated over CIKM ’26, November 07–11, 2026, Rome, Italy Qinfei Li et al. 
+
+three random seeds. Mean values are reported in the main tables for readability. 
+
+## 5.2 Main Performance Comparison 
+
+The main comparison shows a consistent relevance–safety trade-off across the two benchmarks. The core reranker provides the strongest relevance-oriented operating point, while the rule-filtered variant gives a more conservative safety-oriented point. Table 2 compares the eight general-purpose rerankers, which use ToolRet-BGE top-100 candidates, against our full-pool configuration, which evaluates end-to-end performance without relying on upstream can-didate truncation. Under the same top-100 candidates, Core+Graph obtains 0.621 NDCG@5 (Appendix E.2). On UltraTool, the core reranker achieves the best relevance re-sults, with NDCG@5 of 0.562 and MRR of 0.625. Compared with the strongest baseline, Qwen2-1.5B-Reranker, it improves ranking quality while training only two lightweight heads. The rule-filtered variant sacrifices some relevance but substantially reduces exposure, lowering RVR@5 to 0.073 and SRR@5 to 0.019. Seal-Tools shows the same division of operating points, although absolute risk values are smaller because the benchmark contains fewer medium-or-higher risk tools. The core reranker improves NDCG@5 over ToolRet-BGE, while the rule-filtered variant further reduces RVR@5. These results suggest that the core model is better suited for relevance-oriented retrieval, whereas the rule-filtered model is more appropriate for safety-critical deployments. 
+
+## 5.3 Component Analysis 
+
+The ablation study reveals a clear division of labor among the components. The relevance head is responsible for most of the ranking gain, the risk head reduces unnecessary exposure, and the rule filter provides the largest exposure reduction. Table 3 quantifies this progression by adding one component at a time on UltraTool. Training only the relevance head raises NDCG@5 from 0.429 to 0.558, but it also increases RVR@5 from 0.176 to 0.188. This failure mode is important: better semantic matching can promote high-risk tools when they are plausible matches for the query. Adding the risk head reduces RVR@5 to 0.138 while maintaining high relevance, showing that risk supervision corrects part of this exposure without relying on hard rules. Graph smoothing further improves ranking quality, while the rule filter gives the largest reduction in RVR@5 and SRR@5. The edge ablation in Table 4 clarifies the role of the graph, which primarily supports relevance rather than safety. Relative to no graph propagation, the full graph changes NDCG@5 from 0.5508 to 0.5624 and RVR@5 from 0.1384 to 0.1449. Co-occurrence and semantic edges provide the strongest relevance gain, whereas risk-related edges alone do not improve ranking quality. We therefore treat ToolGraph as a relational smoothing module rather than the primary safety mechanism; most exposure reduction comes from the learned risk penalty and the optional rule filter. 
+
+## 5.4 Relevance–Safety Operating Points 
+
+The tradeoff parameter 𝜆 gives a continuous way to move between relevance-oriented and safety-oriented operating points. We vary 
+
+𝜆 ∈ { 0, 0.05 , 0.1, 0.2} for the risk-aware, graph-smoothed, and rule-filtered configurations; the resulting curves are shown in Figure 3. Increasing 𝜆 consistently reduces risky-tool exposure. In the risk-aware and graph-smoothed configurations, RVR@5 decreases from 0.188 to 0.100 and from 0.190 to 0.111, respectively, as 𝜆 increases from 0 to 0.2. This reduction comes with a moderate decrease in NDCG@5, from 0.558 to 0.526 and from 0.569 to 0.544. The rule-filtered configuration stays at a lower-risk operating point across the full range of 𝜆 , because the rule filter is applied on top of the learned risk penalty. Figure 3(c) shows that the baselines cluster at higher RVR@5 val-ues, while our variants move toward lower exposure as 𝜆 increases. The parameter 𝜆 and the rule filter therefore play complementary roles: 𝜆 provides a smooth tuning knob, whereas the rule filter defines a conservative deployment setting. 
+
+## 5.5 Context-Aware Safety and Generalization 
+
+A useful safety mechanism should not simply suppress every high-risk tool: some queries genuinely require higher-risk operations. We therefore split queries according to whether their ground-truth tool set contains a tool with 𝑟 ≥ 3, and separately evaluate long-tail and out-of-distribution queries. The subset results in Figure 4 show that most exposure reduc-tion occurs where risk is actually present. On UltraTool high-risk queries, adding the risk head reduces RVR@5 from 0.472 to 0.377, and the rule filter lowers it further to 0.175. Low-risk queries show smaller changes in NDCG@5, suggesting that the method mainly removes unnecessary risky tools rather than uniformly degrading retrieval. To further evaluate the safety and robustness of tool retrieval, we propose two additional metrics, Safe-RVR@5 and NeedRisk-Hit@5. Let 𝑄 safe = {𝑞 : max 𝑡 ∈𝑅 𝑞 𝑟 𝑡 < 3} and 𝑄 need = {𝑞 : ∃𝑡 ∈ 𝑅 𝑞 , 𝑟 𝑡 ≥ 3}.We define: Safe-RVR@ 𝑘 = 1
+
+|𝑄 safe |∑︁ 𝑞 ∈𝑄 safe 
+
+|{ 𝑡 ∈ 𝜎 (𝑘 ) 
+
+> 𝑞
+
+: 𝑟 𝑡 ≥ 3}| 
+
+𝑘 , (12) and NeedRisk-Hit@ 𝑘 = 1
+
+|Q need |∑︁ 𝑞 ∈ Q need 
+
+1∃ 𝑡 ∈ 𝜎 (𝑘 ) 
+
+> 𝑞
+
+∩ R 𝑞 
+
+s.t. 𝑟 𝑡 ≥ 3 .
+
+(13) These two metrics can measure the trade-off between context-aware safety and the generalization capability. As shown in Table 5, as safety controls become stricter, Safe-RVR@5 decreases, which means fewer high-risk tools are exposed on low-risk queries. At the same time, NeedRisk-Hit@5 also decreases, especially under the rule filter. This is the expected cost of conservative filtering: it can remove high-risk tools even when they are genuinely needed. We therefore treat 𝜆 and the rule filter as deployment controls rather than universally optimal settings. The Seal-Tools test_out results provide a separate check on generalization. Since these tools are unseen during training, the reduction in RVR@5 indicates that the learned risk head uses tool descriptions rather than memorizing tool identities. Risk-Aware Reranking for Agentic Tool Retrieval CIKM ’26, November 07–11, 2026, Rome, Italy 
+
+Table 2: Main results on UltraTool and Seal-Tools test_in. The eight general-purpose rerankers use ToolRet-BGE top-100 candidates; our methods score the complete tool pool. Bold indicates the best result and underlining indicates the second-best result. Relative changes for our methods are computed against the strongest non-Ours baseline. 
+
+Method Params UltraTool (2,032 tools) Seal-Tools test_in (4,076 tools) NDCG@5 ↑ MRR ↑ sNDCG@5 ↑ RVR@5 ↓ SRR@5 ↓ NDCG@5 ↑ MRR ↑ sNDCG@5 ↑ RVR@5 ↓ SRR@5 ↓
+
+ToolRet-BGE (no rerank) 335M 0.429 0.499 0.426 0.176 0.078 0.787 0.946 0.774 0.020 0.006 CE-MiniLM-L6 22M 0.334 0.427 0.322 0.178 0.089 0.607 0.908 0.605 0.017 0.004 CE-MiniLM-L12 33M 0.320 0.415 0.309 0.177 0.087 0.527 0.819 0.525 0.016 0.003 MonoT5-base 220M 0.331 0.424 0.319 0.179 0.081 0.775 0.912 0.784 0.018 0.003 MonoT5-large 770M 0.369 0.466 0.359 0.159 0.071 0.767 0.924 0.755 0.018 0.003 BGE-Reranker-v2-m3 568M 0.219 0.318 0.222 0.158 0.062 0.787 0.905 0.785 0.018 0.004 mxbai-rerank-large 435M 0.285 0.383 0.273 0.152 0.073 0.458 0.700 0.457 0.019 0.003 Qwen2-0.5B-Reranker 494M 0.275 0.339 0.261 0.119 0.042 0.554 0.728 0.553 0.032 0.003 Qwen2-1.5B-Reranker 1.5B 0.505 0.580 0.502 0.178 0.082 0.646 0.820 0.644 0.026 0.003 Ours (Core + Graph, 𝜆 =0.1) 0.2M 0.562 
+
+> (↑11.3%)
+
+0.625 
+
+> (↑7.8%)
+
+0.565 
+
+> (↑12.5%)
+
+0.145 
+
+> (↑21.8%)
+
+0.062 
+
+> (↑47.6%)
+
+0.831 
+
+> (↑5.6%)
+
+0.946 
+
+> (↑0.0%)
+
+0.829 
+
+> (↑5.6%)
+
+0.011 
+
+> (↓31.3%)
+
+0.003 
+
+> (↑0.0%)
+
+Ours + Rule Filter 0.2M 0.522 
+
+> (↑3.4%)
+
+0.612 
+
+> (↑5.5%)
+
+0.535 
+
+> (↑6.6%)
+
+0.073 
+
+> (↓38.7%)
+
+0.019 
+
+> (↓54.8%)
+
+0.828 
+
+> (↑5.2%)
+
+0.943 
+
+> (↓0.3%)
+
+0.826 
+
+> (↑5.2%)
+
+0.007 
+
+> (↓56.3%)
+
+0.002 
+
+> (↓33.3%)
+
+Figure 3: Effect of the tradeoff parameter 𝜆 on UltraTool. (a)–(b): NDCG@5 and RVR@5 as a function of 𝜆 for three configurations. Shaded regions indicate ±1 std over 3 seeds. The dashed vertical line marks 𝜆 ∗ = 0.1. (c): Baselines and our configurations on the NDCG@5–RVR@5 plane. Arrows indicate increasing 𝜆 .
+
+## 5.6 Candidate Exposure and Stress Tests 
+
+The previous experiments evaluate standard retrieval benchmarks. We next isolate the candidate action space that would be shown to an agent before any tool is executed. This diagnostic setting does not evaluate tool-call outcomes; instead, it asks whether different retrieval and reranking strategies expose the agent to different levels of tool risk. Table 6 compares sparse retrieval, dense retrieval, general-purpose reranking, rule-based filtering, and our risk-aware pipeline on Ul-traTool. Relevance-driven retrieval exposes a non-trivial number of higher-risk tools: ToolRet-BGE obtains RVR@5 of 0.1758 and SRR@5 of 0.0784. MonoT5-large slightly reduces exposure, but does not directly optimize the risk profile of the candidate set. Rule filtering yields the lowest RVR@5, while our graph-enhanced rule-filtered variant achieves the strongest relevance metrics and the lowest SRR@5. Without the rule filter, the learned risk-aware reranker also reduces exposure relative to ToolRet-BGE, lowering RVR@5 from 0.1758 to 0.1357 and SRR@5 from 0.0784 to 0.0395. We further construct stress-test queries in which the task-relevant tool is safe or appropriate, but semantically similar risky tools are retrieved by the first-stage retriever. On UltraTool, the rule-filtered system reduces RVR@5 from 0.393 to 0.111 and SRR@5 from 0.233 CIKM ’26, November 07–11, 2026, Rome, Italy Qinfei Li et al. 
+
+Figure 4: NDCG@5 and RVR@5 across query subsets on UltraTool and Seal-Tools. High-/low-risk queries are split by the maximum risk level of ground-truth tools; long-tail queries target tools appearing in at most 5 training queries. Table 3: Ablation on UltraTool ( 𝑄 =1000 , 𝑘 =5). Each row adds one component over the previous row. Rows 2–6 are reported as means over 3 random seeds.                                      
+
+> Method NDCG@5 ↑sNDCG@5 ↑MRR ↑RVR@5 ↓SRR@5 ↓
+> ToolRet-BGE 0.429 0.426 0.499 0.176 0.078 Risk-label penalty 0.391 0.400 0.466 0.127 0.047 Trained 𝑓 rel 0.558 0.548 0.614 0.188 0.097 + Trained 𝑓 risk 0.551 0.552 0.615 0.138 0.063 + Graph smoothing 0.562 0.565 0.625 0.145 0.062 + Rule filter 0.522 0.535 0.612 0.073 0.019
+
+Table 4: Edge-type ablation on UltraTool at 𝜆 =0.1 and 𝛼 =0.2
+
+(3-seed mean). 
+
+Graph configuration NDCG@5 ↑ RVR@5 ↓
+
+No graph ( 𝛼 =0) 0.5508 0.1384 
+
+Co-occurrence + semantic 0.5703 0.1489 Risk-related only 0.5508 0.1655 Full 4-type graph 0.5624 0.1449 to 0.042. This stress setting highlights the intended role of retrieval-stage control: reducing the density of risky candidates before the agent chooses or executes a tool. 
+
+## 5.7 Qualitative Downstream Inspection 
+
+We further conduct a qualitative downstream inspection to exam-ine whether the rule-filtered top-5 lists align with the intended pre-execution safety objective. Rather than listing every retrieved candidate, Table 8 reports two signals for six representative queries: the number of gold tools retained after filtering and the risk lev-els of the five selected candidates in rank order. This inspection 
+
+Table 5: Context-aware safety metrics. Safe-RVR@5 is com-puted on low-risk queries; NeedRisk-Hit@5 is computed on high-risk queries. 
+
+Dataset Method Safe-RVR@5 ↓ NeedRisk-Hit@5 ↑
+
+UltraTool Trained 𝑓 rel 0.0260 0.660 
+
++Risk 0.0147 0.506 +Graph 0.0147 0.489 +Rules 0.0102 0.397 Seal-Tools Trained 𝑓 rel 0.0094 0.727 
+
++Risk 0.0029 0.576 +Graph 0.0029 0.576 +Rules 0.0027 0.545 
+
+Table 6: Candidate exposure analysis without execution on UltraTool. The agent sees only the query and the top-5 can-didate tools. RVR@5 and SRR@5 measure the risk exposure of the candidate set.                                    
+
+> Method NDCG@5 ↑sNDCG@5 ↑MRR ↑RVR@5 ↓SRR@5 ↓
+> BM25 0.2876 0.2829 0.3643 0.1962 0.0990 ToolRet-BGE 0.4288 0.4258 0.4993 0.1758 0.0784 ToolRet-BGE + MonoT5-large 0.3690 0.3594 0.4657 0.1594 0.0710 ToolRet-BGE + Rule Filter 0.4103 0.4181 0.4895 0.0662 0.0228 Ours + Graph + Rule Filter 0.5215 0.5351 0.6120 0.0727 0.0191
+> Ours ( 𝜆 =0.10) –––0.1357 0.0395
+
+serves as a sanity check on whether the filter reduces unnecessary risky-tool exposure while preserving task-relevant tools. The first three cases are high-consequence financial workflows. In all three, the filtered list contains only one L3 tool and no L4/L5 tools. For example, in the credit-card repayment case, the filter preserves the necessary login and debt-query tools while avoiding additional high-risk financial operations that are not needed in Risk-Aware Reranking for Agentic Tool Retrieval CIKM ’26, November 07–11, 2026, Rome, Italy 
+
+Table 7: Stress-test results on UltraTool ( 𝑛 =30 ). Results are reported as means over 3 seeds. 
+
+Method NDCG@5 ↑ RVR@5 ↓ SRR@5 ↓
+
+ToolRet-BGE 0.658 0.393 0.233 +Graph Smoothing 0.562 0.324 0.160 +Rule Filter 0.478 0.111 0.042 Table 8: Qualitative downstream candidate inspection after rule filtering. Risk profiles list the five filtered candidates’ risk levels in rank order.                             
+
+> Setting Scenario Gold retained Risk profile Takeaway Finance Investment submission 1/4 [3,2,2,1,2] No L4/L5 Finance Credit-card repayment 2/3 [3,2,2,1,2] No L4/L5 Finance Foreign-currency purchase 2/3 [3,2,1,2,1] No L4/L5 Service Hotel booking modification 1/2 [1,2,4,1,2] Keeps one L4 File operation Price-list edit/delete 1/2 [4,2,2,1,2] Keeps gold L4 File operation Modify then delete file 1/2 [4,2,2,1,2] Keeps gold L4
+
+the top-5 candidate set. This suggests that the filter can reduce risk density when multiple semantically related financial tools are available but only a small subset is required. The last three cases involve routine service or file-operation workflows. Here, the filter may still retain one L4 tool, such as 
+
+file_delete , when it is directly relevant to the user request. Thus, the rule filter does not impose a rigid zero-risk policy. Instead, it suppresses redundant or unnecessary high-risk tools while allowing task-critical tools to remain. Overall, these cases support the rule-filtered variant as a conservative pre-execution control rather than a blanket safety blocker. 
+
+## 6 Conclusion 
+
+We present a lightweight risk-aware reranking framework for agent tool retrieval. The framework treats retrieval as a pre-execution safety boundary: before an LLM agent invokes any tool, the re-trieved top-𝑘 list already defines the candidate action space ex-posed to the agent. By separating query-conditioned relevance from tool-level exposure risk, our method provides a controllable safety–utility tradeoff on top of a frozen first-stage retriever. Ex-periments on UltraTool and Seal-Tools show that the proposed reranker reduces risky-tool exposure while maintaining compet-itive retrieval quality, and that the rule-filtered variant offers a conservative deployment setting. We acknowledge several limitations. The risk model estimates tool-level operational risk from tool descriptions and does not cap-ture all query-level, user-specific, or environment-dependent haz-ards that may arise during actual execution. Learning 𝑓 risk (𝑞, 𝑡 )
+
+would require per-(𝑞, 𝑡 ) risk supervision, whereas our released an-notations are defined per tool. In addition, the rule-filtered mode assumes an audited tool registry with available risk and permission metadata. Therefore, risk-aware retrieval should be viewed as a complementary upstream safeguard rather than a replacement for downstream permission control, user confirmation, and execution-time safety checks. 
+
+Table 9: Distribution of resolved tool-risk labels. 
+
+Risk level UltraTool Seal-Tools L1 Safe 958 (47.1%) 2807 (68.9%) L2 Low 799 (39.3%) 1197 (29.4%) L3 Medium 155 (7.6%) 51 (1.3%) L4 High 115 (5.7%) 20 (0.5%) L5 Critical 5 (0.2%) 1 (0.02%) Total 2,032 4,076 
+
+## A Risk Annotation Details 
+
+This appendix summarizes the annotation protocol used to produce the five-level tool-risk labels. 
+
+Annotation protocol. All the annotators label each tool from its name and description. They consider three axes: the scope of impact, the reversibility of the action, and the sensitivity of the accessed or modified information. The prompt asks LLM annotators to assign a single integer from 1 to 5 according to the following rubric: L1 for read-only tools with no side effects, L2 for minor reversible actions or non-sensitive personal-data access, L3 for sensitive data access or persistent writes, L4 for irreversible actions or system-level permissions, and L5 for large-scale harm, system intrusion, or severe privacy loss. 
+
+Prompt template. Each LLM annotator is given the same prompt template: 
+
+Given the following tool name and description, assign one risk level from L1 (Safe) to L5 (Critical). Consider scope of impact, reversibility, and data sensitivity. Return only one integer in {1,2,3,4,5}. 
+
+Tool name: {tool_name} 
+
+Description: {tool_description} 
+
+Disagreement resolution. Each tool first receives preliminary la-bels from three independent LLM annotators. Let the three votes be 𝑣 1, 𝑣 2, 𝑣 3, and define span = max (𝑣 1, 𝑣 2, 𝑣 3) − min (𝑣 1, 𝑣 2, 𝑣 3). (14) If span = 0, the label is accepted directly. If span = 1, we use the median vote. If span ≥ 2, the case is escalated to human review. This rule keeps adjacent-level disagreements lightweight while manually auditing broad cross-level disagreements. Seal-Tools contains substantially fewer medium-or-higher-risk tools than UltraTool, which helps explain its lower absolute RVR@5 and SRR@5 values in the main experiments. 
+
+## B ToolGraph Construction Details 
+
+This appendix gives the deterministic construction rules for the ToolGraph used in Section 4.4. We construct an undirected graph 
+
+𝐺 = (T , 𝐸 ) over tools. For each pair (𝑡 𝑖 , 𝑡 𝑗 ), the raw edge weight is 
+
+𝑤 raw  
+
+> 𝑖 𝑗
+
+= 𝑤 co  
+
+> 𝑖 𝑗
+
++ 𝑤 sem  
+
+> 𝑖 𝑗
+
++ 𝑤 perm  
+
+> 𝑖 𝑗
+
++ 𝑤 risk  
+
+> 𝑖 𝑗
+
+, (15) and an edge is retained whenever at least one term is non-zero. The retained weights are normalized by the maximum raw edge weight CIKM ’26, November 07–11, 2026, Rome, Italy Qinfei Li et al. 
+
+Table 10: ToolGraph edge definitions.                         
+
+> Type Trigger Weight Co-occurrence Co-occur in at least 2 training queries 0.4(𝑐 𝑖 𝑗 /𝑐 max )
+> Semantic cos (d𝑖 ,d𝑗 )>0.65 0.3 cos (d𝑖 ,d𝑗 )
+> Permission Share high-risk permission category 0.15 (𝑚 𝑖 𝑗 /5)
+> Risk co-occurrence Both 𝑟 ≥3 and co-occur in training 0.15
+
+in the dataset: 
+
+𝑤 𝑖 𝑗 = 𝑤 raw 
+
+> 𝑖 𝑗
+
+max (𝑢,𝑣 ) ∈ 𝐸 𝑤 raw 
+
+> 𝑢𝑣
+
+. (16) Here 𝑐 𝑖 𝑗 is the number of training queries in which 𝑡 𝑖 and 𝑡 𝑗 co-occur, 𝑐 max is the maximum co-occurrence count, d𝑖 is the ToolRet-BGE description embedding, and 𝑚 𝑖 𝑗 is the number of shared high-risk permission categories. 
+
+Permission categories. For permission-overlap edges and the rule filter, we use five deterministic keyword-derived categories: shell ex-ecution, file write, network access, credential handling, and code ex-ecution. Example keywords include shell , bash , command , delete ,
+
+overwrite , upload , download , token , password , oauth , eval , and 
+
+run_code . These categories are used only as transparent metadata for graph construction and rule filtering; they are not the learned risk model. 
+
+## C Rule Filter Details 
+
+The rule filter is an optional deployment-time exposure-control layer applied after risk-aware reranking. It assumes an audited tool registry with risk metadata and permission categories, and adds no trainable parameters. The fallback was not triggered on either benchmark in our experiments. 
+
+## C.1 Constraints 
+
+Given a reranked candidate list, the filter greedily constructs a top-𝐾 list 𝑆 subject to three constraints. 
+
+Risk cap. At most one higher-risk tool may appear in the final top-𝐾 list: ∑︁  
+
+> 𝑡 ∈𝑆
+
+1[𝑟 𝑡 ≥ 3] ≤ 1. (17) 
+
+Permission cap. Let perm (𝑡 ) be the number of high-risk per-mission categories matched by tool 𝑡 . The filter allows at most two tools with two or more such categories: ∑︁  
+
+> 𝑡 ∈𝑆
+
+1[perm (𝑡 ) ≥ 2] ≤ 2. (18) 
+
+Redundancy constraint. Let e𝑡 be the normalized ToolRet-BGE embedding of tool 𝑡 . A candidate is rejected if it is too similar to an already selected tool: max   
+
+> 𝑠 ∈𝑆
+
+e⊤ 
+
+> 𝑡
+
+e𝑠 > 0.9. (19) 
+
+## C.2 Greedy Filtering Procedure 
+
+The filter scans the reranked list once while maintaining an accepted list 𝑆 and a deferred list 𝐷 :(1) Initialize 𝑆 ← [ ] and 𝐷 ← [ ] .(2) For each candidate 𝑡 in reranked order, append 𝑡 to 𝑆 if adding it satisfies the risk cap, permission cap, and redundancy constraint. Otherwise, append 𝑡 to 𝐷 .(3) Stop the acceptance pass once |𝑆 | = 𝐾 or all candidates have been scanned. (4) If |𝑆 | < 𝐾 , append candidates from 𝐷 in their original reranked order until |𝑆 | = 𝐾 .The fallback step ensures that all methods produce the same top-𝐾 length. For metrics at fixed 𝐾 , only the returned prefix 𝑆 is evaluated. 
+
+## C.3 Complexity 
+
+The greedy pass scans the candidate list once and compares each candidate with at most 𝐾 accepted tools. The per-query complexity is therefore 𝑂 (𝑁 𝐾 ) for a candidate list of length 𝑁 . Since 𝐾 = 5 in our evaluation, the filter is linear in the candidate-list length. 
+
+## D Head Architecture and Training Details 
+
+The ToolRet-BGE encoder is frozen, and only two lightweight MLP heads are trained. The relevance head maps the concatenated query– tool embedding through a 2048 →64 →1 MLP, while the risk head maps the tool embedding through a 1024 →64 →1 MLP. Both heads use sigmoid outputs. The total number of trainable parameters is 196,866. We train the heads with Adam using a learning rate of 10 −3
+
+and a batch size of 64, 10 epochs, five negatives per query, margin 
+
+𝑚 = 0.1, and risk-loss weight 𝜇 = 0.5. As a sanity check, the mean predicted risk score increases mono-tonically from L1 to L5 on UltraTool, indicating that the risk head preserves the ordinal structure of the labels. 
+
+## E Additional Experimental Results E.1 Standard Deviations 
+
+Table 11: Standard deviations of our trained variants over 3 seeds. The corresponding mean values are reported in Ta-ble 2.                             
+
+> Dataset Method NDCG@5 MRR sNDCG@5 RVR@5 SRR@5 UltraTool Core + Graph 0.039 0.036 0.046 0.028 0.027 + Rule Filter 0.047 0.042 0.060 0.011 0.012 Seal-Tools Core + Graph 0.005 0.001 0.004 0.004 0.001 + Rule Filter 0.003 0.001 0.002 0.003 0.001
+
+## E.2 Candidate-Matched Top-100 Evaluation 
+
+Using the same ToolRet-BGE top-100 candidates as the rerank-ing baselines, Core, Core+Graph, and Core+Graph+Rule obtain NDCG@5 of 0 .609 ± 0.029, 0 .621 ± 0.024, and 0 .573 ± 0.032, respec-tively. Graph smoothing is normalized on the candidate-induced subgraph. 
+
+## Acknowledgments 
+
+This work was supported in part by the National Natural Science Foundation of China under Grant 72401282. Risk-Aware Reranking for Agentic Tool Retrieval CIKM ’26, November 07–11, 2026, Rome, Italy 
+
+## GenAI Usage Disclosure 
+
+Claude Code, Codex, and Qwen were used only as preliminary annotators for tool-risk labels under the fixed rubric in Section 4.2. Labels were reconciled by the span-based procedure, and broad disagreements were reviewed by human authors. The authors take full responsibility for the final labels, experiments, and manuscript. 
+
+## References 
+
+[1] Maksym Andriushchenko, Alexandra Souly, Mateusz Dziemian, Derek Dueñas, Maxwell Lin, Justin Wang, Dan Hendrycks, Andy Zou, Zico Kolter, Matt Fredrik-son, et al. 2025. AgentHarm: A Benchmark for Measuring Harmfulness of LLM Agents. In International Conference on Learning Representations .[2] Micheline Beaulieu, Mike Gatford, Xiangji Huang, Stephen Robertson, Steve Walker, and P Williams. 1997. Okapi at TREC-5. Nist Special Publication SP (1997), 143–166. [3] Jaime Carbonell and Jade Goldstein. 1998. The use of MMR, diversity-based reranking for reordering documents and producing summaries. In Proceedings of the 21st annual international ACM SIGIR conference on Research and development in information retrieval . 335–336. [4] Yanfei Chen, Jinsung Yoon, Devendra Singh Sachan, Qingze Wang, Vincent Cohen-Addad, Mohammadhossein Bateni, Chen-Yu Lee, and Tomas Pfister. 2024. Re-Invoke: Tool Invocation Rewriting for Zero-Shot Tool Retrieval. In Findings of the Association for Computational Linguistics: EMNLP 2024 . 4705–4726. [5] Hui Han, Siyuan Li, Jiaqi Chen, Yiwen Yuan, Yuling Wu, Yufan Deng, Chak Tou Leong, Hanwen Du, Junchen Fu, Youhua Li, Jie Zhang, Chi Zhang, Li-jia Li, and Yongxin Ni. 2025. Video-bench: Human-aligned video generation benchmark. In 
+
+2025 IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR) .IEEE, 18858–18868. [6] Shijue Huang, Wanjun Zhong, Jianqiao Lu, Qi Zhu, Jiahui Gao, Weiwen Liu, Yutai Hou, Xingshan Zeng, Yasheng Wang, Lifeng Shang, et al. 2024. Planning, Creation, Usage: Benchmarking LLMs for Comprehensive Tool Utilization in Real-World Complex Scenarios. In Findings of the Association for Computational Linguistics: ACL 2024 . 4363–4400. [7] Binyuan Hui, Jian Yang, Zeyu Cui, Jiaxi Yang, Dayiheng Liu, Lei Zhang, Tianyu Liu, Jiajun Zhang, Bowen Yu, Keming Lu, et al. 2024. Qwen2. 5-coder technical report. arXiv preprint arXiv:2409.12186 (2024). [8] mixedbread.ai. 2024. mxbai-rerank: Crispy Reranking Models by mixedbread.ai. https://github.com/mixedbread-ai/mxbai-rerank. Accessed: 2026-05-23. [9] Rodrigo Nogueira, Zhiying Jiang, Ronak Pradeep, and Jimmy Lin. 2020. Docu-ment ranking with a pretrained sequence-to-sequence model. In Findings of the association for computational linguistics: EMNLP 2020 . 708–718. [10] Shishir G. Patil, Tianjun Zhang, Xin Wang, and Joseph E. Gonzalez. 2024. Gorilla: Large Language Model Connected with Massive APIs. In Advances in Neural Information Processing Systems , Vol. 37. [11] Yujia Qin, Shihao Liang, Yining Ye, Kunlun Zhu, Lan Yan, Yaxi Lu, Yankai Lin, Xin Cong, Xiangru Tang, Bill Qian, et al. 2024. ToolLLM: Facilitating Large Language Models to Master 16000+ Real-World APIs. In International Conference on Learning Representations .[12] Yangjun Ruan, Honghua Dong, Andrew Wang, Silviu Pitis, Yongchao Zhou, Jimmy Ba, Yann Dubois, Chris Maddison, and Tatsunori Hashimoto. 2024. Identi-fying the Risks of LM Agents with an LM-Emulated Sandbox. In International Conference on Learning Representations .[13] Saptarshi Sengupta, Zhengyu Zhou, Jun Araki, Xingbo Wang, Bingqing Wang, Suhang Wang, and Zhe Feng. 2026. ToolDreamer: Instilling LLM Reasoning into Tool Retrievers. In Proceedings of the 19th Conference of the European Chapter of the Association for Computational Linguistics .[14] Yongliang Shen, Kaitao Song, Xu Tan, Dongsheng Li, Weiming Lu, and Yueting Zhuang. 2023. HuggingGPT: Solving AI Tasks with ChatGPT and Its Friends in Hugging Face. In Advances in Neural Information Processing Systems , Vol. 36. [15] Zhengliang Shi, Yuhan Wang, Lingyong Yan, Pengjie Ren, Shuaiqiang Wang, Dawei Yin, and Zhaochun Ren. 2025. Retrieval Models Aren’t Tool-Savvy: Bench-marking Tool Retrieval for Large Language Models. In Findings of the Association for Computational Linguistics: ACL 2025 . 24497–24524. [16] Ada Defne Tur, Nicholas Meade, Xing Han Lù, Alejandra Zambrano, Arkil Pa-tel, Esin DURMUS, Spandana Gella, Karolina Stanczak, and Siva Reddy. 2025. SafeArena: Evaluating the Safety of Autonomous Web Agents. In Forty-second International Conference on Machine Learning .[17] Renxi Wang, Xudong Han, Lei Ji, Shu Wang, Timothy Baldwin, and Haonan Li. 2025. ToolGen: Unified Tool Retrieval and Calling via Generation. In International Conference on Learning Representations .[18] Wenhui Wang, Furu Wei, Li Dong, Hangbo Bao, Nan Yang, and Ming Zhou. 2020. MiniLM: Deep self-attention distillation for task-agnostic compression of pre-trained transformers. Advances in neural information processing systems 33 (2020), 5776–5788. [19] Mengsong Wu, Tong Zhu, Han Han, Chuanyuan Tan, Xiang Zhang, and Wen-liang Chen. 2024. Seal-tools: Self-instruct tool learning dataset for agent tuning and detailed benchmark. In CCF International Conference on Natural Language Processing and Chinese Computing . Springer, 372–384. [20] Yanyan Wu, Boyi Zhang, Yanlin Liu, Xinyu Fang, Jining Luan, Meiqi Zhang, Jiacheng Liu, Hao Zeng, Dexu Yu, Chang Liu, et al. 2026. GIFT: LLM-Guided State-Reward Interface for Financial Reinforcement Learning. arXiv preprint arXiv:2606.08450 (2026). [21] Shitao Xiao, Zheng Liu, Peitian Zhang, Niklas Muennighoff, Defu Lian, and Jian-Yun Nie. 2024. C-pack: Packed resources for general chinese embeddings. In Proceedings of the 47th international ACM SIGIR conference on research and development in information retrieval . 641–649. [22] Cheng Yu and Orestis Papakyriakopoulos. 2025. Safety devolution in ai agents. In ICLR 2025 Workshop on Human-AI Coevolution .[23] Yue Yu, Wei Ping, Zihan Liu, Boxin Wang, Jiaxuan You, Chao Zhang, Moham-mad Shoeybi, and Bryan Catanzaro. 2024. Rankrag: Unifying context ranking with retrieval-augmented generation in llms. Advances in Neural Information Processing Systems 37 (2024), 121156–121184. [24] Lifan Yuan, Yangyi Chen, Xingyao Wang, Yi Fung, Hao Peng, and Heng Ji. 2024. CRAFT: Customizing LLMs by Creating and Retrieving from Specialized Toolsets. In International Conference on Learning Representations .[25] Tongxin Yuan, Zhiwei He, Lingzhong Dong, Yiming Wang, Ruijie Zhao, Tian Xia, Lizhen Xu, Binglin Zhou, Fangqi Li, Zhuosheng Zhang, et al. 2024. R-Judge: Benchmarking Safety Risk Awareness for LLM Agents. In Findings of the Association for Computational Linguistics: EMNLP 2024 . 1467–1490. [26] Meike Zehlike, Francesco Bonchi, Carlos Castillo, Sara Hajian, Mohamed Mega-hed, and Ricardo Baeza-Yates. 2017. Fa* ir: A fair top-k ranking algorithm. In 
+
+Proceedings of the 2017 ACM on Conference on Information and Knowledge Man-agement . 1569–1578. [27] Zhexin Zhang, Shiyao Cui, Yida Lu, Jingzhuo Zhou, Junxiao Yang, Hongning Wang, and Minlie Huang. 2024. Agent-safetybench: Evaluating the safety of llm agents. arXiv preprint arXiv:2412.14470 (2024). [28] Yuanhang Zheng, Peng Li, Wei Liu, Yang Liu, Jian Luan, and Bin Wang. 2024. ToolRerank: Adaptive and Hierarchy-Aware Reranking for Tool Retrieval. In 
+
+Proceedings of the 2024 Joint International Conference on Computational Linguistics, Language Resources and Evaluation . 16263–16273.
