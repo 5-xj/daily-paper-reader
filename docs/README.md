@@ -6,52 +6,47 @@
 </div>
 
 ## 每次日报
-- 最新运行日期：2026-08-30
-- 运行时间：2026-08-30 23:10:26 UTC
+- 最新运行日期：2026-08-31
+- 运行时间：2026-09-01 00:52:19 UTC
 - 运行状态：成功
-- 本次总论文数：10
-- 精读区：6
-- 速读区：4
+- 本次总论文数：9
+- 精读区：3
+- 速读区：6
 
 ### 今日简报（AI）
-今日精读聚焦符号回归与可解释时序建模，共梳理10篇论文。  
-最值得关注：InsightSR借并行语义与结构引导优化符号回归搜索空间，以及Symbolic Neural ODEs从时序数据学习可解释模型。  
-建议先精读这两篇，再速读检索评估与时间窗TSP相关文章以拓展应用视角。
-- 详情：[/202608/30/README](/202608/30/README)
+今日聚焦2篇高分精读：多模态智能体框架自动发现控制方程，以及符号回归加速表格特征工程。最值得关注的是“假设-验证”式科学发现与自动化特征工程的协同潜力。建议普通读者优先了解符号回归在数据建模中的实用价值，可快速上手表格任务。
+- 详情：[/202608/31/README](/202608/31/README)
 
 ### 精读区论文标签
-1. [InsightSR: Refining Symbolic Regression Search Spaces via Parallel Semantic and Structural LLM Guidance](/202608/30/2608.25291v1-insightsr-refining-symbolic-regression-search-spaces-via-parallel-semantic-and-structural-llm-guidance)  
-   标签：评分：10.0/10、query:ad
-   evidence：大模型引导遗传编程搜索空间以进行符号回归发现
-2. [Symbolic Neural ODEs: Learning interpretable models from time-series data](/202608/30/2608.22112v1-symbolic-neural-odes-learning-interpretable-models-from-time-series-data)  
-   标签：评分：9.0/10、query:sr
-   evidence：通过神经ODE从时间序列中学习稀疏可解释符号模型
-3. [FormuEvo: LLM-Guided Evolution for Discovering Solver-Efficient Mixed-Integer Programming Formulations](/202608/30/2608.23353v1-formuevo-llm-guided-evolution-for-discovering-solver-efficient-mixed-integer-programming-formulations)  
+1. [See, Hypothesize, Validate: Multimodal Agentic Framework for Discovering Governing PDEs](/202608/31/2608.27869v1-see-hypothesize-validate-multimodal-agentic-framework-for-discovering-governing-pdes)  
    标签：评分：9.0/10、query:ad
-   evidence：大模型引导进化自动发现高效混合整数规划公式
-4. [Autonomous Mathematical Discovery in an Open-World Multi-Agent Environment](/202608/30/2608.23691v1-autonomous-mathematical-discovery-in-an-open-world-multi-agent-environment)  
+   evidence：多模态智能体框架，通过假设验证循环发现偏微分方程
+2. [SymboLLM-FE: LLM-Accelerated Symbolic Regression for Automated Feature Engineering on Tabular Data](/202608/31/2608.28408v1-symbollm-fe-llm-accelerated-symbolic-regression-for-automated-feature-engineering-on-tabular-data)  
    标签：评分：9.0/10、query:ad
-   evidence：不同模型族AI智能体自主数学发现，属于用大模型完成发现任务
-5. [A Reranker for Orchestrating Heterogeneous Speech and Text Retrievers](/202608/30/2608.26194v1-a-reranker-for-orchestrating-heterogeneous-speech-and-text-retrievers)  
-   标签：评分：9.0/10、query:rerank-train
-   evidence：使用人工整理的多模态数据训练重排序器以聚合语音与文本检索器
-6. [Discovering Relationships in Data Lakes Using Large Language Models: An Industrial Case](/202608/30/2608.26750v1-discovering-relationships-in-data-lakes-using-large-language-models-an-industrial-case)  
+   evidence：LLM加速的符号回归用于特征发现
+3. [Adaptive Strategy Generation for Boundary Value Exploration Beyond Numeric Inputs](/202608/31/2608.28230v1-adaptive-strategy-generation-for-boundary-value-exploration-beyond-numeric-inputs)  
    标签：评分：8.0/10、query:ad
-   evidence：利用大语言模型自动发现数据湖中的列关系，是数据中的自动发现任务
+   evidence：LLM智能体在质量多样性档案导向下提出并执行边界探索策略，结合大模型与演化式搜索
 
 ### 速读区论文标签
-1. [pro-team at LLMs4OL 2026 Tasks Flagship and Reuse: Retrieval-Augmented Generation and Vocabulary-Constrained Filtering for Ontology Learning](/202608/30/2608.27101v1-pro-team-at-llms4ol-2026-tasks-flagship-and-reuse-retrieval-augmented-generation-and-vocabulary-constrained-filtering-for-ontology-learning)  
+1. [Learning Sample-wise Rank-aware Interpolation Weights for Composed Visual Data Retrieval](/202608/31/2608.22500v1-learning-sample-wise-rank-aware-interpolation-weights-for-composed-visual-data-retrieval)  
+   标签：评分：7.0/10、query:rerank-train
+   evidence：学习样本级排序感知插值权重用于检索，与用排序感知目标训练重排序器在概念上相似
+2. [GATNextHop: A GAT for Shortest Path Routing with Cross-Topology Generalization](/202608/31/2608.23917v1-gatnexthop-a-gat-for-shortest-path-routing-with-cross-topology-generalization)  
    标签：评分：7.0/10、query:ad
-   evidence：基于大语言模型和检索增强生成的本体学习，属于知识发现任务
-2. [Rank-Deviation Quality: A Distance-Aware Metric for Multi-Answer Retrieval and Ranking Evaluation](/202608/30/2608.25318v1-rank-deviation-quality-a-distance-aware-metric-for-multi-answer-retrieval-and-ranking-evaluation)  
+   evidence：图神经网络学习近似最短路径路由启发式并跨拓扑泛化
+3. [Matched Excess-Outranker Regularization for Candidate-Set Interference in Continual Knowledge Graph Embedding](/202608/31/2608.24273v2-matched-excess-outranker-regularization-for-candidate-set-interference-in-continual-knowledge-graph-embedding)  
+   标签：评分：7.0/10、query:rerank-train
+   evidence：提出一种针对排序模型的损失式正则化MEOR以处理候选集干扰，与重排序训练损失函数高度相关。
+4. [GRAPE: Gradient Refinement and Progress-Aware Exploitation for Query-Efficient High-Dimensional Bayesian Optimization](/202608/31/2608.25116v1-grape-gradient-refinement-and-progress-aware-exploitation-for-query-efficient-high-dimensional-bayesian-optimization)  
+   标签：评分：7.0/10、query:ad
+   evidence：面向科学发现的启发式贝叶斯优化方法
+5. [From Gradient-Boosted Trees to Deep Recommenders: Practical Lessons from Migrating a Production Customer Support Recommender](/202608/31/2608.24132v1-from-gradient-boosted-trees-to-deep-recommenders-practical-lessons-from-migrating-a-production-customer-support-recommender)  
    标签：评分：6.0/10、query:rerank-train
-   evidence：距离感知的排序评估指标，可调整为排序模型训练中的列表式目标
-3. [The Time-Dependent Traveling Salesman Problem with Loose Time Windows](/202608/30/2608.26360v1-the-time-dependent-traveling-salesman-problem-with-loose-time-windows)  
+   evidence：迁移到逐对二分类深度推荐器，提供排序模型训练实践经验
+6. [SHSP: Structure-Aware Hierarchical Solution Prediction for Mixed-Integer Linear Programming](/202608/31/2608.25282v1-shsp-structure-aware-hierarchical-solution-prediction-for-mixed-integer-linear-programming)  
    标签：评分：6.0/10、query:atsp
-   evidence：面向广义时变TSP的精确分支定价框架，可迁移到现代ATSP求解方法
-4. [JudgeStealer: Extracting LLM Judging Capabilities across Evaluation Protocols](/202608/30/2608.26982v1-judgestealer-extracting-llm-judging-capabilities-across-evaluation-protocols)  
-   标签：评分：6.0/10、query:rerank-train
-   evidence：利用点式到成对/列表式监督训练评判模型，与列表式重排序器训练直接相关
+   evidence：面向混合整数线性规划的学习式解预测，可加速ATSP等组合优化问题求解
 
 
 <div class="dpr-home-promo-card">
