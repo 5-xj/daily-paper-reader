@@ -1,0 +1,635 @@
+Title: CAGE: Coherence-Aware Graph Encoding for Retrieval-Augmented Generation
+
+URL Source: https://arxiv.org/pdf/2609.04647v1
+
+Published Time: Mon, 07 Sep 2026 00:24:38 GMT
+
+Number of Pages: 19
+
+Markdown Content:
+# CAGE: Coherence-Aware Graph Encoding for Retrieval-Augmented Generation 
+
+Tong Qi 1, Jingyu Wu 1, Youbing Yin 1, Spencer Hong 2, Daben Liu 1, Erin Babinsky 1
+
+{tong.qi, jingyu.wu, youbing.yin, daben.liu, erin.babinsky}@capitalone.com 1
+
+spencer@generalintelligencecompany.com 2
+
+Abstract 
+
+Traditional Retrieval-Augmented Generation (RAG) systems score each passage indepen-dently against the query, assembling context sets that may be individually relevant yet col-lectively incoherent. We introduce Coherence-Aware Graph Encoding (CAGE) , a reranking framework that models "between-chunk coher-ence" across four dimensions: Intra-Domain Relevance, Noise Resistance, Informational Bonding, and Factual Consistency . Our pipeline transforms retrieved passages into di-rected heterogeneous entity graphs, amplifies factual anchors via min-out-degree reweight-ing, encodes structural patterns through a Re-lational Graph Convolutional Network, and fuses inter-chunk coherence with query rele-vance for final ranking. Evaluated across four multi-hop benchmarks, CAGE matches or out-performs strong baselines including monoT5 in Recall@5 on bridge-dominated datasets and consistently improves downstream Exact Match, demonstrating that structurally coherent context yields more precise answers even when retrieval recall is comparable or lower. 
+
+1 Introduction 
+
+Retrieval-Augmented Generation (RAG) has be-come a standard paradigm for grounding large lan-guage model (LLM) outputs in external knowledge. In the canonical setup, a retriever identifies the top-k passages most relevant to a query, and those pas-sages are concatenated as context for the LLM. The quality of this retrieved set therefore acts as a hard ceiling on downstream answer quality: no matter how capable the generator, it cannot synthesize a correct answer from an incoherent or contradictory evidence base. Current retrieval pipelines address relevance through two stages: an initial retriever that ranks candidates by query chunk similarity, followed by a reranker that refines those scores using more expressive query–chunk interaction models (Nogueira et al., 2020; Santhanam et al., 2022). Despite this increased expressiveness, both stages share a common objective: scoring each chunk individually against the query. Neither explicitly models the structural dependencies among the re-trieved chunks themselves. As a result, the top-k set is assembled as a collection of independently high-scoring fragments rather than as a collectively coherent unit of evidence. Consider a query such as 
+
+"What is the current treatment procedure for Type 2 diabetes?" A retrieval pipeline may promote: (1) a 2010 passage recommending early insulin therapy; (2) a 2023 passage on GLP-1 receptor agonists; (3) a passage on Type 1 diabetes as a hereditary condition; and (4) a passage disputing the medical benefit of GLP-1 treatments. Each chunk scores well against the query individually; together, they form a contradictory and temporally fragmented context that actively misleads the generator. This failure mode is not an edge case; in our experiments across four multi-hop benchmarks, we observe that gold supporting chunks are frequently displaced by hard distractors that outscore them on individual query-relevance metrics (see section 6.1). We distinguish this problem sharply from related notions of RAG quality. Existing evaluation frame-works such as RAGAS (Es et al., 2024) and Tru-Lens (TruEra) measure generation-side faithfulness and hallucination, properties of the produced an-swer relative to the retrieved context. Graph-based RAG systems such as GraphRAG (Edge et al., 2024) and GNN-RAG (Mavromatis and Karypis, 2025) use graph structures for information naviga-tion, treating the graph as a retrieval map rather than a coherence validator. Our work addresses a different, earlier-stage problem: between-chunk coherence, defined as the structural and logical in-tegrity of the retrieved chunk set prior to answer generation. A retrieved set can exhibit high per-chunk relevance scores and produce a fluent gener-ated answer, yet still be incoherent, if the chunks arXiv:2609.04647v1 [cs.CL] 4 Sep 2026 share keyword overlap but contradict one another on the target facts, or fail to form a connected rea-soning chain, because the generator’s precision is compromised regardless of its capability. We argue that between-chunk coherence is not a monolithic property. In Section 3 we formalize a decomposition into four distinct dimensions, Intra-domain Relevance (entity-level topical alignment beyond surface keyword overlap), Noise Resistance (suppression of distractor chunks that share query keywords but lack inferential utility), Informational Bonding (structural connectivity enabling multi-hop traversal through bridge entities), and Factual Consistency (logical compatibility across the re-lational assertions of retrieved chunks). Together, these four dimensions define what it means for a retrieved set to constitute a coherent evidence base, and they motivate each component of the frame-work we introduce. To capture these dimensions jointly, we pro-pose Coherence-Aware Graph Encoding (CAGE), a graph-based reranking framework that transforms retrieved chunks into directed heterogeneous entity graphs, encodes them via Relational Graph Con-volutional Networks (R-GCN; Schlichtkrull et al. (2018)), and scores each chunk using a fused ob-jective that combines query relevance with inter-chunk structural coherence. Graph reweighting via min-out-degree node emphasis amplifies the contri-bution of specific, semantically grounded entities (the natural anchors of factual claims) while the R-GCN’s relation-type-specific weight matrices allow the model to penalize structural contradictions and reward inferential bridging across documents. Eval-uated across four multi-hop benchmarks, CAGE outperforms strong retrieval baselines in Recall@5 and consistently achieves superior Exact Match per-formance in downstream generation, demonstrat-ing that promoting structurally coherent evidence translates directly into more precise answers. 
+
+2 Related Work 
+
+2.1 Coherence in Information Retrieval 
+
+Text coherence has traditionally been studied as an intrinsic property of single documents — the logical connectivity between constituent sentences. Foundational work used sentence ordering and document discrimination tasks Liu et al. (2020); Mesgar and Strube (2016), while graph-based ap-proaches tracked entity transitions across adjacent sentences to compute local coherence Guinaudeau and Strube (2013); Mesgar and Strube (2014); Kramov (2020). These models share a key insight: coherence is relational, emerging from structural dependencies rather than from sentences in isola-tion. However, they assume continuous, single-author discourse. The retrieval setting violates this: pas-sages come from independent sources with no shared discourse plan. Current RAG evaluation frameworks sidestep this challenge entirely. RA-GAS Es et al. (2024) and TruLens TruEra measure generation-side properties: faithfulness, hallucina-tion, and coherence, where coherence evaluates the logical consistency and flow of the AI-generated re-sponse, not the structural integrity of the retrieved chunks that produced it. NLI-based contradiction detectors (Huang et al., 2025; Ming et al., 2024) op-erate at the claim level but miss higher-order struc-ture: whether passages form connected reasoning chains or collectively support a single answer. We formalize between-chunk coherence, the structural and logical integrity of a retrieved set, as a distinct axis orthogonal to both per-chunk relevance and downstream faithfulness. 
+
+2.2 Coherence Gap in Retrieval Augmented Generation 
+
+We first define the baseline our work builds upon. Vanilla RAG denotes the standard retrieve-then-generate pipeline: all-MiniLM-L6-v2 (Reimers and Gurevych, 2019) encodes queries and passages into a shared embedding space, retrieves the top-k by cosine similarity, and concatenates them as context for the generator. No inter-passage signal is considered. CAGE applies graph reranking to this same retrieved set, isolating the contribution of coherence-aware scoring. Recent work has moved beyond flat retrieval to-ward graph-based paradigms. GraphRAG (Edge et al., 2024) builds hierarchical knowledge graphs for query-focused summarization. HippoRAG (Gutiérrez et al., 2024) enables associative multi-hop retrieval via Personalized PageRank. GNN-RAG (Mavromatis and Karypis, 2025) trains GNNs over knowledge bases to identify reasoning paths. HyperGraphRAG (Luo et al., 2025) introduces hy-pergraph representations capturing many-to-many entity–document relationships. G-RAG (Dong et al., 2024) proposes graph-based reranking to leverage structural connectivity among candidate passages. Despite their sophistication, these systems share a common philosophy: the graph serves as a nav-igation map for locating relevant passages, not as a validator of coherence among them. GraphRAG improves coverage, but does not assess whether the retrieved passages are logically coherent. Hip-poRAG increases multi-hop recall without guar-anteeing internal consistency. GNN-RAG guides which nodes to visit, yet assembles the final set without a coherence objective. HyperGraphRAG captures group associations but remains agnostic to contradictions within retrieved members. While G-RAG models local passage connections during reranking, its approach evaluates pairwise graph topological ties rather than validating set-level co-herence evaluation. In each case, graph topology is exploited for retrieval reach or pairwise affinity rather than set-level evidence integrity. This leaves a persistent gap in retrieval-augmented generation: existing graph-based reranking and set-selection paradigms remain largely coherence-agnostic at the set level. Because prior methods evaluate candidates independently or rely on localized topological affinity, nothing in their design prevents the final context set from har-boring mutual contradictions, lacking inferential bridges, or accumulating uninformative distractors. To bridge this gap, we introduce CAGE, a post-retrieval reranking framework operating prior to answer generation. Rather than utilizing graph rep-resentations merely for information navigation, our primary contribution is establishing between-chunk coherence as an explicit optimization objective for scoring retrieved candidate sets. By repurposing graph topology into a mechanism for set-level evi-dence validation, CAGE ensures that concatenated contexts form a structurally integrable foundation before answer synthesis. 
+
+3 Background Definition and Theory 
+
+The preceding sections identify two gaps: (1) co-herence remains formally undefined for sets of in-dependently retrieved passages, and (2) no exist-ing graph-based RAG system exploits relational structure as a coherence signal. We address both by decomposing between-chunk coherence into four measurable dimensions and proving that Rela-tional Graph Convolutional Networks are expres-sively sufficient to distinguish coherent evidence sets from incoherent ones. 
+
+3.1 Multiple-Dimensions of Coherence in Retrieval 
+
+We formalize between-chunk coherence as a com-posite property over a retrieved set (C1, . . . , C k) ∈D with respect to query q. We decompose it into four dimensions and the example is shown in Fig-ure 1: • Intra-Domain Relevance : Entity-level refer-ential alignment among co-retrieved passages within the same domain. Standard retrievers may surface chunks that share domain vocabulary with the query yet anchor to different real-world referents (e.g., two McDonald’s branches on dif-ferent streets). Intra-domain relevance requires that passages ground to a shared referential con-text, not merely a shared topic. • Noise Resistance : Suppression of cross-domain distractor chunks that exhibit high query simi-larity but contribute no inferential utility. These arise from keyword overlap across unrelated do-mains (e.g., "Big Mac" as a food item vs. afinancial index) and act as isolated informational islands, topologically disconnected from the evi-dence backbone. • Informational Bonding : The presence of bridge entities enabling multi-hop traversal across pas-sages. A coherent set must contain a structurally continuous path from query entities to the target answer; without such bridges, the set remains disconnected facts rather than a traversable rea-soning chain. • Factual Consistency : Logical compatibility among the relational assertions of co-retrieved passages. Multi-source retrieval can introduce mutually exclusive claims (e.g., conflicting dates, contradictory causal relations). A coherent set must be logically integrable, its facts must not invalidate one another during synthesis. These dimensions are complementary and non-overlapping: intra-domain relevance and noise re-sistance partition the relevance space by scope (within-domain disambiguation vs. cross-domain filtering), while informational bonding and factual consistency address structural connectivity and log-ical harmony respectively. Qualitative examples appear in Appendix E (Figures 7-10). 
+
+3.2 Theoretical Foundation of Relational Coherence 
+
+We establish that R-GCNs are expressively suf-ficient to capture all four coherence dimensions Intra-Domain Relevance Query : What are the opening hours of the McDonald's on Main Street?                                            
+
+> Answer : 6:00 AM to 11:00 PM.
+> Facts :
+> •The McDonald's located on Main Street operates from 6:00 AM to 11:00 PM daily.
+> •This Main Street branch recently updated its hours to include a late-night drive-thru.
+> Distractors :
+> •The McDonald's on Broadway Avenue is open 24 hours a day for all customers.
+> •A McDonald's on Airport Road opens at 4:00 AM to serve early travelers.
+> Noise Resistance
+> Query : What is the current price of a Big Mac at the local store?
+> Answer : $5.50.
+> Facts :
+> •The local franchise has set the price of a single Big Mac at $5.50.
+> •Customers can get a Big Mac for this price during the lunch-hour special.
+> Distractors :
+> •The "Big Mac" Index is a financial tool used to measure purchasing power between countries.
+> •Investors are watching the stock price of McDonald's Corp, which rose by $2.00 this morning.
+> Informational Bonding
+> Query : What specific animal is helped by the charity partnered with the 5th Ave McDonald’s?
+> Answer : Sea Turtles.
+> Facts :
+> •The 5th Ave McDonald's donates 10% of its profits to an organization called "Ocean Guardians .”
+> •"Ocean Guardians " is a non-profit dedicated to the rescue of injured sea turtles .
+> Distractors :
+> •Most McDonald's locations support the Ronald McDonald House for children's health.
+> •A McDonald's wildlife fund helps protect farm animals across the global supply chain.
+> Factual Consistency
+> Query : What is the primary oil currently used to cook McDonald's French fries?
+> Answer : A vegetable oil blend (since the removal of beef tallow).
+> Facts :
+> •McDonald’s officially switched from animal fats to a 100% vegetable oil blend for cooking its French fries to reduce cholesterol.
+> •This vegetable oil blend consists primarily of canola, corn, and soybean oils to ensure a consistent flavor profile.
+> Distractors :
+> •Traditional (1940-1990) McDonald's fries are world-famous for being cooked in
+> pure beef tallow for a distinct savory taste.
+> •A health blog incorrectly claims that McDonald's has recently started using
+> peanut oil for all fried menu items.
+
+Figure 1: Examples of the four coherence dimensions. Intra-domain relevance (top-left): distractors share the entity type (McDonald’s) but anchor to a different referent (Broadway vs. Main Street). Noise resistance (top-right): cross-domain keyword overlap ("Big Mac" as food vs. financial index) produces topologically disconnected distractors. Informational bonding (bottom-left): a bridge entity ("Ocean Guardians") is required to connect disjoint facts into a traversable reasoning chain. Factual consistency (bottom-right): mutually exclusive claims (vegetable oil vs. beef tallow) violate logical integrability of the retrieved set. 
+
+defined above. Specifically, we show (1) that the R-GCN update rule is injective over relational mul-tisets, matching the discriminative power of the Relational Weisfeiler-Lehman algorithm, and (2) that each coherence dimension corresponds to a distinguishable structural property in the result-ing embedding space. See Appendix B.1-B.4 for Propositions/Lemmas 1-4 individually. 
+
+Notation: G = (V, E, R ): multi-relational graph with nodes V , edges E, relation types R.
+
+h(l)
+
+i : embedding of node i at layer l with total 
+
+L layers. W(l)
+
+r : relation-specific weight matrix. 
+
+Φ : G → E : graph encoding function. σ: non-linear activation. 
+
+Proposition 1 Relational WL-Equivalence Let 
+
+G = ( V, E, R ) be a multi-relational graph, and consider the unnormalized R-GCN update 
+
+h(l+1) 
+
+i = σ
+
+X
+
+r∈R 
+
+W(l)
+
+r
+
+X
+
+j∈N ri
+
+h(l)
+
+j + W(l)0 h(l)
+
+i
+
+ .
+
+An L-layer R-GCN under this update, with relation-specific weight matrices {W(l)
+
+r } of sufficient rank, is as discriminative as the L-step Relational Weisfeiler-Lehman algorithm: the update is injec-tive over relational multisets, so h(L)
+
+u = h(L)
+
+v if and only if nodes u and v have isomorphic L-hop relational neighborhoods. This guarantees that, un-der sum aggregation, structurally distinct chunk graphs, differing in entity relations, connectivity, or directionality, receive distinct embeddings, a pre-requisite for any coherence scoring function that must discriminate coherent sets from incoherent ones. Building upon Proposition 1, we posit that the graph embedding manifold acts as a structural val-idator for retrieval coherence. 
+
+Theorem 1 Coherence Separability Let Φ : G → 
+
+Rd be an L-layer R-GCN with injective aggrega-tion (Proposition 1, exact under unnormalized sum aggregation and approximate under our degree-normalized implementation per the condition in Appendix B.1) followed by global sum pooling: 
+
+Φ( G) = P
+
+i∈V h(L)
+
+i . Let S(Φ( Gi), Φ( Gj )) = cos(Φ( Gi), Φ( Gj )) . If two passage graphs Gi, G j
+
+share entities and compatible relation types – either directly, or transitively through a bridge entity re-lationally enriched within each graph’s own 1-hop neighborhood (Lemma 3) and neither contains con-tradictory relational patterns relative to the other (i.e., exhibit structural coherence), then: 
+
+S(Φ( Gi), Φ( Gj )) > S (Φ( Gi), Φ( Gk)) 
+
+for any Gk that shares no such entities or bridge structure with Gi, or contains contradictory rela-tional patterns. 
+
+Proof Sketch By Proposition 1, structurally dis-tinct graphs receive distinct embeddings. We de-compose the structural conditions under which sim-ilarity increases: shared linguistic features pro-duce non-orthogonal initial projections (Lemma 1), isolated nodes are attenuated during aggrega-tion (Lemma 2), shared bridge entities receive inde-pendent relational enrichment in each passage’s own graph, elevating cross-graph similarity be-yond raw lexical overlap (Lemma 3), and relational contradictions produce divergent embeddings via non-commutativity of Wr matrices (Lemma 4). Together, these establish that S separates coher-ent passage pairs from incoherent ones. While Theorem 1 establishes a general L-layer formu-lation to provide a scale-invariant framework for arbitrary graph diameters, we empirically instan-tiate CAGE with L = 1 . For our compact pas-sage graphs, bridge entities’ relational context is already captured within each passage’s own imme-diate 1-hop neighborhood (Lemma 3), so a single layer combined with global sum pooling suffices to elevate cross-graph similarity without requiring deeper propagation or multi-layer over-smoothing. The general L-layer theory thus serves as a mathe-matical blueprint for extending CAGE to long-form contexts or macro-reasoning tasks requiring deeper propagation. Our proof proceeds by showing that the Rela-tional GCN mapping preserves the structural dis-tinctness of relational multisets. By identifying these distinct neighborhoods as anchors for a co-herence manifold, we establish the existence of an injective estimator S. See Appendix B for the full derivation. By projecting documents into a relational mani-fold rather than a static semantic space, our method treats retrieval as a validation of structural isomor-phism. This framework ensures that retrieved evi-dence is not merely "topically related" but is topo-logically and logically integrable for downstream reasoning. 
+
+4 CAGE 
+
+Our pipeline takes the top-k passages from the initial retriever and produces a coherence-aware reranking in four stages: graph construction from each passage, min-out-degree node reweighting, R-GCN encoding, and fused scoring that combines query relevance with inter-chunk coherence. Fig-ure 2 illustrates the full pipeline. 
+
+4.1 Entity Enhanced Graph Construction 
+
+For each document Ci, we apply spaCy’s de-pendency parser (en_core_web_lg) with corefer-ence resolution to extract a directed heterogeneous graph Gi = ( Vi, E i). Nodes represent lemma-tized content words with pronouns resolved to their canonical referents. Edges encode various rela-tion types derived from linguistic analysis, such as subject–object links labeled by their governing verb lemma (with negation), adjectival/compound modifiers and appositives, numeric and quantity associations, prepositional relations (e.g., spatial, temporal), and named-entity co-occurrence within sentence boundaries. Each node is initialized with a feature vector consisting of its 300-dimensional contextual embedding (L2-normalized), one-hot POS tag, one-hot entity type, and a scalar weight. 
+
+4.2 Graph Reweighting 
+
+To emphasize coherence-relevant parts of the graph, we apply a reweighting strategy focused on min-out-degree nodes: 
+
+Vi, min = {v ∈ Vi | deg +(v) = δ+(Gi)}
+
+where deg +(v) is the out-degree of node v, and 
+
+δ+(Gi) denotes the minimum out-degree over all nodes in graph Gi. These nodes often represent terminal or specific concepts, such as named enti-ties, numeric values, or endpoints of factual state-ments. We scale their feature vectors and adja-cent edge weights by a factor β > 1. Their low out-degree suggests they are more semantically grounded, playing key roles in anchoring the mean-ing of the chunk. This structural prior helps the model prioritize information from nodes likely to correspond to specific entities, facts, or low-level concepts, improving downstream graph representa-tion learning. 
+
+4.3 R-GCN Encoding 
+
+We encode each reweighted graph using a single R-GCN layer (Schlichtkrull et al., 2018) with ReLU activation, followed by global sum pooling to ob-tain a graph-level embedding Zi ∈ R128 . To pre-vent representation collapse, the encoder is trained with a diversity objective that minimizes mean pair-wise cosine similarity within each batch. This ob-jective acts as a regularization mechanism over the embedding space, forcing structurally distinct pas-sage graphs to occupy separated regions so that pairwise distance metrics remain discriminative at Query  
+
+> Graph Generation Min- out- degree Rew eight
+> Between- chunk
+> coherence
+> Query chunk
+> relevance
+> Coherent Chunks
+> Answ er Generation
+
+Figure 2: Overview of the CAGE pipeline. Retrieved passages are converted into directed heterogeneous entity graphs, reweighted by min-out-degree to emphasize factual anchors (highlighted nodes), encoded via R-GCN into graph-level embeddings, and scored using a fused objective combining query relevance with pairwise structural coherence. 
+
+test time. Consequently, high downstream simi-larity scores specifically reflect genuine structural overlap, such as shared entities, compatible rela-tions, and connected reasoning paths, rather than uninformative, collapsed representations. We in-terpret this relational alignment as between-chunk coherence. 
+
+4.4 Coherence Scoring and Reranking 
+
+Given graph embeddings Z1, . . . , Z k, we compute a symmetric coherence matrix C ∈ Rk×k:
+
+Cij = cos( Zi, Z j )
+
+The coherence score for passage i aggregates its structural alignment with all other retrieved pas-sages: 
+
+si =
+
+> k
+
+X
+
+> j=1
+
+Cij for j = 1 , . . . , k and i̸ = j. 
+
+Passages with high si share entities, compatible relations, and connected paths with the rest of the retrieved set; passages with low si are structural outliers likely representing noise or distractors. To balance coherence with query relevance, the final ranking score fuses both signals: 
+
+fi = α · sim (q, C i) + (1 − α) · 1
+
+k − 1 si
+
+where sim (q, C i) is the query–passage cosine sim-ilarity from the initial retriever, and α ∈ [0 , 1] 
+
+controls the trade-off between relevance and co-herence. The normalization by k − 1 ensures the coherence term is scale-comparable to the query similarity. Passages are reranked by fi and the top-k are passed to the generator. 
+
+5 Experimental Setup 
+
+5.1 Dataset 
+
+We benchmark across four multi-hop datasets: Hot-potQA (distractor setting) (Yang et al., 2018), 2WikiMultihopQA(Ho et al., 2020), MuSiQue (Trivedi et al., 2022), and RAMDocs (Wang et al., 2025). Because isolated per-dimension annotations do not yet exist in standard RAG benchmarks, we therefore leverage multi-hop gold supporting-fact chains as a principled empirical proxy. Gold sup-porting chains represent the unique evidence subset that must collectively exhibit structural connectiv-ity and logical harmony to form a valid reasoning path, whereas hard distractors act as semantically similar yet topologically disconnected alternatives. The four datasets collectively stress-test different coherence dimensions (Table 4, Appendix A). Hot-potQA (81% bridge, 19% comparison) and 2Wiki-MultihopQA (48% bridge, 41% comparison, 11% inference) emphasize informational bonding and 
+
+intra-domain relevance via multi-hop bridge ques-tions that require disambiguating entities from the same domain. MuSiQue introduces 3-4 hop chains with high distractor density, testing noise resistance 
+
+and intra-domain relevance , its distractors are in-tentionally engineered with shared professional vo-cabulary to be highly adversarial yet structurally disconnected. RAMDocs targets factual consis-tency via adversarial misinformation that modifies only the target assertion while preserving surround-ing entity structure. Qualitative case studies map-ping each dataset to its primary coherence dimen-sion appear in Appendix E (Figures 7–10). Retriever MuSiQue 2Wiki HotpotQA RAMDocs                                     
+
+> BM25(Robertson and Zaragoza, 2009) 49.6 71.6 76.4 86.8 GTR(Ni et al., 2022) 49.1 67.9 73.3 87.4 ColBERTv2(Santhanam et al., 2022) 49.2 68.2 79.3 87.6
+> RAPTOR(Sarthi et al., 2024) 45.3 53.8 71.2 87.4 HyperGraphRAG(Luo et al., 2025) 36.8 45.9 60.5 87.2 mxbai-rerank(Li et al., 2025) 63.5 84.0 83.9 87.1 monoT5(Pradeep et al., 2021) 62.8 78.1 84.2 87.1 Vanilla RAG 63.6 80.4 83.8 87.2 CAGE 64.0 85.4 84.2 87.0
+> Table 1: Recall@5 across four multi-hop benchmarks. CAGE achieves the highest Recall@5 on 2WikiMultihopQA and HotpotQA, matching or outperforming the strong baselines, while remaining competitive on MuSiQue and RAMDocs.
+
+5.2 Setup 
+
+All methods retrieve from the same candidate pool per dataset: the full set of passages provided by each benchmark (including gold supporting facts and distractors). For each query, we construct en-tity graphs from the top-k retrieved passages using spaCy (en_core_web_lg) with coreference resolu-tion, apply min-out-degree reweighting ( β = 2 ), and train a single-layer R-GCN independently on that query’s k passage graphs. The R-GCN takes node features (300-dim contextual embedding, one-hot POS, one-hot entity type, weight scalar), edge indices, and edge types as input, producing 128-dimensional graph-level embeddings via global sum pooling. Training uses a diversity objec-tive that minimizes mean pairwise cosine similar-ity across the k graph embeddings, encouraging structurally distinct passages to occupy distinct re-gions of the embedding space. Since each train-ing instance consists of only k small graphs (typi-cally 10–50 nodes each), training converges within 30–60 epochs in under a second per query using Adam (lr = 1e-3). No offline pre-training or corpus-level computation is required. The fusion weight is fixed at α = 0 .7, which is selected via grid search over α ∈ (0 .1, 0.2, . . . , 1.0) and fixed across all datasets as Figure 6 shows in Appendix D. 
+
+6 Results 
+
+6.1 Retrieval Performance 
+
+We evaluate whether our fused scoring success-fully promotes gold supporting chunks into the top-5 positions. Baselines span retrieval paradigms: BM25 (Robertson and Zaragoza, 2009) for sparse retrieval and GTR (Ni et al., 2022) for dense bi-encoder retrieval, ColBERTv2 (Santhanam et al., 2022) for late interaction, RAPTOR (Sarthi et al., 2024) for recursive abstractive retrieval, and Hy-perGraphRAG (Luo et al., 2025) for hypergraph-structured retrieval, monoT5 (Pradeep et al., 2021) and mxbai-rerank (Li et al., 2025) for cross-encoder reranking. Vanilla RAG (Section 2.2) serves as our ablation baseline; it shares the same first-stage re-triever as CAGE but applies no graph reranking. We report Recall@5: the fraction of gold sup-porting chunks that appear in the top-5 after rank-ing. This metric is particularly revealing for coherence-aware reranking because bridge pas-sages, structurally necessary for the reasoning chain but semantically distant from the query, often fail to surface under relevance-only ranking. Figure 3 visualizes this effect on a single exam-ple. The left heatmaps show pairwise semantic similarity and query relevance: the second gold passage scores only 0.29 against the query and ex-hibits weak pairwise similarity to the other two gold passages. Under relevance-only ranking, this passage would be displaced by higher-scoring dis-tractors. The right heatmap shows our structural coherence scores: all three gold passages converge into a distinct high-similarity cluster, cleanly sep-arated from distractors. The R-GCN recovers the latent connectivity, shared entities and compatible relations, that surface similarity misses, effectively rescuing a semantically distant but structurally es-sential bridge passage. Table 1 presents Recall@5 across the four bench-marks. CAGE achieves the strongest results on 2WikiMultihopQA (85.4), outperforming Vanilla RAG by 5 points and ColBERTv2 by 17 points, and on HotpotQA (84.2), matching monoT5 and outper-forming all other baselines; and MuSiQue (64.0), edging out Vanilla RAG (63.6) and monoT5 (62.8). The strongest gains appear on bridge-dominated datasets (2WikiMultihopQA: 48% bridge; Hot-potQA: 81% bridge), precisely the setting where structural coherence identifies connecting pas-sages that relevance-only scoring overlooks. On MuSiQue, where 3-4 hop chains increase distrac-tor density, the margin is narrower but CAGE still achieves the top score, suggesting that coherence signals provide consistent benefit even when struc-tural overlap between gold passages and distractors is high. On RAMDocs, all methods cluster within 1 point (86.8–87.6), indicating that adversarial mis-information, where contradictory passages share entity structure with gold ones, cannot be resolved through structural connectivity alone. True True True False False True True True False False                                                      
+
+> 10.43 0.79 0.53 0.14 0.43 10.31 0.26 0.057 0.79 0.31 10.41 0.25 0.53 0.26 0.41 10.3 0.14 0.057 0.25 0.3 1Pairwise Semantic Similarity
+> True True True False False
+> 0.63 0.29 0.67 0.35 0.24
+> Query-Text Relevance True True True False False True True True False False
+> 10.62 0.97 0.48 0.12 0.62 10.65 0.86 0.5
+> 0.97 0.65 10.51 0.15 0.48 0.86 0.51 10.64 0.12 0.5 0.15 0.64 1Structural Coherence
+> 0.6 0.7 0.8 0.9 1.0
+
+Figure 3: Semantic similarity (left) vs. structural coher-ence (right) for a retrieved set of five passages (three gold, two distractors). Semantic similarity and query relevance fail to unify the gold set, the second gold pas-sage scores 0.29 against the query. Structural coherence recovers the latent connectivity among all three gold passages, forming a separable cluster that distinguishes supporting evidence from distractors. 
+
+6.2 Answer Generation 
+
+Beyond retrieval quality, we evaluate the down-stream impact of our reranking strategies on an-swer generation. We provide the top-5 retrieved chunks as context to two popular language mod-els: Gemma 4 26B A4B (Google, 2026) and Llama 3.3 70B (Meta, 2024) with temperature 0. We re-port Exact Match (EM) and F1, comparing CAGE against monoT5 and Vanilla RAG which are the two strong baselines on Recall@5 (Table 1). Table 2 presents end-to-end results. CAGE achieves the highest EM on 5 of 8 dataset–model combinations, while F1 improvements are more modest. This performance asymmetry highlights a core benefit of coherence-aware reranking. EM is a strict, fine-grained metric requiring the complete reasoning chain to be present in context, a single missing bridge passage drops the score to zero. Conversely, F1 rewards partial token overlap and remains tolerant of incomplete or noisy context. Because CAGE specifically rescues structurally necessary bridge passages that relevance-only scor-ing demotes, the resulting EM gains scale directly with dataset bridge density, yielding the most pronounced improvements on bridge-dominated benchmarks. This EM advantage demonstrates that promoting set-level structural coherence supplies the generator with the complete evidence chain nec-essary for exact multi-hop answer extraction, rather than merely superficial text overlap. MuSiQue 2Wiki HotpotQA RamDocs      
+
+> 2
+> 024
+> % Points
+> +1.4 +1.7 +4.4 -1.0 +0.9 +0.9 -0.3 -0.3
+> Performance Comparison (CAGE-Text only): EM vs F1
+> Exact Match (EM)
+> F1-Score
+
+Figure 4: Ablation of the coherence signal. Bars show the difference in EM and F1 (percentage points) be-tween CAGE’s fused score and text-only query rele-vance (Vanilla RAG) based on Llama model, isolating the contribution of the graph-based coherence term si.
+
+6.3 Ablation: Coherence Signal Contribution 
+
+To isolate the architectural contribution of CAGE, Table 3 presents a component-wise ablation of Re-call@5 across all four benchmarks. Replacing the standard GCN encoder with an R-GCN en-coder(CAGE No-reweight) yields the single largest retrieval improvement, most notably on MuSiQue, where Recall@5 jumps by +10.5 points. This con-firms that relation-type-specific transformation ma-trices are essential for capturing heterogeneous multi-hop connectivity. Incorporating min-out-degree node reweighting (CAGE Full) provides an additional performance boost across all datasets, achieving peak recall on 2Wiki (+3.9 points) and HotpotQA (+1.8 points). The corresponding EM and F1 results are listed in Table 5 in Appendix F. This validates our structural prior that scaling low out-degree nodes effectively amplifies grounded factual anchors during representation learning. Beyond architectural components, we isolate the effect of graph-based coherence, Figure 4 com-pares the full fused score fi = α·sim (q, C i)+(1 −
+
+α) 1
+
+k−1 si against text-only ranking using sim (q, C i)
+
+alone (in Vanilla RAG). The coherence term si
+
+drives consistent EM gains on MuSiQue (+1.4), 2Wiki (+1.7), and HotpotQA (+4.4), while F1 im-Model Gemma 4 26B A4B Llama 3.3 70B MuSiQue 2Wiki HotpotQA RAMDocs MuSiQue 2Wiki HotpotQA RAMDocs Retriever EM F1 EM F1 EM F1 EM F1 EM F1 EM F1 EM F1 EM F1 monoT5 15.8 17.0 34.2 34.4 50.3 51.3 42.7 59.8 24.6 28.3 47.6 49.1 54.2 59.5 43.3 67.6                                 
+
+> Vanilla RAG 16.6 17.6 38.1 38.8 51.7 51.9 45.3 59.7 29.0 32.2 52.6 56.0 50.6 58.7 45.7 66.1 CAGE 17.1 18.0 40.1 40.2 50.7 50.8 44.7 59.3 30.4 33.1 54.3 56.9 55.0 58.4 44.7 65.8
+
+Table 2: Generation Performance Comparison on MuSiQue, 2Wiki, HotpotQA and RAMDocs Datasets 
+
+provements remain modest (+0.9, +0.9, -0.3). This asymmetry confirms that coherence reranking pri-marily enhances extraction precision: EM requires the context to contain the complete, unfragmented reasoning chain, whereas F1 tolerates partial token overlap from noisy evidence. The largest gain (+4.4 EM on HotpotQA) aligns with its high proportion of bridge questions (81%), where the coherence score successfully rescues structurally necessary passages. The slight decline on RAMDocs (-1.0 EM) re-flects a limitation: adversarial misinformation pas-sages share surrounding entity structure with gold facts, rendering structural connectivity alone insuf-ficient to resolve logical conflicts. These differ-ences align with dataset characteristics (Table 4): HotpotQA and 2Wiki reward structural connectiv-ity between passages, where the coherence term excels. MuSiQue’s 3–4 hop chains with high dis-tractor density mean the coherence gain is real but smaller, as distractors share entity structure with gold passages. RAMDocs is adversarial by design, contradictory passages are topologically similar to gold ones, limiting structural signals. To understand this failure mode, we examine RAMDocs cases where CAGE demotes gold pas-sages. Adversarial passages are constructed by modifying only the target fact while preserving all surrounding entity structure, producing near-isomorphic graphs that share the same nodes and relation types but differ in a single edge target (see Figure 10). Because the R-GCN assigns high struc-tural coherence scores to both variants, this con-firms that topology-based encoding cannot distin-guish assertion-level factual shifts, indicating that complementary claim-level NLI verification is re-quired for adversarial settings. 
+
+7 Conclusion 
+
+We introduced CAGE, a framework that reranks retrieved passages by structural coherence rather than individual query relevance alone. Our cen-tral contribution is a four-dimensional decompo-                
+
+> Retriever MuSiQue 2Wiki HotpotQA RAMDocs
+> GCN encoder 52.1 79.7 80.3 86.3 CAGE (No-reweight) 62.6 81.5 82.4 86.7 CAGE (full) 64.0 85.4 84.2 87.0
+
+Table 3: Ablation study evaluating Recall@5 across all benchmarks to isolate the impact of the R-GCN archi-tecture (vs. a vanilla GCN) and the min-out-degree node reweighting mechanism. 
+
+sition of between-chunk coherence: Intra-domain relevance, noise resistance, informational bonding, and factual consistency, operationalized through di-rected heterogeneous entity graphs encoded via R-GCN. Empirically, CAGE achieves the high-est Recall@5 on bridge-dominated benchmarks (2WikiMultihopQA, HotpotQA) and consistently improves Exact Match in downstream generation, confirming that structurally coherent context trans-lates to more precise answers. Notably, even when retrieval recall decreases (MuSiQue), genera-tion quality improves, demonstrating that between-chunk coherence is a complementary signal to per-chunk relevance, not a substitute for it. 
+
+Limitations 
+
+The current framework has three primary con-straints. First, graph construction relies on rule-based dependency parsing (spaCy), which limits relation extraction quality to the parser’s accuracy; errors in entity recognition or dependency resolu-tion propagate into the graph topology. Second, no existing RAG benchmark provides fine-grained between-chunk coherence annotations along our four dimensions; our evaluation relies on multi-hop supporting-fact annotations as an empirical proxy for between-chunk coherence rather than direct, per-dimension labels. Constructing a dedicated benchmark with explicit per-dimension coherence labels, a direction made tractable by the theoretical formalization we introduce in this work remains an important objective for future research. Third, while the tunable fusion weight α balances coher-ence and relevance signals, it is currently set via grid search; an adaptive mechanism that adjusts α
+
+per query based on retrieval confidence or graph density could improve robustness on adversarial benchmarks like RAMDocs. Our evaluation relies on multi-hop supporting-fact annotations as a proxy for the four coherence dimensions rather than direct, per-dimension co-herence labels, since no existing RAG benchmark provides such fine-grained annotations. Construct-ing a benchmark with explicit per-dimension co-herence labels, made tractable by the formalization we introduce in this work, is an important direction for future work. 
+
+Ethical considerations 
+
+This work uses publicly available multi-hop ques-tion answering benchmarks (HotpotQA, 2Wiki-MultihopQA, MuSiQue) derived from Wikipedia, which do not contain personally identifying infor-mation or offensive content. No new data involv-ing human subjects was collected, and no crowd-sourcing or annotation was performed. Our answer generation relies on open-weight models (Gemma and LLaMA), which are run lo-cally without transmitting data to external APIs. The CAGE reranking pipeline itself is lightweight (approximately 210K parameters) and requires min-imal computational resources, making it accessible to researchers with limited hardware. We do not foresee direct negative societal im-pacts from this work. However, as with all retrieval-augmented generation systems, improved retrieval coherence does not guarantee factual correctness of generated answers. Users of RAG systems should exercise caution and verify outputs in high-stakes domains such as healthcare or legal applications. 
+
+References 
+
+Jialin Dong, Bahare Fatemi, Bryan Perozzi, Lin F Yang, and Anton Tsitsulin. 2024. Don’t forget to connect! improving rag with graph-based reranking. arXiv preprint arXiv:2405.18414 .Darren Edge, Ha Trinh, Newman Cheng, Joshua Bradley, Alex Chao, Apurva Mody, Steven Truitt, Dasha Metropolitansky, Robert Osazuwa Ness, and Jonathan Larson. 2024. From local to global: A graph rag approach to query-focused summarization. 
+
+arXiv preprint arXiv:2404.16130 .Shahul Es, Jithin James, Luis Espinosa Anke, and Steven Schockaert. 2024. Ragas: Automated evalua-tion of retrieval augmented generation. In Proceed-ings of the 18th Conference of the European Chap-ter of the Association for Computational Linguistics: System Demonstrations , pages 150–158. Johannes Gasteiger, Aleksandar Bojchevski, and Stephan Günnemann. 2018. Predict then propagate: Graph neural networks meet personalized pagerank. 
+
+arXiv preprint arXiv:1810.05997 .Google. 2026. Gemma 4 model card. https://ai. google.dev/gemma/docs/core/model_card_4 .Accessed 2026-05-24. Camille Guinaudeau and Michael Strube. 2013. Graph-based local coherence modeling. In Proceedings of the 51st Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers) ,pages 93–103. Bernal J Gutiérrez, Yiheng Shu, Yu Gu, Michihiro Ya-sunaga, and Yu Su. 2024. Hipporag: Neurobiologi-cally inspired long-term memory for large language models. Advances in neural information processing systems , 37:59532–59569. Xanh Ho, Anh-Khoa Duong Nguyen, Saku Sugawara, and Akiko Aizawa. 2020. Constructing a multi-hop qa dataset for comprehensive evaluation of reasoning steps. arXiv preprint arXiv:2011.01060 .Lei Huang, Weijiang Yu, Weitao Ma, Weihong Zhong, Zhangyin Feng, Haotian Wang, Qianglong Chen, Weihua Peng, Xiaocheng Feng, Bing Qin, and 1 oth-ers. 2025. A survey on hallucination in large lan-guage models: Principles, taxonomy, challenges, and open questions. ACM Transactions on Information Systems , 43(2):1–55. Artem Kramov. 2020. Evaluating text coherence based on the graph of the consistency of phrases to iden-tify symptoms of schizophrenia. arXiv preprint arXiv:2005.03008 .Xianming Li, Aamir Shakir, Rui Huang, Julius Lipp, Benjamin Clavié, and Jing Li. 2025. Prorank: Prompt warmup via reinforcement learning for small language models reranking. arXiv preprint arXiv:2506.03487 .Sennan Liu, Shuang Zeng, and Sujian Li. 2020. Evalu-ating text coherence at sentence and paragraph levels. In Proceedings of the Twelfth Language Resources and Evaluation Conference , pages 1695–1703. Haoran Luo, Guanting Chen, Yandan Zheng, Xi-aobao Wu, Yikai Guo, Qika Lin, Yu Feng, Zemin Kuang, Meina Song, Yifan Zhu, and 1 others. 2025. Hypergraphrag: Retrieval-augmented genera-tion via hypergraph-structured knowledge represen-tation. arXiv preprint arXiv:2503.21322 .Costas Mavromatis and George Karypis. 2025. Gnn-rag: Graph neural retrieval for efficient large lan-guage model reasoning on knowledge graphs. In 
+
+Findings of the Association for Computational Lin-guistics: ACL 2025 , pages 16682–16699. Mohsen Mesgar and Michael Strube. 2014. Normalized entity graph for computing local coherence. In Pro-ceedings of TextGraphs-9: the workshop on Graph-based Methods for Natural Language Processing ,pages 1–5. Mohsen Mesgar and Michael Strube. 2016. Lexical coherence graph modeling using word embeddings. In Proceedings of the 2016 Conference of the North American Chapter of the Association for Computa-tional Linguistics: Human Language Technologies ,pages 1414–1423. Meta. 2024. Llama 3.3 model card. https://www.llama.com/docs/ model-cards-and-prompt-formats/llama3_3/ .Accessed 2026-05-24. Yifei Ming, Senthil Purushwalkam, Shrey Pandit, Zixuan Ke, Xuan-Phi Nguyen, Caiming Xiong, and Shafiq Joty. 2024. Faitheval: Can your lan-guage model stay faithful to context, even if" the moon is made of marshmallows". arXiv preprint arXiv:2410.03727 .Jianmo Ni, Chen Qu, Jing Lu, Zhuyun Dai, Gustavo Her-nandez Abrego, Ji Ma, Vincent Zhao, Yi Luan, Keith Hall, Ming-Wei Chang, and 1 others. 2022. Large dual encoders are generalizable retrievers. In Pro-ceedings of the 2022 Conference on Empirical Meth-ods in Natural Language Processing , pages 9844– 9855. Rodrigo Nogueira, Zhiying Li, and Jimmy Lin. 2020. Document ranking with a pretrained sequence-to-sequence model. In Findings of EMNLP .Ronak Pradeep, Rodrigo Nogueira, and Jimmy Lin. 2021. The expando-mono-duo design pattern for text ranking with pretrained sequence-to-sequence models. arXiv preprint arXiv:2101.05667 .Nils Reimers and Iryna Gurevych. 2019. Sentence-bert: Sentence embeddings using siamese bert-networks. In Proceedings of the 2019 conference on empirical methods in natural language processing and the 9th international joint conference on natural language processing (EMNLP-IJCNLP) , pages 3982–3992. Stephen Robertson and Hugo Zaragoza. 2009. The prob-abilistic relevance framework: BM25 and beyond ,volume 4. Now Publishers Inc. Keshav Santhanam, Omar Khattab, Jon Saad-Falcon, Christopher Potts, and Matei Zaharia. 2022. Col-bertv2: Effective and efficient retrieval via lightweight late interaction. In Proceedings of the 2022 Conference of the North American Chapter of the Association for Computational Linguistics: Hu-man Language Technologies , pages 3715–3734. Parth Sarthi, Salman Abdullah, Aditi Tuli, Shubh Khanna, Anna Goldie, and Christopher D Manning. 2024. Raptor: Recursive abstractive processing for tree-organized retrieval. In The Twelfth International Conference on Learning Representations .Michael Schlichtkrull, Thomas N Kipf, Peter Bloem, Rianne Van Den Berg, Ivan Titov, and Max Welling. 2018. Modeling relational data with graph convolu-tional networks. In European semantic web confer-ence , pages 593–607. Springer. Harsh Trivedi, Niranjan Balasubramanian, Tushar Khot, and Ashish Sabharwal. 2022. Musique: Multi-hop questions via single-hop question composition. 
+
+Transactions of the Association for Computational Linguistics , 10:539–554. TruEra. Trulens: Evaluation and tracking for llm exper-iments. Han Wang, Archiki Prasad, Elias Stengel-Eskin, and Mohit Bansal. 2025. Retrieval-augmented gener-ation with conflicting evidence. arXiv preprint arXiv:2504.13079 .Keyulu Xu, Weihua Hu, Jure Leskovec, and Stefanie Jegelka. 2018. How powerful are graph neural net-works? arXiv preprint arXiv:1810.00826 .Zhilin Yang, Peng Qi, Saizheng Zhang, Yoshua Ben-gio, William W. Cohen, Ruslan Salakhutdinov, and Christopher D. Manning. 2018. HotpotQA: A dataset for diverse, explainable multi-hop question answer-ing. In Conference on Empirical Methods in Natural Language Processing (EMNLP) .A Dataset summary 
+
+The dataset information is listed in Table 4                
+
+> Dataset Samples # candidates Type / Characteristics MuSiQue 1,000 20 Logical Chains, High Distractor Density
+> HotpotQA 1,000 10 Bridge (81%), Comparison (19%)
+> 2Wiki 1,000 10 Comp. (41%), Bridge (48%), Inf. (11%)
+> RAMDocs 500 [3,12] Adversarial Misinformation
+
+Table 4: Summary of evaluation datasets, including sample sizes and linguistic characteristics across four dimensions. 
+
+B Proof of Relational Coherence Theorem 
+
+Notations: Our framework utilizes a structured notation to formalize the relational graph operations. We define a relational graph as G = ( V, E, R), where V represents the set of nodes, E the edges, and R
+
+the set of unique relations. For each node i at a specific layer l, the hidden state is denoted by h(l) 
+
+> i
+
+. The transformation of these states is governed by W(l) 
+
+> r
+
+, which represents the relation-specific weight matrix for a given relation r at layer l. The high-level representation of the graph is produced by the global graph encoding function Φ : G → E , which maps the graph structure into a latent embedding space E.Finally, we evaluate the quality of these embeddings through the unified coherence manifold, which is characterized by its sub-dimensions Crel,noise,bond,cons where C represents the Coherence Manifold which is a theoretical scalar representing the structural integrity of a document relative to a query. 
+
+B.1 Proof of Proposition 1 
+
+To prove that an R-GCN is as discriminative as the Relational Weisfeiler-Lehman (R-WL) algorithm, we must demonstrate that its aggregation function is injective over relational multisets. 
+
+Proof: Let the relational multiset of node i at layer l be defined as Mi = {{ (r, h (l) 
+
+> j
+
+) : ( j, r, i ) ∈ E}} .Consider the unnormalized update 
+
+h(l+1)  
+
+> i
+
+= σ
+
+X
+
+> r∈R
+
+W(l)
+
+> r
+
+X 
+
+> j∈N ri
+
+h(l) 
+
+> j
+
++ W(l)0 h(l)
+
+> i
+
+ .
+
+As established by Xu et al. (2018), a GNN aggregator is as powerful as the WL test if and only if its neighbor-aggregation function is injective over multisets; sum aggregation satisfies this, whereas mean or max aggregation does not, since both can collapse multisets that share the same support but differ in multiplicity. By assigning a unique weight matrix Wr to each r ∈ R , the model partitions the feature space into |R| independent linear channels; the sum of injective functions over disjoint partitions remains injective, so the R-GCN can distinguish any two relational multisets M1̸ = M2, provided the matrices 
+
+Wr have sufficient rank. Thus h(L) 
+
+> u
+
+= h(L) 
+
+> v
+
+if and only if the L-hop relational neighborhoods of u and v
+
+are isomorphic. Our implementation instead uses the degree-normalized update with 1 
+
+> ci,r
+
+weighting – a mean-style aggregator that is therefore not injective in general, by the same result of Xu et al. (2018): two relational multisets whose per-relation neighbor sums differ only by the ratio of their degrees ci,r produce identical normalized aggregates. Injectivity is recovered when ci,r is constant across the compared neighborhoods, in which case normalization is a uniform rescaling of the sum case above. We adopt the normalized form for gradient stability during training and rely on the diversity training objective Section 4.3 to discourage the embedding collapse that the unnormalized case rules out analytically. 
+
+B.2 Proof of Lemma 1 Lemma 1 Embedding similarity between two passage graphs is bounded by their node-level linguistic overlap. Proof: Let xi, x j be input feature vectors for nodes in graphs Gi and Gj respectively, consisting of contextual embeddings, one-hot POS, and entity type indicators. At initialization, h(0) = Wproj x. The graph-level similarity after sum pooling is: 
+
+S(Φ( Gi), Φ( Gj )) = cos 
+
+ X
+
+> u∈Vi
+
+h(L) 
+
+> u
+
+, X
+
+> v∈Vj
+
+h(L)
+
+> v
+
+
+
+If Vi and Vj share no linguistic overlap (no common entities, POS patterns, or GloVe-similar terms), their initial projections lie in near-orthogonal subspaces. Since the R-GCN update is a linear transformation followed by non-linearity, it cannot generate significant alignment from orthogonal initial states. Therefore, linguistic overlap is a necessary condition for high embedding similarity, establishing that S naturally gates out passage pairs with no shared referential content (Intra-Domain Relevance). Mathematically, orthogonal feature spaces prevent similarity aggregation. In natural language terms, two passages cannot exhibit intra-domain relevance if they share no referential anchors or domain entities, naturally filtering out unrelated topics prior to deep graph encoding. 
+
+B.3 Proof of Lemma 2 Lemma 2 The architecture attenuates signal from isolated informational “islands.” 
+
+Proof: Consider a noise node vn that is semantically similar to the query but topologically isolated (degree 0 or connected only within a small disconnected component). In the R-GCN update, vn receives no neighbor messages (or messages only from its small island). Its updated embedding h(1)  
+
+> vn
+
+therefore reflects only its self-loop: ∥h(L) 
+
+> vn
+
+∥2 = ∥σ(W(L−1) 0 h(L−1)  
+
+> vn
+
+)∥2, lacking the relational enrichment that connected nodes receive. By contrast, consider a connected backbone node v with out-degree d = P 
+
+> r∈R
+
+|N rv |,unrolling the L−layer R-GCN recursion over its relational neighborhood yields: 
+
+∥h(L) 
+
+> v
+
+∥2 ≥ d · min  
+
+> r
+
+σmin (Wr)L−1 · ∥ havg ∥2
+
+where σmin( Wr) denotes the minimum singular value of the relation matrix Wr and havg is the average neighbor feature vector. Backbone node representations strictly dominate isolated node representations in the global sum pool Φ( G) when 
+
+d · min  
+
+> r
+
+σmin (Wr) > 1
+
+which is guaranteed by the sufficient-rank condition established in Proposition 1. The diversity training objective further separates graphs containing noise islands from structurally coherent graphs, as isolated nodes contribute uninformative signal that reduces structural similarity across co-retrieved passage graphs(Gasteiger et al., 2018). Cross-domain distractors (e.g., keyword-matched homonyms) act as topologically isolated nodes. Graph convolutions mathematically dampen these ungrounded islands while exponentially amplifying well-connected factual backbones, guaranteeing robust noise resistance. 
+
+B.4 Proof of Lemma 3 Lemma 3 Shared bridge entities elevate cross-graph similarity through relational enrichment, without requiring a cross-document edge. 
+
+Proof: Let e be a bridge entity realized as a node in both D1’s graph G1 = ( V1, E 1) and D2’s graph 
+
+G2 = ( V2, E 2) (i.e. the same canonical lemma/entity after coreference resolution, per Section 4.1). Within 
+
+G1, e participates in relational edges (r, e, ·) reflecting its role in D1’s factual assertions; by the R-GCN update, its layer-1 embedding 
+
+h(1)  
+
+> e
+
+= σ
+
+X
+
+> r∈R
+
+W(1) 
+
+> r
+
+X 
+
+> j∈N re
+
+1
+
+ce,r 
+
+h(0)  
+
+> j
+
++ W(1) 0 h(0) 
+
+> e
+
+aggregates D1’s local relational context around e, rather than reflecting only e’s raw input feature 
+
+xe = h(0)  
+
+> e
+
+. The analogous embedding computed inside G2 aggregates D2’s independent local context around the same node identity. Because Φ( G1) = P 
+
+> u∈V1
+
+h(1)  
+
+> u
+
+and Φ( G2) = P 
+
+> v∈V2
+
+h(1)  
+
+> v
+
+are sums over all nodes in each graph, both sums include a term anchored at e. By Lemma 1, the shared identity of e guarantees h(0)  
+
+> e
+
+is near-identical across G1 and G2 prior to relational transformation; since W(1)  
+
+> r
+
+is applied identically regardless of which graph e sits in, the two enriched terms remain non-orthogonal after aggregation. This produces a strictly positive contribution to cos(Φ( G1), Φ( G2)) anchored specifically at e, one that does not depend on D1
+
+and D2 sharing any other vocabulary. By contrast, a passage pair sharing no entity node reduces to the generic overlap case of Lemma 1 with no such anchored term, and a passage pair sharing only topologically isolated, unenriched nodes reduces to the noise case of Lemma 2. We therefore interpret informational bonding as an emergent property of shared entity nodes being independently relationally enriched within each passage’s own 1-hop neighborhood, consistent with our per-passage graph construction and pairwise cosine scoring, bonding does not require, and our pipeline does not construct, an explicit edge crossing the document boundary. 
+
+B.5 Proof of Lemma 4 Lemma 4 Relational contradictions that alter relation type or ordering along a shared reasoning path are penalized through non-commutative operators. 
+
+Proof: Standard graph models treat edges as scalars, making the logic A → B → C identical to 
+
+C → B → A. In an R-GCN, the relationship is a linear operator Wr.Consider a factual path P1 = ( r1, r 2). The transformation is Wr2 Wr1 . If a retrieved document presents a contradiction P2 = ( r2, r 1), the transformation is Wr1 Wr2 . Since matrix multiplication is 
+
+non-commutative (Wr1 Wr2̸ = Wr2 Wr1 ), the resulting node embeddings h(L) will diverge in the manifold E.
+
+∥Φ( Gconsistent ) − Φ( Gcontradictory )∥ > ϵ 
+
+This divergence ensures that the similarity score S is maximized only when the relational logic of the document set aligns perfectly with the query’s expected logical flow, thereby enforcing internal factual harmony (Schlichtkrull et al., 2018). Note that Lemma 4 holds at convergence of a well-trained model, and we reference the contrastive objective as the mechanism that drives Wr matrices to be relation-discriminative. This argument applies to contradictions that manifest as a change in relation type or ordering along a path (r1, r 2), e.g., a reversed causal or temporal relation. It does not cover contradictions expressed as a single-entity substitution within an otherwise identical relational structure (e.g., replacing only a location argument while every surrounding relation type and edge direction is preserved): such an edit changes only the leaf node h(0)  
+
+> jp
+
+at the end of a path, not the operator sequence Q 
+
+> k
+
+Wrk , so the resulting divergence is bounded by the difference between the two leaf embeddings rather than by non-commutativity, and can be small when the substituted entities are lexically or semantically similar. This is precisely the assertion-level factual shift underlying our RAMDocs failure analysis (Section 6.3): we attribute that result to this boundary condition of Lemma 4 rather than to a general architectural failure, motivating the complementary claim-level (e.g., NLI) verification we identify as future work. Relation matrices act as direction and type sensitive logical operators. Just as swapping subject and object alters factual meaning in natural language, matrix non-commutativity ensures that reversed or incompatible relation types map to divergent embeddings, penalizing that class of factual inconsistency. Figure 5: Prompt for Generator 
+
+C Prompts D Figures 
+
+Figure 6 illustrates the sensitivity of Recall@5 to the fusion weight α across all four evaluation bench-marks.   
+
+> Figure 6: Sensitivity of Recall@5 to the fusion hyperparameter αacross four benchmarks.
+
+E Examples for Each Dimension 
+
+To provide qualitative intuition for our theoretical framework, this section details case studies mapping each benchmark dataset to its corresponding between-chunk coherence dimension (Figures 7–10). 
+
+F Table for Ablation Study G License 
+
+All datasets and models used in this work are employed in accordance with their intended research use. 2WikiMultihopQA Intra-Domain relevance          
+
+> Question:
+> Who is Archduchess Maria Antonia Of Austria (1899-1977)'s maternal grandfather?
+> Answer:
+> Carlos, Duke of Madrid
+> Supporting facts:
+> •Infanta Blanca of Spain (7 September 1868 - 25 October 1949) was the eldest child of Carlos, Duke of Madrid, Carlist claimant to the throne of Spain and his wife Princess Margherita of Bourbon-Parma.
+> •Archduchess Maria Antonia of Austria ( 13 July 1899 - 22 October 1977) was a daughter of Archduke Leopold Salvator of Austria and Infanta Blanca of Spain .
+> Distractors:
+> •Maria Antonia of Austria (Maria Antonia Josepha Benedicta Rosalia Petronella;
+> 18 January 1669 - 24 December 1692 ) was an Electress of Bavaria by marriage to Maximilian II Emanuel, Elector of Bavaria.
+> •Archduchess Maria Antonia of Austria, Princess of Tuscany (“Maria Antonia Leopoldina Annunciata Anna Amalia Josepha Johanna Thelka”; 10 January 1858 - 13 April 1883) was a member of the House of Habsburg-Lorraine.
+
+Figure 7: Case Study of Intra-Domain Relevance. This example illustrates the challenge of entity disambiguation. The query seeks the "maternal grandfather" of a specific Maria Antonia of Austria (1899–1977). While distractors share the identical name, they refer to different individuals from the 17th and 19th centuries. Furthermore, the term "grandfather" does not appear in the supporting facts; instead, the text only mentions her mother. 
+
+Datasets. HotpotQA (Yang et al., 2018) is released under CC BY-SA 4.0. 2WikiMultihopQA (Ho et al., 2020) is released under Apache 2.0. MuSiQue (Trivedi et al., 2022) is released under CC BY 4.0. RAMDocs (Wang et al., 2025) is released under MIT. 
+
+Models and Libraries. all-MiniLM-L6-v2 (Reimers and Gurevych, 2019) is released under Apache 2.0. SpaCy and en_core_web_lg are released under MIT. GTR (Ni et al., 2022) is released under Apache 2.0. ColBERTv2 (Santhanam et al., 2022) is released under MIT. monoT5 (Nogueira et al., 2020) is released under Apache 2.0. All artifacts are used for research purposes consistent with their respective licenses. 
+
+H Computational Budget 
+
+All experiments were conducted on a compute node equipped with 8 NVIDIA A100 GPUs. The CAGE pipeline’s primary computational cost is graph construction: SpaCy en_core_web_lg with coreference resolution processes approximately 10,000 passages across all four benchmarks in roughly 6 hours on CPU. R-GCN training is performed per query on k=5 passage graphs for 50 epochs (Adam, lr= 1 × 10 −3), with each instance completing in under 0.5 seconds. Total R-GCN training across all queries requires approximately 0.5 GPU-hours on a single A100. Including passage encoding and all baseline model inference (monoT5, ColBERTv2, GTR), the total computational budget is approximately 12 GPU-hours. MuSiQue Noise Resistance 
+
+Question: Who is the chief judge of Friday Osanebi's birthplace? Answer: Honorable Justice Abiodun Smith Supporting facts: 
+
+• Friday Ossai Osanebi (born August 7, 1980) is a Nigerian and a member of the Delta State House of Assembly the Lawmaker representing Ndokwa East Local Government Constituency in the State House of Assembly. 
+
+• Rosaline Patricia Irorefe Bozimo (born 1 January 1946) is a Nigerian lawyer who was appointed Chief Justice of Delta State with effect from 23 March 2003. She retired on 1 January 2011 and was succeeded by Honorable Justice Abiodun Smith. 
+
+Distractors: 
+
+• Jasti Chelameswar (born 23 June 1953) was a judge of the Supreme Court of India. He retired on 22 June 2018 as the second most senior Supreme court judge. Earlier, he was the Chief Justice of the High Court of Kerala and Gauhati High Court. He was also one of the 4 judges who held a controversial press conference against the Chief Justice of India, Dipak Misra. 
+
+• R. Banumathi (born 20 July 1955) is a judge of the Supreme Court of India. She is from Tamil Nadu and the sixth woman to be a Judge of the Indian Supreme Court. Earlier, she had served as the Chief Justice of Jharkhand High Court and judge at Madras High Court. Figure 8: Case Study of Noise Resistance. This MuSiQue example demonstrates the challenge of contextual noise filtering. The query asks for the chief judge of Friday Osanebi’s birthplace. While the distractors contain highly relevant professional terms, "Chief Justice," "Supreme Court," and "High Court"—they refer to the legal systems of India (Kerala, Jharkhand). 
+
+The 8-GPU setup was used to parallelize experiments across datasets and baselines simultaneously; the CAGE pipeline itself requires only a single GPU due to its lightweight architecture. HotpotQA 
+
+Informational Bonding 
+
+Question: The fictional private detective that appears in "The Adventure of the Seven Clocks" what written by whom? Answer: 
+
+Sir Arthur Conan Doyle 
+
+Supporting facts: 
+
+• The Adventure of the Seven Clocks\“ is a Sherlock Holmes story by Adrian Conan Doyle and John Dickson Carr. The story was published in the 1954 collection, " The Exploits of Sherlock Holmes ”. 
+
+• Sherlock Holmes ( ) is a fictional private detective created by British author Sir Arthur Conan Doyle .
+
+Distractors: 
+
+• Dan Turner, also known as the Hollywood Detective, was a fictional private detective created by Robert Leslie Bellem. His first appearance was in the second issue of the pulp magazine "Spicy Detective", dated June 1934, and he continued to appear regularly in that magazine (which was retitled "Speed Detective" in 1943) until its demise in February 1947. 
+
+• Nick Carter, Master Detective was a Mutual radio crime drama based on tales of the fictional private detective Nick Carter from Street & Smith‘s dime novels and pulp magazines. Nick Carter first came to radio as The Return of Nick Carter, a reference to the character's pulp origins, but the title was soon changed to Nick Carter, Master Detective. Figure 9: Case Study of Informational Bonding. This HotpotQA sample illustrates a multi-hop reasoning "bridge." The query asks for the creator of a detective who appears in a specific story (The Adventure of the Seven Clocks). To answer the question, it needs to first identify that the detective in the story is Sherlock Holmes, and then "bridging" to the second document to find that Holmes was created by Sir Arthur Conan Doyle. 
+
+Model Gemma 4 26B A4B Llama 3.3 70B MuSiQue 2Wiki HotpotQA RAMDocs MuSiQue 2Wiki HotpotQA RAMDocs Retriever EM F1 EM F1 EM F1 EM F1 EM F1 EM F1 EM F1 EM F1 GCN encoder 9.5 10.6 33.3 33.6 42.4 42.8 43.2 58.8 21.5 24.1 45.4 47.7 49.9 53.1 42.2 65.3 CAGE(no reweighting) 15.5 16.6 37.1 38.1 50.1 50.3 43.3 58.9 28.4 31.9 52.5 50.7 54.3 57.4 44.2 65.5 CAGE 17.1 18.0 40.1 40.2 50.7 50.8 44.7 59.3 30.4 33.1 54.3 56.9 55.0 58.4 44.7 65.8 
+
+Table 5: Downstream generation ablation study across Gemma 4 26B A4B and Llama 3.3 70B generators. Evaluates Exact Match (EM) and F1 metrics across all four multi-hop datasets to isolate component contributions. RAMDocs Factual Consistency 
+
+Question: Where is the UPRA located? Answer: 
+
+Aguadilla, Puerto Rico 
+
+Supporting facts: 
+
+• University of Puerto Rico at Aguadilla The University of Puerto Rico at Aguadilla (UPRAG or UPR-Aguadilla) is a state university located in the city of Aguadilla, Puerto Rico. Located in northwestern Puerto Rico, the University of Puerto Rico at Aguadilla (UPRAg) offers Associate and Baccalaureate Degrees, among which stand out as being unique in the UPR system: The UPRAg has cooperation agreements with neighboring industry and business and design courses, programs and projects that respond to changing needs that occur in the region. UPRAG has eight academic departments. They consist of the following: Humanities, English, Pedagogy, Electronics, Business Administration, Office. 
+
+Distractors: 
+
+• The University of Puerto Rico at Aguadilla (UPRAG or UPR-Aguadilla) is a state university located in the city of San Juan, Puerto Rico . Located in northeastern Puerto Rico, the University of Puerto Rico at Aguadilla (UPRAg) offers Associate and Baccalaureate Degrees, among which stand out as being unique in the UPR system: The UPRAg has cooperation agreements with neighboring industry and business and design courses, programs and projects that respond to changing needs that occur in the region. UPRAG has eight academic departments. They consist of the following: Humanities, English, Pedagogy, Electronics, Business Administration, Office. Figure 10: Case Study of Factual Consistency. This sample presents an adversarial conflict where two retrieved chunks provide contradictory locations for the "UPRA" university. Both documents share identical phrasing regarding departments and degrees, but the Supporting Fact places the campus in Aguadilla (Northwestern PR), while the Distractor (misinformation) places it in San Juan (Northeastern PR).
