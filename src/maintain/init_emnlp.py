@@ -8,7 +8,10 @@ import subprocess
 import sys
 from datetime import datetime, timezone
 
-import torch
+try:
+    import torch
+except ImportError:
+    torch = None
 
 
 SCRIPT_DIR = os.path.dirname(__file__)
@@ -67,7 +70,7 @@ def main() -> None:
     if not str(args.embed_device or "").strip() and not str(args.embed_devices or "").strip():
         if not args.local_maintain:
             args.embed_device = "cpu"
-        elif torch.cuda.is_available() and int(torch.cuda.device_count() or 0) > 0:
+        elif torch is not None and torch.cuda.is_available() and int(torch.cuda.device_count() or 0) > 0:
             args.embed_devices = ",".join(f"cuda:{idx}" for idx in range(int(torch.cuda.device_count() or 0)))
         else:
             args.embed_device = "cpu"

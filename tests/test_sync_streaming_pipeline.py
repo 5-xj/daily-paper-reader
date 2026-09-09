@@ -25,14 +25,13 @@ class SyncStreamingPipelineTest(unittest.TestCase):
 
     def test_configure_local_embedding_runtime_reserves_upload_cpus(self):
         with patch.object(self.mod.os, "cpu_count", return_value=64):
-            with patch.object(self.mod.torch, "set_num_threads") as mock_set_threads:
-                with patch.object(self.mod.torch, "set_num_interop_threads") as mock_set_interop:
-                    embed_cpus, reserved = self.mod.configure_local_embedding_runtime(2)
+            with patch.object(self.mod, "torch") as mock_torch:
+                embed_cpus, reserved = self.mod.configure_local_embedding_runtime(2)
 
         self.assertEqual(embed_cpus, 62)
         self.assertEqual(reserved, 2)
-        mock_set_threads.assert_called_once_with(62)
-        mock_set_interop.assert_called_once()
+        mock_torch.set_num_threads.assert_called_once_with(62)
+        mock_torch.set_num_interop_threads.assert_called_once()
 
     def test_stream_embed_and_upsert_submits_chunks_incrementally(self):
         rows = [{"id": "p1"}, {"id": "p2"}, {"id": "p3"}]
