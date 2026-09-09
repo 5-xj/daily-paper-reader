@@ -50,9 +50,15 @@ def test_home_notice_contains_latest_update():
         content = path.read_text(encoding="utf-8")
         assert 'class="dpr-home-notice-entry"' in content, path
         assert content.count('class="dpr-home-notice-entry"') <= 3, path
-        assert '<time class="dpr-home-notice-date" datetime="2026-07-20">07.20</time>' in content, path
-        assert "反馈功能上线" in content, path
-        assert "欢迎大家踊跃反馈各种建议，我们会第一时间查看并协调处理。" in content, path
+        assert '<time class="dpr-home-notice-date" datetime="2026-09-09">09.09</time>' in content, path
+        assert "90天/365天 arXiv 专题回溯" in content, path
+        assert "断点评审与分页查看" in content, path
+        assert "费用按实际用量计算" in content, path
+        assert "区间日报可正常点开" not in content, path
+        titles = re.findall(r'<strong class="dpr-home-notice-entry-title">([^<]+)</strong>', content)
+        assert titles[0] == "90天/365天 arXiv 专题回溯", path
+        dates = re.findall(r'<time class="dpr-home-notice-date" datetime="([^"]+)">', content)
+        assert dates == sorted(dates, reverse=True), path
         assert re.search(
             r'<time class="dpr-home-notice-date" datetime="\d{4}-\d{2}-\d{2}">\d{2}\.\d{2}</time>',
             content,
