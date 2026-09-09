@@ -18,6 +18,7 @@ import pathlib
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
@@ -180,6 +181,9 @@ class NoArxivFallbackTest(unittest.TestCase):
 
     def test_sync_resolve_papers_table_refuses_arxiv_fallback(self):
         mod = _load_module("sync_fallback_mod", SRC / "maintain" / "sync.py")
+        config_patch = patch.object(mod, 'load_config', return_value={'supabase': {'papers_table': 'arxiv_papers'}})
+        config_patch.start()
+        self.addCleanup(config_patch.stop)
         self.assertEqual(
             mod.resolve_papers_table("", "arxiv"),
             "arxiv_papers",
@@ -195,6 +199,9 @@ class NoArxivFallbackTest(unittest.TestCase):
 
     def test_cleanup_config_raises_for_unresolved_non_arxiv_backend(self):
         mod = _load_module("cleanup_fallback_mod", SRC / "maintain" / "cleanup.py")
+        config_patch = patch.object(mod, 'load_config', return_value={'supabase': {'papers_table': 'arxiv_papers'}})
+        config_patch.start()
+        self.addCleanup(config_patch.stop)
         cfg = mod.resolve_supabase_config(
             backend_key="arxiv", url="https://example.supabase.co", papers_table="", schema=""
         )
