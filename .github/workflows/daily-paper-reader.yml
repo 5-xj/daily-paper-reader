@@ -22,7 +22,7 @@ on:
         required: false
         default: ""
       reranker_profile:
-        description: "Reranker：默认 public-zwwen-rerank；可改 local-qwen3-0.6b / siliconflow-qwen3-0.6b"
+        description: "Reranker：默认 public-zwwen-rerank；可改 siliconflow-qwen3-0.6b（仅云端）"
         required: false
         default: "public-zwwen-rerank"
 
@@ -38,10 +38,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 120
     env:
+      DPR_MODELS_REMOTE_ONLY: "1"
+      DPR_EMBED_ALLOW_LOCAL_FALLBACK: "0"
       DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
       DEEPSEEK_BASE_URL: ${{ secrets.DEEPSEEK_BASE_URL }}
       DEEPSEEK_MODEL: ${{ secrets.DEEPSEEK_MODEL }}
-      RERANK_PROFILE: ${{ secrets.RERANK_PROFILE }}
+      RERANK_PROFILE: ${{ github.event.inputs.reranker_profile || secrets.RERANK_PROFILE || 'public-zwwen-rerank' }}
       RERANK_PROVIDER: ${{ secrets.RERANK_PROVIDER }}
       RERANK_MODEL: ${{ secrets.RERANK_MODEL }}
       RERANK_API_KEY: ${{ secrets.RERANK_API_KEY }}
@@ -51,9 +53,6 @@ jobs:
       SILICONFLOW_API_KEY: ${{ secrets.SILICONFLOW_API_KEY }}
       SILICONFLOW_RERANK_URL: ${{ secrets.SILICONFLOW_RERANK_URL }}
       SILICONFLOW_RERANK_MIN_INTERVAL_SECONDS: ${{ secrets.SILICONFLOW_RERANK_MIN_INTERVAL_SECONDS || '8' }}
-      LOCAL_RERANK_MODEL: ${{ secrets.LOCAL_RERANK_MODEL || 'Qwen/Qwen3-Reranker-0.6B' }}
-      LOCAL_RERANK_DEVICE: cpu
-      LOCAL_RERANK_BATCH_SIZE: "4"
       MKL_THREADING_LAYER: GNU
       DPR_RERANK_GLOBAL_POOL_LIMIT: "120"
       DPR_RERANK_GUARANTEED_PER_LANE: "2"
@@ -105,8 +104,6 @@ jobs:
           path: |
             ~/.cache/pip
             ~/.cache/uv
-            ~/.cache/torch
-            ~/.cache/dpr-tools/papercropper
           key: ${{ runner.os }}-dpr-embed-deps-v1-${{ hashFiles('requirements.txt') }}
 
       - name: Install deps (skip sqlite3)
@@ -119,70 +116,10 @@ jobs:
           PY
           python -m pip install --upgrade pip
           python -m pip install uv
-          python -m pip install --index-url https://download.pytorch.org/whl/cpu "torch==2.5.1+cpu"
           uv pip install --system -r /tmp/req.txt
 
-      - name: Prepare PaperCropper (optional)
-        if: steps.window.outputs.long_range != 'true'
-        continue-on-error: true
-        run: |
-          set -euo pipefail
-
-          TOOL_DIR="$HOME/.cache/dpr-tools/papercropper"
-          SRC_DIR="$TOOL_DIR/PaperCropper"
-          MODEL_DIR="$TOOL_DIR/models"
-          MODEL_PATH="$MODEL_DIR/doclayout_yolo_docstructbench_imgsz1280_2501.pt"
-
-          mkdir -p "$TOOL_DIR" "$MODEL_DIR"
-          if [ ! -f "$SRC_DIR/extract.py" ]; then
-            rm -rf "$SRC_DIR"
-            git clone --depth 1 https://github.com/fake-learn/PaperCropper "$SRC_DIR"
-          fi
-
-          python -m pip install --index-url https://download.pytorch.org/whl/cpu "torchvision==0.20.1+cpu"
-          python -m pip install -r requirements-paper-media.txt
-          python -m pip install --no-deps "doclayout-yolo==0.0.4"
-          if [ ! -f "$MODEL_PATH" ]; then
-            MODEL_DIR="$MODEL_DIR" python - <<'PY'
-          import os
-          from huggingface_hub import hf_hub_download
-
-          filename = "doclayout_yolo_docstructbench_imgsz1280_2501.pt"
-          path = hf_hub_download(
-              repo_id="juliozhao/DocLayout-YOLO-DocStructBench-imgsz1280-2501",
-              filename=filename,
-              local_dir=os.environ["MODEL_DIR"],
-              local_dir_use_symlinks=False,
-          )
-          print(path)
-          PY
-          fi
-
-          PAPERCROPPER_MODEL="$MODEL_PATH" python - <<'PY'
-          import os
-          import cv2
-          import fitz
-          import torch
-          import torchvision
-          from doclayout_yolo import YOLOv10
-
-          model_path = os.environ["PAPERCROPPER_MODEL"]
-          if not os.path.exists(model_path):
-              raise FileNotFoundError(model_path)
-          print(
-              "PaperCropper smoke OK:",
-              {
-                  "torch": torch.__version__,
-                  "torchvision": torchvision.__version__,
-                  "cv2": cv2.__version__,
-                  "fitz": getattr(fitz, "__doc__", "")[:20],
-                  "YOLOv10": YOLOv10.__name__,
-              },
-          )
-          PY
-
-          echo "PAPERCROPPER_SCRIPT=$SRC_DIR/extract.py" >> "$GITHUB_ENV"
-          echo "PAPERCROPPER_MODEL=$MODEL_PATH" >> "$GITHUB_ENV"
+      - name: Check cloud embedding and reranker
+        run: python scripts/check_cloud_models.py --require-lightweight
 
       - name: Restore long-range review progress
         uses: actions/cache/restore@v5
@@ -200,58 +137,6 @@ jobs:
           HUGGINGFACE_HUB_CACHE: ${{ github.workspace }}/hf_cache
           HF_HUB_DISABLE_SYMLINKS: "1"
         run: |
-          echo "Cleaning any previous local cache..."
-          rm -rf ${{ github.workspace }}/hf_cache
-
-          echo "=== Debug: runtime env ==="
-          echo "PWD=$(pwd)"
-          echo "HOME=$HOME"
-          echo "GITHUB_WORKSPACE=$GITHUB_WORKSPACE"
-          echo "HF_HOME=$HF_HOME"
-          echo "HUGGINGFACE_HUB_CACHE=$HUGGINGFACE_HUB_CACHE"
-          echo "HF_HUB_DISABLE_SYMLINKS=$HF_HUB_DISABLE_SYMLINKS"
-          echo "TRANSFORMERS_CACHE=${TRANSFORMERS_CACHE:-<unset>}"
-          echo "XDG_CACHE_HOME=${XDG_CACHE_HOME:-<unset>}"
-          echo "--- env (filtered) ---"
-          env | grep -E '^(HF_|HUGGINGFACE_|TRANSFORMERS_|XDG_|HOME=|GITHUB_WORKSPACE=)' | sort || true
-
-          echo "--- python/hf versions ---"
-          python - <<'PY'
-          import os
-          def v(mod):
-            try:
-              m = __import__(mod)
-              return getattr(m, "__version__", "<no __version__>")
-            except Exception as e:
-              return f"<import failed: {e}>"
-
-          print("python_exe:", os.environ.get("PYTHON", ""))
-          print("HF_HOME env:", os.environ.get("HF_HOME"))
-          print("HUGGINGFACE_HUB_CACHE env:", os.environ.get("HUGGINGFACE_HUB_CACHE"))
-          print("HF_HUB_DISABLE_SYMLINKS env:", os.environ.get("HF_HUB_DISABLE_SYMLINKS"))
-          print("TRANSFORMERS_CACHE env:", os.environ.get("TRANSFORMERS_CACHE"))
-          print("versions:", {
-            "huggingface_hub": v("huggingface_hub"),
-            "transformers": v("transformers"),
-            "sentence_transformers": v("sentence_transformers"),
-          })
-          try:
-            from huggingface_hub import constants as c
-            print("hub.constants:", {
-              "HF_HOME": getattr(c, "HF_HOME", None),
-              "HUGGINGFACE_HUB_CACHE": getattr(c, "HUGGINGFACE_HUB_CACHE", None),
-              "HF_HUB_DISABLE_SYMLINKS": getattr(c, "HF_HUB_DISABLE_SYMLINKS", None),
-            })
-          except Exception as e:
-            print("hub.constants import failed:", e)
-          PY
-
-          echo "--- cache dir check ---"
-          echo "[legacy] ~/.cache/huggingface:"
-          ls -la ~/.cache/huggingface || true
-          echo "[current] $HF_HOME:"
-          ls -la "$HF_HOME" || true
-
           echo "Running main script..."
           RUN_ENRICH="${{ github.event.inputs.run_enrich }}"
           FETCH_DAYS="${{ github.event.inputs.fetch_days }}"
@@ -279,8 +164,6 @@ jobs:
           # 让前端可以在不配置 GitHub Token 的情况下直接读取配置（只读快照）
           cp -f config.yaml docs/config.yaml
 
-          echo "--- post-run cache symlink check ---"
-          find "$HF_HOME" -xtype l | head -n 50 || true
 
       - name: Save long-range review progress
         if: always() && hashFiles('.local-runs/long-range-cache/**') != ''

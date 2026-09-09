@@ -343,15 +343,6 @@
       note: '默认推荐；使用 zwwen.online 公益 rerank 服务。',
     },
     {
-      value: 'local-qwen3-0.6b',
-      label: '本地 Qwen3-Reranker-0.6B',
-      provider: 'local',
-      model: 'Qwen/Qwen3-Reranker-0.6B',
-      baseUrl: '',
-      requiresApiKey: false,
-      note: '无需 reranker API Key，GitHub Actions 在 CPU 上加载本地模型。',
-    },
-    {
       value: 'siliconflow-qwen3-0.6b',
       label: '硅基流动 Qwen3-Reranker-0.6B',
       provider: 'siliconflow',
@@ -380,12 +371,13 @@
       reranker.profile ||
       '';
     const profile = findRerankerProfile(inferredProfile);
+    const wasLocal = provider === 'local' || inferredProfile === 'local-qwen3-0.6b';
     return {
       profile: profile.value,
-      provider: provider || profile.provider,
-      model: model || profile.model,
-      apiKey: normalizeText(reranker.apiKey || ''),
-      baseUrl: normalizeBaseUrlForStorage(reranker.baseUrl || profile.baseUrl || ''),
+      provider: wasLocal ? profile.provider : (provider || profile.provider),
+      model: wasLocal ? profile.model : (model || profile.model),
+      apiKey: wasLocal ? '' : normalizeText(reranker.apiKey || ''),
+      baseUrl: normalizeBaseUrlForStorage(wasLocal ? profile.baseUrl : (reranker.baseUrl || profile.baseUrl || '')),
     };
   };
   const buildConnectivityTestPayload = (baseUrl, model) => {

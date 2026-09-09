@@ -260,6 +260,7 @@ Zotero       ←── 浏览器 Connector 抓取 citation meta
 
 ### arXiv 长周期专题回溯
 
+- GitHub Pages 的检索入口由 GitHub Actions 执行，embedding/reranker 必须走云端；不要在新链路直接导入或下载本地SentenceTransformer/Qwen。Actions设置 `DPR_MODELS_REMOTE_ONLY=1`，云端失败必须报错而不是静默回退。发布前必须在不含torch/transformers/sentence-transformers的Python 3.11环境验证，并实际跑GitHub工作流；本机预装依赖的成功不能代表CI成功。
 - 公告和News中的回溯入口统一使用数字文案“90天/365天”，不要替换成“九十天/一年”；数字应放在公告标题开头，便于识别。
 - `src/main.py --fetch-days` 限制为1–365；31天以上交给 `src/long_range_review.py`，不走短周期RRF/重排星级和日报名额截断，不生成逐篇精读长文。十天/三十天保持原流程。
 - 长周期仅检索arXiv：关键词分片满500条时继续二分，失败或最小分片仍满页必须报错，不能发布“完整”结果；向量每30天每查询Top100补漏，必须明确不是全量相关论文证明，不能硬编码某个专题的实验余弦阈值。

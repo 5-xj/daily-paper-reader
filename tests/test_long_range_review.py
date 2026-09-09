@@ -215,7 +215,8 @@ class LongRangeReviewTests(unittest.TestCase):
             steps["Save long-range review progress"]["with"]["path"],
             ".local-runs/long-range-cache",
         )
-        self.assertIn("long_range", steps["Prepare PaperCropper (optional)"]["if"])
+        self.assertNotIn('Prepare PaperCropper (optional)', steps)
+        self.assertIn('--require-lightweight', steps['Check cloud embedding and reranker']['run'])
 
 
 if __name__ == "__main__":

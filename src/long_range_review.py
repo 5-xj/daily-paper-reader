@@ -323,10 +323,10 @@ def run_review(config, days, root, run_token):
         tzinfo=timezone.utc
     ) + timedelta(days=1)
     start = end - timedelta(days=days)
-    from sentence_transformers import SentenceTransformer
-    import torch
-
-    torch.set_num_threads(4)
+    try:
+        from model_loader import load_sentence_transformer
+    except ImportError:
+        from .model_loader import load_sentence_transformer
 
     try:
         from llm import DeepSeekClient
@@ -384,18 +384,17 @@ def run_review(config, days, root, run_token):
             collect_window(call, start, end, exhaustive=True, limit=500)
         )
         print(f'[回溯] {q["tag"]} 关键词候选 {len(grouped[q["tag"]])}', flush=True)
-    print("[回溯] 加载语义模型（优先使用本地缓存）", flush=True)
-    try:
-        encoder = SentenceTransformer(
-            "BAAI/bge-small-en-v1.5", device="cpu", local_files_only=True
-        )
-    except (OSError, ValueError):
-        print("[回溯] 首次下载 BGE 语义模型", flush=True)
-        encoder = SentenceTransformer("BAAI/bge-small-en-v1.5", device="cpu")
+    print('[回溯] 使用云端 BGE embedding，不下载本地模型', flush=True)
+    encoder = load_sentence_transformer('BAAI/bge-small-en-v1.5', device='cpu')
+    if not getattr(encoder, 'is_remote', False):
+        raise RuntimeError('专题回溯需要云端 embedding 服务')
+    encoder.allow_local_fallback = False
     for q in plan["embedding_queries"]:
-        vector = encoder.encode(
-            "query: " + q["query_text"], normalize_embeddings=True
-        ).tolist()
+        vectors = encoder.encode(['query: '+q['query_text']], normalize_embeddings=True)
+        import numpy as np
+        if vectors.shape != (1, 384) or not np.isfinite(vectors).all() or np.linalg.norm(vectors[0]) < 1e-8:
+            raise RuntimeError('云端 embedding 必须返回有效的384维向量，与现有论文库一致')
+        vector = vectors[0].tolist()
 
         def call(a, b, n):
             return match_papers_by_embedding(

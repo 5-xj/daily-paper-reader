@@ -32,7 +32,13 @@ def is_remote_embedding_enabled() -> bool:
   return bool(str(_DEFAULT_REMOTE_EMBED_ENDPOINT or "").strip())
 
 
+def remote_models_required() -> bool:
+  return str(os.getenv('DPR_MODELS_REMOTE_ONLY') or '').strip().lower() in {'1', 'true', 'yes'}
+
+
 def is_local_embedding_fallback_enabled() -> bool:
+  if remote_models_required():
+    return False
   value = str(os.getenv("DPR_EMBED_ALLOW_LOCAL_FALLBACK") or "").strip().lower()
   return value in {"1", "true", "yes", "y", "on"}
 
@@ -91,6 +97,8 @@ class RemoteSentenceTransformer:
     return headers
 
   def _get_local_model(self):
+    if remote_models_required():
+      raise RuntimeError('云端模型模式禁止加载本地 embedding；请检查远程服务。')
     if not self.allow_local_fallback:
       reason = self._remote_disabled_reason or "远程 embedding 请求失败"
       raise RuntimeError(
@@ -350,6 +358,8 @@ def load_sentence_transformer(
 ):
   remote_endpoint = _DEFAULT_REMOTE_EMBED_ENDPOINT
   remote_api_key = _DEFAULT_REMOTE_EMBED_API_KEY
+  if remote_models_required() and (not allow_remote or not remote_endpoint):
+    raise RuntimeError('云端模型模式需要有效的 DPR_EMBED_API_URL，不允许本地 embedding。')
   if allow_remote and remote_endpoint:
     remote_timeout_text = os.getenv("DPR_EMBED_API_TIMEOUT", str(_DEFAULT_REMOTE_TIMEOUT_SECONDS))
     try:

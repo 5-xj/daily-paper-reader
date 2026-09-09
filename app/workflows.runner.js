@@ -119,6 +119,7 @@ window.DPRWorkflowRunner = (function () {
       const secret = window.decoded_secret_private || {};
       const reranker = secret.rerankerLLM || {};
       const profile = String(reranker.profile || '').trim();
+      if (profile === 'local-qwen3-0.6b' || reranker.provider === 'local') return 'public-zwwen-rerank';
       if (profile) return profile;
       if (isLocalDebugPage()) return 'public-zwwen-rerank';
       return '';

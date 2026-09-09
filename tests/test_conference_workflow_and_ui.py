@@ -17,8 +17,8 @@ class ConferenceWorkflowAndUiTest(unittest.TestCase):
         self.assertIn("RERANK_API_KEY", text)
         self.assertIn("SILICONFLOW_API_KEY", text)
         self.assertIn('default: "public-zwwen-rerank"', text)
-        self.assertIn("requirements-paper-media.txt", text)
-        self.assertIn("PaperCropper smoke OK", text)
+        self.assertIn("check_cloud_models.py --require-lightweight", text)
+        self.assertNotIn("torch==", text)
 
     def test_conference_retrieval_workflow_dispatches_pipeline(self):
         root = pathlib.Path(__file__).resolve().parents[1]
@@ -43,8 +43,8 @@ class ConferenceWorkflowAndUiTest(unittest.TestCase):
         self.assertIn("RERANK_API_KEY", text)
         self.assertIn("SILICONFLOW_API_KEY", text)
         self.assertIn("DEEPSEEK_API_KEY", text)
-        self.assertIn("requirements-paper-media.txt", text)
-        self.assertIn("PaperCropper smoke OK", text)
+        self.assertIn("check_cloud_models.py --require-lightweight", text)
+        self.assertNotIn("torch==", text)
         self.assertIn("python src/conference_pipeline.py", text)
         self.assertIn("--run-llm-refine", text)
         self.assertIn("--output-dir \"archive/${RUN_DATE}/filtered\"", text)

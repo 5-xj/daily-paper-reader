@@ -74,9 +74,10 @@ def _normalize_rerank_profile(value: str) -> str:
 
 
 def _normalize_rerank_provider(value: str) -> str:
+  from model_loader import remote_models_required
   text = str(value or "").strip().lower().replace("_", "-")
   if text in {"", "local", "hf", "huggingface"}:
-    return "local"
+    return "public_zwwen" if remote_models_required() else "local"
   if text in {"siliconflow", "sf"}:
     return "siliconflow"
   if text in {"public", "public-zwwen", "public-zwwen-rerank", "zwwen"}:
@@ -88,6 +89,10 @@ def _normalize_rerank_provider(value: str) -> str:
 
 def _resolve_rerank_profile_config(profile: str) -> Dict[str, str]:
   normalized = _normalize_rerank_profile(profile)
+  from model_loader import remote_models_required
+  if remote_models_required() and normalized == 'local-qwen3-0.6b':
+    print('[INFO] 云端模式：旧本地 reranker 配置改用 public-zwwen-rerank', flush=True)
+    normalized = 'public-zwwen-rerank'
   return dict(RERANK_PROFILE_CONFIGS.get(normalized) or {})
 
 
@@ -102,11 +107,11 @@ def resolve_default_rerank_model() -> str:
 
 
 def _resolve_remote_api_key(provider: str) -> str:
-  if provider in {"siliconflow", "public_zwwen"}:
+  if provider == 'siliconflow':
+    return (os.getenv('SILICONFLOW_API_KEY') or os.getenv('RERANK_API_KEY') or '').strip()
+  if provider == 'public_zwwen':
     return (
-      os.getenv("SILICONFLOW_API_KEY")
-      or os.getenv("RERANK_API_KEY")
-      or os.getenv("PUBLIC_RERANK_API_KEY")
+      os.getenv("PUBLIC_RERANK_API_KEY")
       or os.getenv("DPR_PUBLIC_SERVICE_API_KEY")
       or "26932a86d772001af60cbd9d2c162bfda3a90e094f797f3d6806f6077478b27a"
       or ""
@@ -158,6 +163,9 @@ class LocalQwenReranker:
     batch_size: int = DEFAULT_LOCAL_RERANK_BATCH_SIZE,
     max_length: int = 8192,
   ) -> None:
+    from model_loader import remote_models_required
+    if remote_models_required():
+      raise RuntimeError('云端模型模式禁止加载本地 reranker')
     self.model_name = str(model_name or DEFAULT_LOCAL_RERANK_MODEL).strip()
     self.batch_size = max(int(batch_size or DEFAULT_LOCAL_RERANK_BATCH_SIZE), 1)
     self.max_length = max(int(max_length or 8192), 256)
