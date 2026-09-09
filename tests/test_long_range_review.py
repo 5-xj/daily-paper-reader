@@ -25,8 +25,10 @@ class LongRangeReviewTests(unittest.TestCase):
                 {"start": "2025-09-10", "end_exclusive": "2026-09-10"},
             )
             self.assertTrue(publish.call_args.kwargs["with_fulltext"])
+            self.assertTrue(publish.call_args.kwargs["with_reading"])
             review.rebuild_report_index(root)
             self.assertFalse(publish.call_args.kwargs["with_fulltext"])
+            self.assertFalse(publish.call_args.kwargs["with_reading"])
 
     def test_empty_query_profile_is_rejected_before_network_or_model_loading(self):
         with patch.object(
@@ -191,6 +193,7 @@ class LongRangeReviewTests(unittest.TestCase):
                 {"ATSP": rows, "empty": []},
                 {"start": "2025-09-10", "end_exclusive": "2026-09-10"},
                 with_fulltext=False,
+                with_reading=False,
             )
             self.assertEqual(len(manifest["groups"][0]["buckets"]["core"]["pages"]), 2)
             self.assertEqual(manifest["groups"][1]["total"], 0)

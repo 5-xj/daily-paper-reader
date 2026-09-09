@@ -245,7 +245,7 @@ def review_batch(papers, topic, cache, client_factory, model_key):
     return cached
 
 
-def publish_report(root, token, groups, metadata, *, with_fulltext=True):
+def publish_report(root, token, groups, metadata, *, with_fulltext=True, with_reading=True):
     root = Path(root)
     folder = root / "docs" / "long-range" / token
     folder.mkdir(parents=True, exist_ok=True)
@@ -274,11 +274,11 @@ def publish_report(root, token, groups, metadata, *, with_fulltext=True):
             group["buckets"][bucket] = {"count": len(selected), "pages": files}
         manifest["groups"].append(group)
     write_json(folder / "manifest.json", manifest)
-    rebuild_report_index(root, with_fulltext=with_fulltext)
+    rebuild_report_index(root, with_fulltext=with_fulltext, with_reading=with_reading)
     return manifest
 
 
-def rebuild_report_index(root, *, with_fulltext=False):
+def rebuild_report_index(root, *, with_fulltext=False, with_reading=False):
     """汇总报告；默认合并后仅静态重建，新评审发布时额外补齐PDF全文。"""
     root = Path(root)
     (root / "docs" / "long-range").mkdir(parents=True, exist_ok=True)
@@ -316,7 +316,7 @@ def rebuild_report_index(root, *, with_fulltext=False):
     )
     from long_range_native import publish_native_reports
 
-    publish_native_reports(root, with_fulltext=with_fulltext)
+    publish_native_reports(root, with_fulltext=with_fulltext, with_reading=with_reading)
     return catalog
 
 

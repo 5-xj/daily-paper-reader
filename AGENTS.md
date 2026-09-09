@@ -260,11 +260,12 @@ Zotero       ←── 浏览器 Connector 抓取 citation meta
 
 ### arXiv 长周期专题回溯
 
-- 回溯必须复用既有 Sidebar 日报区间、日历/标签、未读与1/2/3/4标记，以及同一 docsify 论文阅读页；不得另建“专题回溯”面板、独立HTML阅读器或新窗口跳转。现有前端已支持区间，接入前先检查现成数据契约。历史JSON通过 `src/long_range_native.py` 离线投影为原有Markdown、累计状态与Sidebar，不得为纠正展示而重跑抓取/DeepSeek。
+- 回溯必须复用既有 Sidebar 日报区间、日历/标签、未读与1/2/3/4标记，以及同一 docsify 论文阅读页；不得另建“专题回溯”面板、独立HTML阅读器或新窗口跳转。现有前端已支持区间，接入前先检查现成数据契约。历史JSON通过 `src/long_range_native.py` 投影为原有Markdown、累计状态与Sidebar，不得为纠正展示而重跑召回/评分；补齐缺失的阅读总结可以按用户要求调用日常LLM生成器。
 - “页面可见”不是阅读链路完成：每篇可读论文还必须生成同route的 `.txt` 全文（现有约定：优先Jina将PDF转为Markdown内容，保存为`.txt`；失败则PyMuPDF抽取）。未生成精读长文不等于允许跳过全文。验收必须检查真实全文包含正文/证明/参考文献，并检查聊天请求实际携带全文；缺全文时前端必须说明仅页面内容，不得称为完整论文。旧结果用 `python src/long_range_native.py --backfill-fulltext` 补齐，不重新召回或评分。撤稿/404/代理错误页面不得存为全文，官方不可下载版本需明确记录原因，不能偷偷换版本。
+- 回溯只允许改变检索与评审阶段，不能绕过日常的阅读内容生成：复用Step 6 `process_paper`，所有可见论文生成中文标题/摘要、TLDR与四项速览；核心论文走精读全文总结，补充和待复核走速读。Sidebar短说明沿用日常简短中文关联说明的契约，不直接使用评分过程reason；reason保留在正文。原生YAML页补齐必须按元数据字段识别完成状态，保留route/阅读状态与用户笔记，缺失内容按阶段缓存，失败不得报告完成。旧结果用 `--backfill-content` 补内容，不重跑检索和评分；索引重建仍必须保持离线。
 - GitHub Pages 的检索入口由 GitHub Actions 执行，embedding/reranker 必须走云端；不要在新链路直接导入或下载本地SentenceTransformer/Qwen。Actions设置 `DPR_MODELS_REMOTE_ONLY=1`，云端失败必须报错而不是静默回退。发布前必须在不含torch/transformers/sentence-transformers的Python 3.11环境验证，并实际跑GitHub工作流；本机预装依赖的成功不能代表CI成功。
 - 公告和News中的回溯入口统一使用数字文案“90天/365天”，不要替换成“九十天/一年”；数字应放在公告标题开头，便于识别。
-- `src/main.py --fetch-days` 限制为1–365；31天以上交给 `src/long_range_review.py`，不走短周期RRF/重排星级和日报名额截断，不生成逐篇精读长文。十天/三十天保持原流程。
+- `src/main.py --fetch-days` 限制为1–365；31天以上交给 `src/long_range_review.py`，不走短周期RRF/重排星级和日报名额截断；下游仍按核心/补充/待复核分类复用日常精读/速读内容生成。十天/三十天保持原流程。
 - 长周期仅检索arXiv：关键词分片满500条时继续二分，失败或最小分片仍满页必须报错，不能发布“完整”结果；向量每30天每查询Top100补漏，必须明确不是全量相关论文证明，不能硬编码某个专题的实验余弦阈值。
 - 核心区≥8分且限定条件匹配、引文可在标题摘要中核验；6–7分为补充，高分但证据或限定条件不通过进入待复核。模型评分不是人工金标准。
 - ATSP写法需补查Asymmetric TSP、salesman/salesperson及英美拼写；对明确标为ATSP的专题，普通TSP即使被模型误打高分也应进入待复核。不得把RL/NCO大专题里的一个ATSP子查询扩大成整个专题的硬过滤条件。

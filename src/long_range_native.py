@@ -1,6 +1,7 @@
-"""复用原有阅读链路：静态投影与可选PDF全文补齐，不重新召回或调用模型。"""
+"""复用原有阅读链路：静态投影、PDF全文及日常总结补齐，不重新召回或评分。"""
 
 import importlib.util
+import hashlib
 import json
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -17,7 +18,62 @@ from daily_report_state import (
 )
 
 
-def publish_native_reports(root, *, with_fulltext=False):
+def cache_reading_generators(generator, root):
+    """复用Actions已有进度缓存，按内容/模型缓存各生成阶段，不缓存失败占位文本。"""
+    folder = Path(root) / ".local-runs/long-range-cache/reading"
+    folder.mkdir(parents=True, exist_ok=True)
+
+    def wrap(function, kind):
+        def cached(*args, **kwargs):
+            client = kwargs.get("client")
+            inputs = list(args)
+            if kind == "deep":
+                inputs = [
+                    generator.strip_auto_sections(
+                        Path(args[0]).read_text(encoding="utf-8")
+                    ),
+                    Path(args[1]).read_text(encoding="utf-8"),
+                ]
+            identity = [
+                1,
+                kind,
+                inputs,
+                kwargs.get("sidebar_context"),
+                getattr(client, "model", ""),
+                getattr(client, "base_url", ""),
+            ]
+            key = hashlib.sha256(
+                json.dumps(identity, sort_keys=True, ensure_ascii=False).encode()
+            ).hexdigest()
+            path = folder / (key + ".json")
+            if path.exists():
+                return json.loads(path.read_text(encoding="utf-8"))["value"]
+            result = function(*args, **kwargs)
+            valid = bool(result) and (all(result) if kind == "translate" else True)
+            if kind == "deep":
+                valid = valid and "（完）" in result
+            if valid:
+                import tempfile
+
+                with tempfile.NamedTemporaryFile(
+                    "w", dir=folder, encoding="utf-8", delete=False
+                ) as output:
+                    json.dump({"value": result}, output, ensure_ascii=False)
+                    temporary = Path(output.name)
+                temporary.replace(path)
+            return result
+
+        return cached
+
+    for name, kind in [
+        ("translate_title_and_abstract_to_zh", "translate"),
+        ("generate_glance_overview", "glance"),
+        ("generate_deep_summary", "deep"),
+    ]:
+        setattr(generator, name, wrap(getattr(generator, name), kind))
+
+
+def publish_native_reports(root, *, with_fulltext=False, with_reading=False):
     root = Path(root)
     docs = root / "docs"
     manifests = sorted((docs / "long-range").glob("*/manifest.json"))
@@ -81,6 +137,7 @@ def publish_native_reports(root, *, with_fulltext=False):
                         }
 
     fulltext_jobs = []
+    reading_jobs = []
     for date, group in sorted(by_date.items()):
         state_path = daily_state_path(str(docs), date)
         existing = load_daily_state(state_path) or bootstrap_daily_state_from_sidebar(
@@ -89,12 +146,24 @@ def publish_native_reports(root, *, with_fulltext=False):
         papers = list(group["rows"].values())
         records = []
         for paper in papers:
+            route = f'{date}/{paper["id"]}'
+            document = docs / (route + ".md")
+            metadata = (
+                generator._parse_front_matter(document.read_text(encoding="utf-8"))
+                if document.exists()
+                else {}
+            )
+            if metadata.get("reading_content_version"):
+                paper["canonical_evidence"] = (
+                    metadata.get("evidence") or paper["canonical_evidence"]
+                )
+            reading_jobs.append((paper, date, route))
             records.append(
                 {
                     "paper_id": paper["id"],
                     "route": f'{date}/{paper["id"]}',
                     "title": paper["title"],
-                    "section": "quick",
+                    "section": metadata.get("reading_section") or "quick",
                     "score": paper["llm_score"],
                     "tags": [
                         dict(zip(("kind", "label"), tag.split(":", 1)))
@@ -216,6 +285,37 @@ def publish_native_reports(root, *, with_fulltext=False):
                 f"{len(failures)}/{len(fulltext_jobs)} 篇全文未就绪："
                 + ", ".join(failures)
             )
+    if with_reading:
+        cache_reading_generators(generator, root)
+        errors = []
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            jobs = {
+                pool.submit(
+                    generator.process_paper,
+                    paper,
+                    "deep" if "paper:核心" in paper["llm_tags"] else "quick",
+                    date,
+                    str(docs),
+                    route=route,
+                    require_complete=True,
+                ): route
+                for paper, date, route in reading_jobs
+            }
+            for future in as_completed(jobs):
+                route = jobs[future]
+                try:
+                    future.result()
+                    print(f"[内容] {route} 日常阅读内容已补齐", flush=True)
+                except Exception as error:
+                    errors.append(route)
+                    print(f"[内容] {route} 未完成：{error}", flush=True)
+        # 从已经生成的同一份元数据回写Sidebar和累计状态；不再次调用模型。
+        publish_native_reports(root)
+        if errors:
+            raise RuntimeError(
+                f"{len(errors)}篇阅读内容未完成，可从已保存的阶段继续："
+                + ", ".join(errors)
+            )
     return sorted(by_date)
 
 
@@ -223,11 +323,19 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(
-        description="为已有回溯结果补全文，不重新召回或调用DeepSeek"
+        description="为已有回溯结果补全文或日常阅读内容，不重新召回/评分"
     )
     parser.add_argument(
         "--root", type=Path, default=Path(__file__).resolve().parents[1]
     )
-    parser.add_argument("--backfill-fulltext", action="store_true", required=True)
+    action = parser.add_mutually_exclusive_group(required=True)
+    action.add_argument("--backfill-fulltext", action="store_true")
+    action.add_argument(
+        "--backfill-content",
+        action="store_true",
+        help="调用现有日常LLM生成器补齐缺失总结",
+    )
     arguments = parser.parse_args()
-    publish_native_reports(arguments.root, with_fulltext=True)
+    publish_native_reports(
+        arguments.root, with_fulltext=True, with_reading=arguments.backfill_content
+    )
