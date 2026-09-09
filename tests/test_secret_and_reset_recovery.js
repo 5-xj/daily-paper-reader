@@ -26,7 +26,7 @@ function sandbox() {
 function secretSandbox() {
   const s = sandbox();
   const code = fs.readFileSync('app/secret.session.js', 'utf8')
-    .replace(/\}\)\(\);\s*$/, 'window.probe = {fetchStaticSecretPayload, pingChatModels, init};})();');
+    .replace(/\}\)\(\);\s*$/, 'window.probe = {fetchStaticSecretPayload, pingChatModels, init, resolveRerankerConfig, RERANKER_PROFILES};})();');
   vm.runInContext(code, s.context);
   return s;
 }
@@ -150,7 +150,7 @@ async function testWorkflowReturnsDispatchResultBeforeMonitoring() {
       return response(200, { default_branch: 'main', fork: true });
     };
     const code = fs.readFileSync('app/workflows.runner.js', 'utf8')
-      .replace('return {\n    open,', 'return {\n    dispatchAndMonitor, setUi: (s,r) => {statusEl=s;runsEl=r;},\n    open,');
+      .replace(/\n  return \{\n/, '\n  return {\n    dispatchAndMonitor, setUi: (s,r) => {statusEl=s;runsEl=r;},\n');
     vm.runInContext(code, context);
     const api = context.window.DPRWorkflowRunner;
     const statusEl = { textContent: '', style: {}, classList: { toggle() {} } };
@@ -164,8 +164,17 @@ async function testWorkflowReturnsDispatchResultBeforeMonitoring() {
   }
 }
 
+async function testLegacyLocalRerankerMovesToCloud() {
+  const {context} = secretSandbox();
+  const value = context.window.probe.resolveRerankerConfig({rerankerLLM:{profile:'local-qwen3-0.6b',provider:'local',baseUrl:'http://localhost:9999',apiKey:'private-local-test'}});
+  assert.equal(value.provider,'public_zwwen');
+  assert.equal(value.baseUrl,'https://zwwen.online/rerank');
+  assert.equal(value.apiKey,'');
+  assert.equal(context.window.probe.RERANKER_PROFILES.some(p => p.provider==='local'),false);
+}
+
 (async () => {
-  for (const test of [testSecretReadFailuresAndRetry, testDeepSeekTimeoutAndHttpError, testSecretErrorUiPreservesPasswordAndCanRetry,
+  for (const test of [testLegacyLocalRerankerMovesToCloud, testSecretReadFailuresAndRetry, testDeepSeekTimeoutAndHttpError, testSecretErrorUiPreservesPasswordAndCanRetry,
     testResetWaitsForAcknowledgement, testWorkflowReturnsDispatchResultBeforeMonitoring]) {
     await test();
     console.log(test.name + ' passed');
