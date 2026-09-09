@@ -1,8 +1,9 @@
-"""把既有回溯评审投影到原有日报/论文页面；不抓取、不调用模型。"""
+"""复用原有阅读链路：静态投影与可选PDF全文补齐，不重新召回或调用模型。"""
 
 import importlib.util
 import json
 import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -16,7 +17,7 @@ from daily_report_state import (
 )
 
 
-def publish_native_reports(root):
+def publish_native_reports(root, *, with_fulltext=False):
     root = Path(root)
     docs = root / "docs"
     manifests = sorted((docs / "long-range").glob("*/manifest.json"))
@@ -79,6 +80,7 @@ def publish_native_reports(root):
                             or f"https://arxiv.org/pdf/{pid}",
                         }
 
+    fulltext_jobs = []
     for date, group in sorted(by_date.items()):
         state_path = daily_state_path(str(docs), date)
         existing = load_daily_state(state_path) or bootstrap_daily_state_from_sidebar(
@@ -126,6 +128,7 @@ def publish_native_reports(root):
                 )
             text += "\n\n仅依据标题与摘要评审；待复核不代表已确认相关。\n"
             destination = target / (paper["id"] + ".md")
+            fulltext_jobs.append((paper["pdf_url"], target / (paper["id"] + ".txt")))
             # 不覆盖用户或旧流水线已生成的详细阅读内容。
             if not destination.exists():
                 destination.write_text(text, encoding="utf-8")
@@ -175,4 +178,56 @@ def publish_native_reports(root):
             merged_deep_entries=deep,
             merged_quick_entries=quick,
         )
+    if with_fulltext:
+        failures = []
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            jobs = {
+                pool.submit(generator.ensure_text_content, url, str(path)): path
+                for url, path in fulltext_jobs
+            }
+            for future in as_completed(jobs):
+                path = jobs[future]
+                try:
+                    text = future.result()
+                    print(f"[全文] {path.name} 就绪，{len(text)} 字符", flush=True)
+                except Exception as error:
+                    if isinstance(error, generator.PaperFulltextUnavailable):
+                        # 保留不可用的真实原因，不能把撤稿通知当作全文；错误缓存移到隔离文件。
+                        if path.exists() and not generator.is_usable_paper_text(
+                            path.read_text(encoding="utf-8")
+                        ):
+                            path.replace(path.with_suffix(".invalid-text"))
+                        path.with_suffix(".fulltext.json").write_text(
+                            json.dumps(
+                                {
+                                    "status": "unavailable",
+                                    "reason": str(error),
+                                },
+                                ensure_ascii=False,
+                            ),
+                            encoding="utf-8",
+                        )
+                        print(f"[全文] {path.name} 官方不可用：{error}", flush=True)
+                        continue
+                    failures.append(path.name)
+                    print(f"[全文] {path.name} 失败：{error}", flush=True)
+        if failures:
+            raise RuntimeError(
+                f"{len(failures)}/{len(fulltext_jobs)} 篇全文未就绪："
+                + ", ".join(failures)
+            )
     return sorted(by_date)
+
+
+if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="为已有回溯结果补全文，不重新召回或调用DeepSeek"
+    )
+    parser.add_argument(
+        "--root", type=Path, default=Path(__file__).resolve().parents[1]
+    )
+    parser.add_argument("--backfill-fulltext", action="store_true", required=True)
+    arguments = parser.parse_args()
+    publish_native_reports(arguments.root, with_fulltext=True)

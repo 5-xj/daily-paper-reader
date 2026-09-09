@@ -14,6 +14,20 @@ import long_range_review as review
 
 
 class LongRangeReviewTests(unittest.TestCase):
+    def test_new_reports_require_fulltext_but_index_rebuild_remains_offline(self):
+        with tempfile.TemporaryDirectory() as root, patch(
+            "long_range_native.publish_native_reports"
+        ) as publish:
+            review.publish_report(
+                root,
+                "report",
+                {},
+                {"start": "2025-09-10", "end_exclusive": "2026-09-10"},
+            )
+            self.assertTrue(publish.call_args.kwargs["with_fulltext"])
+            review.rebuild_report_index(root)
+            self.assertFalse(publish.call_args.kwargs["with_fulltext"])
+
     def test_empty_query_profile_is_rejected_before_network_or_model_loading(self):
         with patch.object(
             review,
@@ -176,6 +190,7 @@ class LongRangeReviewTests(unittest.TestCase):
                 "safe-token",
                 {"ATSP": rows, "empty": []},
                 {"start": "2025-09-10", "end_exclusive": "2026-09-10"},
+                with_fulltext=False,
             )
             self.assertEqual(len(manifest["groups"][0]["buckets"]["core"]["pages"]), 2)
             self.assertEqual(manifest["groups"][1]["total"], 0)
@@ -184,7 +199,9 @@ class LongRangeReviewTests(unittest.TestCase):
             )
             self.assertEqual(catalog["version"], 1)
             self.assertEqual(catalog["reports"][0]["token"], "safe-token")
-            self.assertFalse((Path(root) / "docs/long-range/safe-token/index.html").exists())
+            self.assertFalse(
+                (Path(root) / "docs/long-range/safe-token/index.html").exists()
+            )
             self.assertTrue((Path(root) / "docs/20250910-20260909/0.md").exists())
 
     def test_main_routes_long_range_and_does_not_launch_legacy_steps(self):

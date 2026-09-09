@@ -1,0 +1,623 @@
+Title: HeatACO: A Heatmap-Guided Max–Min Ant System for Large-Scale Travelling Salesman Problems
+
+URL Source: https://arxiv.org/pdf/2601.19041v2
+
+Published Time: Wed, 29 Jul 2026 00:31:34 GMT
+
+Number of Pages: 14
+
+Markdown Content:
+> IEEE TRANSACTIONS , VOL. XX, NO. X, MONTH YYYY 1
+
+# HEAT ACO: A Heatmap-Guided Max–Min Ant System for Large-Scale Travelling Salesman Problems 
+
+Bo-Cheng Lin, Yi Mei, Mengjie Zhang 
+
+Abstract —Non-autoregressive neural solvers predict an edge-confidence heatmap for the Travelling Salesman Problem (TSP) in one forward pass, but a decoder must still produce a feasible Hamiltonian cycle. As instance size grows, this stage must reconcile a quadratic number of edge scores with global tour constraints. Greedy edge merging is fast and deterministic but produces low-quality tours, whereas Monte Carlo Tree Search (MCTS) over 
+
+k-opt moves recovers better tours at high computational cost and requires predictor-specific tuning. We propose H EAT ACO, a predictor-agnostic heatmap-to-tour decoder. Its key is a capped, degree-aware evidence factor that integrates a fixed heatmap into a Max–Min Ant System (MMAS). The factor rewards only edge confidence beyond a node’s tour-degree capacity, and its strength is scaled automatically from the pheromone dynamic range, allowing one configuration to decode heatmaps from different predictors without retraining or per-predictor tuning. Across four heatmap sources, H EAT ACO produces higher-quality solutions in less decoding time than the MCTS baseline on TSP500, TSP1K and TSP10K. Against matched standard MMAS baselines with the same search budget, heatmap guidance improves construction for all four predictors at both scales and remains beneficial with local search. H EAT ACO also transfers competitively to several distribution shifts and the asymmetric TSP (ATSP). Our post-hoc analysis identifies measurable heatmap properties associated with the observed performance variation. 
+
+Impact Statement —Many learning-based methods for large routing problems score promising edges rather than return a complete route. A decoder must then enforce global route constraints, yet existing procedures can be slow or require model- and scale-specific tuning. H EAT ACO provides a common, automatically scaled procedure for converting heatmaps from different pretrained models into feasible tours without retraining. Across in-distribution TSP benchmarks from 500 to 10,000 nodes, it obtained lower gaps and shorter reported decoding times than the published MCTS baselines in every available same-heatmap comparison. Matched classical-search comparisons show that guidance is most valuable when it contributes structure not recovered by local repair. Directed and distribution-shift experiments identify when learned evidence transfers and when conventional geometric search is preferable, making existing predictors easier to compare and reuse. 
+
+Index Terms —Ant colony optimisation, heatmap decoding, neural combinatorial optimisation, travelling salesman problem. 
+
+I. I NTRODUCTION 
+
+# THE Travelling Salesman Problem (TSP) is a classic problem in combinatorial optimisation and a standard testbed for new solution methods [1]. It is NP-hard [2], and the size of its search space grows factorially with the number of nodes, so large instances remain difficult despite 
+
+> Authors are with the Centre for Data Science and Artificial Intelligence & the School of Engineering and Computer Science, Victoria University of Wellington, Wellington, 6140, New Zealand. Corresponding authors: Bo-Cheng Lin (e-mail: bocheng.lin@ecs.vuw.ac.nz) and Yi Mei (e-mail: yi.mei@ecs.vuw.ac.nz).
+
+decades of progress on exact solvers and local search [1], [3]. Exact methods do not scale to the largest instances within practical limits [4], and the burden of solving them falls on heuristics, where carefully engineered local search, such as Lin– Kernighan and its extensions, still defines the state of the art at scale [3], [5]. More recently, machine learning has emerged as a complementary route to such NP-hard combinatorial problems, learning solution strategies directly from data with the aim of producing high-quality solutions quickly and of transferring across instances [6], [7]. Among these machine-learning approaches, heatmap-based non-autoregressive (NAR) neural solvers [8], [9] separate inference into two stages. A predictor computes an edge-confidence heatmap in a single parallel forward pass, whereas autoregressive models construct a tour one node at a time [10], [11], and a decoder then converts the heatmap into a feasible tour. The heatmap assigns every edge a score reflecting how likely that edge is to appear in a high-quality tour, and the predictor is trained so that edges on good tours receive higher scores than the rest [12]–[14]. A heatmap, however, is not itself a tour [8]. At large scale, the decoder must select the n edges of a globally consistent tour from O(n2) heatmap scores. A heatmap typically assigns high confidence to more than two edges at a node, admits disconnected cycles, and contains locally plausible edges that cannot coexist in a single Hamiltonian cycle. Even when the predictor architecture models graph context, its heatmap output and training loss do not by themselves enforce the degree and subtour constraints of a tour [8], [12], [13]. A node can therefore receive high confidence on many incident edges, none of which the predictor is forced to disambiguate. Its numerical scale is also predictor-dependent, so the same confidence value need not carry the same weight across models, and a given model can produce denser and less separated heatmaps under scale or distribution shift. The values are therefore best read as ordinal evidence rather than as calibrated probabilities. Turning the heatmap into a feasible tour is therefore a distinct second stage within the solver, the heatmap-to-tour decoding problem, and the decoder largely determines whether the learned edge evidence becomes a globally consistent tour [15], [16]. The decoder must enforce the degree and subtour constraints, exploit the reliable edges while rejecting high-confidence false positives, and do so fast enough to preserve the parallelism that NAR prediction provides. Two commonly used fixed-heatmap decoders in this line of work are greedy merging and MCTS-guided k-opt search. Greedy merging ranks candidate edges by a combined heatmap and distance score and inserts each edge that keeps the partial solution feasible [12], [17]. It is fast and deterministic, but arXiv:2601.19041v2 [cs.NE] 28 Jul 2026 IEEE TRANSACTIONS , VOL. XX, NO. X, MONTH YYYY 2
+
+it builds a single tour in one pass and in practice reaches only low quality, leaving most of the useful information in the heatmap unexploited [12]. MCTS-guided k-opt search uses the heatmap to guide repeated local moves and recovers much higher-quality tours [9], [18], but it requires carefully designed action spaces and predictor-specific tuning of its exploration and rollout parameters [16]. Ant colony optimisation (ACO) [19] occupies exactly this middle ground. It is a population-based metaheuristic in which simple agents repeatedly sample feasible tours from a pheromone distribution over edges, after which short tours reinforce the edges they use and the rest evaporate, so that the search refines its own bias over many low-cost iterations [20]. This sample-evaluate-reinforce cycle is a natural fit for heatmap decoding, because the heatmap supplies useful but noisy local evidence while the pheromone feedback can decide, over repeated sampling, which locally attractive edges are globally consistent, all without the per-instance tree search that makes MCTS expensive [15], [16]. Among ACO variants, the Max–Min Ant System (MMAS) [21] is one of the strongest and most stable choices for the TSP, as it bounds the pheromone values between explicit limits and restarts on stagnation, which prevents premature convergence and makes the search stable at scale. We therefore design our decoder based on MMAS. The central challenge is to incorporate the heatmap into the construction rule without displacing the pheromone feedback. A bias expressed in predictor-dependent units produces inconsistent effects across heatmaps, because the raw confidence magnitude varies across predictors. The bias should be calibrated so that the heatmap influences early construction and then pheromone feedback can later correct edges that the heatmap incorrectly favours, once instance-specific evidence accumulates. This paper proposes HEAT ACO, a scalable, predictor-agnostic heatmap-to-tour decoder for large-scale TSPs. H EAT -ACO adds a capped, degree-aware evidence bias to the MMAS construction rule. The bias rewards only edges whose confidence exceeds a node’s tour-degree capacity, while its scale is bounded by the pheromone dynamic range so that pheromone feedback can override misleading guidance. The evidence is folded into transition weights on fixed-size candidate lists, retaining O(nk ) per-ant sampling and parallel construction. Following established large-scale neural TSP protocols [9], [12], [22], we evaluate fixed-heatmap decoding across the TSP500, TSP1K, and TSP10K benchmarks. Our contributions are as follows.  
+
+> •
+
+We propose H EAT ACO, a scalable, predictor-agnostic heatmap-to-tour decoder for large-scale TSPs. It extends MMAS with a capped, degree-aware evidence bias whose strength is scaled automatically from the pheromone dynamic range. A single evidence configuration therefore decodes heatmaps from different pretrained predictors without retraining or predictor-specific tuning.  
+
+> •
+
+We evaluate H EAT ACO against two commonly used fixed-heatmap decoders across large-scale TSPs. Across four heatmap sources, H EAT ACO decodes the same fixed heatmaps to higher quality and in less time than the MCTS decoder, improving construction quality for every predictor on TSP500, TSP1K, and TSP10K. It transfers well to out-of-distribution settings, including the directed Asymmetric TSP (ATSP).  
+
+> •
+
+We quantify the marginal value of heatmap guidance to MMAS and identify two empirical boundaries: heatmap reliability under distribution shift and complementar-ity with geometric local search. Candidate-graph and confidence-band analyses distinguish failures associated with degraded heatmap evidence from cases in which reliable guidance adds little beyond strong geometric repair. II. B ACKGROUND 
+
+A. Travelling Salesman Problem 
+
+The TSP is defined on a complete graph G = ( V, E ) with node set V , |V | = n, and edge set E, where each edge (i, j ) ∈
+
+E has a cost dij . A feasible solution is a closed tour that visits every node exactly once, written as a permutation π =(π1, . . . , π n) of V with tour length 
+
+L(π) = 
+
+> n
+
+X
+
+> t=1
+
+dπt,π t+1 , πn+1 = π1, (1) and the goal is to find a tour of minimum length [23]. In the symmetric TSP, dij = dji for every node pair, while in the ATSP, dij ̸ = dji for at least one pair [24]. We study both NP-hard variants [2]. 
+
+B. Heatmap-Based Non-Autoregressive Neural Solvers 
+
+A heatmap-based NAR solver comprises two stages: a neural heatmap predictor and a tour decoder. The predictor maps an instance representation X to an edge-confidence matrix in one forward pass, 
+
+H = fθ (X) ∈ [0 , 1] n×n, (2) where each entry scores how likely the corresponding edge is to lie on a high-quality tour. A decoder then combines the heatmap with the distance matrix to produce ˆπ = g(H, D ) = 
+
+g(fθ (X), D ); the complete solver returns a tour only after this second stage. Throughout this paper, predictor refers to fθ,
+
+decoder refers to g, and solver refers to their composition. The predictors differ in architecture and training objective, but they share the same output interface: a dense confidence matrix over edges. For symmetric instances the heatmap is commonly symmetrised as ¯Hij = ( Hij +Hji )/2 [12], while for the ATSP the directed matrix is kept. We write hij for the entry actually consumed by the decoder: hij = ¯Hij for symmetric TSP and TSPLIB instances, and hij = Hij for ATSP. This common interface is what makes a predictor-agnostic decoder study possible. Because the confidence objective is defined edge by edge and does not encode the degree or subtour constraints of a feasible tour, the raw heatmap is not itself a tour and must be decoded. Heatmap-to-tour decoding is the second stage of a heatmap-based NAR solver and maps a fixed distance matrix D and heatmap H to a feasible tour ˆπ = g(H, D ) [9], [16]. We hold H fixed to study this stage independently and isolate the decoder’s contribution to final solution quality. The decoder IEEE TRANSACTIONS , VOL. XX, NO. X, MONTH YYYY 3
+
+is a substantial algorithmic component: it extracts useful local evidence, rejects high-confidence false positives, keeps the tour feasible under the degree and subtour constraints, and runs fast enough not to erase the parallelism gained by NAR prediction. 
+
+1) Greedy Merge: Greedy merge scores edges by a com-bined metric such as sij = Hij /d ij [12], sorts them in descending order, and inserts them one by one subject to degree and subtour checks. The time cost is dominated by sorting the O(n2) edges, which takes O(n2 log n2) time. Its appeal is speed and determinism, but it cannot revise an edge once accepted. A single misleading high-confidence edge can therefore force the rest of the construction toward a poor tour. 
+
+2) MCTS-Guided k-opt Search: These decoders use Monte Carlo Tree Search (MCTS) [9] to select sequences of k-opt moves, biasing proposals toward high-confidence heatmap edges. The per-round cost is O(DMCTS B n (n + k)) under the published formulation, and additional preprocessing for distance matrices, heatmaps, and candidate sets can add O(n2)
+
+to O(n2k) work. MCTS recovers higher-quality tours than greedy merge, but the quality it achieves is sensitive to the action space, the exploration constant, the rollout policy, and the search budget, and these must be tuned to each heatmap source and instance scale [16]. 
+
+C. Related Work Ant colony optimisation for the TSP. ACO is a constructive metaheuristic whose variants differ in how they manage the pheromone trail. Ant System [19] introduced the basic sample-and-reinforce loop, in which all ants deposit pheromone in proportion to tour quality. Ant Colony System [20] added a pseudorandom proportional construction rule that sharpens exploitation and a local pheromone update that diversifies successive ants. MMAS [21] is the variant we build on: it lets only the best tour deposit, bounds every trail within an explicit interval [τmin , τ max ], and reinitialises the trails on stagnation, which together prevent premature convergence and make the search reliable on large instances. The behaviour of these algorithms has been studied from convergence and invariance standpoints [25], [26], and pairing ACO with strong local search remains competitive on routing problems [27], [28]. H EAT ACO leaves this MMAS machinery unchanged and modifies only the construction weight, into which a fixed heatmap enters as a bounded evidence factor. 
+
+Neural combinatorial optimisation. A second line learns solvers from data, surveyed in [6], [29], [30]. Autoregressive constructive solvers emit a tour one node at a time, from Pointer Networks [31] and reinforcement-learning policies [32] to attention-based models [10], [33], while a complementary group learns to improve a given tour through learned local rewriting or test-time search [34]–[36]. Both exploit learned priors effectively, but rely on sequential decoding or repeated neural evaluation, which becomes the bottleneck at thousands of nodes. This bottleneck has motivated large-scale designs based on divide-and-conquer decomposition and transferable routing backbones [22], [37], [38], as well as tighter coupling of learning with classical local search [39]. 
+
+Heatmap-based NAR solvers and their decoders. The setting of this paper is the family of NAR solvers that predict an edge-confidence heatmap in one forward pass and delegate feasibility to a separate decoder [8], [9], [12], which raises decoding to a first-order algorithmic problem. AttGCN [9] trains a graph convolutional network by supervised learning against optimal tours. DIMES [14] learns a continuous edge parameterisation with a meta-learning reinforcement objective. UTSP [13] uses an unsupervised surrogate loss that needs no labelled tours. DIFUSCO [12] casts edge prediction as a diffusion-based generative process. Despite their different training objectives, all four produce the same output in the form of a dense confidence matrix over edges, and therefore expose the same downstream interface that our decoder design exploits. UniCO [40] extends this interface to the directed ATSP and to non-Euclidean instances. Two commonly used fixed-heatmap decoders in this line of work are the greedy edge merging used by efficient diffusion and refinement pipelines [12], [17] and the MCTS-guided k-opt search of large-scale neural solvers [9], [16]. The AttGCN evaluation on TSP10K still relies on MCTS, whose repeated per-instance search and sensitivity to heatmap source and scale mean that predictor scalability does not by itself resolve decoder scalability [9], [16]. These limitations motivate a common decoder that can operate across fixed heatmaps and instance scales without retraining or decoder retuning. A separate group of recent solvers, including GLOP [41], GenSCO [42], and MaskCO [43], redesigns the generation or reconstruction mechanism itself, but are not predictor-agnostic decoders for an arbitrary fixed heatmap. 
+
+Neural components inside ACO. The line closest to ours embeds learned components in the ACO loop. DeepACO [44] trains a GNN to output the heuristic desirability that biases construction, GFACS [45] learns a GFlowNet sampler to propose tours, and GTG-ACO [46] jointly learns the heuristic and an initial pheromone field. These methods train a problem-specific neural model as part of the solver and couple it to a particular ACO configuration. H EAT ACO differs in both inputs and goal: it consumes a heatmap that an external predictor has already produced, performs no training of its own, and is designed to decode heatmaps from different predictors through one scale-free bias, so a new heatmap source needs no new network and no retuning. III. T HE PROPOSED METHOD 
+
+HEAT ACO takes a distance matrix D and a precomputed heatmap H as input and returns a feasible tour. It treats the predictor that produced H as fixed, so it does not retrain the predictor, alter the heatmap, or learn a new neural model. Fig. 1 gives an overview, from heatmap prediction by the fixed predictor to the iterative H EAT ACO decoding loop. Algorithm 1 gives the full procedure. 
+
+A. Tour Construction 
+
+Restricting construction to sparse candidate lists keeps the per-ant sampling cost at O(nk ) and keeps pheromone maintenance linear in the number of retained edges. Each node 
+
+i is given a construction candidate list Ci ⊂ V \ { i} of fixed IEEE TRANSACTIONS , VOL. XX, NO. X, MONTH YYYY 4
+
+Fig. 1. Overview of H EAT ACO. Top: a heatmap-based non-autoregressive predictor (such as a GCN or diffusion model) is trained on a dataset and, at inference, predicts an edge-confidence heatmap H for the instance. Bottom: the H EAT ACO decoder takes the fixed heatmap together with the distance and pheromone matrices and runs a Max–Min Ant System. In each iteration, 
+
+m ants build tours in parallel, each turning the heatmap into a degree-aware evidence bias, constructing a tour by the state transition rule, and optionally applying local search. The iteration-best tour updates the global best and the pheromone matrix, and the loop repeats until the iteration budget tmax is reached, after which the best tour is returned. 
+
+size |Ci| = k = 20 . We form Ci from the heatmap-supported set 
+
+Pi = {j ∈ V \ { i} : hij > θ h}, θh = 10 −4. (3) If |Pi| > k , we keep the k nodes of Pi closest to i, and if 
+
+|Pi| < k , we fill the remaining slots with the nearest unused nodes by distance. Heatmap support admits useful non-local edges that a pure nearest-neighbour list would miss, while the geometric filling preserves connectivity when the heatmap is sparse. An ant builds a tour by visiting nodes one at a time. From its current node i it chooses the next node within the feasible neighbourhood Ni, the candidate nodes in Ci not yet visited, with probability 
+
+pij = [τij ]α [ηij ]β [eij ]κ
+
+P 
+
+> l∈N i
+
+[τil ]α [ηil ]β [eil ]κ , j ∈ N i, (4) where τij is the pheromone trail, ηij = 1 /d ij is the heuristic desirability, and eij ≥ 1 is the heatmap evidence factor defined in Section III-C. The three construction terms therefore share the same multiplicative power-law form. When κ = 0 , or when an edge has eij = 1 , the heatmap multiplier is one and the transition weights recover the classical MMAS form over the current candidate list. As in Ant Colony System [20], the choice follows a pseudorandom proportional rule, in which with probability q0 the ant takes the node with the largest numerator and otherwise samples from pij ; we set q0 = 0 , so construction is purely probabilistic. When Ni is empty the ant moves to the 
+
+Algorithm 1 HEAT ACO Decoding for a Fixed Heatmap 
+
+Input: Distance matrix D, heatmap H, m, I, k, α, β, ρ, ccap 
+
+Output: Best tour Tgb 
+
+1: // Preparation, once per instance 
+
+2: Build construction candidates {Ci} from H and D ▷ III-A 3: Compute evidence eij by (9)–(11) and scale κ by (12)–(14) ▷ III-C 4: Construct NN tour TNN (optionally one 2-opt pass) 5: Init τmax , τ min from L(TNN ) by (5); set τ ← τmax 
+
+6: Tgb ← TNN 
+
+7: // Search 
+
+8: for t = 1 to I do 
+
+9: for each of m ants in parallel do 
+
+10: Construct a tour by Algorithm 2; optionally apply local search ▷
+
+III-D 11: end for 
+
+12: Identify iteration-best Tib ; update restart-best Trb 
+
+13: if a new global best is found then 
+
+14: Update Tgb ; recompute τmax , τ min 
+
+15: end if 
+
+16: Evaporate pheromone on candidate edges 17: Select elite tour T + by the ugb schedule; deposit on T + by (7) 18: if branching factor < branch fac (checked every 100 iterations) and restart-best stagnation > 250 iterations then 
+
+19: Reset τ ← τmax and restart-best Trb 
+
+20: end if 
+
+21: Update the ugb schedule 22: end for 
+
+23: return Tgb 
+
+Algorithm 2 Ant tour construction 
+
+Input: τ , η, e, κ, {Ci}, q0 = 0 
+
+Output: Feasible tour T
+
+1: T [0] ← random start node; mark visited 2: for s = 1 to n − 1 do 
+
+3: i ← T [s − 1] ; Ni ← Ci \ { visited }
+
+4: if Ni = ∅ then 
+
+5: j ← nearest unvisited node to i
+
+6: else 
+
+7: wij ← [τij ]α[ηij ]β [eij ]κ for j ∈ N i
+
+8: sample j ∈ N i with probability wij / P 
+
+> l
+
+wil 
+
+9: end if 
+
+10: T [s] ← j; mark visited 11: end for 
+
+12: return T
+
+nearest unvisited node by distance, which guarantees a feasible tour even where the candidates are exhausted. Algorithm 2 summarises the construction. 
+
+B. Pheromone Update 
+
+HEAT ACO first constructs a nearest-neighbour tour TNN ,applying one 2-opt pass when local search is enabled, and sets the pheromone bounds from its length Lnn = L(TNN )
+
+following the MMAS convention [21], 
+
+τ (0) max = 1
+
+ρ L nn 
+
+, τ (0) min = τ (0) max 
+
+2n , (5) where ρ is the evaporation rate. When local search is disabled we replace this lower bound with the standard MMAS value derived from a target construction probability pbest = 0 .05 [21]. Writing px = n
+
+√pbest ,
+
+τ (0) min = τ (0) max (1 − px) 
+
+> k−12
+
+px
+
+, (6) The pheromone matrix is then filled uniformly with τ (0) max .The heatmap is never written into the pheromone matrix, IEEE TRANSACTIONS , VOL. XX, NO. X, MONTH YYYY 5
+
+so the pheromone values remain the sole record of instance-specific search experience and the heatmap acts only through the construction step. At the end of each iteration the pheromone evaporates and one elite tour T + deposits, with the bounded update 
+
+τij ← min 
+
+n
+
+τmax , max τmin , (1 − ρ) τij + ∆ τ +
+
+> ij
+
+o
+
+, (7) where the deposit on the elite tour is 
+
+∆τ + 
+
+> ij
+
+=
+
+(
+
+1/L(T +), (i, j ) ∈ T +,
+
+0, otherwise . (8) Both bounds in (7) are applied to the updated trail values. The elite tour follows the adaptive ugb schedule of MMAS [21], using the iteration-best tour on most iterations and the restart-best or global-best tour every ugb iterations, with ugb tightening from 25 to 1 as the search stalls. Whenever a new global-best tour is found, τmax and τmin are recomputed from its length. Every 100 iterations the branching factor is checked, and if it falls below λbf = 1 + 10 −5 while the restart-best tour has not improved for more than 250 iterations, the pheromone is reset to τmax and the restart-best tour is cleared, while the global-best tour is kept. 
+
+C. Degree-Aware Evidence Bias 
+
+The single heatmap-dependent component is the evidence factor eij and its scale κ (we use κ rather than λ, which is reserved for the MMAS branching-factor threshold λbf in Section III-B). We read the heatmap as ordinal local evidence rather than as a calibrated probability, and use the thresholded values directly to avoid predictor-specific calibration. Let d⋆
+
+be the local degree target, with d⋆ = 2 for symmetric TSP and TSPLIB and d⋆ = 1 for the outgoing decision in ATSP. For each candidate edge j ∈ Ci we take the thresholded confidence 
+
+cij =
+
+(
+
+hij , hij > θ h,
+
+0, otherwise , (9) with confidence floor ε = 10 −9 used to avoid zero ratios. Sorting the positive values in row i as c(1)  
+
+> i
+
+≥ c(2)  
+
+> i
+
+≥ · · · and setting missing order statistics to zero, the degree baseline is the first confidence level the node cannot use within its tour degree, 
+
+bi = max  c(d⋆+1)  
+
+> i
+
+, ε . (10) For symmetric TSP ( d⋆ = 2 ) this is the third-highest confidence in the row, because a node accepts two incident tour edges and any confidence beyond the second-best edge lies above the baseline, and for ATSP ( d⋆ = 1 ) it is the second-highest confidence, since a row represents one outgoing edge. The evidence factor is the confidence ratio above this baseline, lower-bounded by one, 
+
+eij = max 
+
+ max( cij , ε )
+
+bi
+
+, 1
+
+
+
+. (11) An edge therefore receives additional evidence, eij > 1, only when its confidence exceeds the degree baseline, i.e., when the heatmap distinguishes it beyond the node’s tour-degree capacity. When a row has many similar scores the ratios approach one, and the decoder falls back to distance and pheromone. The local search uses independent geometric candidate lists, so the evidence affects only construction and never the repair operator. The scale κ should let the heatmap bias early sampling without permanently overriding the pheromone feedback, so we cap it by the pheromone dynamic range. With q0.90 the 90th percentile of the positive log-margins, 
+
+q0.90 = Q0.90 ({log eij : i ∈ V, j ∈ Ci, e ij > 1}) , (12) and bRτ the active pheromone dynamic range, 
+
+bRτ = τmax 
+
+τmin 
+
+, (13) the scale is 
+
+κ =
+
+
+
+ccap α log bRτ
+
+q0.90 
+
+, q0.90 > 0, bRτ > 1,
+
+0, otherwise ,
+
+(14) with ccap = 0 .5. At the 90th percentile the log of the evidence multiplier is then κq 0.90 = ccap α log bRτ , so under our setting 
+
+α = 1 it equals half the log pheromone range; for general α
+
+it is (α/ 2) log bRτ . The heatmap thus shapes early sampling while the pheromone feedback keeps enough dynamic range to correct the bias over time. If the heatmap provides no edge with eij > 1, then κ = 0 and the transition weights take the classical MMAS form over the current candidate list. The rule uses only the heatmap scores, the candidate graph, and the MMAS configuration, and it does not use known tours or per-predictor tuning. For efficiency the implementation folds 
+
+[eij ]κ into the heuristic term during preparation and clips the log-weight κ log eij at a large constant to avoid overflow, which leaves (4) unchanged. 
+
+D. Local Search 
+
+A constructed tour can optionally be refined by local search before it updates the pheromone. For symmetric TSP and TSPLIB we use first-improvement 2-opt [47] and 3-opt, both restricted to geometric nearest-neighbour candidate lists of size 
+
+kls = 20 with don’t-look bits, and for ATSP we use a directed 2-opt based on the Jonker–Volgenant reduction [24]. The local search runs on geometric candidates and is independent of the heatmap-supported construction lists, so the heatmap guides construction while the repair operator remains purely distance-based. Improved tours feed the pheromone update, so the benefit of local search propagates to later iterations through the pheromone distribution. IV. E XPERIMENTAL DESIGN 
+
+A. Datasets 
+
+All benchmark instances are drawn from ML4CO-Bench-101 [48]. The in-distribution evaluation uses its TSP500, TSP1K, and TSP10K suites, which are the uniform Euclidean benchmarks originally released with AttGCN [9]. TSP500 and TSP1K each contain 128 instances, and TSP10K contains 16 instances. For TSP500 and TSP1K, L⋆i is the Concorde optimum [1]; for TSP10K, L⋆i is the known optimum supplied IEEE TRANSACTIONS , VOL. XX, NO. X, MONTH YYYY 6
+
+with the benchmark. The four heatmaps for these instances come from the publicly released pretrained checkpoints of AttGCN [9], DIMES [14], UTSP [13], and DIFUSCO [12], with no retraining or fine-tuning. Generalisation is evaluated under several qualitatively dis-tinct shifts, all drawn from the same benchmark. Clustered TSP500 and Gaussian TSP500 (128 instances each) test spatial distribution shift at fixed scale. Three TSPLIB [23] instances, pcb442, pr1002, and pr2392, test structural shift from synthetic uniform coordinates to application-derived geometries. GenSCO heatmaps [42] from the released C = 160 
+
+configuration test transfer to a structurally different heatmap source. MatDIFFNet heatmaps [40] for ATSP50 and ATSP100 test transfer to directed instances. 
+
+B. Compared Methods 
+
+Our single controlled baseline is standard MMAS. It uses the same parameters, candidate-list sizes, local-search settings, hardware, and random seeds as H EAT ACO. This matched comparison isolates the marginal gain of the heatmap, and it is the only one we use for paired statistical testing. All other methods serve as external reference points and are reported as published. They include the classical solvers Concorde [1] and LKH-3 [49], the NCO solver LEHD [50], and the neural-ACO solvers DeepACO [44] and GFACS [45]. Two commonly used fixed-heatmap decoders are our direct points of comparison: greedy edge merging, introduced as the fast decoder of DIFUSCO [12], and MCTS-guided k-opt search, introduced with AttGCN [9]. For the MCTS decoder, we use the results of Pan et al. [16], who tuned its hyperparameters per heatmap to obtain its best published quality. For each heatmap source we evaluate H EAT ACO (i.e., without local-search refinement), HEAT ACO+2-opt, and H EAT ACO+3-opt on symmetric TSP and TSPLIB, and H EAT ACO and H EAT ACO+2-opt on ATSP. These external references were obtained on stronger hard-ware than ours. They are reported on 16- to 128-core CPUs together with high-performance GPUs for the neural inference, whereas all H EAT ACO and MMAS results use 8 CPU cores and no GPU. The comparison is therefore conservative for HEAT ACO: where it matches or improves on a reference, it does so from a weaker computational budget. 
+
+C. Metrics 
+
+The primary quality metric is the optimality gap, 
+
+Gap i,s (%) = L(Ti,s ) − L⋆i
+
+L⋆i
+
+× 100 . (15) Here Ti,s is the best tour found for instance i under seed 
+
+s, and L⋆i is that instance’s reference length. For benchmark suites containing multiple instances, we first average the 30 seed results for each instance, and then report the mean and standard deviation of these instance-level means. For individual TSPLIB instances, the mean and standard deviation are computed across the 30 seeds. Where reported, runtime is given as per-instance wall-clock decoding time, which is the metric available for the published external baselines. For heatmap-based methods we list heatmap inference time separately from decoding time, and a leading “ +” denotes the decoding time added after heatmap inference. All statistical tests compare H EAT ACO against the matched standard MMAS baseline only. For benchmark suites contain-ing multiple instances, we average the gap over the 30 seeds for each instance and apply a two-sided paired Wilcoxon signed-rank test [51] across instances at p < 0.05 ; for individual TSPLIB instances, the test is applied across the 30 paired seeds. A significant result is marked as an improvement if the corresponding mean gap is lower for H EAT ACO and as a degradation otherwise. The win, tie, and loss counts for multi-instance suites are computed from the same per-instance means. 
+
+D. Parameter Settings 
+
+HEAT ACO and MMAS share the same core parameters: 
+
+m = 32 ants running in parallel, each with its own random number generator, with a barrier ensuring that all ants finish before the pheromone update; I = 5000 iterations; construction candidate list size k = 20 ; local-search candidate list size 
+
+kls = 20 ; α = 1 ; β = 2 ; ρ = 0 .8 for symmetric TSP/TSPLIB and ρ = 0 .2 for ATSP; and q0 = 0 for pure stochastic sampling. The heatmap threshold is θh = 10 −4, the confidence floor is 
+
+ε = 10 −9, the evidence quantile is Q0.90 , and the cap factor is ccap = 0 .5. Branching-factor monitoring is performed every 
+
+100 iterations with band fraction ξbf = 0 .05 and branching threshold λbf = 1+10 −5; restarts are triggered after more than 
+
+250 consecutive iterations without restart-best improvement. Every experimental setting is evaluated over 30 independent random seeds. The decoder is implemented in C++ and all HEAT ACO and MMAS experiments use 8 CPU cores. The cap factor ccap = 0 .5 was fixed before the final 30-run evaluation and was not selected by tuning on the benchmark results, and Section V-D reports its sensitivity. V. M AIN RESULTS 
+
+This section separates two comparisons. First, against published MCTS results for the same fixed heatmaps, H EAT -ACO+2-opt obtains lower gaps and shorter reported decoding times in every available in-distribution comparison from TSP500 to TSP10K. Second, against matched standard MMAS baselines, heatmap guidance improves construction at every tested scale and remains beneficial in most local-search settings on TSP500 and TSP1K and in the directed ATSP, while its contribution becomes negative after local search on TSP10K or under some severe distribution shifts. 
+
+A. In-Distribution Results 
+
+The fixed heatmaps carry useful edge information, but greedy decoding exploits only a small fraction of this information. Across the four heatmap sources, as shown in Table I, the greedy gaps range from 10 .85% to 76 .28% on TSP500 and from 13 .06% to 101 .61% on TSP1K, and they remain between 
+
+36 .75% and 359 .15% on TSP10K. These values are far above the standard MMAS baselines, which shows that a heatmap alone does not yield a good tour. Greedy merging cannot revise IEEE TRANSACTIONS , VOL. XX, NO. X, MONTH YYYY 7
+
+TABLE I MAIN RESULTS ON TSP500, TSP1K, AND TSP10K. 
+
+Method Type TSP500 TSP1K TSP10K 
+
+Gap ↓ Time ↓ Gap ↓ Time ↓ Gap ↓ Time ↓
+
+Concorde [52] Exact — 17.65 s — 3.12 m — —LKH-3 [49] Heuristic — 21.69 s — 1.2 m — 4.13 m MCTS [16] MCTS 0.66 50 s 1.16 100 s 3.79 16.67 m MMAS [21] MMAS 6.14 ±0.30 2.28 s 7.73 ±0.26 5.29 s 38.32 ±0.30 7.61 m MMAS+2-opt 0.16 ±0.05 4.25 s 0.42 ±0.05 9.13 s 1.19 ±0.03 2.06 m MMAS+3-opt 0.0045 ±0.0060 14.01 s 0.06 ±0.02 29.64 s 0.41 ±0.02 9.22 m DeepACO [44] NAR+ACO 1.84 10 s 3.16 32 s — —GFACS [45] NAR+ACO 1.56 15 s 2.63 66 s — —LEHD [50] AR+Greedy 1.56 0.14 s 3.17 0.75 s — —+Partial Re-Construction 1000 0.17 33.75 s 0.72 3.28 m — —GenSCO ( C=40 ) [42] NAR 0.016 18 s 0.26 46 s — —GenSCO ( C=160 ) [42] NAR+2-opt 0.01 1.2 m 0.04 3.0 m — —AttGCN [9] NAR+Greedy 47.78 0.2 s 65.52 0.34 s 184.90 15.6 s DIMES [14] 76.28 0.45 s 101.61 0.98 s 359.15 17.43 s UTSP [13] 32.28 0.64 s 44.94 1.57 s — —DIFUSCO [12] 10.85 1.69 s 13.06 5.56 s 36.75 1.78 m AttGCN +MCTS [16] 0.69 0.2 s+50 s 1.09 0.34 s+1.67 m 3.02 15.6 s+16.67 m DIMES 0.69 0.98 s+50 s 1.11 0.98 s+1.67 m 3.05 17.43 s+16.67 m UTSP 0.90 0.64 s+50 s 1.53 1.57 s+1.67 m — —DIFUSCO 0.51 1.69 s+50 s 0.53 5.56 s+1.67 m 2.35 1.78 m+16.67 m AttGCN +H EAT ACO 3.60 ±0.31 0.2 s+1.95 s 4.85 ±0.31 0.34 s+4.58 s 23.06 ±0.25 15.6 s+3.70 m DIMES 4.65 ±0.29 0.98 s+2.01 s 5.91 ±0.21 0.98 s+4.32 s 27.36 ±0.28 17.43 s+3.50 m UTSP 4.37 ±0.28 0.64 s+2.01 s 5.75 ±0.25 1.57 s+4.18 s — —DIFUSCO 0.81 ±0.37 1.69 s+1.71 s 1.07 ±0.38 5.56 s+4.28 s 9.20 ±0.42 1.78 m+2.52 m AttGCN +H EAT ACO+2-opt 0.14 ±0.06 0.2 s+4.08 s 0.39 ±0.06 0.34 s+8.49 s 1.75 ±0.12 15.6 s+2.16 m DIMES 0.15 ±0.05 0.98 s+4.09 s 0.40 ±0.05 0.98 s+8.40 s 1.29 ±0.04 17.43 s+1.87 m UTSP 0.14 ±0.05 0.64 s+4.21 s 0.40 ±0.05 1.57 s+8.47 s — —DIFUSCO 0.12 ±0.08 1.69 s+3.99 s 0.20 ±0.07 5.56 s+8.37 s 1.49 ±0.10 1.78 m+2.37 m AttGCN +H EAT ACO+3-opt 0.0036 ±0.0054 0.2 s+14.82 s 0.05 ±0.02 0.34 s+28.54 s 0.73 ±0.09 15.6 s+8.14 m DIMES 0.0037 ±0.0052 0.98 s+14.23 s 0.06 ±0.02 0.98 s+27.01 s 0.44 ±0.03 17.43 s+6.65 m UTSP 0.0040 ±0.0054 0.64 s+13.63 s 0.05 ±0.02 1.57 s+27.10 s — —DIFUSCO 0.01 ±0.02 1.69 s+14.32 s 0.04 ±0.03 5.56 s+26.43 s 0.81 ±0.04 1.78 m+7.25 m 
+
+Note: Gap cells report mean ±std for MMAS and H EAT ACO rows; std is computed over instance-level mean gaps after averaging the 30 seeds. Other neural-decoder rows are published reference results. Time is per-instance wall-clock seconds (s) or minutes (m). Dashes in reference-solver gap cells denote the defining reference gap, and other dashes denote unavailable published results. ‘+’ in time entries denotes additional decoding time beyond fixed heatmap inference. External references use 16–128 CPU cores with a high-performance GPU; H EAT ACO and MMAS use 8 CPU cores and no GPU. Lower values are better for both gap and time. 
+
+an early edge, so a few high-confidence false positives commit the construction to a poor completion. Before any local search, the evidence bias already turns MMAS construction from a weak sampler into a strong one. On TSP500 it lowers the mean gap from 6.14% for standard MMAS to 0.81% with the DIFUSCO heatmap and to 3.60% –
+
+4.65% with the other three, and on TSP1K it lowers the gap from 7.73% to 1.07% with DIFUSCO and to 4.85% –5.91% 
+
+with the others. The gain persists at TSP10K: against the 
+
+38 .32% MMAS gap, the three available heatmaps reach 9.20% –
+
+27 .36% . As Table II shows, construction-only H EAT ACO is significantly better on every instance at every available scale and for every predictor. This construction-only setting isolates the contribution of the heatmap before local search affects the final tour, and it shows that the bias moves the early sampling distribution into promising regions of the search space that standard MMAS reaches only after many more iterations. The gap between DIFUSCO and the other three predictors is large and consistent, and it tracks how cleanly each heatmap separates tour edges from the rest. We quantify this separation in Section VI, where the precision of the edges with additional evidence is highest for DIFUSCO, which is the same ordering seen here. With 2-opt, H EAT ACO decodes a fixed heatmap to higher quality and in less time than the MCTS decoder. On TSP500 the four heatmaps reach 0.12% –0.15% with H EAT ACO+2-opt, against 0.16% for MMAS+2-opt and 0.51% –0.90% 
+
+for the same heatmaps decoded by MCTS, and on TSP1K HEAT ACO+2-opt reaches 0.20% –0.40% against 0.42% for MMAS+2-opt and 0.53% –1.53% for MCTS. The scope of this claim is narrow: stronger generation and reconstruction solvers such as GenSCO and LEHD remain competitive at this scale, so the comparison is between H EAT ACO and the greedy / MCTS decoders for the same heatmap family rather than against all neural solvers. We include 3-opt as the strongest local-search configuration, since it is the setting in which geometric repair is strongest and therefore the most demanding test of whether the heatmap still adds value. On TSP500 and TSP1K, HEAT ACO+3-opt reaches gaps below 0.1% ( 0.0036% –0.01% and 0.04% –IEEE TRANSACTIONS , VOL. XX, NO. X, MONTH YYYY 8
+
+0.06% ). The marginal contribution of the heatmap diminishes as the local search strengthens, because the bias mainly supplies structure that 2-opt and 3-opt would otherwise have to recover. On TSP1K, H EAT ACO+3-opt is still significantly better than MMAS+3-opt for all four predictors (Table II), so the heatmap remains useful even under the strongest local search at this scale. On TSP500, the smallest scale, the heatmap’s marginal value vanishes for the most reliable heatmap: DIFUSCO+H EAT ACO+3-opt is significantly worse than MMAS+3-opt, at 0.01% against 0.0045% . This is the same mechanism as the large-scale reversal, but reached from the opposite extreme: once 3-opt resolves the tour structure on a small instance, the heatmap has no further structure to contribute. At TSP10K, the construction and local-search regimes separate sharply. Without local search, all three available heatmaps improve over MMAS on all 16 instances. With 2-opt, HEAT ACO still improves on MCTS for every heatmap, for instance 1.29% for DIMES+H EAT ACO+2-opt against 3.05% 
+
+for DIMES+MCTS, but it no longer outperforms the matched MMAS+2-opt baseline at 1.19% . The same holds under 3-opt, where DIMES+H EAT ACO+3-opt reaches 0.44% against 
+
+0.41% for MMAS+3-opt. Section VI shows that the TSP10K heatmaps retain sparse, high-coverage edge evidence; the reversal therefore marks reduced complementarity with strong geometric repair, rather than a failure of the heatmap itself. These quality changes are reached at low decoding cost relative to the baseline search. The heatmap restricts construc-tion to a sparse candidate list, so heatmap-guided decoding incurs no systematic runtime overhead. On TSP1K the decoding time of H EAT ACO is 4.2–4.6 s without local search and 
+
+8.4–8.5 s with 2-opt, comparable to the 9.1 s of MMAS+2-opt; construction-only H EAT ACO thus takes 4.2–4.6 s while bringing the DIFUSCO gap to 1.07% . At TSP10K, construction-only H EAT ACO takes 2.52 –3.70 m versus 7.61 m for MMAS, while the 2-opt and 3-opt variants remain comparable to or faster than their matched baselines. Against the MCTS decoder the difference is large: DIFUSCO+H EAT ACO+2-opt decodes in 8.4 s on TSP1K against the 100 s of MCTS, with a lower gap. On TSP1K the win count decreases monotonically as the local search strengthens: 128 /0/0 without local search, a clear majority under 2-opt, a smaller but still significant majority under 3-opt, as stronger geometric repair recovers more of what the heatmap would otherwise supply. Across instance scales, construction-only guidance remains uniformly effective through TSP10K, where all three predictors win all 16 instances, but the same scale increase produces a reversal after local search: every 2-opt row loses all 16 instances and the 3-opt rows lose at least 14. The agreement between W/T/L counts, signed mean dif-ferences, and Wilcoxon directions rules out a tail-driven explanation at TSP10K. The heatmap is consistently useful before local search and consistently non-complementary after 2-opt; under 3-opt, DIMES is close in mean gap but still loses on 14 of 16 instances. Fig. 2 visualises the same controlled comparison at the distribution level. Without local search, every heatmap-guided                                                                                   
+
+> TABLE II PAIRED WINS /T IES /L OSSES AGAINST MATCHED MMAS V ARIANTS .
+> Heatmap Decoder TSP500 TSP1K TSP10K
+> AttGCN HEAT ACO 128/0/0 (↑)128/0/0 (↑)16/0/0 (↑)
+> DIMES 128/0/0 (↑)128/0/0 (↑)16/0/0 (↑)
+> UTSP 128/0/0 (↑)128/0/0 (↑)—DIFUSCO 128/0/0 (↑)128/0/0 (↑)16/0/0 (↑)
+> AttGCN HEAT ACO+2-opt 99/0/29 (↑)91/0/37 (↑)0/0/16 (↓)
+> DIMES 76/0/52 (↑)74/0/54 (↑)0/0/16 (↓)
+> UTSP 90/0/38 (↑)84/0/44 (↑)—DIFUSCO 84/0/44 (↑)128/0/0 (↑)0/0/16 (↓)
+> AttGCN HEAT ACO+3-opt 52/43/33 (↑)84/0/44 (↑)0/0/16 (↓)
+> DIMES 52/41/35 (↑)71/0/57 (↑)2/0/14 (↓)
+> UTSP 41/42/45 (=) 80/0/48 (↑)—DIFUSCO 36/32/60 (↓)102/0/26 (↑)0/0/16 (↓)
+> Note: Each cell reports W/T/L = wins/ties/losses against the matched MMAS variant, computed over per-instance mean gaps after averaging the 30 seeds. The arrow combines a two-sided paired Wilcoxon signed-rank test ( p < 0.05 )with the sign of the mean gap delta, so (↑)means significant with the mean favouring H EAT ACO, (↓)means significant with the mean favouring MMAS, and (=) means not significant.
+> Fig. 2. Instance-level gap distributions for the main in-distribution benchmarks. Columns correspond to TSP scale and rows to the local-search setting. Each violin is formed from instance-level mean gaps after averaging the 30 independent runs for each instance.
+
+distribution shifts downward relative to matched MMAS at all available scales. On TSP500 and TSP1K this advantage usually persists under 2-opt, while with 3-opt the distributions become narrow and close because both decoders are near optimal. On TSP10K with local search, the MMAS distribution is lower than the heatmap-guided variants, matching the boundary identified by the W/T/L analysis. Fig. 3 shows the convergence behaviour. Without local search, heatmap-guided curves fall quickly during early iterations at all IEEE TRANSACTIONS , VOL. XX, NO. X, MONTH YYYY 9
+
+Fig. 3. Mean best-so-far convergence on TSP500/TSP1K/TSP10K. Rows correspond to instance scale and columns to no local search (left) and 2-opt (right). The y-axis shows the positive excess gap above the best final mean gap within each panel on a logarithmic scale. Legend entries show predictor+H EAT ACO. 
+
+three scales, whereas standard MMAS needs more iterations to discover comparable edge combinations. This supports the role of the evidence bias: it does not replace pheromone learning, but changes the initial sampling distribution so that pheromone feedback starts from a better part of the search space. With 2-opt, the curves are closer because local repair removes many construction errors. At TSP10K they also expose the interaction seen in Table I: reliable heatmap guidance improves the unrefined tours, but the matched geometric baseline reaches a lower final gap once every constructed tour is repaired. 
+
+B. Out-of-Distribution Generalisation 
+
+Under spatial distribution shift, the heatmap continues to help when it stays reliable and stops helping when it degrades, and the clustered and Gaussian benchmarks in Table III separate these cases. On Clustered TSP500 the matched MMAS+2-opt baseline is already strong at 0.07% , and H EAT ACO+2-opt does not improve on it, but it stays in the same range at 0.11% to 
+
+0.23% and remains far ahead of MCTS on the same shifted heatmaps, where AttGCN reaches 0.11% against 1.37% and DIMES reaches 0.17% against 6.14% . On Gaussian TSP500 the outcome depends on the predictor. The AttGCN and DIMES heatmaps still improve on MMAS+2-opt, at 0.16% and 0.21% 
+
+against 0.23% , whereas the UTSP and DIFUSCO heatmaps degrade, and UTSP is the worst at 1.98% . The decoder therefore transfers across spatial shift, but the magnitude and direction of its benefit track the reliability of the shifted heatmap, which Section VI quantifies. 
+
+TABLE III OOD R ESULTS ON CLUSTERED AND GAUSSIAN TSP500. 
+
+Method Clustered TSP500 Gaussian TSP500 
+
+MCTS HEAT ACO+2-opt MCTS HEAT ACO+2-opt MMAS+2-opt — 0.07 ±0.08 — 0.23 ±0.08 AttGCN 1.37 0.11 ±0.10 (↓) 1.14 0.16 ±0.05 (↑)
+
+DIMES 6.14 0.17 ±0.16 (↓) 5.33 0.21 ±0.07 (↑)
+
+UTSP 4.85 0.23 ±0.20 (↓) 190.12 1.98 ±0.29 (↓)
+
+DIFUSCO 3.33 0.15 ±0.14 (↓) 7.14 0.48 ±0.19 (↓)
+
+Note: Cells report mean ±std gap (%); std is computed over instance-level mean gaps after averaging seeds. (↑) indicates significant improvement over the corresponding MMAS baseline ( p < 0.05 ); (↓) indicates significant degradation; (=) indicates no significant difference. TABLE IV GENERALISATION TO TSPLIB I NSTANCES .
+
+Method Type pcb442 pr1002 pr2392 
+
+Gap (%) Gap (%) Gap (%) MMAS H 5.32 ±0.87 7.14 ±1.82 23.86 ±6.59 H+2-opt 0.30 ±0.08 0.62 ±0.17 0.78 ±0.18 H+3-opt 0 0.09 ±0.10 0.23 ±0.10 MCTS MCTS 0.31 2.60 1.77 AttGCN NAR +Greedy  40.33 73.94 90.24 DIMES 70.80 116.01 180.83 UTSP 20.03 18.06 21.67 DIFUSCO 27.40 21.34 18.89 AttGCN 
+
+> +H EAT ACO
+
+2.74 ±0.51 (↑) 7.71 ±2.59 (=) 17.47 ±1.79 (↑)
+
+DIMES 3.37 ±0.63 (↑) 30.29 ±2.44 (↓) 89.17 ±1.18 (↓)
+
+UTSP 4.12 ±0.52 (↑) 13.83 ±4.67 (↓) 33.01 ±1.50 (↓)
+
+DIFUSCO 1.29 ±0.19 (↑) 3.69 ±0.27 (↑) 10.08 ±0.98 (↑)
+
+AttGCN +MCTS  0.24 2.43 2.77 DIMES 0.25 1.59 2.37 UTSP 0.56 1.94 1.86 DIFUSCO 0.26 1.32 2.54 AttGCN 
+
+> +H EAT ACO +2-opt
+
+0.31 ±0.07 (=) 0.73 ±0.20 (↓) 0.75 ±0.17 (=) 
+
+DIMES 0.27 ±0.09 (↑) 2.32 ±0.21 (↓) 4.08 ±0.22 (↓)
+
+UTSP 0.30 ±0.02 (=) 0.77 ±0.16 (↓) 1.43 ±0.27 (↓)
+
+DIFUSCO 0.29 ±0.02 (=) 0.53 ±0.18 (↑) 0.77 ±0.16 (=) 
+
+AttGCN 
+
+> +H EAT ACO +3-opt
+
+0 (=) 0.07 ±0.08 (=) 0.17 ±0.08 (↑)
+
+DIMES 0 (=) 0.52 ±0.11 (↓) 1.55 ±0.16 (↓)
+
+UTSP 0.0016 ±0.0065 (=) 0.21 ±0.10 (↓) 0.30 ±0.11 (↓)
+
+DIFUSCO 0.01 ±0.05 (=) 0 (↑) 0.23 ±0.10 (=) 
+
+Note: Gap measured against the TSPLIB reference. H denotes construction without local search. MMAS and H EAT ACO entries report mean ±std over 30 seeds, with exact zero shown as 0; Greedy and MCTS entries report published mean gaps. (↑) indicates significant improvement, (↓) significant degradation, and (=) no significant difference over matched MMAS across the 30 paired seeds at p < 0.05 .
+
+The TSPLIB instances in Table IV provide the strongest test of structural transfer, because they have application-derived geometry rather than synthetic uniform sampling, and use the standard EUC_2D rounding rule. Greedy heatmap decoding is weak here, with gaps from 18 .06% to 180 .83% , while HEAT ACO recovers usable tours from the same fixed heatmaps. On pcb442 the construction-only gaps fall to 1.29% –4.12% 
+
+and H EAT ACO+2-opt reaches 0.27% –0.31% ; on the larger instances the best heatmap-guided variants remain strong, with DIFUSCO+H EAT ACO+2-opt at 0.53% on pr1002 and AttGCN+H EAT ACO+2-opt at 0.75% on pr2392. The best 3-opt entries reach 0% on pcb442, 0% on pr1002, and 0.17% 
+
+on pr2392. Table IV also exposes the most pronounced failure cases we observe: DIMES+H EAT ACO stays far worse than IEEE TRANSACTIONS , VOL. XX, NO. X, MONTH YYYY 10                                  
+
+> TABLE V ATSP R ESULTS WITH MAT DIFFN ET HEATMAPS .
+> Method Type ATSP50 ATSP100
+> Gap (%) Gap (%) Gurobi [48] Exact ——MMAS Heuristic 2.65 ±0.02 6.15 ±0.02 Heuristic+2-opt 0.62 ±0.01 3.76 ±0.02 MatDIFFNet NAR 33.2 24.1 NAR+2-opt 10.6 9.6 MatDIFFNet +H EAT ACO 0.81 ±0.006 (↑)1.07 ±0.006 (↑)
+> +H EAT ACO+2-opt 0.23 ±0.005 (↑)0.57 ±0.005 (↑)
+> Note: Gaps computed against the Gurobi optimal tours supplied by ML4CO-Bench-101 [48]; dashes in the Gurobi row denote the defining reference gap.
+> (↑)indicates significant improvement, and (=) no significant difference, over matched MMAS ( p < 0.05 ).
+
+MMAS on pr1002 and pr2392, and UTSP degrades on the larger instances. These failures are predictor-specific, indicating that the cause lies in the heatmap, not the decoder; Section VI-C traces them to candidate-density and confidence-separation failures of the heatmap itself. 
+
+C. Directed ATSP and Heatmap Transfer 
+
+The clearest evidence that the heatmap helps where the available local search is weak comes from the asymmetric TSP. In our ATSP experiments, local search is limited to a directed 2-opt operator, which is a much weaker repair than the symmetric 2-opt and 3-opt used above, so more of the burden of finding tour structure falls on construction. Table V reports results with directed heatmaps from MatDIFFNet, the diffusion-based matrix-encoded TSP solver proposed in UniCO [40] to extend heatmap prediction to asymmetric and non-Euclidean instances. Construction-only H EAT ACO reaches 
+
+0.81% on ATSP50 and 1.07% on ATSP100, far below both the native MatDIFFNet decoder, at 33 .2% and 24 .1% , and standard MMAS, at 2.65% and 6.15% . With the directed 2-opt enabled, H EAT ACO+2-opt reaches 0.23% and 0.57% , and it stays significantly ahead of MMAS+2-opt, at 0.62% and 
+
+3.76% . Unlike the symmetric case, where strong local search subsumes much of the heatmap’s contribution, here the heatmap remains essential even with local search, because the directed 2-opt cannot recover the structure on its own. Adapting the decoder to ATSP requires only changing the degree target, the evaporation rate, and the local-search operator, which shows that the evidence bias is not tied to symmetric edge selection. GenSCO builds degree-awareness into the predictor through a constraint-sensitive output stage, so its heatmaps already concentrate on near-feasible tour structure. H EAT ACO therefore acts here as a refinement step on top of an existing solver rather than as its replacement (Table VI). On in-distribution TSP1K the refinement matches the native pipeline without improving on it, with H EAT ACO+2-opt at 0.06% against 0.04% 
+
+for GenSCO+2-opt. The strong in-distribution behaviour does not transfer, however, and this is where H EAT ACO matters most. On Clustered TSP500, H EAT ACO+2-opt lowers the original GenSCO gap from 5.62% to 0.06% , ahead of the native GenSCO+2-opt at 0.48% . On Gaussian TSP500 the native GenSCO output collapses to 654 .23% and its own 2-opt leaves it at 558 .50% , a near-total failure, whereas H EAT ACO                                                    
+
+> TABLE VI GEN SCO H EATMAP TRANSFER RESULTS .
+> Setting Original +2-opt +H EAT ACO +H EAT ACO+2-opt TSP1K (in-dist.) 0.19 0.04 0.16 ±0.14 0.06 ±0.04 TSP500 Clustered 5.62 0.48 1.37 ±1.21 0.06 ±0.09
+> TSP500 Gaussian 654.23 558.50 31.21 ±4.96 3.00 ±0.33
+> Note: GenSCO C=160 configuration. Cells report mean ±std gap (%); std is computed over instance-level mean gaps after averaging seeds. Bold values mark the best result for each setting. TABLE VII SOFT DIST HEATMAP TRANSFER RESULTS .
+> Settings +MCTS +H EAT ACO +H EAT ACO+2-opt Gap Time Gap Time Gap Time TSP500 0.43 50 s 4.19 ±0.65 1.64 s 0.164 ±0.122 1.95 s TSP1K 3.13 100 s 5.51 ±0.60 3.98 s 0.425 ±0.137 4.30 s TSP10K 3.13 16.67 m 24.72 ±0.83 5.90 m 0.540 ±0.096 60.92 s
+> Note: SoftDist is a non-learned heatmap formed by a softmax over the distance matrix, so it encodes only proximity. Gap cells report mean ±std where repeated-run statistics are available; MCTS values are published mean gap/time.
+
+brings the same heatmap to 31 .21% without local search and to 3.00% with 2-opt. H EAT ACO recovers most of this lost quality: pheromone feedback repairs an informative but globally inconsistent heatmap, which the native one-shot decoder cannot. As a non-learned control, Table VII uses SoftDist, which produces a heatmap by applying a softmax to the (negated) distance matrix, so the resulting confidence is a monotone function of pairwise distance alone. It is therefore not a learned signal at all and carries no information beyond the geometry that H EAT ACO already sees through its distance heuristic 
+
+ηij = 1 /d ij . The decoder remains numerically stable on this degenerate input, and with 2-opt it remains strong at every scale, reaching 0.16% , 0.43% , and 0.54% on TSP500, TSP1K, and TSP10K. The TSP10K figure is the most informative, because there SoftDist with 2-opt is on par with the learned heatmaps and far ahead of SoftDist with MCTS at 3.13% . This is a property of the setting, not of the decoder: at large scale with strong local search, a purely geometric prior is already a strong and consistent signal, the same setting where the learned heatmaps lose their advantage. The control therefore supports the central observation: a learned heatmap is worth using only when it supplies reliable structure beyond pairwise distance, and elsewhere a geometric prior plus local search is hard to outperform. 
+
+D. Ablation and Sensitivity 
+
+We evaluate the design of the evidence bias through two ablation studies. The first removes its two scaling components in turn, and the second varies the single free parameter of the cap rule. Table VIII isolates the two components of the scaling rule on TSP1K. Fixing κ = 1 removes the instance-level adaptation, and “No cap” removes the pheromone-range constraint. The full method is best, or statistically tied for best, in almost every heatmap and local-search block, and the effect is clearest in construction, where no local search can mask a scaling error. Removing the cap is most damaging on the strongest heatmap, where it degrades DIFUSCO from 1.07% to 4.26% , because a IEEE TRANSACTIONS , VOL. XX, NO. X, MONTH YYYY 11                                                                               
+
+> TABLE VIII TSP1K E VIDENCE -B IAS COMPONENT ABLATION .
+> Heatmap Variant No LS 2-opt 3-opt
+> AttGCN Main 4.85 ±0.31 0.39 ±0.06 0.053 ±0.021
+> Fixed κ=1 6.67 ±0.22 (↓)0.42 ±0.05 (↓)0.059 ±0.021 (↓)
+> No cap 5.42 ±0.23 (↓)0.40 ±0.05 (↓)0.058 ±0.020 (↓)
+> DIMES Main 5.91 ±0.21 0.40 ±0.05 0.056 ±0.020
+> Fixed κ=1 6.79 ±0.34 (↓)0.41 ±0.05 (↓)0.059 ±0.019 (↓)
+> No cap 6.26 ±0.20 (↓)0.40 ±0.05 (=) 0.057 ±0.021 (=)
+> UTSP Main 5.75 ±0.25 0.40 ±0.05 0.055 ±0.021
+> Fixed κ=1 7.72 ±0.21 (↓)0.42 ±0.05 (↓)0.060 ±0.021 (↓)
+> No cap 6.06 ±0.21 (↓)0.41 ±0.05 (=) 0.057 ±0.022 (↓)
+> DIFUSCO Main 1.07 ±0.38 0.20 ±0.07 0.040 ±0.026
+> Fixed κ=1 1.11 ±0.35 (↓)0.21 ±0.06 (↓)0.040 ±0.023 (=)
+> No cap 4.26 ±0.18 (↓)0.37 ±0.05 (↓)0.058 ±0.021 (↓)
+> Note: Bold values are best within each block. Std is computed over instance-level mean gaps after averaging seeds. (↓)marks a significant degradation from Main, and (=) no significant difference, at p < 0.05 (paired Wilcoxon on instance-level mean deltas).
+
+sharply separated heatmap then produces an unbounded factor that overpowers the pheromone feedback. Fixing the scale is most damaging on the weaker heatmaps, where it degrades AttGCN from 4.85% to 6.67% and UTSP from 5.75% to 
+
+7.72% , because a uniform scale is too aggressive for evidence that is faint and poorly separated. The automatic cap therefore handles the strong-heatmap risk and the automatic scale handles the weak-heatmap risk, so both are needed for the rule to work across predictors. Under 2-opt and 3-opt the differences shrink but stay significant in most blocks, for the same reason that the main gains shrink under stronger local search. The cap factor ccap is the only free parameter intro-duced by the scaling rule, and Fig. 4 sweeps it over 
+
+{0.0625 , 0.125 , 0.25 , 0.5, 1, 2}, from a weak bias to one as large as the pheromone range. The stable region is broad, and values from 0.125 to 0.5 behave similarly across most TSP500 and TSP1K settings. Very small caps underuse an informative heatmap, and very large caps can hurt construction because the bias dominates before the pheromone feedback has accumulated instance-specific evidence. Under 3-opt the curves are flatter, since local search compensates for part of the construction error. The default ccap = 0 .5 corresponds to half the log pheromone range. VI. H EATMAP RELIABILITY AND DECODING LIMITS 
+
+We now inspect the thresholded heatmap graph before per-node candidate truncation. The goal is to explain why the gains are stable during construction from TSP500 through TSP10K, become less complementary to strong local search at TSP10K, and remain predictor-dependent under distribution shift. For H EAT ACO to improve on standard MMAS, the heatmap must satisfy several conditions. The thresholded graph must contain most edges of a good tour, or the decoder cannot sample them. The number of surviving edges must stay moderate, or construction faces too many false alternatives. The useful edges must stand out above the row-level degree baseline, or the evidence factors in (11) approach one and the decoder falls back to distance and pheromone. Known-tour coverage is available only as a post-hoc analysis. Candidate density and     
+
+> Fig. 4. Sensitivity to the evidence cap factor ccap on regular TSP benchmarks. Each panel reports the raw mean gap for the indicated heatmap-guided decoder and local search setting. The dark horizontal dashed line marks the standard MMAS baseline, and the light-grey vertical dashed line marks the default
+> ccap = 0 .5. Top-edge triangles indicate values clipped by the adaptive display range, with the true gap annotated nearby.
+
+row-level score separation can be evaluated from the heatmap alone, although whether the separated edges are useful remains a post-hoc question. 
+
+A. Candidate Sparsity and Known-Tour Recall 
+
+Let Eθh (H) = {(i, j ) : Hij > θh} be the directed heatmap entries surviving the global threshold θh = 10 −4 [9], before per-node truncation, and let ¯Eθh (H) be their undirected projection. We use three diagnostics: undirected-equivalent candidate density Edges /n = |Eθh (H)|/(2 n), known-tour coverage Cov( H) = | ¯Eθh (H) ∩ E⋆|/|E⋆|, and the missing-edge percentage Miss( H) = 100(1 − Cov( H)) , where E⋆
+
+is the edge set of the known tour: the Concorde optimum for TSP500/TSP1K, the benchmark-provided known optimum for TSP10K, and the TSPLIB reference tour for the TSPLIB instances. Candidate density approximates the branching burden imposed on the decoder, coverage measures whether good edges are available at all, and missing edges identify cases where even a perfect decoder restricted to the thresholded graph would be limited. We report these diagnostics wherever both a heatmap and the known tour are available; UTSP has no TSP10K heatmap in this benchmark release and is therefore left blank. At θh = 10 −4, the predictors reduce the dense O(n2)
+
+edge set to O(n) candidates while keeping high known-tour recall (Table IX, uniform-TSP block). Across the available in-distribution scales, DIFUSCO yields 4.5–5.9 edges per node with under 1% of known-tour edges missing, AttGCN yields 
+
+4.8–5.8 edges per node while missing only 0.8% –1.3% , and DIMES is sparser at 2.5–3.8 edges per node while missing 
+
+2.2% –3.4% . UTSP is denser at about 11 .3 edges per node and IEEE TRANSACTIONS , VOL. XX, NO. X, MONTH YYYY 12                                                                                                                                                 
+
+> TABLE IX HEATMAP -RELIABILITY DIAGNOSTICS AND HEAT ACO OUTCOME VS .
+> MATCHED MMAS.
+> Heatmap Set Edges/ nMiss% P(e >1) no-LS +2-opt
+> uniform TSP
+> AttGCN TSP500 4.78 0.84 0.75 ↑↑
+> TSP1K 4.86 0.89 0.74 ↑↑
+> TSP10K 5.75 1.3 0.73 ↑↓
+> DIMES TSP500 3.67 3.40 0.71 ↑↑
+> TSP1K 3.82 3.06 0.71 ↑↑
+> TSP10K 2.50 2.2 0.64 ↑↓
+> UTSP TSP500 11.39 0.00 0.65 ↑↑
+> TSP1K 11.34 0.00 0.61 ↑↑
+> TSP10K –––––DIFUSCO TSP500 4.51 0.62 0.86 ↑↑
+> TSP1K 4.51 0.62 0.86 ↑↑
+> TSP10K 5.90 0.2 0.81 ↑↓
+> TSPLIB
+> AttGCN pcb442 4.65 0.68 0.74 ↑=
+> pr1002 4.72 2.40 0.71 =↓
+> pr2392 4.77 1.71 0.74 ↑=
+> DIMES pcb442 3.75 2.26 0.72 ↑↑
+> pr1002 116.34 7.58 0.70 ↓↓
+> pr2392 493.26 16.30 0.72 ↓↓
+> UTSP pcb442 40.68 0.00 0.63 ↑=
+> pr1002 68.99 0.00 0.42 ↓↓
+> pr2392 112.62 0.00 0.38 ↓↓
+> DIFUSCO pcb442 3.83 1.58 0.72 ↑=
+> pr1002 9.56 0.40 0.73 ↑↑
+> pr2392 23.43 0.00 0.75 ↑=
+> Note: Edges/ nand Miss% diagnose the heatmap; P(e >1) is the fraction of edges with additional evidence that belong to the known tour, a post-hoc control on the selection rule. ↑/=/↓is H EAT ACO significantly better / tied / worse than matched MMAS (paired Wilcoxon, p < 0.05 ) at no-LS and +2-opt. Shading: red / orange flag degraded heatmap diagnostics; green marks healthy selection or a H EAT ACO win.
+
+nearly lossless on TSP500 and TSP1K. The table also reports the fraction P (e > 1) of edges with additional evidence that belong to the known tour. This reference-dependent quantity is not used by the algorithm and serves only as a post-hoc control. On uniform TSP it stays between 0.61 and 0.86 , whereas an arbitrary thresholded candidate belongs to the known tour with probability only 0.09 to 0.26 , so the rule concentrates the known-tour edge signal by a factor of 2.7 to 7.4. The heatmap graph is thus sparse, contains nearly all known-tour edges through TSP10K, and is filtered by a rule that reliably keeps the good ones. High recall alone is not enough. A tour uses exactly two edges per node, yet even a sparse heatmap offers several plausible edges at each node, so the decoder must select a globally consistent subset under the degree and subtour constraints rather than merely confirm that good edges exist. The pheromone feedback performs this selection: H EAT ACO samples many feasible tours, reinforces the edges that take part in short tours, and evaporates the rest. The diagnostics therefore link the gap improvements to a specific mechanism: the heatmap supplies a high-recall candidate region, and pheromone feedback resolves the conflicts within that region.        
+
+> (a) In-distribution TSP1K
+> (b) TSPLIB pr2392 Fig. 5. Confidence-band separation on (a) in-distribution TSP1K and (b) the structurally shifted TSPLIB instance pr2392. Blue bars give the candidate edges per node in each confidence band (left axis), and orange markers give
+> P(opt |band ), the fraction of edges in that band that lie on the known tour (right axis, 0–1). Filled markers are reliable bands holding at least 1% of the predictor’s candidate edges, and hollow markers are sparse bands.
+
+B. Confidence-Band Concentration 
+
+Fig. 5(a) partitions the confidence values into bands and reports, for each band, the candidate-edge density and the conditional optimal-edge frequency P (opt | band ). Higher con-fidence is not uniformly better. Known-tour edges concentrate in a narrow medium-to-high band of high discriminability, while the dense low-confidence bands are almost pure noise. For DIFUSCO the lowest populated band [0 .01 , 0.05) holds most of the candidate edges yet has P (opt | band ) ≈ 0.04 ,whereas the [0 .4, 0.5) band holds about one edge per node at P (opt | band ) ≈ 0.87 . DIMES has a smooth monotone relationship but spreads its optimal edges across several middle bands, and UTSP places about ten edges per node into low-confidence bands of near-zero discriminability. This band structure motivates both the evidence formula and the cap. The degree baseline in (11) measures whether an edge stands out beyond the number of edges the node can use, so a node with many similar scores produces little evidence even at high raw confidence, because the heatmap exhibits low row-level discriminability there. The cap in (14) then bounds IEEE TRANSACTIONS , VOL. XX, NO. X, MONTH YYYY 13 
+
+the strongest evidence relative to the pheromone range, which prevents a dense low-confidence band from dominating early construction by sheer volume. The method thus exploits the concentrated, well-separated band while keeping raw heatmap magnitude from overriding later pheromone correction. The same band structure also clarifies the interaction with 2-opt and 3-opt. Heatmap guidance changes the starting tours and the pheromone trajectory, while local search itself always uses a separate geometric nearest-neighbour candidate list. When construction draws useful high-confidence edges, geometric repair starts from a better tour; however, once strong repair can recover the same structure independently, the heatmap’s marginal benefit can vanish or reverse. TSP10K demonstrates this complementarity boundary directly: its heatmaps have healthy sparsity, recall, and selection precision, and they improve every unrefined instance, yet the matched geometric baseline attains the lower post-search gap. 
+
+C. Failure Modes Under Distribution Shift 
+
+Fig. 5(b) and the TSPLIB block of Table IX show the effect of the geometry shift on the confidence mass. DIMES exhibits a sharp increase in low-confidence density: candidate density rises from 3.75 edges per node on pcb442 to 116 
+
+on pr1002 and 493 on pr2392, with most of the extra mass in the lowest-confidence bins. The missing rate rises to 
+
+7.58% and 16 .30% , and known-tour edges become hard to separate from background candidates. The selection control 
+
+P (e > 1) nonetheless stays around 0.72 , so the degree-aware rule still picks good edges, but they are diluted by a large volume of low-confidence candidates. This accounts for DIMES+H EAT ACO+2-opt being competitive on pcb442, at 0.27% , but degrading on pr1002 and pr2392, at 2.32% and 
+
+4.08% , where the failure comes from heatmap density, not from the selection rule. UTSP fails in a related but distinct way. It keeps all known-tour edges, with zero missing in Table IX, but its thresholded graph is very dense at 40 .68 to 112 .63 edges per node, and its selection control also drops, with P (e > 1) falling to 0.42 
+
+and 0.38 on pr1002 and pr2392, so the decoder faces many competing low-signal candidates that the rule can no longer separate. AttGCN and DIFUSCO stay much sparser and keep 
+
+P (e > 1) ≥ 0.71 . DIFUSCO still performs strongly on pr1002 with local search, at 0.53% for 2-opt and 0% for 3-opt, and AttGCN is strongest on pr2392, at 0.75% for 2-opt and 0.17% 
+
+for 3-opt, so different predictors fail under different structural shifts. 
+
+D. Boundaries of Heatmap-Guided Decoding 
+
+HEAT ACO exhibits two empirical boundaries. The first is reliability: under severe distribution shift, a heatmap can become too dense or move its confidence mass away from known-tour edges, leaving little separable evidence. The evi-dence factors then approach one, although residual misleading candidates can still hurt on some TSPLIB combinations. The second is complementarity: at TSP10K the heatmaps remain sparse and high in coverage and improve every construction-only instance, but 2-opt and 3-opt recover much of the same geometric structure and the matched MMAS variants finish lower. Heatmap quality therefore indicates whether guidance is usable, while local-search strength determines its additional value. We do not claim that a neural heatmap should always outperform classical search. A fixed heatmap is useful when it carries well-separated edge evidence, and these diagnostics indicate when it does not. VII. C ONCLUSIONS AND FUTURE WORK 
+
+This paper addressed heatmap-to-tour decoding as a dis-tinct stage of heatmap-based non-autoregressive solvers. We proposed H EAT ACO, a scalable, predictor-agnostic decoder that adds a capped, degree-aware evidence factor to MMAS and scales it from the pheromone dynamic range. H EAT ACO retains fixed-size candidate sampling and parallel ant con-struction, while using the same evidence configuration across pretrained predictors without retraining or predictor-specific tuning. In every available in-distribution same-heatmap com-parison, H EAT ACO with 2-opt obtains lower gaps and shorter reported decoding times than the published MCTS baselines. Against matched MMAS baselines on these benchmarks, it improves construction for every available predictor and scale and remains beneficial in most local-search settings on TSP500 and TSP1K. Directed ATSP experiments show consistent gains, while distribution shifts reveal both successful transfer and predictor-specific failures. At TSP10K, its advantage over matched MMAS is construction-specific, which is consistent with reduced complementarity under strong geometric repair. Together, these results support reusable fixed-heatmap decoding across large-scale benchmarks while showing that its value depends on heatmap reliability and complementarity with local search. Future work should combine score-only heatmap reliability with local-search strength to select between H EAT ACO and a full MMAS fallback. REFERENCES [1] D. L. Applegate, R. E. Bixby, V. Chv´ atal, and W. J. Cook, The Traveling Salesman Problem: A Computational Study . Princeton University Press, 2006. [2] B. H. Korte, J. Vygen, B. Korte, and J. Vygen, Combinatorial optimiza-tion . Springer, 2011. [3] K. Helsgaun, “An effective implementation of the Lin–Kernighan traveling salesman heuristic,” European Journal of Operational Research ,vol. 126, no. 1, pp. 106–130, 2000. [4] K. Ilavarasi and K. S. Joseph, “Variants of travelling salesman problem: A survey,” in International Conference on Information Communication and Embedded Systems (ICICES2014) , Feb. 2014, pp. 1–7. [5] S. Lin and B. W. Kernighan, “An effective heuristic algorithm for the traveling-salesman problem,” Operations Research , vol. 21, no. 2, pp. 498–516, 1973. [6] Y. Bengio, A. Lodi, and A. Prouvost, “Machine learning for combinatorial optimization: A methodological tour d’horizon,” European Journal of Operational Research , vol. 290, no. 2, pp. 405–421, Apr. 2021. [7] M. Karimi-Mamaghan, M. Mohammadi, P. Meyer, A. M. Karimi-Mamaghan, and E.-G. Talbi, “Machine learning at the service of meta-heuristics for solving combinatorial optimization problems: A state-of-the-art,” European Journal of Operational Research , vol. 296, no. 2, pp. 393–422, 2022. [8] C. K. Joshi, T. Laurent, and X. Bresson, “An Efficient Graph Convolu-tional Network Technique for the Travelling Salesman Problem,” Oct. 2019, arXiv:1906.01227. IEEE TRANSACTIONS , VOL. XX, NO. X, MONTH YYYY 14 
+
+[9] Z.-H. Fu, K.-B. Qiu, and H. Zha, “Generalize a Small Pre-trained Model to Arbitrarily Large TSP Instances,” Proceedings of the AAAI Conference on Artificial Intelligence , vol. 35, no. 8, pp. 7474–7482, May 2021. [10] W. Kool, H. van Hoof, and M. Welling, “Attention, learn to solve routing problems!” in International Conference on Learning Representations , 2019. [Online]. Available: https://openreview.net/forum? id=ByxBFsRqYm [11] Y. Ba, X. Lin, C. Zhou, R. Zheng, Z. Wang, X. Liang, Z. Lu, J. Sun, Y. Qian, and Q. Zhang, “Survey on Neural Routing Solvers,” Feb. 2026, arXiv:2602.21761 [math]. [Online]. Available: http://arxiv.org/abs/2602.21761 [12] Z. Sun and Y. Yang, “DIFUSCO: Graph-based diffusion solvers for combinatorial optimization,” in Advances in Neural Information Processing Systems , vol. 36, 2023. [Online]. Available: https://proceedings.neurips.cc/paper files/paper/2023/hash/ 0ba520d93c3df592c83a611961314c98-Abstract-Conference.html [13] Y. Min, Y. Bai, and C. P. Gomes, “Unsupervised Learning for Solving the Travelling Salesman Problem,” in arXiv preprint arXiv:2303.01307 ,Nov. 2023. [14] R. Qiu, Z. Sun, and Y. Yang, “DIMES: A Differentiable Meta Solver for Combinatorial Optimization Problems,” in arXiv preprint arXiv:2210.04123 , Oct. 2022. [15] Y. Xia, X. Yang, Z. Liu, Z. Liu, L. Song, and J. Bian, “Position: Rethinking Post-Hoc Search-Based Neural Approaches for Solving Large-Scale Traveling Salesman Problems,” in Proceedings of the 41st International Conference on Machine Learning . PMLR, Jul. 2024, pp. 54 178–54 190, iSSN: 2640-3498. [16] X. Pan, C. Wang, C. Ying, Y. Xue, and T. Yu, “Beyond the Heatmap: A Rigorous Evaluation of Component Impact in MCTS-Based TSP Solvers,” May 2025, arXiv:2411.09238 [cs]. [17] J. Guo, Y. Li, R. Wang, and J. Yan, “T2t: From distribution learning in training to gradient search in testing for combinatorial optimization,” in Advances in Neural Information Processing Systems 36 , ser. NeurIPS 2023. Neural Information Processing Systems Foundation, Inc. (NeurIPS), 2023, p. 50020–50040. [Online]. Available: http://dx.doi.org/10.52202/075280-2176 [18] C. B. Browne, E. Powley, D. Whitehouse, S. M. Lucas, P. I. Cowling, P. Rohlfshagen, S. Tavener, D. Perez, S. Samothrakis, and S. Colton, “A Survey of Monte Carlo Tree Search Methods,” IEEE Transactions on Computational Intelligence and AI in Games , vol. 4, no. 1, pp. 1–43, Mar. 2012. [19] M. Dorigo, V. Maniezzo, and A. Colorni, “Ant system: Optimization by a colony of cooperating agents,” IEEE Transactions on Systems, Man, and Cybernetics, Part B (Cybernetics) , vol. 26, no. 1, pp. 29–41, 1996. [20] M. Dorigo and L. M. Gambardella, “Ant colony system: A cooperative learning approach to the traveling salesman problem,” IEEE Transactions on Evolutionary Computation , vol. 1, no. 1, pp. 53–66, 1997. [21] T. St¨ utzle and H. H. Hoos, “MAX–MIN Ant System,” Future Generation Computer Systems , vol. 16, no. 8, pp. 889–914, Jun. 2000. [22] X. Pan, Y. Jin, Y. Ding, M. Feng, L. Zhao, L. Song, and J. Bian, “H-TSP: Hierarchically Solving the Large-Scale Traveling Salesman Problem,” in 
+
+arXiv preprint arXiv:2303.10122 , Feb. 2023. [23] G. Reinelt, “TSPLIB—A traveling salesman problem library,” ORSA J. Com. , vol. 3, no. 4, pp. 376–384, 1991. [24] R. Jonker and T. Volgenant, “Transforming asymmetric into symmetric traveling salesman problems,” Operations Research Letters , vol. 2, no. 4, pp. 161–163, 1983. [25] M. Dorigo and C. Blum, “Ant colony optimization theory: A survey,” 
+
+Theoretical Computer Science , vol. 344, no. 2, pp. 243–278, Nov. 2005. [26] M. Birattari, P. Pellegrini, and M. Dorigo, “On the invariance of ant colony optimization,” IEEE Transactions on Evolutionary Computation ,vol. 11, no. 6, pp. 732–742, 2007. [27] M. Mavrovouniotis, F. M. Muller, and S. Yang, “Ant colony optimization with local search for dynamic traveling salesman problems,” IEEE Transactions on Cybernetics , vol. 47, no. 7, p. 1743–1756, Jul. 2017. [Online]. Available: http://dx.doi.org/10.1109/TCYB.2016.2556742 [28] A. F. Tuani, E. Keedwell, and M. Collett, “Heterogenous adaptive ant colony optimization with 3-opt local search for the travelling salesman problem,” Applied Soft Computing , vol. 97, p. 106720, 2020. [29] N. Mazyavkina, S. Sviridov, S. Ivanov, and E. Burnaev, “Reinforcement learning for combinatorial optimization: A survey,” Computers &Operations Research , vol. 134, p. 105400, 2021. [30] Q. Cappart, D. Ch´ etelat, E. B. Khalil, A. Lodi, C. Morris, and P. Veliˇ ckovi´ c, “Combinatorial optimization and reasoning with graph neural networks,” Journal of Machine Learning Research , vol. 24, no. 130, pp. 1–61, 2023. [31] O. Vinyals, M. Fortunato, and N. Jaitly, “Pointer networks,” in 
+
+Advances in Neural Information Processing Systems , vol. 28, 2015. [Online]. Available: https://proceedings.neurips.cc/paper/2015/ hash/29921001f2f04bd3baee84a12e98098f-Abstract.html [32] I. Bello, H. Pham, Q. V. Le, M. Norouzi, and S. Bengio, “Neural Combinatorial Optimization with Reinforcement Learning,” Jan. 2017, arXiv:1611.09940 [cs]. [33] X. Bresson and T. Laurent, “The Transformer Network for the Traveling Salesman Problem,” ArXiv , Mar. 2021. [34] X. Chen and Y. Tian, “Learning to Perform Local Rewriting for Combinatorial Optimization,” Oct. 2019, arXiv:1810.00337 [cs, stat]. [35] B. Hudson, Q. Li, M. Malencia, and A. Prorok, “Graph Neural Network Guided Local Search for the Traveling Salesperson Problem,” Apr. 2022, arXiv:2110.05291 [cs]. [36] A. Hottung, Y.-D. Kwon, and K. Tierney, “Efficient Active Search for Combinatorial Optimization Problems,” Mar. 2022, arXiv:2106.05126 [cs, math]. [37] X. Tong, Z. Wang, M. Yuan, Z. Zheng, and C. Zhou, “Udc: A unified neural divide-and-conquer framework for large-scale combinatorial optimization problems,” in Advances in Neural Information Processing Systems 37 , ser. NeurIPS 2024. Neural Information Processing Systems Foundation, Inc. (NeurIPS), 2024, p. 6081–6125. [Online]. Available: http://dx.doi.org/10.52202/079017-0197 [38] F. Berto, C. Hua, N. G. Zepeda, A. Hottung, N. Wouda, L. Lan, K. Tierney, and J. Park, “RouteFinder: Towards Foundation Models for Vehicle Routing Problems,” Jun. 2024, arXiv:2406.15007 [cs]. [39] J. Zhao, M. Mao, X. Zhao, and J. Zou, “A hybrid of deep reinforcement learning and local search for the vehicle routing problems,” IEEE Transactions on Intelligent Transportation Systems , vol. 22, no. 11, pp. 7208–7218, 2021. [40] W. Pan, H. Xiong, J. Ma, W. Zhao, Y. Li, and J. Yan, “UniCO: On Unified Combinatorial Optimization via Problem Reduction to Matrix-Encoded General TSP,” in arXiv preprint arXiv:2410.08227 , Oct. 2024. [41] H. Ye, J. Wang, H. Liang, Z. Cao, Y. Li, and F. Li, “Glop: Learning global partition and local construction for solving large-scale routing problems in real-time,” Proceedings of the AAAI Conference on Artificial Intelligence , vol. 38, no. 18, p. 20284–20292, Mar. 2024. [Online]. Available: http://dx.doi.org/10.1609/aaai.v38i18.30009 [42] Y. Li, L. Chen, H. Wang, R. Wang, and J. Yan, “Generation as Search Operator for Test-Time Scaling of Diffusion-based Combinatorial Optimization,” in OpenReview , Oct. 2025. [Online]. Available: https://openreview.net/forum?id=9JM03CQwzC [43] L. Chen, Y. Li, and J. Yan, “MaskCO: Masked Generation Drives Effective Representation Learning and Exploiting for Combinatorial Optimization,” in OpenReview , Oct. 2025. [Online]. Available: https://openreview.net/forum?id=psUjNnLhl9 [44] H. Ye, J. Wang, Z. Cao, H. Liang, and Y. Li, “DeepACO: Neural-enhanced Ant Systems for Combinatorial Optimization,” in arXiv preprint arXiv:2309.14032 , Nov. 2023. [45] M. Kim, S. Choi, H. Kim, J. Son, J. Park, and Y. Bengio, “Ant Colony Sampling with GFlowNets for Combinatorial Optimization,” arXiv preprint arXiv:2403.07041, 2024, publisher: arXiv Version Number: 2. [46] A. R. Abir, M. A. Nayeem, M. S. Rahman, and M. A. Arefeen, “GTG-ACO: Graph Transformer Guided Ant Colony Optimization for learning heuristics and pheromone dynamics for combinatorial optimization,” Swarm and Evolutionary Computation , vol. 99, p. 102147, Dec. 2025. [Online]. Available: https://www.sciencedirect.com/science/ article/pii/S2210650225003049 [47] G. A. Croes, “A method for solving traveling-salesman problems,” 
+
+Operations Research , vol. 6, no. 6, pp. 791–812, 1958. [48] J. Ma, W. Pan, Y. Li, and J. Yan, “ML4CO-Bench-101: Benchmark Machine Learning for Classic Combinatorial Problems on Graphs,” in OpenReview , Oct. 2025. [Online]. Available: https://openreview.net/ forum?id=ye4ntB1Kzi&noteId=pNJFK9iNG3 [49] K. Helsgaun, “An Extension of the Lin-Kernighan-Helsgaun TSP Solver for Constrained Traveling Salesman and Vehicle Routing Problems: Technical report,” Roskilde University, Technical Report, Dec. 2017. [50] F. Luo, X. Lin, F. Liu, Q. Zhang, and Z. Wang, “Neural Combinatorial Optimization with Heavy Decoder: Toward Large Scale Generalization,” in arXiv preprint arXiv:2310.07985 , Nov. 2023. [51] J. Derrac, S. Garc´ ıa, D. Molina, and F. Herrera, “A practical tutorial on the use of nonparametric statistical tests as a methodology for comparing evolutionary and swarm intelligence algorithms,” Swarm and Evolutionary Computation , vol. 1, no. 1, pp. 3–18, 2011. [52] D. Applegate, R. Bixby, V. Chvatal, and W. Cook, “Concorde TSP solver,” 2006.

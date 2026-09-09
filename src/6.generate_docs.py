@@ -1430,22 +1430,59 @@ def merge_daily_run_results(
     return state, merged_deep, merged_quick, merged_evidence, state_file
 
 
+class PaperFulltextUnavailable(ValueError):
+    """官方已撤回且无法下载的版本，不是可重试的转换故障。"""
+
+
+def is_usable_paper_text(text: str) -> bool:
+    """基本质量门：拒绝空缓存、短错误提示和代理返回的HTML/JSON错误页。"""
+    value = str(text or "").strip()
+    if len(value) < 1200:
+        return False
+    head = value[:1000].lower()
+    if re.search(r"warning: target url returned error|has been withdrawn and is unavailable", head):
+        return False
+    if re.search(r"<!doctype\s+html|<html\b|<body\b", head):
+        return False
+    if value.startswith(("{", "[")) and re.search(r'"(?:error|message|status)"\s*:', head):
+        return False
+    if re.match(r"(?:error|access denied|service unavailable|rate limit|upstream error)\b", head):
+        return False
+    return True
+
+
 def ensure_text_content(pdf_url: str, txt_path: str) -> str:
     if os.path.exists(txt_path):
         with open(txt_path, "r", encoding="utf-8") as f:
-            return f.read()
+            cached = f.read()
+        if is_usable_paper_text(cached):
+            return cached
     text_content = fetch_paper_markdown_via_jina(pdf_url)
-    if text_content is None and pdf_url:
+    if not is_usable_paper_text(text_content) and pdf_url:
         resp = requests.get(pdf_url, timeout=60)
+        if resp.status_code == 404 and 'has been withdrawn and is unavailable' in str(text_content or '').lower():
+            raise PaperFulltextUnavailable("该arXiv版本已撤回，官方PDF不可下载")
         resp.raise_for_status()
+        if not resp.content.lstrip().startswith(b"%PDF-"):
+            raise ValueError("全文下载未返回有效PDF，拒绝将错误页保存为论文全文")
         with tempfile.NamedTemporaryFile(suffix=".pdf", delete=True) as tmp_pdf:
             tmp_pdf.write(resp.content)
             tmp_pdf.flush()
             text_content = extract_pdf_text(tmp_pdf.name)
-    os.makedirs(os.path.dirname(txt_path), exist_ok=True)
-    with open(txt_path, "w", encoding="utf-8") as f:
-        f.write(text_content or "")
-    return text_content or ""
+    if not is_usable_paper_text(text_content):
+        raise ValueError("论文全文抽取为空或不完整，未发布全文文件")
+    directory = os.path.dirname(txt_path) or "."
+    os.makedirs(directory, exist_ok=True)
+    temporary = ""
+    try:
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=directory, delete=False) as f:
+            temporary = f.name
+            f.write(text_content)
+        os.replace(temporary, txt_path)
+    finally:
+        if temporary and os.path.exists(temporary):
+            os.unlink(temporary)
+    return text_content
 
 
 def yaml_escape_value(s: str) -> str:

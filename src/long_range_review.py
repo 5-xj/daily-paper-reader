@@ -245,7 +245,7 @@ def review_batch(papers, topic, cache, client_factory, model_key):
     return cached
 
 
-def publish_report(root, token, groups, metadata):
+def publish_report(root, token, groups, metadata, *, with_fulltext=True):
     root = Path(root)
     folder = root / "docs" / "long-range" / token
     folder.mkdir(parents=True, exist_ok=True)
@@ -274,12 +274,12 @@ def publish_report(root, token, groups, metadata):
             group["buckets"][bucket] = {"count": len(selected), "pages": files}
         manifest["groups"].append(group)
     write_json(folder / "manifest.json", manifest)
-    rebuild_report_index(root)
+    rebuild_report_index(root, with_fulltext=with_fulltext)
     return manifest
 
 
-def rebuild_report_index(root):
-    """只汇总已完成报告；可在git合并后执行，不调用任何抓取或模型。"""
+def rebuild_report_index(root, *, with_fulltext=False):
+    """汇总报告；默认合并后仅静态重建，新评审发布时额外补齐PDF全文。"""
     root = Path(root)
     (root / "docs" / "long-range").mkdir(parents=True, exist_ok=True)
     entries = []
@@ -316,7 +316,7 @@ def rebuild_report_index(root):
     )
     from long_range_native import publish_native_reports
 
-    publish_native_reports(root)
+    publish_native_reports(root, with_fulltext=with_fulltext)
     return catalog
 
 

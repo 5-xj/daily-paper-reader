@@ -1,0 +1,1840 @@
+Beyond Solving: Prescriptive Probing for Neural
+Routing Solvers
+Reuben Narad∗
+Foster School of Business
+University of Washington
+Seattle, WA, USA
+rnarad@uw.edu
+Léonard Boussioux
+Foster School of Business
+Paul G. Allen School of Computer Science & Engineering
+University of Washington
+Seattle, WA, USA
+Michael Wagner
+Foster School of Business
+University of Washington
+Seattle, WA, USA
+Abstract
+Neural combinatorial optimization (NCO) trains fast heuristics for routing prob-
+lems, but planners often need more than a single solve: they ask which stop to
+drop, which transition to preserve, or which subset of stops to remove if a route
+is infeasible. Answering such counterfactual questions by re-solving each can-
+didate is expensive even when the action set is small. We introduce prescriptive
+probing: using the frozen representations of a trained NCO model to rank can-
+didate interventions for what-if decision support. While recent interpretability
+work descriptively probes what NCO solvers encode, we ask whether those same
+representations can prescriptively guide intervention choices on real-road routing
+problems. Where exhaustive labels are available, we train supervised probes from
+offline re-solve labels; where they are not (e.g., combinatorial action spaces), we
+train a lightweight reinforcement learning intervention head. Across real-road
+benchmarks on the Asymmetric Traveling Salesperson Problem and Capacitated
+Vehicle Routing Problem, probes built on frozen model representations achieve the
+strongest performance on a majority of intervention tasks and improve over local-
+repair heuristics on edge-forbiddance and on key node- and multi-node-removal
+metrics. We further investigate probeability as a property of the routing model
+itself, varying model quality, the mix of supervised learning and reinforcement
+learning, and the architecture family. Overall, our results suggest a new use case
+for NCO solvers: representations learned for route construction can transfer to
+decision support.
+1
+Introduction
+Routing problems such as the Traveling Salesperson Problem (TSP), its asymmetric variant (ATSP),
+and the Capacitated Vehicle Routing Problem (CVRP) are central to logistics, and neural combinato-
+rial optimization (NCO) has emerged as a promising way to learn fast heuristics for them [Bello et al.,
+2017, Kool et al., 2019, Kwon et al., 2020, Kim et al., 2022, Kwon et al., 2021, Luo et al., 2023, Sun
+and Yang, 2023]. NCO models are typically evaluated as direct solvers: given an instance, the model
+constructs or improves a route, and is judged by route cost. Many real planning workflows, however,
+also involve questions about a route once it is in hand: which stop to drop, which planned transition
+is most critical to preserve, or which subset of stops to remove when a route becomes infeasible?
+Each such question is a counterfactual, and answering it by brute force means modifying the instance,
+∗Corresponding author: rnarad@uw.edu
+arXiv:2602.07216v2  [cs.LG]  4 Aug 2026
+
+
+Figure 1: Overview of prescriptive probing. A trained NCO model first solves a routing instance
+and exposes frozen internal activations. Offline, we label counterfactual interventions by modifying
+the instance, re-solving with a target solver, and recording the resulting action values. A lightweight
+probe is then trained to map activations to these labels. At test time, the probe scores candidate
+interventions for a new instance using a single forward pass through a routing model; the top-ranked
+actions can be selected directly or used as a shortlist for a small number of expensive re-solves.
+re-solving under each candidate intervention, and comparing the resulting costs, which is expensive
+even when the action set is only linear in the number of stops.
+We ask whether trained NCO models can be useful beyond solving. Specifically, can their frozen
+internal representations serve as operational signals for downstream what-if decision support? This
+perspective is inspired by pragmatic uses of model internals in other domains: activation probes can
+flag harmful or policy-relevant behavior in production large language models [Kramár et al., 2026],
+and frozen Evo 2 genomic foundation-model embeddings can support lightweight variant-effect and
+pathogenicity predictors in a label-scarce scientific domain [Pearce et al., 2026]. In routing, the
+analogous question is whether a model trained to solve routing instances has learned representations
+that make costly counterfactual decisions easier to rank.
+We call this idea prescriptive probing. Recent NCO probing work uses frozen solver representations
+descriptively, asking what learned solvers encode and how those encodings explain routing behavior
+[Zhang et al., 2025]. Prescriptive probing, in contrast, asks whether those representations can guide
+actions. Given a trained solver, we freeze its representations and train a small head to rank downstream
+interventions by their counterfactual value under the target solver. The resulting probe provides a
+cheap screening mechanism: score many candidate interventions in a single model forward pass, then
+optionally re-solve only a shortlist.
+We study this framework in real-road asymmetric routing. Unlike synthetic Euclidean TSP, real road
+networks induce explicit asymmetric origin-destination cost matrices because of one-way streets,
+turn restrictions, topological constraints, and direction-dependent travel times. We therefore build on
+Real Routing NCO (RRNCO) and its real-road city benchmark: RRNCO is designed for asymmetric
+distance and duration matrices, and its row/column encoder produces node-aligned incoming and
+outgoing representations before the decoder commits to a route [Son et al., 2026]. Euclidean TSP
+remains useful as a controlled sandbox for comparing alternative model families, but the headline
+setting of this paper is real-road routing, where operational what-if decisions are most natural.
+Our experiments consider three intervention regimes. In single-node removal, the action is to remove
+one stop and re-solve the reduced instance. In single-edge forbiddance, the action is to forbid one
+directed transition from a planned route and measure the cost of the best alternative. Both tasks have
+enumerable candidate sets, so we collect offline re-solve labels and train supervised prescriptive
+probes. In multi-node removal, the action is a subset of stops; exhaustive labels are infeasible because
+the action space is combinatorial, so we train a lightweight reinforcement-learning intervention head
+on the same frozen representations. Across tasks, we compare against simple operations research
+(OR)-style local repair heuristics and learned controls that do not use trained model representations.
+Empirically, methods using frozen routing representations improve learned controls on the main ATSP
+intervention benchmarks and outperform local repair heuristics on key node-remove, edge-forbid,
+and multi-node-removal metrics. We also find that probeability is shaped by the routing model itself:
+prescriptive signal varies across encoder layers, training checkpoints, and supervised/reinforcement
+learning (SL/RL) training mixtures. Finally, a Euclidean TSP100 architecture sandbox shows that
+prescriptive probeability is not unique to RRNCO and varies substantially across modern NCO
+representation families. Overall, our results suggest that NCO models can be useful not only when
+2
+
+
+they produce the final route, but also when their learned states provide reusable operational signals
+for expensive downstream decisions.
+2
+Background and Related Work
+Neural combinatorial optimization and routing. Neural combinatorial optimization trains neural
+models as fast heuristics for routing problems such as TSP, ATSP, CVRP, and related variants. Early
+work framed routing as sequence prediction or RL [Vinyals et al., 2015, Bello et al., 2017], while the
+Attention Model became a standard Transformer-style encoder-decoder baseline for learned routing
+[Kool et al., 2019]. Subsequent autoregressive and constructive methods improved training, symmetry
+handling, matrix encodings, and decoder-side computation [Kwon et al., 2020, Kim et al., 2022,
+Kwon et al., 2021, Luo et al., 2023]. Other paradigms expose different representation objects: GCN
+and heatmap methods predict edge scores, local-search methods learn guidance signals, and diffusion
+or test-time optimization methods operate through edge- or denoising-centric states [Joshi et al.,
+2019, Fu et al., 2021, Hudson et al., 2022, Sun and Yang, 2023, Li et al., 2023, 2024]. A related line
+uses learning as a component of an explicit solver, for example, by guiding destroy-repair, large-
+neighborhood search, ant-colony search, or subproblem selection [Chen and Tian, 2019, Hottung
+and Tierney, 2020, Li et al., 2021, Ye et al., 2024, 2023]. Recent generalist and unified approaches
+broaden NCO across problems and distributions [Drakulic et al., 2025, Pan et al., 2025, Li et al., 2025,
+Ma et al., 2025]. These works primarily ask how well neural methods solve routing problems; we ask
+whether the representations learned while solving can also support downstream what-if decisions.
+Real-road asymmetric routing. Most learned routing benchmarks use synthetic Euclidean TSP or
+CVRP, where the coordinates induce symmetric distances. Earlier matrix-encoding work showed
+that neural CO models can operate directly on relationship matrices, including ATSP [Kwon et al.,
+2021]. RRNCO extends this direction to real-world routing, using asymmetric distance and duration
+matrices and exposing row/column representations for incoming and outgoing structures [Son et al.,
+2026]. This makes RRNCO a natural source of representation for real-road ATSP what-if tasks.
+We use Euclidean TSP100 only as a controlled-architecture sandbox for model families that do not
+natively support explicit asymmetric real-road matrices.
+Probing and pragmatic representation reuse. Probing trains lightweight predictors on frozen
+representations to test what information is accessible from model states [Alain and Bengio, 2016,
+Adi et al., 2016, Conneau et al., 2018, Belinkov, 2022]. This connects to mechanistic interpretability,
+which studies internal computation in neural networks, and to a pragmatic view in which model
+internals are useful when they support concrete downstream tasks such as monitoring, classification,
+steering, or scientific prediction [Elhage et al., 2021, Bricken et al., 2023, Nanda et al., 2025,
+Kramár et al., 2026, Pearce et al., 2026]. Recent NCO probing work applies this idea descriptively,
+asking whether learned solvers encode distances, demands, route membership, myopia-avoidance
+information, constraint structure, or layer-wise decision-relevant features [Zhang et al., 2025]. Our
+use is prescriptive: rather than asking only what a routing model encodes, we ask whether those
+frozen representations can rank operational interventions.
+What-if optimization, reoptimization, and interdiction. OR has long studied routing problems
+where solutions change under local instance modifications. TSP reoptimization considers node
+insertion/deletion [Archetti et al., 2003, Ausiello et al., 2009]; interdiction and fortification study edge
+disruptions or increased arc costs [Lozano et al., 2017]; and orienteering, prize-collecting, and quota
+variants model optional service over subsets of customers [Vansteenwegen et al., 2011, Bienstock
+et al., 1993]. Our intervention labels follow this tradition: modify the instance or planned route,
+re-solve with a target solver, and measure the resulting objective. The bottleneck is label cost: even
+O(n) action sets require many re-solves, while subset interventions are combinatorial.
+3
+Methodology: Prescriptive Tasks and Probing
+3.1
+Counterfactual interventions and solver-relative labels
+Let x = (V, C) be a routing instance with stops V = {1, . . . , n} and, in the ATSP setting, an
+asymmetric cost matrix C ∈Rn×n. Let S be the target solver used to evaluate interventions. The
+3
+
+
+Figure 2:
+Representation pipeline for prescriptive probing with RRNCO. The routing model
+encodes a real-road instance using separate row and column residual streams, which remain aligned
+with the input stops. We extract frozen states from multiple encoder probe points, such as early,
+intermediate, and final row/column residual-stream locations. Node probes score candidate removals
+from row/column node states; edge probes score used directed transitions from source and target
+endpoint states; and remove-k intervention heads sequentially select subsets using the same frozen
+representations. The routing model is not updated during probe or intervention-head training.
+framework is solver-agnostic: S may be an exact solver, heuristic, commercial optimizer, or learned
+routing model, depending on what an organization uses in deployment.
+A prescriptive task specifies candidate actions A(x). Each action a ∈A(x) induces a modified
+instance xa, whose value is obtained by re-solving with S. We write JS(x) for the route cost returned
+by S, qS(a; x) = JS(xa) for the counterfactual value, and ∆S(a; x) = JS(xa) −JS(x) for the
+effect relative to the base solution. Labels are therefore solver-relative: an intervention is important
+relative to the counterfactual behavior of the chosen solver. Even when |A(x)| is only O(n), fully
+labeling one instance requires many counterfactual re-solves.
+3.2
+Frozen routing representations
+Let Mϕ be a trained routing model. We reuse internal states of Mϕ as frozen representations for
+what-if prediction, writing Hp
+ϕ(x) for the representation extracted at encoder probe point p. For
+RRNCO, which is an encoder-decoder model for real-road routing, the encoder builds node-aligned
+representations from coordinates and real-road edge features, including asymmetric distance and
+duration information [Son et al., 2026]. The decoder then uses the encoded instance and partial route
+to construct a solution autoregressively.
+We probe encoder residual-stream states because they are computed once per instance and remain
+aligned with input nodes before any particular route is decoded. This follows recent NCO probing
+work, which also reads node embeddings across AM/POMO encoder layers and LEHD decoder
+states [Zhang et al., 2025]. At probe point p, RRNCO exposes row states {rp
+i }i∈V and column states
+{cp
+i }i∈V . Our default node representation is hp
+i = [rp
+i ; cp
+i ], where row and column streams capture
+outgoing- and incoming-oriented structure. We sweep over early, intermediate, and final encoder
+probe points; unless otherwise stated, Mϕ is frozen and only the probe or intervention head is trained.
+3.3
+Supervised single-intervention tasks
+We first study two O(n)-candidate intervention tasks (single-node removal and single-edge for-
+biddance) that can be labeled offline by exhaustive counterfactual re-solving. For both, a probe
+receives frozen representations from Mϕ at probe point p and predicts one score per candidate action,
+written as ˆqθ(a; x, p) = gθ(Hp
+ϕ(x), a). Probes rank candidates by predicted impact on tour length.
+Probe-head details are in Appendix A.
+Single-node removal.
+Each candidate action removes one node: Anode(x) = V , or V \ {depot}
+in depot-based settings. Let x−i be the instance with node i removed. The best node is i⋆
+S(x) =
+arg mini∈Anode(x) JS(x−i). This models decisions such as last-mile triage: a driver has 100 planned
+deliveries but, because of space or time constraints, can serve only 99, so the planner must choose
+one package to drop. It is also a natural reoptimization problem: TSP reoptimization under node
+addition/deletion is NP-hard [Archetti et al., 2003, Ausiello et al., 2009].
+4
+
+
+Figure 3: Two ATSP instances from San Francisco illustrating the single-node removal (top) and
+edge-forbid (bottom) tasks. Candidate actions are colored by the change in route cost induced by
+removing/forbidding and re-solving; the highlighted node/edge is the most impactful. Additional
+examples of both tasks are provided in Appendix B.
+Single-edge forbiddance.
+This is a post-solve task: given a base route τS(x), we ask which
+used directed transition is most critical to preserve. For TSP or ATSP, the candidates are successor
+pairs Aedge(x, τS) = {(τt, τt+1) : t = 1, . . . , n}. For a used edge (u, v), let x−(u,v) forbid v from
+immediately following u. The target is (u, v)⋆
+S(x) = arg max(u,v)∈Aedge(x,τS)[JS(x−(u,v))−JS(x)].
+This models route-level contingency analysis: if time-sensitive operations depend on certain planned
+transitions, which ones should be monitored most closely for disruption? While a real road closure
+usually changes many origin–destination costs rather than forbidding a single successor pair, the
+edge-forbid task provides a controlled abstraction: it tests whether the representations that support
+node-removal sensitivity also capture localized pairwise route sensitivity.
+3.4
+Multi-node removal
+We also study a combinatorial intervention, remove-k: choose k stops to remove, Ak(x) = {R ⊆
+V : |R| = k}. This models cases where a route is substantially infeasible and several stops must be
+dropped. The ideal target is R⋆
+S,k(x) = arg minR⊆V, |R|=k JS(x−R), but exhaustive labels require
+ n
+k
+
+re-solves. This illustrates a broader limitation of supervised prescriptive probing: many useful
+interventions have clear counterfactual rewards but no tractable exhaustive label set.
+5
+
+
+In routing, however, the reward can still be queried by trying a proposed intervention and re-solving.
+We therefore train a lightweight online intervention head rather than a supervised probe. The head
+sequentially selects nodes without replacement, it ∼πθ(· | Hp
+ϕ(x), i1, . . . , it−1), and receives reward
+after x−{i1,...,ik} is re-solved. This use of RL is natural in OR-style domains, where candidate actions
+can be simulated or optimized against a black-box solver, even when exhaustive labels are unavailable.
+The task tests whether frozen routing representations support combinatorial intervention policies, not
+only independent single-action scores.
+3.5
+Baselines and metrics
+We compare against two baseline families. Heuristic baselines approximate counterfactual effects by
+cheap local route repair: for node removal, delete a node and shortcut its predecessor to its successor;
+for edge forbiddance, replace a forbidden transition with a local detour. These are simple but strong.
+Learned controls use the same probe-head families as the representation probes, but replace trained
+activations with raw routing inputs such as coordinates, cost matrices, and summary features. These
+controls test whether performance comes from trained routing states rather than probe capacity or
+raw instance information alone. Appendix F additionally reports random-action references.
+For supervised tasks, the main benchmark reports Acc@1, Acc@5, Reg@1, and Reg@5. Acc@1 is
+the fraction of instances where the probe’s top-ranked action equals the true best action; Acc@5 is
+the fraction where the true best action appears anywhere in the probe’s top five. Reg@1 measures
+the regret of the top-ranked action, while Reg@5 measures the regret after taking the best action
+among the probe’s top five candidates. Thus Acc@5 and Reg@5 correspond to a screening workflow:
+the probe shortlists five interventions and the planner re-solves only that shortlist. We additionally
+use Spearman rank correlation in diagnostic analyses where full-ranking agreement is useful. For
+remove-k, we report the resulting tour reduction after selected nodes are removed and the instance is
+re-solved. Metric definitions are in Appendix C, and implementation details are in Appendix D.
+4
+Experimental Setup
+We organize the experiments around three questions. First, how well do prescriptive probes perform
+on real-road intervention tasks, compared with learned controls and simple local-repair heuristics?
+Second, what aspects of a routing model make it probeable, across training checkpoints and NCO
+architectures? Third, can the probing analysis give practical guidance for training routing models, for
+example in choosing the amount of supervised pretraining before RL continuation?
+4.1
+Main real-road benchmark
+The main benchmark uses real-road instances of 80 cities from the RRNCO data pipeline. We
+evaluate ATSP100 and ATSP500, with 100 and 500 stops, and include RCVRP100 customer removal
+as a capacitated-routing extension. ATSP instances have no depot; RCVRP instances include a depot,
+customer demands, vehicle capacity, and customer-removal candidates only.
+We evaluate three intervention regimes. Node removal resolves the instance after removing a stop.
+Edge forbiddance resolves after forbidding one used directed edge in a planned ATSP route; we omit
+RCVRP edge forbiddance because depot/customer route edges require a separate task definition.
+Remove-5, the k = 5 instance of remove-k, trains a policy to sequentially remove five ATSP nodes
+and receives a reward after the reduced instance is re-solved.
+All real-road counterfactual labels are defined with respect to Lin–Kernighan-style (LKH) heuristic
+solvers [Helsgaun, 2000, 2017]. This matches the solver-relative framing of Section 3.1: the probe
+learns intervention value under the target solver used to generate labels. Node-removal labels are
+100(Lbase −Lremoved)/Lbase, edge-forbid labels are 100(Lforbid −Lbase)/Lbase, and remove-5
+uses the same tour-improvement reward after removing the selected nodes. Dataset sizes, splits,
+solver trials, and timeouts are in Appendix D.
+4.2
+Routing models, probes, and controls
+The main representation source is an RRNCO checkpoint trained on the corresponding real-road
+problem family. For ATSP100 and ATSP500, we use real-road ATSP RRNCO models initialized
+6
+
+
+with weak-LKH supervised training and continued with RL; RCVRP100 uses the corresponding
+capacitated RRNCO model. We extract row/column encoder states at two probe locations, an
+intermediate layer-2 state and the final encoder state, as described in Section 3.2. Full architecture
+and routing-model training details are given in Appendix D.
+For each supervised problem-task pair, we run a validation sweep over probe location, learning
+rate, input type, and probe head. Input types are raw, using the same coordinates, cost information,
+and summary features available to the routing model; activation, using frozen RRNCO states; and
+raw+activation, concatenating both. Probe heads include linear, standard MLP, and RowCol MLP
+variants, where RowCol MLP keeps the RRNCO row and column streams separate through the
+first projection before scoring their interaction; it is a probe-head choice rather than an additional
+raw cost-matrix input. All supervised probes use a ranking-aware soft cross-entropy loss and are
+selected by validation Regret@1. The main table reports the selected probe for each setting, with
+final results averaged over 10 seeds. For remove-5, we train analogous lightweight RL intervention
+heads that select nodes sequentially without replacement and select by validation reward. Full swept
+configurations, feature definitions, and optimization details are in Appendix D and Appendix A.
+4.3
+Probeability analyses
+Beyond the fixed-model benchmark, we ask what makes a routing model more probeable. We
+run two analyses on RRNCO training. First, we track probe performance over RL training for an
+ATSP100 large model, extracting checkpoints throughout RL continuation and training both linear
+and row-column MLP probes for node removal and edge forbiddance. This tests whether prescriptive
+signal improves as the same routing model becomes a better solver.
+Second, we run an iso-performance and supervised-learning/reinforcement-learning (SL/RL) sweep:
+starting from a fully supervised RRNCO model, we resume earlier supervised checkpoints with RL
+until matched route performance, then train linear and MLP node-removal probes. This gives models
+with comparable routing quality but different SL/RL mixtures. A small amount of SL before RL
+improves probeability across both probe families, with the clearest effect for linear probes and a
+consistent Spearman trend for MLP probes.
+Finally, we evaluate released NCO checkpoints in Euclidean TSP100, enabling a controlled compari-
+son across model families that do not all support explicit asymmetric real-road matrices. We include
+autoregressive, symmetry-augmented, heatmap, heavy-decoder, diffusion, and RRNCO-style models,
+probing each model’s most natural internal state. We compare node-removal probe accuracy against
+TSP100 policy gap; provenance and probe-location details are in Appendix I.
+5
+Results and Analysis
+5.1
+Main real-road results
+Table 1 reports the main real-road benchmark. ATSP100 node removal is the cleanest activation-only
+result: the layer-2 RowCol MLP reaches 69.8% Acc@5 and reduces Reg@5 from 1.13 for the
+raw-input control to 0.23. The local repair heuristic remains strongest on exact top-1 and Reg@1,
+showing that learned representations are most useful here as a high-quality screening signal rather
+than a universal replacement for local tour repair.
+The larger and constrained node-removal settings are more baseline-competitive. On ATSP500, raw
+inputs remain strongest on accuracy and Reg@1, while raw+activation slightly improves Reg@5; on
+RCVRP100, local repair remains very strong on regret, while raw+activation gives the best Acc@5
+among learned rows. Edge forbiddance is the clearest win over local repair: raw+activation probes
+improve both accuracy and regret over heuristic and raw-input baselines on ATSP100 and ATSP500.
+Remove-5 shows the same mixed picture: raw+activation RL wins on ATSP100, while local top-5
+deletion remains strongest on ATSP500. Overall, frozen routing states provide useful prescriptive
+information, but the best use of that signal depends on task, scale, and the strength of local repair.
+5.2
+Probeability tracks routing-model quality
+We show that probeability is shaped by the routing model itself. Figure 4 (top) tracks the ATSP100
+RRNCO foundation model used in the main benchmark during the RL training stage. As performance
+7
+
+
+Table 1: Main real-road benchmark results. Acc@5/1 reports top-5 and top-1 accuracy in percentage
+points; Reg@5/1 reports regret at top-5 and top-1. Remove-5 reports the average tour improvement.
+Configurations were chosen by a sweep over probe location, learning rate, and probe type; Local-
+repair baselines are deterministic. Means are over 10 seeds; See Appendix E for details.
+Problem
+Task
+Input
+Location
+Probe Type
+Acc@5 / Acc@1 ↑
+Reg@5 / Reg@1 ↓
+Tour Reduction (%) ↑
+ATSP100
+node-remove
+heuristic
+N/A
+local repair
+65.5 / 42.4
+0.41 / 1.12
+–
+raw
+N/A
+MLP
+30.9 / 11.7
+1.13 / 2.76
+–
+activation
+L2
+RowCol MLP
+69.8 / 36.1
+0.23 / 1.36
+–
+raw+activation
+L2
+MLP
+69.6 / 34.9
+0.23 / 1.38
+–
+ATSP500
+node-remove
+heuristic
+N/A
+local repair
+19.5 / 9.1
+1.18 / 2.88
+–
+raw
+N/A
+MLP
+34.1 / 17.2
+0.92 / 2.63
+–
+activation
+Final
+RowCol MLP
+25.0 / 12.9
+1.08 / 2.90
+–
+raw+activation
+Final
+MLP
+32.9 / 16.7
+0.92 / 2.70
+–
+RCVRP100
+node-remove
+heuristic
+N/A
+local repair
+7.3 / 2.2
+6.05 / 11.53
+–
+raw
+N/A
+MLP
+8.0 / 1.8
+6.06 / 11.88
+–
+activation
+Final
+RowCol MLP
+7.1 / 2.0
+6.23 / 12.09
+–
+raw+activation
+L2
+MLP
+8.1 / 2.1
+6.06 / 11.74
+–
+ATSP100
+edge-forbid
+heuristic
+N/A
+local repair
+20.7 / 9.0
+2.71 / 4.80
+–
+raw
+N/A
+MLP
+27.9 / 12.8
+2.52 / 4.25
+–
+activation
+L2
+RowCol MLP
+25.8 / 12.3
+2.55 / 4.24
+–
+raw+activation
+L2
+MLP
+29.7 / 15.9
+2.37 / 3.87
+–
+ATSP500
+edge-forbid
+heuristic
+N/A
+local repair
+20.9 / 10.6
+1.43 / 2.32
+–
+raw
+N/A
+MLP
+41.1 / 17.7
+1.11 / 1.95
+–
+activation
+L2
+RowCol MLP
+37.8 / 16.3
+1.16 / 1.98
+–
+raw+activation
+Final
+MLP
+46.0 / 21.5
+1.03 / 1.72
+–
+ATSP100
+remove-5
+heuristic
+N/A
+local top-5
+–
+–
+12.3
+raw
+N/A
+MLP policy
+–
+–
+12.0
+activation
+Final
+RowCol policy
+–
+–
+13.7
+raw+activation
+Final
+MLP policy
+–
+–
+14.7
+ATSP500
+remove-5
+heuristic
+N/A
+local top-5
+–
+–
+7.8
+raw
+N/A
+MLP policy
+–
+–
+7.2
+activation
+Final
+RowCol policy
+–
+–
+6.4
+raw+activation
+L2
+MLP policy
+–
+–
+7.3
+improves, both node-removal and edge-forbid Acc@5 improve. The row-column MLP remains
+stronger, but both probe families follow the same upward trend. Thus, within a fixed architecture and
+training trajectory, better routing models expose more useful prescriptive signal.
+5.3
+A little SL goes a long way
+Figure 4 (bottom) shows the iso-performance SL/RL sweep: we compare checkpoints with matched
+route quality but different amounts of supervised pretraining before RL continuation. Neither the
+pure-RL nor the pure-SL endpoint is baest. Instead, a small amount of supervised pretraining, roughly
+10%–30% of the supervised anchor, followed by mostly RL yields the strongest probeability. The
+effect is visible in both linear and MLP probes.
+5.4
+Cross-architecture analysis
+Finally, Figure 5 presents the Euclidean TSP100 cross-architecture sandbox. This experiment is not
+the real-road headline: most modern alternatives to RRNCO are built for 2D Euclidean TSP and
+do not natively support explicit asymmetric real-road matrices. The sandbox instead asks whether
+prescriptive probeability is unique to RRNCO, and how it varies across representation families in a
+domain where released checkpoints are directly comparable.
+The comparison shows that prescriptive probeability extends beyond RRNCO while varying sub-
+stantially across representation families. DIFUSCO is strongest, pairing a small policy gap with
+93.3% Acc@5; Sym-NCO, GCN-Heatmap, and POMO are also strong. Solver quality alone does
+not explain the pattern: LEHD is less probeable despite competitive routing performance (consistent
+with its definitionally light encoder), while RRNCO-ATSP probes well despite being evaluated out of
+domain. Thus, better solvers often expose better prescriptive signal, but the representation interface
+also matters. Together, the real-road benchmark and probeability analyses show that prescriptive
+signal is not merely a property of the downstream probe head. It is shaped by the trained routing
+representation, the training recipe, and the architecture family exposing it. This supports the central
+view of the paper: NCO models can be evaluated not only by the routes they produce, but also by the
+operational usefulness of the internal states they learn while solving.
+8
+
+
+Figure 4: Probeability analyses. Top: probe performance during RL continuation of the ATSP100
+RRNCO model. As the routing model improves, downstream probe accuracy also improves for both
+probe types. Bottom: iso-performance SL/RL sweep for node-removal probes. Fixing routing quality,
+a small amount of SL before RL yields the best probeability; the effect is strongest for linear probes.
+Model
+Family
+Gap
+Acc@1
+Acc@5
+DIFUSCO (Sun and Yang 2023)
+Diffusion
+0.24
+50.0
+93.3
+Sym-NCO (Kim et al. 2022)
+AR constructive
+0.38
+36.7
+83.3
+RRNCO-ATSP (Son et al. 2026)
+AR constructive
+3.82
+50.0
+83.3
+GCN-Heatmap (Joshi et al. 2019)
+Non-AR
+1.57
+43.3
+73.3
+POMO (Kwon et al. 2020)
+AR constructive
+0.37
+33.3
+70.0
+AM (Kool et al. 2019)
+AR constructive
+4.57
+20.0
+60.0
+LEHD (Luo et al. 2023)
+AR constructive
+0.56
+16.7
+40.0
+Figure 5:
+Euclidean TSP100 cross-architecture comparison. Left: released-checkpoint policy
+optimality gap and node-removal probe accuracy, averaged over three split/probe seeds. Right: policy
+gap versus Acc@5. We find that diffusion and heatmap-style representations are also probeable in
+Euclidean TSP100. RRNCO-ATSP reference is trained for real-road, asymmetric routing.
+6
+Discussion, Limitations, and Conclusion
+Our results support a view of neural routing models as operationally useful encoders. Frozen routing
+representations provide useful signal for real-road what-if tasks, especially when combined with
+directly available route and cost features. The probeability analyses further show that this signal is
+shaped by the routing model itself: it improves during RL training, changes under different SL/RL
+mixtures at matched route quality across probe families, and varies across NCO architecture families.
+Thus, route cost alone does not fully summarize what a neural routing model has learned; its internal
+states can also be evaluated by their usefulness for downstream prescriptive decisions.
+The study has several limitations. Labels are solver-relative, so a probe trained on one routing
+engine learns that engine’s notion of intervention value; this is appropriate for deployment but limits
+solver-independent claims. The labels also remain expensive: prescriptive probing amortizes offline
+re-solving, but still requires counterfactual data or simulator-style reward queries. Our intervention
+families cover node removal, edge forbiddance, and multi-node removal, while richer logistics settings
+include time windows, stochastic travel times, and route-level disruptions. Finally, cross-architecture
+probing is inherently imperfect because different NCO families expose different internals. Even
+with these limits, the results suggest a broader evaluation axis for NCO: not only the route a model
+produces, but how useful its learned state is for the operational decisions surrounding that route.
+9
+
+
+References
+Yossi Adi, Einat Kermany, Yonatan Belinkov, Ofer Lavi, and Yoav Goldberg. Fine-grained analysis
+of sentence embeddings using auxiliary prediction tasks. arXiv preprint arXiv:1608.04207, 2016.
+URL https://arxiv.org/abs/1608.04207.
+Guillaume Alain and Yoshua Bengio. Understanding intermediate layers using linear classifier probes.
+arXiv preprint arXiv:1610.01644, 2016. URL https://arxiv.org/abs/1610.01644.
+Claudia Archetti, Luca Bertazzi, and Maria Grazia Speranza. Reoptimizing the traveling salesman
+problem. Networks, 42(3):154–159, 2003. doi: 10.1002/net.10091. URL https://doi.org/10.
+1002/net.10091.
+Giorgio Ausiello, Bruno Escoffier, Jérôme Monnot, and Vangelis Th. Paschos. Reoptimization of
+minimum and maximum traveling salesman’s tours. Journal of Discrete Algorithms, 7(4):453–463,
+2009. doi: 10.1016/j.jda.2008.12.001. URL https://doi.org/10.1016/j.jda.2008.12.
+001.
+Yonatan Belinkov. Probing classifiers: Promises, shortcomings, and advances. Computational
+Linguistics, 48(1):207–219, 2022. doi: 10.1162/coli_a_00422. URL https://doi.org/10.
+1162/coli_a_00422.
+Irwan Bello, Hieu Pham, Quoc V. Le, Mohammad Norouzi, and Samy Bengio. Neural combinatorial
+optimization with reinforcement learning. In International Conference on Learning Representations
+Workshop, 2017. URL https://openreview.net/forum?id=Bk9mxlSFx.
+Daniel Bienstock, Michel X. Goemans, David Simchi-Levi, and David P. Williamson. A note on the
+prize collecting traveling salesman problem. Mathematical Programming, 59(1–3):413–420, 1993.
+doi: 10.1007/BF01581256. URL https://doi.org/10.1007/BF01581256.
+Trenton Bricken, Adly Templeton, Joshua Batson, Brian Chen, Adam Jermyn, Tom Conerly, Nick
+Turner, Cem Anil, Carson Denison, Amanda Askell, Robert Lasenby, Yifan Wu, Shauna Kravec,
+Nicholas Schiefer, Tim Maxwell, Nicholas Joseph, Zac Hatfield-Dodds, Alex Tamkin, Karina
+Nguyen, Brayden McLean, Josiah E. Burke, Tristan Hume, Shan Carter, Tom Henighan, and
+Christopher Olah. Towards monosemanticity: Decomposing language models with dictionary
+learning. Transformer Circuits Thread, 2023. URL https://transformer-circuits.pub/
+2023/monosemantic-features/index.html.
+Xinyun Chen and Yuandong Tian. Learning to perform local rewriting for combinatorial optimization.
+In Advances in Neural Information Processing Systems, 2019. URL https://proceedings.
+neurips.cc/paper/2019/hash/131f383b434fdf48079bff1e44e2d9a5-Abstract.html.
+Alexis Conneau, German Kruszewski, Guillaume Lample, Loïc Barrault, and Marco Baroni. What
+you can cram into a single vector: Probing sentence embeddings for linguistic properties. In Pro-
+ceedings of the 56th Annual Meeting of the Association for Computational Linguistics, pages 2126–
+2136, 2018. doi: 10.18653/v1/P18-1198. URL https://aclanthology.org/P18-1198/.
+Darko Drakulic, Sofia Michel, and Jean-Marc Andreoli. GOAL: A generalist combinatorial optimiza-
+tion agent learner. In The Thirteenth International Conference on Learning Representations, 2025.
+URL https://openreview.net/forum?id=z2z9suDRjw.
+Nelson Elhage, Neel Nanda, Catherine Olsson, Tom Henighan, Nicholas Joseph, Ben Mann, Amanda
+Askell, Yuntao Bai, Anna Chen, Tom Conerly, Nova DasSarma, Dawn Drain, Deep Ganguli, Zac
+Hatfield-Dodds, Danny Hernandez, Andy Jones, Jackson Kernion, Liane Lovitt, Kamal Ndousse,
+Dario Amodei, Tom Brown, Jack Clark, Jared Kaplan, Sam McCandlish, and Chris Olah. A
+mathematical framework for transformer circuits. Transformer Circuits Thread, 2021. URL
+https://transformer-circuits.pub/2021/framework/index.html.
+Zhang-Hua Fu, Kai-Bin Qiu, and Hongyuan Zha. Generalize a small pre-trained model to arbitrarily
+large TSP instances. In AAAI Conference on Artificial Intelligence, 2021. URL https://arxiv.
+org/abs/2012.10658.
+10
+
+
+Keld Helsgaun. An effective implementation of the lin–kernighan traveling salesman heuristic.
+European Journal of Operational Research, 126(1):106–130, 2000. doi: 10.1016/S0377-2217(99)
+00284-2. URL https://doi.org/10.1016/S0377-2217(99)00284-2.
+Keld Helsgaun. LKH-3: An extension of the lin–kernighan–helsgaun TSP solver for constrained
+traveling salesman and vehicle routing problems. Technical report, Roskilde University, 2017.
+URL http://webhotel4.ruc.dk/~keld/research/LKH-3/LKH-3_REPORT.pdf.
+André Hottung and Kevin Tierney. Neural large neighborhood search for the capacitated vehicle
+routing problem. In 24th European Conference on Artificial Intelligence, volume 325 of Frontiers
+in Artificial Intelligence and Applications, pages 443–450. IOS Press, 2020. doi: 10.3233/
+FAIA200124. URL https://doi.org/10.3233/FAIA200124.
+Benjamin Hudson, Qingbiao Li, Matthew Malencia, and Amanda Prorok. Graph neural network
+guided local search for the traveling salesperson problem. In International Conference on Learning
+Representations, 2022. URL https://openreview.net/forum?id=ar92oEosBIg.
+Chaitanya K. Joshi, Thomas Laurent, and Xavier Bresson. An efficient graph convolutional network
+technique for the travelling salesman problem, 2019. URL https://arxiv.org/abs/1906.
+01227.
+Minsu Kim, Junyoung Park, and Jinkyoo Park. Sym-NCO: Leveraging symmetricity for neural
+combinatorial optimization. In Advances in Neural Information Processing Systems, 2022. URL
+https://arxiv.org/abs/2205.13209.
+Wouter Kool, Herke van Hoof, and Max Welling. Attention, learn to solve routing problems! In
+International Conference on Learning Representations, 2019. URL https://arxiv.org/abs/
+1803.08475.
+János Kramár, Joshua Engels, Zheng Wang, Bilal Chughtai, Rohin Shah, Neel Nanda, and Arthur
+Conmy. Building production-ready probes for gemini, 2026. URL https://arxiv.org/abs/
+2601.11516.
+Yeong-Dae Kwon, Jinho Choo, Byoungjip Kim, Iljoo Yoon, Youngjune Gwon, and Seungjai Min.
+POMO: Policy optimization with multiple optima for reinforcement learning. In Advances in
+Neural Information Processing Systems, 2020. URL https://arxiv.org/abs/2010.16011.
+Yeong-Dae Kwon, Jinho Choo, Iljoo Yoon, Minah Park, Duwon Park, and Youngjune Gwon. Matrix
+encoding networks for neural combinatorial optimization. In Advances in Neural Information
+Processing Systems, 2021. URL https://arxiv.org/abs/2106.11113.
+Sirui Li, Zhongxia Yan, and Cathy Wu. Learning to delegate for large-scale vehicle routing. In
+Advances in Neural Information Processing Systems, 2021. URL https://arxiv.org/abs/
+2107.04139.
+Yang
+Li,
+Jinpei
+Guo,
+Runzhong
+Wang,
+and
+Junchi
+Yan.
+T2T:
+From
+distribu-
+tion learning in training to gradient search in testing for combinatorial optimization.
+In Advances in Neural Information Processing Systems,
+volume 36,
+pages 50020–
+50040, 2023. URL https://proceedings.neurips.cc/paper_files/paper/2023/hash/
+9c93b3cd3bc60c0fe7b0c2d74a2da966-Abstract-Conference.html.
+Yang Li, Jinpei Guo, Runzhong Wang, Hongyuan Zha, and Junchi Yan. Fast T2T: Optimization
+consistency speeds up diffusion-based training-to-testing solving for combinatorial optimization.
+In Advances in Neural Information Processing Systems, 2024. URL https://openreview.net/
+forum?id=xDrKZOZEOc.
+Yang Li, Jiale Ma, Wenzheng Pan, Runzhong Wang, Haoyu Geng, Nianzu Yang, and Junchi Yan.
+Unify ML4TSP: Drawing methodological principles for TSP and beyond from streamlined de-
+sign space of learning and search. In The Thirteenth International Conference on Learning
+Representations, 2025. URL https://openreview.net/forum?id=grU1VKEOLi.
+Leonardo Lozano, J. Cole Smith, and Mary E. Kurz. Solving the traveling salesman problem
+with interdiction and fortification. Operations Research Letters, 45(3):210–216, 2017. doi:
+10.1016/j.orl.2017.02.007. URL https://doi.org/10.1016/j.orl.2017.02.007.
+11
+
+
+Fu Luo, Xi Lin, Fei Liu, Qingfu Zhang, and Zhenkun Wang. Neural combinatorial optimization with
+heavy decoder: Toward large scale generalization. In Advances in Neural Information Processing
+Systems, 2023. URL https://arxiv.org/abs/2310.07985.
+Jiale Ma, Wenzheng Pan, Yang Li, and Junchi Yan. ML4CO-Bench-101: Benchmark machine
+learning for classic combinatorial problems on graphs.
+In Advances in Neural Information
+Processing Systems Datasets and Benchmarks Track, 2025. URL https://openreview.net/
+forum?id=ye4ntB1Kzi.
+Neel Nanda, Josh Engels, Arthur Conmy, Senthooran Rajamanoharan, Bilal Chughtai, Callum
+McDougall, János Kramár, and Lewis Smith. A pragmatic vision for interpretability. AI Align-
+ment Forum, 2025. URL https://www.alignmentforum.org/posts/StENzDcD3kpfGJssR/
+a-pragmatic-vision-for-interpretability.
+Wenzheng Pan, Hao Xiong, Jiale Ma, Wentao Zhao, Yang Li, and Junchi Yan.
+UniCO: On
+unified combinatorial optimization via problem reduction to matrix-encoded general TSP. In
+The Thirteenth International Conference on Learning Representations, 2025.
+URL https:
+//openreview.net/forum?id=yEwakMNIex.
+Michael Pearce, Thomas Dooms, Ryo Yamamoto, Joshua Meehl, Carl Molnar, Mark Bissell, Dron
+Hazra, Ching Fang, Nam Nguyen, Michael Anderson, Collin Osborne, Patrick Duffy, Bridget
+Toomey, Eric Klee, Elena Myasoedova, Alexander Ryu, Shant Ayanian, Panos Korfiatis, Matt
+Redlon, Archa Jain, Daniel Balsam, and Nicholas Wang. Explaining 4.2 million genetic variants
+with state-of-the-art, interpretable predictions. Goodfire Research Blog, April 2026. URL https:
+//www.goodfire.ai/research/evee-explaining-genetic-variants.
+Jiwoo Son, Zhikai Zhao, Federico Berto, Chuanbo Hua, Zhiguang Cao, Changhyun Kwon, and
+Jinkyoo Park. RRNCO: Towards real-world routing with neural combinatorial optimization.
+In The Fourteenth International Conference on Learning Representations, 2026. URL https:
+//openreview.net/forum?id=sKvo9ZZfpe.
+Zhiqing Sun and Yiming Yang.
+DIFUSCO: Graph-based diffusion solvers for combinatorial
+optimization.
+In Advances in Neural Information Processing Systems, 2023.
+URL https:
+//arxiv.org/abs/2302.08224.
+Pieter Vansteenwegen, Wouter Souffriau, and Dirk Van Oudheusden. The orienteering problem: A
+survey. European Journal of Operational Research, 209(1):1–10, 2011. doi: 10.1016/j.ejor.2010.
+03.045. URL https://doi.org/10.1016/j.ejor.2010.03.045.
+Oriol Vinyals, Meire Fortunato, and Navdeep Jaitly. Pointer networks. In Advances in Neural
+Information Processing Systems, 2015. URL https://arxiv.org/abs/1506.03134.
+Haoran Ye, Jiarui Wang, Zhiguang Cao, Helan Liang, and Yong Li. DeepACO: Neural-enhanced ant
+systems for combinatorial optimization. In Advances in Neural Information Processing Systems,
+2023. URL https://arxiv.org/abs/2309.14032.
+Haoran Ye, Jiarui Wang, Helan Liang, Zhiguang Cao, Yong Li, and Fanzhang Li. GLOP: Learning
+global partition and local construction for solving large-scale routing problems in real-time. In Pro-
+ceedings of the AAAI Conference on Artificial Intelligence, volume 38, pages 20284–20292, 2024.
+doi: 10.1609/aaai.v38i18.30009. URL https://doi.org/10.1609/aaai.v38i18.30009.
+Zhiqin Zhang, Yining Ma, Zhiguang Cao, and Hoong Chuin Lau. Probing neural combinatorial
+optimization models.
+In Advances in Neural Information Processing Systems, 2025.
+URL
+https://openreview.net/forum?id=ycnc9aLnQu.
+A
+Probe Head Architectures
+This appendix describes the probe heads used for the supervised single-intervention tasks in Sec-
+tion 3.3. In all cases, the routing model Mϕ is frozen. Only the probe parameters are trained.
+12
+
+
+Node heads.
+For single-node removal, each candidate action corresponds to one node i. At encoder
+probe point p, RRNCO provides row and column states rp
+i and cp
+i . The simplest node representation
+is the row-column concatenation hp
+i = [rp
+i ; cp
+i ]. A linear probe scores this representation with
+si = w⊤hp
+i + b, testing whether intervention value is linearly exposed in the chosen model state.
+We also use a row-column interaction MLP. This head first maps row and column states separately,
+ui = ϕr(rp
+i ) and vi = ϕc(cp
+i ), then scores the interaction vector zi = [ui; vi; ui−vi; ui⊙vi], where ⊙
+denotes elementwise multiplication. This preserves RRNCO’s directional row/column structure while
+allowing the probe to use alignment, mismatch, and multiplicative interactions between incoming-
+and outgoing-oriented states.
+This interaction-augmented input is related in spirit to interaction features used in prior NCO probing
+work, including CS-Probing-style analyses [Zhang et al., 2025], but differs in purpose and architecture:
+CS-Probing analyzes statistically significant coefficients of linear probes, whereas our row-column
+head is a nonlinear predictor of counterfactual intervention value.
+Edge heads.
+For single-edge forbiddance, each candidate action is a directed used edge (u, v) ∈
+Aedge(x, τS). The probe input is built from source and target endpoint representations. A generic
+edge input uses hp
+uv = [hp
+u; hp
+v]. For RRNCO, a more directionally structured input is hp
+uv = [rp
+u; cp
+v],
+since the transition u →v combines the outgoing role of u with the incoming role of v.
+We also evaluate interaction-augmented edge inputs such as [hp
+u; hp
+v; |hp
+u −hp
+v|; hp
+u ⊙hp
+v], and the
+corresponding row-column variants. The edge probe outputs a scalar disruption score ˆ∆uv =
+gθ(hp
+uv). Candidate edges are ranked by this score, with larger values indicating more critical planned
+transitions.
+B
+Additional task examples
+Figure 6 shows additional real-road examples of the two single-intervention tasks. Each row shows
+one city instance, with single-node removal on the left pair of panels and single-edge forbiddance
+on the right pair of panels. For node removal, candidate stops are colored by the change in route
+cost induced by removing that stop and re-solving; the highlighted stop is the best removal action.
+For edge forbiddance, used directed transitions are colored by the increase in route cost induced by
+forbidding that transition and re-solving; the highlighted transition is the most damaging forbidden
+edge. The post-intervention panels show the corresponding re-solved routes after applying the
+highlighted intervention.
+C
+Evaluation Metrics
+For supervised intervention tasks, let a⋆be the best action under the counterfactual labels and let
+ˆa1, ˆa2, . . . be the predicted ranking. Acc@1 is the fraction of instances for which ˆa1 = a⋆. Acc@5
+is the fraction of instances for which a⋆∈{ˆa1, . . . , ˆa5}. Spearman is the rank correlation between
+predicted scores and true counterfactual action values within each instance, averaged across instances.
+For minimization-style tasks such as node removal, Reg@1 is qS(ˆa1; x) −qS(a⋆; x), and Reg@5
+is the best regret among the top five predicted actions. For disruption-style tasks such as edge
+forbiddance, regret is the gap between the true maximum disruption and the disruption achieved by
+the selected candidate. Remove-5 reports average tour reduction after removing five selected nodes
+and re-solving: 100(Lbase −Lremoved)/Lbase.
+D
+Experimental Details
+Real-road datasets and splits.
+The main real-road benchmark uses ATSP100, ATSP500, and
+RCVRP100 instances from the RRNCO data pipeline. ATSP100 and ATSP500 contain directed
+routing instances with 100 and 500 stops and asymmetric real-road distance matrices. RCVRP100
+contains 100 customers plus one depot, customer demands, vehicle capacity, and a real-road distance
+matrix. The supervised probe datasets use instance-level splits. ATSP100 node removal uses 9,783
+labeled instances split into 7,826/978/979 train/validation/test examples; ATSP100 edge forbiddance
+uses 9,757 instances split into 7,806/976/975. Note that the ATSP100 dataset is not 10,000 due to some
+13
+
+
+Figure 6: Additional real-road task examples for single-node removal and single-edge forbiddance.
+Rows show Hong Kong, New York City, and New Orleans instances. In each row, the left two
+panels show the node-removal task before and after removing the highlighted stop, and the right
+two panels show the edge-forbid task before and after forbidding the highlighted directed transition.
+Candidate colors indicate the counterfactual route-cost change obtained by applying the intervention
+and re-solving.
+nodes being unreachable during instance generation, making it unsolvable by LKH. ATSP500 node
+removal and edge forbiddance each use 10,000 instances split into 8,000/1,000/1,000. RCVRP100
+customer removal uses 10,000 instances split into 8,000/1,000/1,000.
+Counterfactual labels.
+For ATSP node removal, each candidate node is removed, the reduced
+instance is re-solved with LKH, and the label is 100(Lbase −Lremoved)/Lbase. ATSP100 node-
+removal labels use one LKH run per candidate; ATSP500 node-removal labels use one run per
+candidate with a 20-second timeout. RCVRP100 customer-removal labels use LKH ADCVRP
+tooling with 10 trials per candidate and a 60-second timeout. For edge forbiddance, the base LKH
+route is fixed, each used directed transition is forbidden, and the constrained instance is re-solved.
+ATSP100 edge-forbid labels use one LKH run per candidate; ATSP500 edge-forbid labels use 10 LKH
+trials per candidate. For remove-5, labels are not enumerated offline. The policy selects five nodes,
+the reduced instance is solved online with LKH, and the reward is the percentage tour improvement
+after removal.
+Representation extraction.
+For ATSP100 and ATSP500, we use 6-layer RRNCO base models with
+128-dimensional row and column streams, giving 256-dimensional concatenated node representations.
+For RCVRP100, we use an 8-layer RRNCO model with 192-dimensional row and column streams,
+giving 384-dimensional concatenated customer representations. We extract encoder states at the
+layer-2 and final probe points. The routing models are frozen for all probe training.
+Compute resources.
+All reported training and probing jobs were run on H200 nodes. The RRNCO
+foundation runs used approximately 6 hours of supervised learning followed by 18 hours of RL
+continuation per run. Remove-5 RL intervention-head runs used a 30-minute wall-clock budget per
+run. In the iso-performance SL/RL sweep, RL continuation from the earlier supervised checkpoints
+took at most 6 hours to reach parity with the full SL checkpoint. Supervised probe runs used the fixed
+14
+
+
+epoch and early-stopping budgets described below; counterfactual label-generation cost is governed
+by the LKH trials and timeouts described above.
+Probe training and selection.
+The supervised probe datasets are split by instance, typically with
+about 8k training instances and 1k each for validation and test. Final main-table probes use a
+fixed budget of 240 epochs with validation early stopping patience 40. The optimizer is AdamW
+with weight decay 10−4, a cosine learning-rate schedule, and batch size 32. MLP-style heads use
+hidden dimension 1024, four layers, and dropout 0.1. Probe configurations are selected by validation
+Regret@1 for the main supervised tables, and final results are reported over 10 seeds. Learning rate
+is included in the validation sweep rather than fixed analytically.
+Raw-input features.
+The raw-input MLP baseline receives problem-specific non-representation
+features. For ATSP node removal, these include coordinates, nearest outgoing and incoming distances,
+and row/column distance summary statistics. For ATSP edge forbiddance, they include source and
+target coordinates, coordinate differences, directed edge costs, edge position in the tour, and nearest-
+neighbor distance summaries. For RCVRP node removal, they include customer coordinates, demand,
+depot distances, nearest row/column distances, and row/column summary statistics. All raw features
+are standardized using the training split.
+Training-dynamics probes.
+The training-dynamics sweeps use lighter probe-training settings:
+max epoch budget 80, early-stopping patience 12, learning rate 3 × 10−4, batch size 32, and a
+cosine learning-rate schedule. The split is the same 80/10/10 instance split as in the main supervised
+experiments. These probes often stop well before the maximum epoch budget.
+Euclidean cross-architecture probes.
+The Euclidean cross-architecture comparison uses 100
+exact-labeled TSP100 instances split 80/10/10. Because the train split contains only 80 instances,
+the probe has 8k node-candidate labels. These probes use max epoch budget 120, early-stopping
+patience 20, learning rate 10−3, batch size 16, and no learning-rate scheduler. Models are selected by
+validation Acc@1.
+Local repair diagnostics.
+For node removal, the local shortcut heuristic removes node i and
+connects its predecessor directly to its successor in the base route. For edge forbiddance, the local
+replacement heuristic estimates the cost of replacing a forbidden directed transition with a cheap
+alternative transition or local detour. These heuristics are used as OR-style diagnostic baselines and
+as context for the learned methods; exhaustive counterfactual re-solving is the label oracle, not a
+deployable baseline.
+E
+Full Main-Benchmark Results
+The main text reports a compact validation-selected subset in Table 1. This appendix reports the
+full supervised and RL benchmark tables, including all swept learned rows and mean ± standard
+deviation over 10 seeds. Deterministic local-repair and random-reference baselines are reported in
+Appendix F.
+15
+
+
+Table 2: Full node-removal results. Acc@5/1 reports top-5 and top-1 accuracy; Reg@5/1 reports
+regret at top-5 and top-1.
+Problem
+Input
+Loc.
+Head
+Acc@5/1 ↑
+Reg@5/1 ↓
+ATSP100
+raw
+N/A
+MLP
+30.9±1.6 / 11.7±0.6
+1.130±0.042 / 2.762±0.032
+ATSP100
+activation L2
+Linear
+63.4±0.4 / 29.8±0.4
+0.324±0.008 / 1.655±0.029
+ATSP100
+activation Final
+Linear
+58.9±0.4 / 26.0±0.6
+0.415±0.010 / 1.740±0.023
+ATSP100
+activation L2
+RowCol MLP 69.8±0.4 / 36.1±1.0
+0.229±0.005 / 1.363±0.039
+ATSP100
+activation Final
+RowCol MLP
+65.9±1.1 / 32.6±1.0
+0.294±0.015 / 1.460±0.045
+ATSP100
+raw+act.
+L2
+MLP
+69.6±0.7 / 34.9±0.7
+0.228±0.010 / 1.376±0.038
+ATSP100
+raw+act.
+Final
+MLP
+66.7±1.1 / 34.1±1.3
+0.277±0.018 / 1.433±0.045
+ATSP500
+raw
+N/A
+MLP
+34.1±0.4 / 17.2±0.7
+0.918±0.025 / 2.631±0.069
+ATSP500
+activation L2
+Linear
+17.8±1.8 / 7.3±0.8
+1.355±0.041 / 3.400±0.044
+ATSP500
+activation Final
+Linear
+16.6±0.6 / 7.6±0.3
+1.358±0.030 / 3.290±0.042
+ATSP500
+activation L2
+RowCol MLP 23.4±1.0 / 11.3±0.4
+1.112±0.025 / 3.036±0.042
+ATSP500
+activation Final
+RowCol MLP
+25.0±1.2 / 12.9±0.6
+1.080±0.034 / 2.904±0.079
+ATSP500
+raw+act.
+L2
+MLP
+33.4±0.9 / 16.6±0.6
+0.907±0.020 / 2.735±0.051
+ATSP500
+raw+act.
+Final
+MLP
+32.9±1.0 / 16.7±0.9
+0.917±0.022 / 2.703±0.062
+RCVRP100 raw
+N/A
+MLP
+8.0±0.4 / 1.8±0.1
+6.064±0.053 / 11.884±0.073
+RCVRP100 activation L2
+Linear
+7.8±0.4 / 2.0±0.3
+6.274±0.050 / 12.067±0.127
+RCVRP100 activation Final
+Linear
+6.8±0.5 / 1.8±0.3
+6.254±0.071 / 12.050±0.180
+RCVRP100 activation L2
+RowCol MLP
+7.6±0.4 / 1.9±0.3
+6.261±0.113 / 12.150±0.200
+RCVRP100 activation Final
+RowCol MLP
+7.1±0.5 / 2.0±0.2
+6.225±0.064 / 12.087±0.162
+RCVRP100 raw+act.
+L2
+MLP
+8.1±0.4 / 2.1±0.2
+6.064±0.053 / 11.737±0.079
+RCVRP100 raw+act.
+Final
+MLP
+7.9±0.4 / 1.8±0.1
+6.128±0.051 / 11.791±0.078
+Table 3: Full edge-forbid results. RCVRP100 edge forbiddance is omitted from the current scope
+because route-edge interventions in depot/customer multi-route solutions require a separate task
+definition.
+Problem
+Input
+Loc.
+Head
+Acc@5/1 ↑
+Reg@5/1 ↓
+ATSP100 raw
+N/A
+MLP
+27.9±0.3 / 12.8±0.1
+2.522±0.020 / 4.254±0.013
+ATSP100 activation L2
+Linear
+23.2±0.6 / 9.3±0.2
+2.647±0.020 / 4.529±0.027
+ATSP100 activation Final Linear
+16.5±0.5 / 5.6±0.3
+2.959±0.040 / 5.014±0.035
+ATSP100 activation L2
+RowCol MLP 25.8±0.5 / 12.3±0.6
+2.545±0.041 / 4.238±0.043
+ATSP100 activation Final RowCol MLP
+21.9±0.4 / 9.8±0.4
+2.682±0.044 / 4.564±0.045
+ATSP100 raw+act.
+L2
+MLP
+29.7±0.9 / 15.9±0.3
+2.366±0.057 / 3.865±0.039
+ATSP100 raw+act.
+Final
+MLP
+29.3±0.6 / 15.6±0.4 2.399±0.052 / 3.878±0.035
+ATSP500 raw
+N/A
+MLP
+41.1±0.4 / 17.7±0.3
+1.105±0.008 / 1.954±0.018
+ATSP500 activation L2
+Linear
+24.1±0.6 / 8.1±0.2
+1.474±0.017 / 2.496±0.016
+ATSP500 activation Final Linear
+16.6±0.3 / 6.9±0.3
+1.681±0.025 / 2.700±0.034
+ATSP500 activation L2
+RowCol MLP 37.8±0.9 / 16.3±0.5
+1.155±0.033 / 1.975±0.036
+ATSP500 activation Final RowCol MLP 33.9±1.2 / 14.3±0.7
+1.225±0.035 / 2.077±0.041
+ATSP500 raw+act.
+L2
+MLP
+45.9±0.6 / 22.4±0.7
+1.055±0.037 / 1.693±0.036
+ATSP500 raw+act.
+Final
+MLP
+46.0±0.8 / 21.5±0.6 1.028±0.022 / 1.716±0.040
+F
+Heuristic Baselines
+The main benchmark includes one deterministic local-repair heuristic per problem-task pair. Table 5
+reports those heuristic rows, random references, and additional heuristic variants. Accuracy values
+are percentages, and regret values use the same normalized percentage-point label units as the main
+tables.
+G
+Remove-5 RL Details
+Remove-5 is trained as an online intervention policy rather than a supervised probe. At each episode,
+the policy observes candidate node features derived from raw inputs, frozen activations, or their
+16
+
+
+Table 4: Full remove-5 results. The metric is average tour reduction after removing five selected
+nodes and re-solving; higher is better.
+Problem
+Input
+Loc.
+Head
+Tour reduction (%) ↑
+ATSP100
+raw
+N/A
+MLP policy
+11.975±0.310
+ATSP100
+activation
+L2
+Linear policy
+9.071±0.153
+ATSP100
+activation
+Final
+Linear policy
+8.306±0.387
+ATSP100
+activation
+L2
+RowCol policy
+11.707±0.577
+ATSP100
+activation
+Final
+RowCol policy
+13.707±0.798
+ATSP100
+raw+act.
+L2
+MLP policy
+13.316±0.182
+ATSP100
+raw+act.
+Final
+MLP policy
+14.659±0.285
+ATSP500
+raw
+N/A
+MLP policy
+7.170±0.162
+ATSP500
+activation
+L2
+Linear policy
+5.135±0.118
+ATSP500
+activation
+Final
+Linear policy
+5.294±0.263
+ATSP500
+activation
+L2
+RowCol policy
+5.974±0.453
+ATSP500
+activation
+Final
+RowCol policy
+6.421±0.599
+ATSP500
+raw+act.
+L2
+MLP policy
+7.318±0.129
+ATSP500
+raw+act.
+Final
+MLP policy
+7.253±0.113
+Table 5: Primary local-repair heuristic baselines for node removal and edge forbiddance.
+Task
+Problem
+Heuristic
+n
+Reg@5/1 ↓
+Acc@5/1 ↑
+Spearman ↑
+node-remove
+ATSP100
+local_delete_saving
+1
+0.408 / 1.121
+65.5 / 42.4
+0.364
+node-remove
+ATSP500
+local_delete_saving
+1
+1.180 / 2.877
+19.5 / 9.1
+0.068
+node-remove
+RCVRP100
+route_delete_saving
+1
+6.050 / 11.529
+7.3 / 2.2
+0.032
+edge-forbid
+ATSP100
+edge_replacement_gap_sum
+1
+2.710 / 4.801
+20.7 / 9.0
+0.178
+edge-forbid
+ATSP500
+edge_replacement_gap_sum
+1
+1.425 / 2.321
+20.9 / 10.6
+0.241
+concatenation, and selects five nodes without replacement. The reduced instance is then re-solved
+and the reward is the resulting tour reduction percentage.
+For raw-input policies, the policy head consumes manual features analogous to the raw supervised
+probes. For activation policies, the policy consumes frozen RRNCO encoder states. RowCol policies
+preserve separate row and column activation streams before scoring candidates; MLP policies use
+flattened raw or raw+activation features. Validation reward is used for model selection, and final
+results are averaged over 10 seeds.
+H
+Additional Probeability Analyses
+RL training dynamics.
+The training-dynamics figure in Section 5.2 uses the ATSP100 RRNCO
+foundation trajectory. We extract checkpoints throughout RL continuation and train node-removal
+and edge-forbid probes at each checkpoint. The plotted quantities are routing-model tour length,
+node-removal Acc@5 for linear and row-column MLP probes, and edge-forbid Acc@5 for linear and
+row-column MLP probes.
+Iso-performance SL/RL sweep.
+The iso-performance sweep compares RRNCO checkpoints with
+approximately matched route quality but different amounts of supervised pretraining before RL
+continuation. The linear probe shows the clearest optimum at low but nonzero supervised pretraining.
+Repeating the sweep with an MLP probe gives the same qualitative Spearman pattern and similar,
+though less pronounced, trends in Acc@5 and Reg@5. This supports the conclusion that the SL/RL
+effect is not only a linear-readout artifact.
+17
+
+
+Table 6: Additional heuristic variants and random references.
+Task
+Problem
+Baseline
+n
+Reg@5/1 ↓
+Acc@5/1 ↑
+Spearman ↑
+edge-forbid
+ATSP100
+edge_cost
+1
+4.236 / 6.110
+3.9 / 0.7
+-0.052
+edge-forbid
+ATSP100
+edge_replacement_gap_min
+1
+2.980 / 5.100
+17.4 / 6.5
+0.159
+edge-forbid
+ATSP100
+random_uniform
+10
+3.965 / 5.908
+5.0 / 1.1
+-0.001
+edge-forbid
+ATSP500
+edge_cost
+1
+2.800 / 3.538
+2.1 / 0.3
+-0.082
+edge-forbid
+ATSP500
+edge_replacement_gap_min
+1
+1.760 / 2.767
+13.0 / 4.3
+0.217
+edge-forbid
+ATSP500
+random_uniform
+10
+2.715 / 3.508
+0.9 / 0.2
+-0.000
+node-remove
+ATSP100
+random_uniform
+10
+2.527 / 4.017
+5.1 / 1.0
+-0.000
+node-remove
+ATSP500
+random_uniform
+10
+1.922 / 3.834
+0.9 / 0.2
+0.000
+node-remove
+RCVRP100
+random_uniform
+10
+6.878 / 13.025
+4.4 / 0.9
+-0.001
+Table 7: Remove-5 local and random baselines.
+Problem
+Baseline
+n
+Instances
+Tour improvement (%) ↑
+ATSP100
+local_delete_saving_top5
+1
+64
+12.347
+ATSP100
+random_top5
+10
+64
+3.461 ± 0.277
+ATSP500
+local_delete_saving_top5
+1
+128
+7.828
+ATSP500
+random_top5
+10
+128
+4.875 ± 0.052
+I
+Euclidean Cross-Architecture Comparison Details
+The Euclidean TSP100 comparison evaluates prescriptive probeability across released checkpoints
+from representative NCO architecture families. This comparison uses 100 Euclidean TSP100
+instances with exact node-removal labels. Probe metrics are averaged over three split/probe seeds, so
+Acc@1 is coarse and should be interpreted directionally.
+For constructive encoder-decoder models, we probe node-aligned encoder states when available. For
+heatmap and diffusion models, the natural representation is edge-centric, so we summarize edge
+hidden states into node-level inputs by row/column pooling before training the probe. For LEHD, we
+probe the released model’s available node-level state; because LEHD shifts more computation into
+the decoder, this may understate the information available in partial-tour-conditioned decoder states.
+RRNCO-ATSP is included as an out-of-domain point: it is trained and architecturally designed for
+real-road asymmetric routing, not Euclidean TSP100.
+Table 8: Euclidean TSP100 cross-architecture comparison details. Policy gap is reported against
+Concorde optima. Probe accuracies are mean ± standard deviation over three split/probe seeds.
+Model
+Family
+Gap
+Acc@1
+Acc@5
+Probed state
+DIFUSCO [Sun and Yang, 2023]
+Diffusion
+0.24
+50.0±10.0
+93.3±11.5
+Final GNN denoiser edge hidden state, row/column
+mean pooled to nodes.
+GCN-Heatmap [Joshi et al., 2019]
+NAR GCN
+1.57
+43.3±15.3
+73.3±5.8
+Final residual-gated GCN edge state, row/column mean
+pooled to nodes.
+POMO [Kwon et al., 2020]
+AR constructive
+0.37
+33.3±5.8
+70.0±20.0
+TSP encoder output, per node.
+Sym-NCO [Kim et al., 2022]
+AR constructive
+0.38
+36.7±5.8
+83.3±5.8
+Sym-NCO-POMO encoder output, per node.
+LEHD [Luo et al., 2023]
+Heavy decoder
+0.56
+16.7±15.3
+40.0±10.0
+LEHD encoder output, per node.
+RRNCO-ATSP [Son et al., 2026]
+AR
+3.82
+50.0±0.0
+83.3±5.8
+Policy encoder row and column embeddings concate-
+nated per node.
+AM [Kool et al., 2019]
+AR constructive
+4.57
+20.0±0.0
+60.0±10.0
+Graph attention encoder output, per node.
+18
+
+
+NeurIPS Paper Checklist
+1. Claims
+Question: Do the main claims made in the abstract and introduction accurately reflect the
+paper’s contributions and scope?
+Answer: [Yes]
+Justification: The abstract and introduction state the prescriptive probing contribution,
+real-road RRNCO scope, supervised/RL intervention tasks, and the qualified empirical
+claims.
+Guidelines:
+• The answer [N/A] means that the abstract and introduction do not include the claims
+made in the paper.
+• The abstract and/or introduction should clearly state the claims made, including the
+contributions made in the paper and important assumptions and limitations. A [No] or
+[N/A] answer to this question will not be perceived well by the reviewers.
+• The claims made should match theoretical and experimental results, and reflect how
+much the results can be expected to generalize to other settings.
+• It is fine to include aspirational goals as motivation as long as it is clear that these goals
+are not attained by the paper.
+2. Limitations
+Question: Does the paper discuss the limitations of the work performed by the authors?
+Answer: [Yes]
+Justification: Section 6 discusses solver-relative labels, counterfactual label cost, limited
+intervention families, and imperfect cross-architecture comparability.
+Guidelines:
+• The answer [N/A] means that the paper has no limitation while the answer [No] means
+that the paper has limitations, but those are not discussed in the paper.
+• The authors are encouraged to create a separate “Limitations” section in their paper.
+• The paper should point out any strong assumptions and how robust the results are to
+violations of these assumptions (e.g., independence assumptions, noiseless settings,
+model well-specification, asymptotic approximations only holding locally). The authors
+should reflect on how these assumptions might be violated in practice and what the
+implications would be.
+• The authors should reflect on the scope of the claims made, e.g., if the approach was
+only tested on a few datasets or with a few runs. In general, empirical results often
+depend on implicit assumptions, which should be articulated.
+• The authors should reflect on the factors that influence the performance of the approach.
+For example, a facial recognition algorithm may perform poorly when image resolution
+is low or images are taken in low lighting. Or a speech-to-text system might not be
+used reliably to provide closed captions for online lectures because it fails to handle
+technical jargon.
+• The authors should discuss the computational efficiency of the proposed algorithms
+and how they scale with dataset size.
+• If applicable, the authors should discuss possible limitations of their approach to
+address problems of privacy and fairness.
+• While the authors might fear that complete honesty about limitations might be used by
+reviewers as grounds for rejection, a worse outcome might be that reviewers discover
+limitations that aren’t acknowledged in the paper. The authors should use their best
+judgment and recognize that individual actions in favor of transparency play an impor-
+tant role in developing norms that preserve the integrity of the community. Reviewers
+will be specifically instructed to not penalize honesty concerning limitations.
+3. Theory assumptions and proofs
+Question: For each theoretical result, does the paper provide the full set of assumptions and
+a complete (and correct) proof?
+19
+
+
+Answer: [N/A]
+Justification: The paper is empirical and does not introduce new theoretical results or proofs.
+Guidelines:
+• The answer [N/A] means that the paper does not include theoretical results.
+• All the theorems, formulas, and proofs in the paper should be numbered and cross-
+referenced.
+• All assumptions should be clearly stated or referenced in the statement of any theorems.
+• The proofs can either appear in the main paper or the supplemental material, but if
+they appear in the supplemental material, the authors are encouraged to provide a short
+proof sketch to provide intuition.
+• Inversely, any informal proof provided in the core of the paper should be complemented
+by formal proofs provided in appendix or supplemental material.
+• Theorems and Lemmas that the proof relies upon should be properly referenced.
+4. Experimental result reproducibility
+Question: Does the paper fully disclose all the information needed to reproduce the main ex-
+perimental results of the paper to the extent that it affects the main claims and/or conclusions
+of the paper (regardless of whether the code and data are provided or not)?
+Answer: [Yes]
+Justification: Sections 4 and Appendix D describe datasets, labels, splits, model/probe
+settings, training budgets, selection criteria, and evaluation metrics.
+Guidelines:
+• The answer [N/A] means that the paper does not include experiments.
+• If the paper includes experiments, a [No] answer to this question will not be perceived
+well by the reviewers: Making the paper reproducible is important, regardless of
+whether the code and data are provided or not.
+• If the contribution is a dataset and/or model, the authors should describe the steps taken
+to make their results reproducible or verifiable.
+• Depending on the contribution, reproducibility can be accomplished in various ways.
+For example, if the contribution is a novel architecture, describing the architecture fully
+might suffice, or if the contribution is a specific model and empirical evaluation, it may
+be necessary to either make it possible for others to replicate the model with the same
+dataset, or provide access to the model. In general. releasing code and data is often
+one good way to accomplish this, but reproducibility can also be provided via detailed
+instructions for how to replicate the results, access to a hosted model (e.g., in the case
+of a large language model), releasing of a model checkpoint, or other means that are
+appropriate to the research performed.
+• While NeurIPS does not require releasing code, the conference does require all submis-
+sions to provide some reasonable avenue for reproducibility, which may depend on the
+nature of the contribution. For example
+(a) If the contribution is primarily a new algorithm, the paper should make it clear how
+to reproduce that algorithm.
+(b) If the contribution is primarily a new model architecture, the paper should describe
+the architecture clearly and fully.
+(c) If the contribution is a new model (e.g., a large language model), then there should
+either be a way to access this model for reproducing the results or a way to reproduce
+the model (e.g., with an open-source dataset or instructions for how to construct
+the dataset).
+(d) We recognize that reproducibility may be tricky in some cases, in which case
+authors are welcome to describe the particular way they provide for reproducibility.
+In the case of closed-source models, it may be that access to the model is limited in
+some way (e.g., to registered users), but it should be possible for other researchers
+to have some path to reproducing or verifying the results.
+5. Open access to data and code
+20
+
+
+Question: Does the paper provide open access to the data and code, with sufficient instruc-
+tions to faithfully reproduce the main experimental results, as described in supplemental
+material?
+Answer: [Yes]
+Justification: We provide an anonymized source-code supplement with setup instructions,
+experiment entrypoints, label-generation scripts, representation-extraction scripts, probe-
+training scripts, and table/figure summarization scripts. The archive is source-only and
+excludes generated datasets and checkpoints; these artifacts can be regenerated using the
+documented pipeline, and we plan to release the full public repository after review.
+Guidelines:
+• The answer [N/A] means that paper does not include experiments requiring code.
+• Please see the NeurIPS code and data submission guidelines (https://neurips.cc/
+public/guides/CodeSubmissionPolicy) for more details.
+• While we encourage the release of code and data, we understand that this might not
+be possible, so [No] is an acceptable answer. Papers cannot be rejected simply for not
+including code, unless this is central to the contribution (e.g., for a new open-source
+benchmark).
+• The instructions should contain the exact command and environment needed to run to
+reproduce the results. See the NeurIPS code and data submission guidelines (https:
+//neurips.cc/public/guides/CodeSubmissionPolicy) for more details.
+• The authors should provide instructions on data access and preparation, including how
+to access the raw data, preprocessed data, intermediate data, and generated data, etc.
+• The authors should provide scripts to reproduce all experimental results for the new
+proposed method and baselines. If only a subset of experiments are reproducible, they
+should state which ones are omitted from the script and why.
+• At submission time, to preserve anonymity, the authors should release anonymized
+versions (if applicable).
+• Providing as much information as possible in supplemental material (appended to the
+paper) is recommended, but including URLs to data and code is permitted.
+6. Experimental setting/details
+Question: Does the paper specify all the training and test details (e.g., data splits, hyperpa-
+rameters, how they were chosen, type of optimizer) necessary to understand the results?
+Answer: [Yes]
+Justification: The paper specifies data sources, splits, label generation, solvers, probe
+locations, probe heads, hyperparameter selection, optimizer settings, and evaluation metrics
+in the main text and appendix.
+Guidelines:
+• The answer [N/A] means that the paper does not include experiments.
+• The experimental setting should be presented in the core of the paper to a level of detail
+that is necessary to appreciate the results and make sense of them.
+• The full details can be provided either with the code, in appendix, or as supplemental
+material.
+7. Experiment statistical significance
+Question: Does the paper report error bars suitably and correctly defined or other appropriate
+information about the statistical significance of the experiments?
+Answer: [Yes]
+Justification: Main learned results are averaged over 10 seeds, with full mean ± standard
+deviation tables in Appendix E; cross-architecture results report mean ± standard deviation
+over three split/probe seeds.
+Guidelines:
+• The answer [N/A] means that the paper does not include experiments.
+21
+
+
+• The authors should answer [Yes] if the results are accompanied by error bars, confidence
+intervals, or statistical significance tests, at least for the experiments that support the
+main claims of the paper.
+• The factors of variability that the error bars are capturing should be clearly stated (for
+example, train/test split, initialization, random drawing of some parameter, or overall
+run with given experimental conditions).
+• The method for calculating the error bars should be explained (closed form formula,
+call to a library function, bootstrap, etc.)
+• The assumptions made should be given (e.g., Normally distributed errors).
+• It should be clear whether the error bar is the standard deviation or the standard error
+of the mean.
+• It is OK to report 1-sigma error bars, but one should state it. The authors should
+preferably report a 2-sigma error bar than state that they have a 96% CI, if the hypothesis
+of Normality of errors is not verified.
+• For asymmetric distributions, the authors should be careful not to show in tables or
+figures symmetric error bars that would yield results that are out of range (e.g., negative
+error rates).
+• If error bars are reported in tables or plots, the authors should explain in the text how
+they were calculated and reference the corresponding figures or tables in the text.
+8. Experiments compute resources
+Question: For each experiment, does the paper provide sufficient information on the com-
+puter resources (type of compute workers, memory, time of execution) needed to reproduce
+the experiments?
+Answer: [Yes]
+Justification: Appendix D reports the H200 compute setting and wall-clock budgets for
+foundation training, SL/RL sweeps, remove-5 RL heads, and probe training.
+Guidelines:
+• The answer [N/A] means that the paper does not include experiments.
+• The paper should indicate the type of compute workers CPU or GPU, internal cluster,
+or cloud provider, including relevant memory and storage.
+• The paper should provide the amount of compute required for each of the individual
+experimental runs as well as estimate the total compute.
+• The paper should disclose whether the full research project required more compute
+than the experiments reported in the paper (e.g., preliminary or failed experiments that
+didn’t make it into the paper).
+9. Code of ethics
+Question: Does the research conducted in the paper conform, in every respect, with the
+NeurIPS Code of Ethics https://neurips.cc/public/EthicsGuidelines?
+Answer: [Yes]
+Justification: The work uses road network data; it does not involve human subjects, sensitive
+personal data, or high-risk deployment.
+Guidelines:
+• The answer [N/A] means that the authors have not reviewed the NeurIPS Code of
+Ethics.
+• If the authors answer [No], they should explain the special circumstances that require a
+deviation from the Code of Ethics.
+• The authors should make sure to preserve anonymity (e.g., if there is a special consid-
+eration due to laws or regulations in their jurisdiction).
+10. Broader impacts
+Question: Does the paper discuss both potential positive societal impacts and negative
+societal impacts of the work performed?
+Answer: [Yes]
+22
+
+
+Justification: The paper discusses operational decision-support use cases and limitations.
+Positive impacts include more efficient what-if analysis; possible negative impacts include
+overreliance on solver-relative predictions if used without validation.
+Guidelines:
+• The answer [N/A] means that there is no societal impact of the work performed.
+• If the authors answer [N/A] or [No], they should explain why their work has no societal
+impact or why the paper does not address societal impact.
+• Examples of negative societal impacts include potential malicious or unintended uses
+(e.g., disinformation, generating fake profiles, surveillance), fairness considerations
+(e.g., deployment of technologies that could make decisions that unfairly impact specific
+groups), privacy considerations, and security considerations.
+• The conference expects that many papers will be foundational research and not tied
+to particular applications, let alone deployments. However, if there is a direct path to
+any negative applications, the authors should point it out. For example, it is legitimate
+to point out that an improvement in the quality of generative models could be used to
+generate Deepfakes for disinformation. On the other hand, it is not needed to point out
+that a generic algorithm for optimizing neural networks could enable people to train
+models that generate Deepfakes faster.
+• The authors should consider possible harms that could arise when the technology is
+being used as intended and functioning correctly, harms that could arise when the
+technology is being used as intended but gives incorrect results, and harms following
+from (intentional or unintentional) misuse of the technology.
+• If there are negative societal impacts, the authors could also discuss possible mitigation
+strategies (e.g., gated release of models, providing defenses in addition to attacks,
+mechanisms for monitoring misuse, mechanisms to monitor how a system learns from
+feedback over time, improving the efficiency and accessibility of ML).
+11. Safeguards
+Question: Does the paper describe safeguards that have been put in place for responsible
+release of data or models that have a high risk for misuse (e.g., pre-trained language models,
+image generators, or scraped datasets)?
+Answer: [Yes]
+Justification: The paper does not release high-risk generative models, scraped datasets, or
+dual-use systems requiring special safeguards.
+Guidelines:
+• The answer [N/A] means that the paper poses no such risks.
+• Released models that have a high risk for misuse or dual-use should be released with
+necessary safeguards to allow for controlled use of the model, for example by requiring
+that users adhere to usage guidelines or restrictions to access the model or implementing
+safety filters.
+• Datasets that have been scraped from the Internet could pose safety risks. The authors
+should describe how they avoided releasing unsafe images.
+• We recognize that providing effective safeguards is challenging, and many papers do
+not require this, but we encourage authors to take this into account and make a best
+faith effort.
+12. Licenses for existing assets
+Question: Are the creators or original owners of assets (e.g., code, data, models), used in
+the paper, properly credited and are the license and terms of use explicitly mentioned and
+properly respected?
+Answer: [Yes]
+Justification: The paper cites the existing models, solvers, datasets, and released checkpoints
+used in the experiments, including RRNCO, LKH/LKH3, and external NCO checkpoints.
+Guidelines:
+• The answer [N/A] means that the paper does not use existing assets.
+23
+
+
+• The authors should cite the original paper that produced the code package or dataset.
+• The authors should state which version of the asset is used and, if possible, include a
+URL.
+• The name of the license (e.g., CC-BY 4.0) should be included for each asset.
+• For scraped data from a particular source (e.g., website), the copyright and terms of
+service of that source should be provided.
+• If assets are released, the license, copyright information, and terms of use in the
+package should be provided. For popular datasets, paperswithcode.com/datasets
+has curated licenses for some datasets. Their licensing guide can help determine the
+license of a dataset.
+• For existing datasets that are re-packaged, both the original license and the license of
+the derived asset (if it has changed) should be provided.
+• If this information is not available online, the authors are encouraged to reach out to
+the asset’s creators.
+13. New assets
+Question: Are new assets introduced in the paper well documented and is the documentation
+provided alongside the assets?
+Answer: [N/A]
+Justification: The submission does not currently release a new dataset, benchmark suite, or
+model as a paper artifact.
+Guidelines:
+• The answer [N/A] means that the paper does not release new assets.
+• Researchers should communicate the details of the dataset/code/model as part of their
+submissions via structured templates. This includes details about training, license,
+limitations, etc.
+• The paper should discuss whether and how consent was obtained from people whose
+asset is used.
+• At submission time, remember to anonymize your assets (if applicable). You can either
+create an anonymized URL or include an anonymized zip file.
+14. Crowdsourcing and research with human subjects
+Question: For crowdsourcing experiments and research with human subjects, does the paper
+include the full text of instructions given to participants and screenshots, if applicable, as
+well as details about compensation (if any)?
+Answer: [N/A]
+Justification: The work does not involve crowdsourcing or human-subject experiments.
+Guidelines:
+• The answer [N/A] means that the paper does not involve crowdsourcing nor research
+with human subjects.
+• Including this information in the supplemental material is fine, but if the main contribu-
+tion of the paper involves human subjects, then as much detail as possible should be
+included in the main paper.
+• According to the NeurIPS Code of Ethics, workers involved in data collection, curation,
+or other labor should be paid at least the minimum wage in the country of the data
+collector.
+15. Institutional review board (IRB) approvals or equivalent for research with human
+subjects
+Question: Does the paper describe potential risks incurred by study participants, whether
+such risks were disclosed to the subjects, and whether Institutional Review Board (IRB)
+approvals (or an equivalent approval/review based on the requirements of your country or
+institution) were obtained?
+Answer: [N/A]
+Justification: The work does not involve human-subject research.
+24
+
+
+Guidelines:
+• The answer [N/A] means that the paper does not involve crowdsourcing nor research
+with human subjects.
+• Depending on the country in which research is conducted, IRB approval (or equivalent)
+may be required for any human subjects research. If you obtained IRB approval, you
+should clearly state this in the paper.
+• We recognize that the procedures for this may vary significantly between institutions
+and locations, and we expect authors to adhere to the NeurIPS Code of Ethics and the
+guidelines for their institution.
+• For initial submissions, do not include any information that would break anonymity (if
+applicable), such as the institution conducting the review.
+16. Declaration of LLM usage
+Question: Does the paper describe the usage of LLMs if it is an important, original, or
+non-standard component of the core methods in this research? Note that if the LLM is used
+only for writing, editing, or formatting purposes and does not impact the core methodology,
+scientific rigor, or originality of the research, declaration is not required.
+Answer: [N/A]
+Justification: LLMs are not used as a core methodological component of the research.
+Guidelines:
+• The answer [N/A] means that the core method development in this research does not
+involve LLMs as any important, original, or non-standard components.
+• Please refer to our LLM policy in the NeurIPS handbook for what should or should not
+be described.
+25

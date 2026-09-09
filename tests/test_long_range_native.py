@@ -134,3 +134,35 @@ def test_reject_unsafe_report_page_path(tmp_path):
     )
     with pytest.raises(ValueError, match="无效回溯分页路径"):
         publish_native_reports(tmp_path)
+
+
+def test_fulltext_option_fetches_pdf_markdown_at_native_chat_route(tmp_path):
+    folder = tmp_path / "docs/long-range/report"
+    folder.mkdir(parents=True)
+    (folder / "a-core-1.json").write_text(
+        json.dumps(
+            [{"id": "2510.17595v1", "title": "ATSP", "score": 8, "bucket": "core"}]
+        )
+    )
+    (folder / "manifest.json").write_text(
+        json.dumps(
+            {
+                "start": "2025-09-10",
+                "end_exclusive": "2026-09-10",
+                "generated_at": "",
+                "groups": [
+                    {"tag": "ATSP", "buckets": {"core": {"pages": ["a-core-1.json"]}}}
+                ],
+            }
+        )
+    )
+    from unittest.mock import Mock
+
+    content = "# Introduction\n" + "Full proof, not an abstract. " * 100
+    response = Mock(status_code=200, text=content)
+    with patch("requests.get", return_value=response) as get:
+        publish_native_reports(tmp_path, with_fulltext=True)
+        get.assert_called_once()
+    assert (
+        tmp_path / "docs/20250910-20260909/2510.17595v1.txt"
+    ).read_text() == content.strip()
