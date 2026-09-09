@@ -11,6 +11,41 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class EmptyArchiveWorkflowTest(unittest.TestCase):
+    def test_conference_staging_accepts_no_publishable_paper_directory(self):
+        workflow = yaml.safe_load(
+            (ROOT / ".github/workflows/conference-paper-retrieval.yml").read_text()
+        )
+        step = next(
+            s
+            for s in workflow["jobs"]["retrieve"]["steps"]
+            if s.get("name") == "Commit conference retrieval results"
+        )
+        staging = (
+            "shopt -s nullglob\n"
+            + step["run"].split("shopt -s nullglob", 1)[1].split("git commit -m", 1)[0]
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+            (root / "docs").mkdir()
+            (root / "docs/_sidebar.md").write_text("")
+            (root / "archive/20260909/rank").mkdir(parents=True)
+            (
+                root / "archive/20260909/rank/conference-icml-2025.supabase.llm.json"
+            ).write_text("{}")
+            result = subprocess.run(
+                ["bash", "-e", "-c", staging],
+                cwd=root,
+                env=dict(
+                    os.environ,
+                    GITHUB_REPOSITORY_OWNER="test",
+                    GITHUB_REPOSITORY="test/example",
+                ),
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_commit_staging_works_in_reset_fork_without_archive(self):
         workflow = yaml.safe_load(
             (ROOT / ".github/workflows/daily-paper-reader.yml").read_text()
