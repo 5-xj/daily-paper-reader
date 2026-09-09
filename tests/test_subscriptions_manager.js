@@ -174,7 +174,7 @@ function testConferenceCurrentYearDisabledForPendingSources() {
   assert.equal(isConferenceYearSelectable('OSDI', currentYear), true);
   assert.equal(isConferenceYearSelectable('IEEE S&P', currentYear), true);
   assert.equal(isConferenceYearSelectable('CVPR', currentYear), true);
-  assert.equal(isConferenceYearSelectable('ECCV', currentYear), false);
+  assert.equal(isConferenceYearSelectable('ECCV', currentYear), true);
   assert.equal(isConferenceYearSelectable('IJCAI', currentYear), false);
   // ECCV biennial: odd years disabled
   assert.equal(isConferenceYearSelectable('ECCV', '2024'), true);
@@ -190,7 +190,7 @@ function testConferenceDefaultYearOnlySelects2025() {
   assert.deepEqual(pairs, []);
 }
 
-function testCvpr2026EnabledAndEmnlpEstimateMatchesNotice() {
+function testAvailable2026ConferenceChoicesAndEmnlpEstimate() {
   __setConferenceStatsSnapshot(require('../app/conference-stats.json'));
   __setRunSelectionState({ conferencePairs: ['CVPR:2026'] });
   const html = __buildConferenceChoiceRowsHtml();
@@ -201,6 +201,11 @@ function testCvpr2026EnabledAndEmnlpEstimateMatchesNotice() {
   assert.ok(cvpr.includes('aria-pressed="true"'));
   assert.ok(cvpr.includes('class="dpr-choice-total">4042</span>'));
   const emnlp = buttonFor('EMNLP');
+  const eccv = buttonFor('ECCV');
+  assert.equal(/\bdisabled\b/.test(eccv), false);
+  const eccvStats = require('../app/conference-stats.json').items.find(item => item.id === 'eccv-2026');
+  assert.ok(eccvStats.stored_total_count > 0);
+  assert.ok(eccv.includes(`class="dpr-choice-total">${eccvStats.stored_total_count}</span>`));
   assert.ok(/\bdisabled\b/.test(emnlp));
   assert.ok(emnlp.includes('10 月中下旬'));
   assert.ok(emnlp.includes('以官方论文集开放时间为准'));
@@ -507,7 +512,7 @@ async function testConferenceRetrievalDispatchesUnifiedConferencePairs() {
   await testRunProfileQuickFetchPassesProfileTagToWorkflow();
   testConferenceCurrentYearDisabledForPendingSources();
   testConferenceDefaultYearOnlySelects2025();
-  testCvpr2026EnabledAndEmnlpEstimateMatchesNotice();
+  testAvailable2026ConferenceChoicesAndEmnlpEstimate();
   testConferenceYearChoicesShowTwoDigitYearAndStoredTotalOnly();
   await testConferenceStatsLoadReusesBootstrappedJsonPromise();
   testQuickRunUnsavedMessageClearsAfterSave();

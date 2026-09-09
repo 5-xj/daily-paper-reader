@@ -111,8 +111,8 @@ window.SubscriptionsManager = (function () {
     'NDSS',
   ];
   const CONFERENCE_STATS_SNAPSHOT_URL = 'app/conference-stats.json';
-  // 2026 年已入库并验证检索的会议（截至 2026-09，含 CVPR 4,042 篇）。
-  const CONFERENCE_2026_AVAILABLE = new Set(['ICLR', 'ICML', 'AAAI', 'ACL', 'CVPR', 'OSDI', 'IEEE S&P', 'NDSS']);
+  // 2026 年已入库并验证检索的会议（截至 2026-09，含 CVPR、ECCV）。
+  const CONFERENCE_2026_AVAILABLE = new Set(['ICLR', 'ICML', 'AAAI', 'ACL', 'CVPR', 'ECCV', 'OSDI', 'IEEE S&P', 'NDSS']);
   const FEATURED_CONFERENCE_YEAR_PAIRS = new Set(['acl:2026', 'icml:2026']);
   // ECCV 是双年会议（偶数年）
   const BIENNIAL_EVEN_CONFERENCES = new Set(['ECCV']);
@@ -696,7 +696,6 @@ window.SubscriptionsManager = (function () {
         EMNLP:   '2026 年 10 月中下旬（以官方论文集开放时间为准）',
         NEURIPS: '2026 年 12 月会后',
         NIPS:    '2026 年 12 月会后',
-        ECCV:    '2026 年秋季会后',
         OSDI:    '2026 年会后论文 PDF 公开后',
         SOSP:    '2026 年会后论文 PDF 公开后',
         'IEEE S&P': '2026 年 CSDL 论文 PDF 公开后',

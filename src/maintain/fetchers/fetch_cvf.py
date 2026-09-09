@@ -41,6 +41,8 @@ SRC_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 if SRC_DIR not in sys.path:
     sys.path.insert(0, SRC_DIR)
 
+from maintain.conference_program import fetch_eccv_program, program_paper_id
+
 SCRIPT_DIR = os.path.dirname(__file__)
 ROOT_DIR = os.path.abspath(os.path.join(SCRIPT_DIR, "..", "..", ".."))
 TODAY_STR = datetime.now(timezone.utc).strftime("%Y%m%d")
@@ -190,7 +192,7 @@ def _parse_eccv_list(html: str, year: int) -> List[Dict[str, str]]:
 
         href = a_title.get("href", "")
         # Filter for the requested year.
-        if year_str not in href:
+        if not re.search(rf"/eccv_{year_str}/", "/" + href.lstrip("/"), re.I):
             continue
 
         title = _norm(a_title.get_text())
@@ -295,7 +297,7 @@ def _build_paper(
     published = f"{year}-{month:02d}-01T00:00:00+00:00"
 
     return {
-        "id": f"{conf_lower}-{year}-{slug}",
+        "id": program_paper_id(conf_upper, year, title) if conf_upper == "ECCV" and year >= 2026 else f"{conf_lower}-{year}-{slug}",
         "source": f"{conf_upper}-{year}-Accepted",
         "title": title,
         "abstract": detail["abstract"],
@@ -367,6 +369,8 @@ def fetch_eccv(year: int, workers: int) -> List[Dict[str, Any]]:
     log(f"  Found {len(entries)} papers for ECCV {year}")
 
     if not entries:
+        if year >= 2026:
+            return fetch_eccv_program(year, workers=workers)
         return []
 
     papers: List[Dict[str, Any]] = []

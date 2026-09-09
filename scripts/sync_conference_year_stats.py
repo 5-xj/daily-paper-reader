@@ -52,6 +52,9 @@ CONFERENCE_SPECS: Tuple[Dict[str, str], ...] = (
 OFFICIAL_ACCEPTED_COUNTS: Dict[Tuple[str, int], int] = {
     # https://cvpr.thecvf.com/Conferences/2026/News/Closing
     ("cvpr", 2026): 4089,
+    # ECCV 官方 poster 列表去重计数，与 Springer Part LXI 一致（2026-09-09）。
+    # https://link.springer.com/book/10.1007/978-3-032-37095-2
+    ("eccv", 2026): 2834,
     ("osdi", 2024): 53,
     ("osdi", 2025): 53,
     ("osdi", 2026): 136,
