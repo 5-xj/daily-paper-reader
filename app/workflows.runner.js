@@ -1016,9 +1016,12 @@ window.DPRWorkflowRunner = (function () {
     return dispatchAndMonitor(wf, extraInputs);
   };
 
-  const runQuickFetchByDays = async (days, extra) => {
-    const parsed = parseInt(days, 10);
-    const normalized = Number.isFinite(parsed) && parsed > 0 ? String(Math.max(1, parsed)) : '10';
+  const buildQuickFetchRequest = (days, extra) => {
+    const parsed = Number(days);
+    if (!Number.isInteger(parsed) || parsed < 1 || parsed > 365) {
+      throw new Error('回溯天数必须在 1–365 天之间。');
+    }
+    const normalized = String(parsed);
     const options = extra && typeof extra === 'object' ? extra : {};
     const fetchMode = (typeof options.fetchMode === 'string' ? options.fetchMode : '').trim().toLowerCase();
     const presetKey = fetchMode ? `${normalized}-${fetchMode}` : normalized;
@@ -1030,7 +1033,16 @@ window.DPRWorkflowRunner = (function () {
       },
     };
     const mergedInputs = combineInputs(preset.dispatchInputs, options.dispatchInputs);
-    return runWorkflowByKey(preset.key, mergedInputs);
+    // 不允许额外参数绕开天数校验；31天以上由后端进入独立回溯模式。
+    mergedInputs.fetch_days = normalized;
+    if (parsed > 30) mergedInputs.fetch_mode = 'skims';
+    return { key: preset.key, inputs: mergedInputs };
+  };
+  const runQuickFetchByDays = async (days, extra) => {
+    let request;
+    try { request = buildQuickFetchRequest(days, extra); }
+    catch (error) { setStatus(error.message, '#c00'); return false; }
+    return runWorkflowByKey(request.key, request.inputs);
   };
 
   const normalizeConferenceName = (value) => {
@@ -1121,6 +1133,7 @@ window.DPRWorkflowRunner = (function () {
     runConferenceRetrieval(conference, years);
 
   return {
+    __test: { buildQuickFetchRequest },
     open,
     runWorkflowByKey,
     runQuickFetchByDays,

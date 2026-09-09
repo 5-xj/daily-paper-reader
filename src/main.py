@@ -533,13 +533,13 @@ def main() -> None:
         "--fetch-days",
         type=int,
         default=None,
-        help="Pass --days to Step1 (fetch arxiv). Default: use config.yaml/state logic.",
+        help="回溯1–365天；1–30天沿用日报流程，31天以上为arXiv专题回溯。",
     )
     parser.add_argument(
         "--fetch-mode",
         default="auto",
         choices=("auto", "standard", "skims"),
-        help="Force fetch-run mode: auto(按阈值), standard(非skims), skims(强制skims).",
+        help="1–30天：auto/standard/skims；31–365天固定使用独立arXiv专题回溯。",
     )
     parser.add_argument(
         "--profile-tag",
@@ -566,6 +566,8 @@ def main() -> None:
         help="强制执行 Step 1（全量数据拉取），即使 Supabase 已启用。",
     )
     args = parser.parse_args()
+    if args.fetch_days is not None and not 1 <= args.fetch_days <= 365:
+        parser.error('--fetch-days 必须在 1–365 天之间')
 
     python = sys.executable
 
@@ -581,6 +583,15 @@ def main() -> None:
     else:
         os.environ.pop("DPR_FILTER_PROFILE_TAG", None)
         os.environ.pop("DPR_INCLUDE_CONFERENCE_ONLY_PROFILES", None)
+    if args.fetch_days is not None and args.fetch_days > 30:
+        if args.skip_fetch is False:
+            parser.error('31–365天专题回溯只读取Supabase，不支持 --no-skip-fetch')
+        from long_range_review import run_review
+        print('[INFO] 启用 arXiv 专题回溯：不使用日报Top-K/星级截断，不生成逐篇精读长文。', flush=True)
+        if args.run_enrich:
+            run_step('Step 0 - enrich config', [python, os.path.join(SRC_DIR, '0.enrich_config_queries.py')])
+        run_review(_load_full_config(), args.fetch_days, ROOT_DIR, run_date_token)
+        return
     fetch_mode = (args.fetch_mode or "auto").strip().lower()
     if fetch_mode == "skims":
         use_skims_mode = True

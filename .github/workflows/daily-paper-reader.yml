@@ -10,11 +10,11 @@ on:
         required: false
         default: "false"
       fetch_days:
-        description: "回溯抓取天数（例如 30）；留空则使用默认配置"
+        description: "回溯1–365天；31天以上进入arXiv专题回溯（独立分页报告、DeepSeek按实际用量计费）"
         required: false
         default: "10"
       fetch_mode:
-        description: "抓取模式：auto/standard/skims（auto 按 fetch-days 阈值决定，standard/ skims 强制）"
+        description: "1–30天：auto/standard/skims；31–365天固定为独立arXiv专题回溯"
         required: false
         default: "auto"
       profile_tag:
@@ -84,6 +84,21 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Validate requested window
+        id: window
+        env:
+          REQUESTED_DAYS: ${{ github.event.inputs.fetch_days }}
+        run: |
+          python - <<'PY'
+          import os
+          raw = os.environ.get('REQUESTED_DAYS', '').strip()
+          days = int(raw) if raw else 10
+          if not 1 <= days <= 365:
+              raise SystemExit('fetch_days 必须在 1–365 天之间')
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write(f'long_range={str(days > 30).lower()}\n')
+          PY
+
       - name: Cache Python deps
         uses: actions/cache@v5
         with:
@@ -108,6 +123,7 @@ jobs:
           uv pip install --system -r /tmp/req.txt
 
       - name: Prepare PaperCropper (optional)
+        if: steps.window.outputs.long_range != 'true'
         continue-on-error: true
         run: |
           set -euo pipefail
@@ -168,7 +184,17 @@ jobs:
           echo "PAPERCROPPER_SCRIPT=$SRC_DIR/extract.py" >> "$GITHUB_ENV"
           echo "PAPERCROPPER_MODEL=$MODEL_PATH" >> "$GITHUB_ENV"
 
+      - name: Restore long-range review progress
+        uses: actions/cache/restore@v5
+        with:
+          path: .local-runs/long-range-cache
+          key: long-range-v1-${{ github.ref_name }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            long-range-v1-${{ github.ref_name }}-
+
       - name: Run Retrieval and Embedding
+        # 留出保存评审缓存的时间；失败后重跑可复用仍在缓存中的已完成评分。
+        timeout-minutes: 100
         env:
           HF_HOME: ${{ github.workspace }}/hf_cache
           HUGGINGFACE_HUB_CACHE: ${{ github.workspace }}/hf_cache
@@ -255,6 +281,24 @@ jobs:
 
           echo "--- post-run cache symlink check ---"
           find "$HF_HOME" -xtype l | head -n 50 || true
+
+      - name: Save long-range review progress
+        if: always() && hashFiles('.local-runs/long-range-cache/**') != ''
+        uses: actions/cache/save@v5
+        with:
+          path: .local-runs/long-range-cache
+          key: long-range-v1-${{ github.ref_name }}-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: Upload long-range report
+        if: success() && steps.window.outputs.long_range == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: arxiv-long-range-results
+          path: |
+            docs/long-range/
+            app/long-range-reader.js
+          retention-days: 7
+          if-no-files-found: error
 
       - name: Cleanup non-recommend archives
         run: |

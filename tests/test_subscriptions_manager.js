@@ -27,6 +27,8 @@ const {
   formatConferenceYearStatsLabel,
   runQuickConferenceRetrieval,
   runSelectedQuickFetch,
+  runSelectedQuickFetchByMode,
+  __setQuickRunMode,
 } = global.window.SubscriptionsManager.__test;
 
 function buildBaseConfig() {
@@ -505,6 +507,25 @@ async function testConferenceRetrievalDispatchesUnifiedConferencePairs() {
   delete global.window.SubscriptionsSmartQuery;
 }
 
+async function testLongRangeSelectionDispatchesAndCanCancel() {
+  const calls = [];
+  window.SubscriptionsSmartQuery = { getSelectedProfilesForRun: () => [{tag: 'ATSP', paused: false}] };
+  window.DPRWorkflowRunner = { runQuickFetchByDays: (days, options) => { calls.push({days, options}); return true; } };
+  window.confirm = () => true;
+  __setUnsavedChanges(false);
+  for (const days of [90, 365]) {
+    __setQuickRunMode(String(days));
+    assert.equal(await runSelectedQuickFetchByMode(), true);
+    assert.equal(calls.at(-1).days, days);
+    assert.equal(calls.at(-1).options.dispatchInputs.profile_tag, 'ATSP');
+  }
+  window.confirm = () => false;
+  assert.equal(await runSelectedQuickFetchByMode(), false);
+  assert.equal(calls.length, 2);
+  __setQuickRunMode('10');
+  delete window.confirm; delete window.SubscriptionsSmartQuery; delete window.DPRWorkflowRunner;
+}
+
 (async () => {
   testNormalizeSubscriptionsAddsBiorxivBackend();
   testNormalizeSubscriptionsPreservesCustomBiorxivBackendFields();
@@ -521,6 +542,7 @@ async function testConferenceRetrievalDispatchesUnifiedConferencePairs() {
   testConferenceRunDisabledWhenSelectedStoredTotalReachesLimit();
   await testQuickFetchIncludesAnySelectedProfile();
   await testConferenceRetrievalDispatchesUnifiedConferencePairs();
+  await testLongRangeSelectionDispatchesAndCanCancel();
 
   console.log('subscriptions manager tests passed');
 })().catch((error) => {

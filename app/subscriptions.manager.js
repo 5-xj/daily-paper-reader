@@ -1036,8 +1036,8 @@ window.SubscriptionsManager = (function () {
     };
     const fetchMode = normalizeText(options.fetchMode).toLowerCase();
     const modeText = fetchMode === 'standard'
-      ? '30 天标准抓取任务'
-      : (fetchMode === 'skims' ? '30 天速览抓取任务' : `${days} 天抓取任务`);
+      ? `${days} 天标准抓取任务`
+      : (Number(days) > 30 ? `${days} 天 arXiv 专题回溯任务` : (fetchMode === 'skims' ? `${days} 天速览抓取任务` : `${days} 天抓取任务`));
     const tip = `已发起词条「${normalizedTag}」的${modeText}。`;
     return runQuickFetch(days, quickRunMsgEl || msgEl, tip, options);
   };
@@ -1051,8 +1051,8 @@ window.SubscriptionsManager = (function () {
     }
     const fetchMode = normalizeText(runOptions.fetchMode).toLowerCase();
     const modeText = fetchMode === 'standard'
-      ? '30 天全标准 / 精读'
-      : (fetchMode === 'skims' ? '30 天全速览' : `${days} 天`);
+      ? `${days} 天全标准 / 精读`
+      : (Number(days) > 30 ? `${days} 天 arXiv 专题回溯` : (fetchMode === 'skims' ? `${days} 天全速览` : `${days} 天`));
     const options = runOptions && typeof runOptions === 'object' ? cloneDeep(runOptions) : {};
     const dispatchInputs = isPlainObject(options.dispatchInputs) ? options.dispatchInputs : {};
     options.dispatchInputs = {
@@ -1065,6 +1065,10 @@ window.SubscriptionsManager = (function () {
     return success;
   };
   const runSelectedQuickFetchByMode = () => {
+    if (quickRunMode === '90' || quickRunMode === '365') {
+      if (!window.confirm('将对所选词条进行 arXiv 长周期回溯，只检索 arXiv。全部候选需调用 DeepSeek 评审，宽泛专题可能有上万篇，耗时和费用按实际量增长；不下载全量PDF。确认开始？')) return false;
+      return runSelectedQuickFetch(Number(quickRunMode), { fetchMode: 'skims' });
+    }
     if (quickRunMode === '30-skims') {
       return runSelectedQuickFetch(30, { fetchMode: 'skims' });
     }
@@ -1474,7 +1478,18 @@ window.SubscriptionsManager = (function () {
                     <span class="dpr-task-action-title">立即抓取三十天精读</span>
                     <span class="dpr-task-action-cost">约 ¥0.50</span>
                   </label>
+                  <label class="chat-quick-run-item dpr-task-radio-card">
+                    <input type="radio" name="dpr-quick-run-mode" value="90">
+                    <span class="dpr-task-action-title">回溯九十天 arXiv</span>
+                    <span class="dpr-task-action-cost">专题评审 · 按实际用量计费</span>
+                  </label>
+                  <label class="chat-quick-run-item dpr-task-radio-card">
+                    <input type="radio" name="dpr-quick-run-mode" value="365">
+                    <span class="dpr-task-action-title">回溯一年 arXiv</span>
+                    <span class="dpr-task-action-cost">365 天 · 可复用评审进度</span>
+                  </label>
                 </div>
+                <p class="dpr-task-hint">90 天/一年为 arXiv 专题回溯：关键词候选与语义补漏，不保证找全；核心≥8分，补充6–7分。<a id="arxiv-admin-long-range-results" href="#/long-range/README">查看已完成的回溯结果</a>，或下载工作流结果附件。</p>
                 <button id="arxiv-admin-quick-run-start-btn" class="chat-quick-run-run-btn dpr-task-start-btn" type="button">开始检索</button>
                 <div id="arxiv-admin-quick-run-msg" class="chat-quick-run-msg"></div>
               </div>
@@ -1538,6 +1553,21 @@ window.SubscriptionsManager = (function () {
     `;
 
     document.body.appendChild(overlay);
+    overlay.querySelector('#arxiv-admin-long-range-results').addEventListener('click', async (event) => {
+      event.preventDefault();
+      try {
+        const response = await fetch('docs/long-range/README.md', { cache: 'no-cache' });
+        if (response.status === 404) {
+          setQuickRunMessage('尚无已完成的回溯结果，请先运行90天或一年任务。', '#666');
+          return;
+        }
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        closeOverlay();
+        window.location.hash = '/long-range/README';
+      } catch (error) {
+        setQuickRunMessage(`暂时无法读取回溯结果：${error.message}，请稍后重试。`, '#c00');
+      }
+    });
     panel = document.getElementById('arxiv-search-panel');
 
     saveBtn = document.getElementById('arxiv-config-save-btn');
@@ -1924,6 +1954,8 @@ window.SubscriptionsManager = (function () {
     validateDraftConfig: () => validateIntentProfiles(draftConfig || {}),
     runProfileQuickFetch: (profileTag, days, runOptions) => runProfileQuickFetch(profileTag, days, runOptions),
     __test: {
+      __setQuickRunMode: (value) => { quickRunMode = value; },
+      runSelectedQuickFetchByMode,
       normalizeSubscriptions: (config) => normalizeSubscriptions(config),
       ensureSourceBackendsForProfiles: (config) => ensureSourceBackendsForProfiles(cloneDeep(config || {})),
       buildDefaultSourceBackend: (sourceKey, config) => buildDefaultSourceBackend(sourceKey, cloneDeep(config || {})),

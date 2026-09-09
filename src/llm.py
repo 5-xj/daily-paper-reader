@@ -518,6 +518,7 @@ class LLMClient:
             'presence_penalty', 'frequency_penalty', 'stop', 'logprobs',
             'tools', 'tool_choice', 'logit_bias',
             'response_format',
+            'thinking',  # DeepSeek V4：批量筛选可显式关闭思考，不改变其他调用默认行为。
         }
         if isinstance(self.kwargs, dict):
             for k, v in self.kwargs.items():
