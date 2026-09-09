@@ -13,6 +13,14 @@ from llm import LLMClient
 
 
 class LlmStructuredOutputTest(unittest.TestCase):
+    @patch("llm.requests.post")
+    def test_explicit_thinking_toggle_is_forwarded(self, mock_post):
+        mock_post.return_value = self._mock_success_response({"content": "ok"})
+        client = LLMClient(api_key="test-key", model="deepseek-v4-flash", base_url="https://api.deepseek.com")
+        client.kwargs["thinking"] = {"type": "disabled"}
+        client.chat(messages=[{"role": "user", "content": "hello"}])
+        self.assertEqual(mock_post.call_args.kwargs["json"].get("thinking"), {"type": "disabled"})
+
     def _mock_success_response(self, message: dict):
         resp = MagicMock()
         resp.raise_for_status.return_value = None

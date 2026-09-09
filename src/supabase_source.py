@@ -17,11 +17,23 @@ except Exception:  # pragma: no cover - 兼容 package 导入路径
 
 
 DEFAULT_TIMEOUT = 20
+# 与 sql/match_arxiv_papers.sql 的函数级预算对应，预留网络传输时间。
+_RPC_DEFAULT_TIMEOUTS = {
+    "match_arxiv_papers_exact": 75,
+    "match_arxiv_papers_bm25": 45,
+}
 _DEFAULT_SUPABASE_RETRY = 3
 _DEFAULT_SUPABASE_RETRY_WAIT_SECONDS = 1.0
 
 # PostgreSQL error code for "canceling statement due to statement timeout"
 _PG_STATEMENT_TIMEOUT_CODE = "57014"
+
+
+def _resolve_rpc_timeout(rpc_name: str, timeout: int | None) -> int:
+    # 显式参数仍由调用方控制；只调整 arXiv RPC 的默认值。
+    if timeout is not None:
+        return max(int(timeout or DEFAULT_TIMEOUT), 1)
+    return _RPC_DEFAULT_TIMEOUTS.get(rpc_name, DEFAULT_TIMEOUT)
 
 
 def _is_statement_timeout(resp: requests.Response) -> bool:
@@ -482,7 +494,7 @@ def match_papers_by_embedding(
     query_embedding: List[float],
     match_count: int,
     schema: str = "public",
-    timeout: int = DEFAULT_TIMEOUT,
+    timeout: int | None = None,
     start_dt: datetime | None = None,
     end_dt: datetime | None = None,
     time_fields: tuple[str, ...] = ("published",),
@@ -523,7 +535,7 @@ def match_papers_by_embedding(
                 "Content-Type": "application/json",
             },
             json=payload,
-            timeout=max(int(timeout or DEFAULT_TIMEOUT), 1),
+            timeout=_resolve_rpc_timeout(safe_rpc, timeout),
             retries=_DEFAULT_SUPABASE_RETRY,
             retry_wait_seconds=_DEFAULT_SUPABASE_RETRY_WAIT_SECONDS,
             log_prefix="[Supabase RPC]",
@@ -579,7 +591,7 @@ def match_papers_by_bm25(
     query_text: str,
     match_count: int,
     schema: str = "public",
-    timeout: int = DEFAULT_TIMEOUT,
+    timeout: int | None = None,
     start_dt: datetime | None = None,
     end_dt: datetime | None = None,
     time_fields: tuple[str, ...] = ("published",),
@@ -620,7 +632,7 @@ def match_papers_by_bm25(
                 "Content-Type": "application/json",
             },
             json=payload,
-            timeout=max(int(timeout or DEFAULT_TIMEOUT), 1),
+            timeout=_resolve_rpc_timeout(safe_rpc, timeout),
             retries=_DEFAULT_SUPABASE_RETRY,
             retry_wait_seconds=_DEFAULT_SUPABASE_RETRY_WAIT_SECONDS,
             log_prefix="[Supabase RPC]",

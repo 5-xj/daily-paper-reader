@@ -216,13 +216,15 @@ def main() -> None:
     parser.add_argument("--service-key", type=str, default=os.getenv("SUPABASE_SERVICE_KEY", ""))
     parser.add_argument("--papers-table", type=str, default=os.getenv("SUPABASE_PAPERS_TABLE", ""))
     parser.add_argument("--schema", type=str, default=os.getenv("SUPABASE_SCHEMA", "public"))
-    parser.add_argument("--retention-days", type=int, default=45)
+    parser.add_argument("--retention-days", type=int, default=None)
     parser.add_argument("--batch-size", type=int, default=500)
     parser.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT)
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 
     backend_key = _norm(args.backend_key) or "arxiv"
+    if args.retention_days is None:
+        args.retention_days = 400 if backend_key.lower() == "arxiv" else 45
     config = resolve_supabase_config(
         backend_key=backend_key,
         url=args.url,

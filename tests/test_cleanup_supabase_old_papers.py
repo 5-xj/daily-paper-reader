@@ -77,6 +77,15 @@ class CleanupSupabaseOldPapersTest(unittest.TestCase):
         self.assertEqual(result["batches"], 1)
         delete_mock.assert_not_called()
 
+    def test_default_retention_is_400_days_only_for_arxiv(self):
+        for source, expected in [('arxiv', 400), ('biorxiv', 45)]:
+            with self.subTest(source=source), patch.object(sys, 'argv', ['cleanup.py', '--backend-key', source, '--service-key', 'test-only', '--dry-run']), \
+                 patch.object(self.mod, 'resolve_supabase_config', return_value={'url': 'https://example.org', 'papers_table': source + '_papers', 'schema': 'public'}), \
+                 patch.object(self.mod, 'cleanup_old_papers', return_value={'deleted': 0, 'batches': 0, 'cutoff_iso': 'test'}) as cleanup:
+                self.mod.main()
+                self.assertEqual(cleanup.call_args.kwargs['retention_days'], expected)
+                self.assertTrue(cleanup.call_args.kwargs['dry_run'])
+
 
 if __name__ == "__main__":
     unittest.main()

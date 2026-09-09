@@ -14,7 +14,7 @@ def main() -> None:
     parser.add_argument("--fetch-days", type=str, default="")
     parser.add_argument("--chunk-days", type=int, default=7)
     parser.add_argument("--run-date", type=str, default=TODAY_STR)
-    parser.add_argument("--retention-days", type=int, default=45)
+    parser.add_argument("--retention-days", type=int, default=400)
     parser.add_argument("--raw-input", type=str, default="")
     parser.add_argument("--skip-cleanup", action="store_true")
     parser.add_argument("--skip-fetch", action="store_true")
