@@ -2032,7 +2032,7 @@ def update_sidebar(
     if day_idx != -1:
         end = day_idx + 1
         while end < len(lines):
-            if lines[end].startswith("  * ") and not lines[end].startswith("    * "):
+            if lines[end].startswith("* ") or (lines[end].startswith("  * ") and not lines[end].startswith("    * ")):
                 break
             end += 1
         existing_deep_lines, existing_quick_lines = _extract_day_block_papers(

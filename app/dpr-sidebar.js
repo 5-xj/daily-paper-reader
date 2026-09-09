@@ -826,7 +826,8 @@
     var opts = resolveResultOptions(options);
     var id = paperIdentity(paper);
     if (opts.keyword && paperSearchText(paper).indexOf(opts.keyword) === -1) return false;
-    if (opts.unreadOnly && opts.unreadResultPaperIds) return id && opts.unreadResultPaperIds.has(id);
+    // 首次进入未读时当前页可能已经标记已读，不在快照中；仍需保留当前阅读项。
+    if (opts.unreadOnly && opts.unreadResultPaperIds) return !!id && (id === opts.currentPaperId || opts.unreadResultPaperIds.has(id));
     if (opts.unreadOnly && paperReadStatus(paper, opts.readMap) && paperIdentity(paper) !== opts.currentPaperId) return false;
     return true;
   }
@@ -1582,7 +1583,7 @@
       '    <button type="button" class="dpr-sidebar-filter-btn ' + filterUnreadActive + '" data-filter="unread">未读 <span class="dpr-sidebar-unread-count" data-count="0">0</span></button>' +
       '  </div>' +
       '</div>' +
-      '<nav class="dpr-sidebar-body" aria-label="论文导航"><section class="dpr-long-range-nav" aria-label="专题回溯" hidden></section><div class="dpr-sidebar-legacy"></div></nav>' +
+      '<nav class="dpr-sidebar-body" aria-label="论文导航"></nav>' +
       renderSidebarFooterControls(state.sidebarCollapsed) +
       '<div class="dpr-sidebar-resizer" role="separator" aria-orientation="vertical" title="拖动调整侧栏宽度"></div>';
     state.bodyEl = $('.dpr-sidebar-body', root);
@@ -1732,7 +1733,7 @@
       unreadResultPaperIds: state.filter === 'unread' ? ensureUnreadSessionPaperIds(state.model, readMap) : state.unreadResultPaperIds,
       expandedAxisSections: state.expandedAxisSections,
     };
-    ($('.dpr-sidebar-legacy', state.bodyEl) || state.bodyEl).innerHTML = renderBodyHtml(state.model, viewState);
+    state.bodyEl.innerHTML = renderBodyHtml(state.model, viewState);
     schedulePaperTitleOverflowMarks(state.bodyEl);
     syncResolvedAxisState();
   }
@@ -2518,138 +2519,6 @@
     syncResolvedAxisState();
   }
 
-  // 回溯报告独立于日报运行态；旧报告从README发现，无需重新运行论文任务。
-  function longRangeTokens(value) {
-    var tokens = Array.isArray(value)
-      ? value.map(function (item) { return typeof item === 'string' ? item : item && item.token; })
-      : Array.from(String(value || '').matchAll(/docs\/long-range\/([\w-]+)\/index\.html/g), function (m) { return m[1]; });
-    return Array.from(new Set(tokens.filter(function (token) {
-      return /^\d{8}-\d{8}-[a-f0-9]{12}$/.test(String(token || ''));
-    })));
-  }
-
-  function longRangePaperHref(token, topic, bucket, page, paperId) {
-    if (longRangeTokens([token]).length !== 1 || !/^(core|related|review)$/.test(bucket) ||
-      !Number.isInteger(Number(topic)) || Number(topic) < 0 || !Number.isInteger(Number(page)) || Number(page) < 0) return '';
-    return 'docs/long-range/' + token + '/index.html?topic=' + Number(topic) +
-      '&bucket=' + bucket + '&page=' + Number(page) + '&paper=' + encodeURIComponent(paperId || '');
-  }
-
-  async function loadLongRangeSidebar(host) {
-    if (!host) return;
-    function node(tag, label, parent, className) {
-      var item = document.createElement(tag);
-      if (label) item.textContent = label;
-      if (className) item.className = className;
-      if (parent) parent.appendChild(item);
-      return item;
-    }
-    function failure(parent, error, retry) {
-      parent.replaceChildren();
-      node('p', '回溯结果加载失败：' + error.message, parent, 'dpr-long-range-hint');
-      var button = node('button', '重试', parent);
-      button.type = 'button'; button.onclick = retry;
-    }
-    async function json(path) {
-      var response = await fetch(path, { cache: 'no-store' });
-      if (!response.ok) throw new Error('HTTP ' + response.status);
-      return response.json();
-    }
-    function bucketView(parent, token, group, topicIndex, bucket, label) {
-      var meta = group.buckets && group.buckets[bucket];
-      if (!meta || !Number.isInteger(meta.count) || meta.count < 0 || !Array.isArray(meta.pages)) return;
-      var details = node('details', '', parent, 'dpr-long-range-bucket');
-      node('summary', label + '（' + meta.count + '）', details);
-      var body = node('div', '', details);
-      var page = 0, loaded = false, busy = false;
-      async function loadPage() {
-        if (busy) return;
-        busy = true; body.setAttribute('aria-busy', 'true');
-        try {
-          var file = meta.pages[page];
-          if (file && !/^[a-f0-9]+-(core|related|review)-[1-9]\d*\.json$/.test(file)) throw new Error('无效分页路径');
-          var rows = file ? await json('docs/long-range/' + token + '/' + file) : [];
-          if (!Array.isArray(rows)) throw new Error('无效论文列表');
-          body.replaceChildren();
-          rows.forEach(function (paper) {
-            var link = node('a', paper.title || paper.id, body, 'dpr-long-range-paper');
-            link.href = longRangePaperHref(token, topicIndex, bucket, page, paper.id);
-            link.target = '_blank'; link.rel = 'noopener noreferrer';
-            link.setAttribute('data-no-router', '');
-            link.title = String(paper.title || paper.id || '');
-          });
-          if (!rows.length) node('p', '暂无论文', body, 'dpr-long-range-hint');
-          if (meta.pages.length > 1) {
-            var controls = node('div', '', body, 'dpr-long-range-pages');
-            var previous = node('button', '上一页', controls);
-            previous.type = 'button'; previous.disabled = page === 0;
-            previous.onclick = function () { if (busy) return; page -= 1; loadPage(); };
-            node('span', (page + 1) + '/' + meta.pages.length, controls);
-            var next = node('button', '下一页', controls);
-            next.type = 'button'; next.disabled = page + 1 >= meta.pages.length;
-            next.onclick = function () { if (busy) return; page += 1; loadPage(); };
-          }
-          loaded = true;
-        } catch (error) { loaded = false; failure(body, error, loadPage); }
-        finally { busy = false; body.setAttribute('aria-busy', 'false'); }
-      }
-      details.addEventListener('toggle', function () { if (details.open && !loaded) loadPage(); });
-    }
-    function reportView(parent, token, first) {
-      var parts = token.split('-');
-      var date = function (value) { return value.slice(0, 4) + '-' + value.slice(4, 6) + '-' + value.slice(6, 8); };
-      var start = date(parts[0]), end = date(parts[1]);
-      var days = Math.round((Date.parse(end) - Date.parse(start)) / 86400000) + 1;
-      var details = node('details', '', parent, 'dpr-long-range-report');
-      details.setAttribute('data-long-range-token', token);
-      node('summary', (Number.isFinite(days) ? days + '天 · ' : '') + start + ' ～ ' + end, details);
-      var body = node('div', '', details);
-      var loaded = false, busy = false;
-      async function loadReport() {
-        if (busy || loaded) return;
-        busy = true;
-        try {
-          var manifest = await json('docs/long-range/' + token + '/manifest.json');
-          if (!Array.isArray(manifest.groups)) throw new Error('无效报告目录');
-          body.replaceChildren();
-          manifest.groups.forEach(function (group, index) {
-            var topic = node('div', '', body, 'dpr-long-range-topic');
-            node('strong', group.tag, topic);
-            bucketView(topic, token, group, index, 'core', '核心');
-            bucketView(topic, token, group, index, 'related', '补充');
-            bucketView(topic, token, group, index, 'review', '待复核');
-          });
-          loaded = true;
-        } catch (error) { failure(body, error, loadReport); }
-        finally { busy = false; }
-      }
-      details.addEventListener('toggle', function () { if (details.open) loadReport(); });
-      if (first) { details.open = true; loadReport(); }
-    }
-    try {
-      var response = await fetch('docs/long-range/index.json', { cache: 'no-store' });
-      var tokens;
-      if (response.status === 404) {
-        var legacy = await fetch('docs/long-range/README.md', { cache: 'no-store' });
-        if (legacy.status === 404) { host.hidden = true; return; }
-        if (!legacy.ok) throw new Error('HTTP ' + legacy.status);
-        tokens = longRangeTokens(await legacy.text());
-      } else {
-        if (!response.ok) throw new Error('HTTP ' + response.status);
-        var catalog = await response.json();
-        if (!Array.isArray(catalog.reports)) throw new Error('无效回溯索引');
-        tokens = longRangeTokens(catalog.reports);
-      }
-      host.replaceChildren(); host.hidden = !tokens.length;
-      if (!tokens.length) return;
-      var section = node('details', '', host);
-      section.open = true;
-      node('summary', '🗂 专题回溯 · ' + tokens.length, section, 'dpr-long-range-heading');
-      node('p', '独立报告，不计入日报未读数', section, 'dpr-long-range-hint');
-      tokens.forEach(function (token, index) { reportView(section, token, index === 0); });
-    } catch (error) { host.hidden = false; failure(host, error, function () { loadLongRangeSidebar(host); }); }
-  }
-
   function loadAndRender() {
     return fetch(SIDEBAR_URL, { cache: 'no-store' })
       .then(function (r) {
@@ -2665,7 +2534,6 @@
         }
         applySidebarWidth(state.sidebarWidth || loadPersistedSidebarWidth());
         renderShell(state.rootEl);
-        loadLongRangeSidebar($('.dpr-long-range-nav', state.rootEl));
         syncResponsiveSidebarMode();
         if (!state._eventsBound) {
           bindEvents(state.rootEl);
@@ -2731,8 +2599,6 @@
     module.exports = {
       api: DPRSidebarApi,
       __test: {
-        longRangeTokens: longRangeTokens,
-        longRangePaperHref: longRangePaperHref,
         parseSidebar: parseSidebar,
         collectPaperHrefsFromModel: collectPaperHrefsFromModel,
         collectReportHrefsFromModel: collectReportHrefsFromModel,

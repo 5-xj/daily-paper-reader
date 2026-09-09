@@ -260,7 +260,7 @@ Zotero       ←── 浏览器 Connector 抓取 citation meta
 
 ### arXiv 长周期专题回溯
 
-- 回溯验收必须覆盖Sidebar导航，不能只验证独立报告能打开。新报告自动生成 `docs/long-range/index.json`；前端须兼容旧README报告目录，已有报告不得为了显示导航而重跑抓取/DeepSeek。Sidebar按区间、专题、核心/补充/待复核懒加载，单篇链接应定位到已有分页报告，不影响日报与会议分组的滚动或未读状态。
+- 回溯必须复用既有 Sidebar 日报区间、日历/标签、未读与1/2/3/4标记，以及同一 docsify 论文阅读页；不得另建“专题回溯”面板、独立HTML阅读器或新窗口跳转。现有前端已支持区间，接入前先检查现成数据契约。历史JSON通过 `src/long_range_native.py` 离线投影为原有Markdown、累计状态与Sidebar，不得为纠正展示而重跑抓取/DeepSeek。
 - GitHub Pages 的检索入口由 GitHub Actions 执行，embedding/reranker 必须走云端；不要在新链路直接导入或下载本地SentenceTransformer/Qwen。Actions设置 `DPR_MODELS_REMOTE_ONLY=1`，云端失败必须报错而不是静默回退。发布前必须在不含torch/transformers/sentence-transformers的Python 3.11环境验证，并实际跑GitHub工作流；本机预装依赖的成功不能代表CI成功。
 - 公告和News中的回溯入口统一使用数字文案“90天/365天”，不要替换成“九十天/一年”；数字应放在公告标题开头，便于识别。
 - `src/main.py --fetch-days` 限制为1–365；31天以上交给 `src/long_range_review.py`，不走短周期RRF/重排星级和日报名额截断，不生成逐篇精读长文。十天/三十天保持原流程。
@@ -269,7 +269,7 @@ Zotero       ←── 浏览器 Connector 抓取 citation meta
 - ATSP写法需补查Asymmetric TSP、salesman/salesperson及英美拼写；对明确标为ATSP的专题，普通TSP即使被模型误打高分也应进入待复核。不得把RL/NCO大专题里的一个ATSP子查询扩大成整个专题的硬过滤条件。
 - DeepSeek批量回溯显式关闭thinking，JSON模式的提示必须包含完整输出字段。缓存键包含模型/端点、专题、论文ID/标题/摘要、提示及schema版本；失败重跑不能把缺失评分当完成。
 - 进度保存在 `.local-runs/long-range-cache`，GitHub Actions失败后仍尽量保存缓存；缓存可能被淘汰，不承诺永久保留或跨日期不重新召回。
-- 输出到运行态 `docs/long-range/<区间与查询指纹>/`，每页50条JSON；模板在 `docs_init/long-range/`，阅读器在 `app/long-range-reader.js`。禁止把测试报告或个性化结果提交上游；没有历史结果时前端入口必须显示空态而不是导航到404。
+- 评审数据输出到运行态 `docs/long-range/<区间与查询指纹>/`，每页50条JSON；可见结果同时投影到 `docs/<起止日期>/` 原有论文Markdown与 `_daily_state.json`、`papers.meta.json`。核心/补充/待复核作为论文标签保留，未生成精读正文的结果不得冒充精读；排除项不进入Sidebar。禁止把测试报告或个性化结果提交上游。
 - 前端必须验证90天/365天选项、费用确认、参数传递、分页/重试/移动端；不向访客或客户端暴露服务角色密钥。
 
 ### 前端反馈入口规则

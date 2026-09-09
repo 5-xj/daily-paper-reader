@@ -171,9 +171,6 @@ class LongRangeReviewTests(unittest.TestCase):
             for i in range(51)
         ]
         with tempfile.TemporaryDirectory() as root:
-            template = Path(root) / "docs_init/long-range/report.html"
-            template.parent.mkdir(parents=True)
-            template.write_text((ROOT / "docs_init/long-range/report.html").read_text())
             manifest = review.publish_report(
                 root,
                 "safe-token",
@@ -187,8 +184,8 @@ class LongRangeReviewTests(unittest.TestCase):
             )
             self.assertEqual(catalog["version"], 1)
             self.assertEqual(catalog["reports"][0]["token"], "safe-token")
-            html = (Path(root) / "docs/long-range/safe-token/index.html").read_text()
-            self.assertNotIn("<script>unsafe", html)
+            self.assertFalse((Path(root) / "docs/long-range/safe-token/index.html").exists())
+            self.assertTrue((Path(root) / "docs/20250910-20260909/0.md").exists())
 
     def test_main_routes_long_range_and_does_not_launch_legacy_steps(self):
         spec = importlib.util.spec_from_file_location(

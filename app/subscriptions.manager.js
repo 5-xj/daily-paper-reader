@@ -1489,7 +1489,7 @@ window.SubscriptionsManager = (function () {
                     <span class="dpr-task-action-cost">365 天 · 可复用评审进度</span>
                   </label>
                 </div>
-                <p class="dpr-task-hint">90 天/一年为 arXiv 专题回溯：关键词候选与语义补漏，不保证找全；核心≥8分，补充6–7分。<a id="arxiv-admin-long-range-results" href="#/long-range/README">查看已完成的回溯结果</a>，或下载工作流结果附件。</p>
+                <p class="dpr-task-hint">90天/365天为 arXiv 专题回溯：关键词候选与语义补漏，不保证找全；核心≥8分，补充6–7分。完成后在 Sidebar「日报」选择区间结束日期与专题标签阅读，或下载工作流结果附件。</p>
                 <button id="arxiv-admin-quick-run-start-btn" class="chat-quick-run-run-btn dpr-task-start-btn" type="button">开始检索</button>
                 <div id="arxiv-admin-quick-run-msg" class="chat-quick-run-msg"></div>
               </div>
@@ -1553,21 +1553,6 @@ window.SubscriptionsManager = (function () {
     `;
 
     document.body.appendChild(overlay);
-    overlay.querySelector('#arxiv-admin-long-range-results').addEventListener('click', async (event) => {
-      event.preventDefault();
-      try {
-        const response = await fetch('docs/long-range/README.md', { cache: 'no-cache' });
-        if (response.status === 404) {
-          setQuickRunMessage('尚无已完成的回溯结果，请先运行90天或一年任务。', '#666');
-          return;
-        }
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        closeOverlay();
-        window.location.hash = '/long-range/README';
-      } catch (error) {
-        setQuickRunMessage(`暂时无法读取回溯结果：${error.message}，请稍后重试。`, '#c00');
-      }
-    });
     panel = document.getElementById('arxiv-search-panel');
 
     saveBtn = document.getElementById('arxiv-config-save-btn');

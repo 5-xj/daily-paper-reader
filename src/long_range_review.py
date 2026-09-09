@@ -274,10 +274,6 @@ def publish_report(root, token, groups, metadata):
             group["buckets"][bucket] = {"count": len(selected), "pages": files}
         manifest["groups"].append(group)
     write_json(folder / "manifest.json", manifest)
-    template = root / "docs_init" / "long-range" / "report.html"
-    (folder / "index.html").write_text(
-        template.read_text(encoding="utf-8"), encoding="utf-8"
-    )
     rebuild_report_index(root)
     return manifest
 
@@ -303,7 +299,7 @@ def rebuild_report_index(root):
         entries.append(
             (
                 item["generated_at"],
-                f'- [{label} · {len(item["groups"])} 个专题](docs/long-range/{path.parent.name}/index.html ":ignore")',
+                f'- {label} · {len(item["groups"])} 个专题（从站内 Sidebar 日报进入）',
             )
         )
     index = "# arXiv 专题回溯\n\n按关键词和语义候选评审，不保证覆盖所有相关论文。\n\n"
@@ -318,6 +314,9 @@ def rebuild_report_index(root):
             ),
         },
     )
+    from long_range_native import publish_native_reports
+
+    publish_native_reports(root)
     return catalog
 
 
@@ -518,7 +517,7 @@ def run_review(config, days, root, run_token):
         },
     )
     print(
-        f'[回溯] 完成：{sum(g["total"] for g in manifest["groups"])} 个论文—专题评审；docs/long-range/{report_id}/index.html',
+        f'[回溯] 完成：{sum(g["total"] for g in manifest["groups"])} 个论文—专题评审；在 Sidebar 日报中选择区间结束日期阅读',
         flush=True,
     )
     return manifest

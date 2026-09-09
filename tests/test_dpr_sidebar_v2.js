@@ -1703,6 +1703,38 @@ function testReadStatusNormalization() {
   assert.equal(tools.normalizeReadStatus(null), '');
 }
 
+function testAnnualReviewReusesNativeSidebarReadingAndStatus() {
+  const route = '20250910-20260909/2510.17595v1';
+  const tools = loadSidebarForTest('#/' + route).__test;
+  const payload = JSON.stringify({title: 'ATSP', score: 8, tags: [
+    {kind: 'query', label: 'ATSP'}, {kind: 'paper', label: '核心'},
+  ]}).replace(/"/g, '&quot;');
+  const model = tools.parseSidebar('* Daily Papers\n' +
+    '  * 2025-09-10 ～ 2026-09-09 <!--dpr-date:20250910-20260909-->\n' +
+    '    * 速读区\n' +
+    `      * <a href="#/${route}" data-sidebar-item="${payload}">ATSP</a>\n`);
+  const view = tools.buildDailyCalendarTagView(model, '20260909', 'ATSP', {}, '202609');
+  assert.equal(view.calendar.days.find(day => day.dateKey === '20260909').totalCount, 1);
+  const html = tools.renderBodyHtml(model, {
+    expandedGroups: {daily: true}, activeDailyDate: '20260909',
+    readMap: {[route]: 'good'},
+  });
+  assert.ok(html.includes(`href="#/${route}"`));
+  assert.ok(html.includes('data-paper-status="good"'));
+  assert.ok(html.includes('data-read="1"'));
+  assert.ok(!html.includes('target="_blank"'));
+  const unreadHtml = tools.renderBodyHtml(model, {
+    expandedGroups: {daily: true}, activeDailyDate: '20260909',
+    filter: 'unread', currentPaperHref: '#/' + route,
+    unreadResultPaperIds: [], readMap: {[route]: 'blue'},
+  });
+  assert.ok(unreadHtml.includes(`href="#/${route}"`), '首次切入未读也应保留当前正在阅读的论文');
+  const source = fs.readFileSync(require.resolve('../app/dpr-sidebar.js'), 'utf8');
+  assert.ok(!source.includes('dpr-long-range-nav'));
+  assert.ok(!source.includes('独立报告，不计入日报未读数'));
+}
+
+testAnnualReviewReusesNativeSidebarReadingAndStatus();
 testSidebarNavigationContract();
 testAxisViewsForDailyAndConference();
 testHyphenatedConferenceMarkerParsing();
