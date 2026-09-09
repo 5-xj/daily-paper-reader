@@ -36,13 +36,22 @@ class UpdateSidebarMergeTest(unittest.TestCase):
     def setUpClass(cls):
         cls.mod = _load_module()
 
-    def _run_update(self, sidebar_path, date_str, deep, quick, evidence=None):
+    def _run_update(
+        self,
+        sidebar_path,
+        date_str,
+        deep,
+        quick,
+        evidence=None,
+        replace_existing=False,
+    ):
         self.mod.update_sidebar(
             sidebar_path=sidebar_path,
             date_str=date_str,
             deep_entries=deep,
             quick_entries=quick,
             paper_evidence_by_id=evidence or {},
+            replace_existing=replace_existing,
         )
 
     def test_extract_day_block_papers_groups_by_section(self):
@@ -162,6 +171,29 @@ class UpdateSidebarMergeTest(unittest.TestCase):
             self.assertIn("速读区", text2)
             self.assertIn("#/papers/D1", text2)
             self.assertIn("#/papers/Q1", text2)
+
+    def test_replace_existing_uses_cumulative_state_as_the_only_source(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            sidebar = Path(tmp) / "_sidebar.md"
+            sidebar.write_text("* [首页](/)\n", encoding="utf-8")
+            self._run_update(
+                str(sidebar),
+                "20260624",
+                deep=[("papers/old-route", "Old title", [])],
+                quick=[],
+            )
+
+            self._run_update(
+                str(sidebar),
+                "20260624",
+                deep=[("papers/new-route", "Updated title", [])],
+                quick=[],
+                replace_existing=True,
+            )
+
+            text = sidebar.read_text(encoding="utf-8")
+            self.assertNotIn("#/papers/old-route", text)
+            self.assertEqual(text.count("#/papers/new-route"), 1)
 
 
 if __name__ == "__main__":

@@ -130,6 +130,11 @@ def resolve_papers_table(args_table: str, backend_key: str = "arxiv") -> str:
     backend = get_source_backend(cfg, backend_key)
     if backend:
         return _norm((backend or {}).get("papers_table") or "")
+    # 全局 supabase.papers_table 是 arXiv 的历史配置，只对 arXiv 生效。
+    # 其它源落到这里说明配置缺失，必须返回空让调用方显式报错——
+    # 否则会静默把该源的论文写进 arxiv_papers，造成跨源数据污染。
+    if _norm(backend_key).lower() not in ("", "arxiv"):
+        return ""
     sb = (cfg.get("supabase") or {}) if isinstance(cfg, dict) else {}
     return _norm((sb or {}).get("papers_table") or "")
 
@@ -518,6 +523,14 @@ def upsert_papers(
         nonlocal uploaded
         if not chunk:
             return
+        # PostgREST 要求批内字段一致；省略的可选字段不能补 null，以免覆盖旧 PDF。
+        field_groups: Dict[frozenset[str], List[Dict[str, Any]]] = {}
+        for row in chunk:
+            field_groups.setdefault(frozenset(row), []).append(row)
+        if len(field_groups) > 1:
+            for group in field_groups.values():
+                _upsert_with_split(group, depth)
+            return
         try:
             used_attempt = _post_chunk(chunk)
             uploaded += len(chunk)
@@ -686,7 +699,13 @@ def main() -> None:
     backend_key = _norm(args.backend_key) or "arxiv"
     url = resolve_supabase_url(args.url, backend_key)
     key = _norm(args.service_key)
-    papers_table = resolve_papers_table(args.papers_table, backend_key) or "arxiv_papers"
+    papers_table = resolve_papers_table(args.papers_table, backend_key)
+    if not papers_table:
+        raise SystemExit(
+            f"[FATAL] 无法为 backend={backend_key} 解析目标表名："
+            "请设置 SUPABASE_PAPERS_TABLE 或在 config.yaml 的 source_backends 中配置。"
+            "拒绝回退到 arxiv_papers，以免把该源的论文写进 arXiv 表。"
+        )
     if not url or not key:
         log("[INFO] 缺少 Supabase 连接信息（url 或 service key），跳过同步。")
         return

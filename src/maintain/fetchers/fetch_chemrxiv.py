@@ -341,17 +341,18 @@ def fetch_chemrxiv_metadata(
     total_count = len(unique_papers)
     log(f"✅ All Done. Total unique ChemRxiv papers fetched: {total_count}")
 
-    if total_count > 0:
-        if not output_file:
-            run_token = get_run_date_token(end_date)
-            archive_dir = os.path.join(ROOT_DIR, "archive", run_token)
-            raw_dir = os.path.join(archive_dir, "raw")
-            output_file = os.path.join(raw_dir, f"chemrxiv_papers_{run_token}.json")
-        os.makedirs(os.path.dirname(output_file) if os.path.dirname(output_file) else ".", exist_ok=True)
-        with open(output_file, "w", encoding="utf-8") as f:
-            json.dump(list(unique_papers.values()), f, ensure_ascii=False, indent=2)
-        log(f"💾 File saved to: {output_file}")
-    else:
+    # 抓取结果一律落盘（0 篇时写空数组）：下游 sync 走「空跑」分支即可，
+    # 不能因为缺文件而让整条维护流水线崩掉。
+    if not output_file:
+        run_token = get_run_date_token(end_date)
+        archive_dir = os.path.join(ROOT_DIR, "archive", run_token)
+        raw_dir = os.path.join(archive_dir, "raw")
+        output_file = os.path.join(raw_dir, f"chemrxiv_papers_{run_token}.json")
+    os.makedirs(os.path.dirname(output_file) if os.path.dirname(output_file) else ".", exist_ok=True)
+    with open(output_file, "w", encoding="utf-8") as f:
+        json.dump(list(unique_papers.values()), f, ensure_ascii=False, indent=2)
+    log(f"💾 File saved to: {output_file}")
+    if total_count <= 0:
         log("⚠️ No ChemRxiv papers found. Check your date range or upstream dataset.")
 
     if max_published_new:

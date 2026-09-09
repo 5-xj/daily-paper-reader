@@ -341,6 +341,7 @@ def fetch_medrxiv_metadata(
 
     windows = iter_time_windows(start_date, end_date, chunk_days=chunk_days)
     unique_papers: Dict[str, Dict[str, Any]] = {}
+    failed_windows = 0
     max_published_new: datetime | None = None
 
     group_start("Step 1 - fetch medRxiv")
@@ -360,6 +361,7 @@ def fetch_medrxiv_metadata(
         try:
             rows = fetch_window_records(window_start, window_end)
         except Exception as exc:
+            failed_windows += 1
             log(f"[WARN] medRxiv 窗口抓取失败，将跳过：{exc}")
             continue
 
@@ -377,26 +379,37 @@ def fetch_medrxiv_metadata(
     total_count = len(unique_papers)
     log(f"✅ All Done. Total unique medRxiv papers fetched: {total_count}")
 
-    if total_count > 0:
-        if not output_file:
-            run_token = get_run_date_token(end_date)
-            archive_dir = os.path.join(ROOT_DIR, "archive", run_token)
-            raw_dir = os.path.join(archive_dir, "raw")
-            output_file = os.path.join(raw_dir, f"medrxiv_papers_{run_token}.json")
+    # 抓取结果一律落盘（0 篇时写空数组）：下游 sync 走「空跑」分支即可，
+    # 不能因为缺文件而让整条维护流水线崩掉。
+    if not output_file:
+        run_token = get_run_date_token(end_date)
+        archive_dir = os.path.join(ROOT_DIR, "archive", run_token)
+        raw_dir = os.path.join(archive_dir, "raw")
+        output_file = os.path.join(raw_dir, f"medrxiv_papers_{run_token}.json")
 
-        os.makedirs(os.path.dirname(output_file) if os.path.dirname(output_file) else ".", exist_ok=True)
-        with open(output_file, "w", encoding="utf-8") as f:
-            json.dump(list(unique_papers.values()), f, ensure_ascii=False, indent=2)
-        log(f"💾 File saved to: {output_file}")
-    else:
+    os.makedirs(os.path.dirname(output_file) if os.path.dirname(output_file) else ".", exist_ok=True)
+    with open(output_file, "w", encoding="utf-8") as f:
+        json.dump(list(unique_papers.values()), f, ensure_ascii=False, indent=2)
+    log(f"💾 File saved to: {output_file}")
+    if total_count <= 0:
         log("⚠️ No medRxiv papers found. Check your date range or network.")
 
-    if max_published_new:
-        save_seen_state(seen_ids, max_published_new)
+    # 有窗口抓取失败时不推进水位线：否则失败区间会被下次运行永久跳过，造成静默丢数据。
+    if failed_windows:
+        log(f"[WARN] 本次有 {failed_windows}/{len(windows)} 个窗口抓取失败，已跳过水位线推进。")
     else:
-        save_seen_state(seen_ids, latest_published_at)
-    save_last_crawl_at(end_date)
+        if max_published_new:
+            save_seen_state(seen_ids, max_published_new)
+        else:
+            save_seen_state(seen_ids, latest_published_at)
+        save_last_crawl_at(end_date)
     group_end()
+
+    # 全部窗口都失败说明上游不可用，必须让流水线可见地失败，而不是静默返回 0 篇。
+    if windows and failed_windows == len(windows):
+        raise SystemExit(
+            f"medRxiv 全部 {len(windows)} 个抓取窗口均失败，判定为上游不可用，本次维护中止。"
+        )
 
 
 if __name__ == "__main__":

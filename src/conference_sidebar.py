@@ -21,6 +21,9 @@ DEFAULT_DOCS_DIR = ROOT_DIR / "docs"
 CONFERENCE_HEADING = "* Conference Papers\n"
 CONFERENCE_DISPLAY_MIN_SCORE = 4.0
 CONFERENCE_DEEP_MIN_SCORE = 4.0
+CONFERENCE_DOC_FILENAME_MAX_BYTES = 255
+CONFERENCE_DOC_BASENAME_MAX_BYTES = 240
+CONFERENCE_DOC_BASENAME_HASH_LEN = 10
 _GENERATE_DOCS_MODULE = None
 
 
@@ -98,6 +101,54 @@ def slugify(value: str) -> str:
     return text.strip("-") or "paper"
 
 
+def stable_short_hash(*parts: Any, length: int = CONFERENCE_DOC_BASENAME_HASH_LEN) -> str:
+    raw = "\n".join(norm_text(part) for part in parts)
+    return hashlib.sha1(raw.encode("utf-8")).hexdigest()[: max(int(length or 0), 1)]
+
+
+def shorten_slug_bytes(slug: str, max_bytes: int, *, suffix: str = "") -> str:
+    text = slugify(slug)
+    suffix_text = slugify(suffix) if suffix else ""
+    limit = max(int(max_bytes or 0), 16)
+    reserved = len(suffix_text.encode("utf-8")) + (1 if suffix_text else 0)
+    body_limit = max(limit - reserved, 8)
+    encoded = text.encode("utf-8")
+    if len(encoded) <= body_limit:
+        body = text
+    else:
+        body = encoded[:body_limit].decode("utf-8", errors="ignore").rstrip("-")
+    body = body or "paper"
+    out = f"{body}-{suffix_text}" if suffix_text else body
+    if len(out.encode("utf-8")) <= limit:
+        return out
+    return out.encode("utf-8")[:limit].decode("utf-8", errors="ignore").rstrip("-") or "paper"
+
+
+def build_conference_paper_basename(paper: Dict[str, Any], conference: str, years: str) -> str:
+    paper_id = norm_text(paper.get("id")) or "paper"
+    title = norm_text(paper.get("title")) or paper_id
+    paper_slug = slugify(paper_id)
+    title_slug = slugify(title)
+    basename = f"{paper_slug}-{title_slug}"
+    if len(f"{basename}.md".encode("utf-8")) <= CONFERENCE_DOC_FILENAME_MAX_BYTES:
+        return basename
+    digest = stable_short_hash(conference, years, paper_id, title)
+    return shorten_slug_bytes(
+        basename,
+        CONFERENCE_DOC_BASENAME_MAX_BYTES,
+        suffix=digest,
+    )
+
+
+def build_conference_asset_key(paper: Dict[str, Any]) -> str:
+    raw_key = norm_text(paper.get("id")) or norm_text(paper.get("title")) or "paper"
+    key = slugify(raw_key)
+    if len(key.encode("utf-8")) <= CONFERENCE_DOC_FILENAME_MAX_BYTES:
+        return key
+    digest = stable_short_hash(raw_key, paper.get("title"))
+    return shorten_slug_bytes(key, CONFERENCE_DOC_BASENAME_MAX_BYTES, suffix=digest)
+
+
 def yaml_escape_value(value: Any) -> str:
     text = norm_text(value)
     if not text:
@@ -173,9 +224,7 @@ def normalize_sidebar_tag(raw_tag: str) -> Tuple[str, str]:
 
 
 def build_conference_paper_route(paper: Dict[str, Any], conference: str, years: str) -> str:
-    paper_id = norm_text(paper.get("id")) or "paper"
-    title_slug = slugify(norm_text(paper.get("title")) or paper_id)
-    basename = f"{slugify(paper_id)}-{title_slug}"
+    basename = build_conference_paper_basename(paper, conference, years)
     return f"conference/{build_conference_key(conference, years)}/{basename}"
 
 
@@ -351,7 +400,7 @@ def ensure_conference_media(
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     if not pdf_url:
         return [], []
-    asset_key = norm_text(paper.get("id")) or slugify(norm_text(paper.get("title")))
+    asset_key = build_conference_asset_key(paper)
     try:
         from paper_figures import ensure_paper_media
 

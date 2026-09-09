@@ -258,6 +258,18 @@ Zotero       ←── 浏览器 Connector 抓取 citation meta
 
 ## 九、开发约定
 
+### 前端反馈入口规则
+
+项目反馈入口固定放在侧边栏顶部，与“首页”“使用教程”同一行；不得挤占侧边栏底部仅用于“展开/收缩”和“设置”的双按钮区域。反馈类型允许多选，Issue 标题必须使用 `[功能新增|体验问题] 用户标题` 格式：类型之间只使用半角竖线分隔，方括号后保留一个半角空格。反馈弹窗不得附加“页面上下文、来源、目标仓库、期望”等自动模板废话；点击非弹窗区域应关闭，提交前必须明确提示内容将以当前用户 GitHub 身份公开发布。
+
+### 前端初始资源加载规则
+
+首屏核心脚本遇到瞬时本地请求失败时至少重试一次；核心资源最终失败后必须移除 `#app` 的 `data-dpr-pending` 并显示可重试错误界面。不得在应用仍处于 pending 状态时仅隐藏初始 Logo，否则会形成无提示白屏。
+
+### 会议论文文档路径规则
+
+会议检索写入 `docs/conference/.../*.md` 时，不得把完整论文标题无上限拼进文件名；短标题可保留可读 slug，长标题必须使用稳定短 hash 截断，并保证单个文件名小于常见文件系统的 255 字节限制。图表/表格缓存目录的 `asset_key` 也必须走同类短名策略，避免长论文 id 在后续精读/图表阶段再次触发 `File name too long`。
+
 ### 前端侧栏 sticky 布局规则
 
 修改 `app/app.css` 中 `dpr-sidebar-v2` 的冻结窗口布局时，不要通过缩小“会议论文”“日报”等上层 sticky header 规避遮挡；其白底遮罩可向上外溢补白，但 bottom 必须为 0，不得向下覆盖下级切换行。横向标签行不得用负 `margin-top` 抵消裁剪问题。若增加 header 或标签行上下留白，必须同步调整后续 sticky top 变量，并用 `tests/test_dpr_sidebar_v2.js` 锁住 CSS 合同。
@@ -275,9 +287,7 @@ Zotero       ←── 浏览器 Connector 抓取 citation meta
 本仓库内由 Agent/Codex 创建、提交或推送的 commit，提交信息末尾必须追加以下共同作者 trailer：
 
 ```text
-Co-Authored-By: lilmortyj <781113402@qq.com>
 Co-Authored-By: xixi <3495302215@qq.com>
-Co-Authored-By: wy <345619498@qq.com>
 ```
 
 以上规则仅用于 Git commit message，不代表需要修改 `CITATION.cff`、`README.md` 或其它项目作者元数据。

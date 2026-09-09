@@ -30,8 +30,17 @@ IEEE_SP_ACCEPTED_URL = "https://sp{year}.ieee-security.org/accepted-papers.html"
 IEEE_SP_PROCEEDINGS = {
     2024: "1RjE8VKKk1y",
     2025: "21B7ONGXzZ6",
+    # 官方开幕报告：https://sp2026.ieee-security.org/downloads/opening_slides.pdf
+    2026: "2bojuokAJK8",
 }
 IEEE_SP_GRAPHQL_URL = "https://www.computer.org/csdl/api/v1/graphql"
+# CSDL 列表缺失但官方录用列表确认的论文；作者版本用于补全摘要和公开 PDF。
+IEEE_SP_AUTHOR_VERSIONS = {
+    2026: {
+        "Audience Injection Attacks: A New Class of Attacks on Web-Based Authorization and Authentication Standards":
+            "https://eprint.iacr.org/2025/629",
+    },
+}
 SEMANTIC_SCHOLAR_BATCH_URL = "https://api.semanticscholar.org/graph/v1/paper/batch"
 ARXIV_API_URL = "https://export.arxiv.org/api/query"
 ARXIV_ATOM_NS = {"atom": "http://www.w3.org/2005/Atom"}
@@ -193,7 +202,8 @@ def parse_osdi_paper_page(html_text: str, *, year: int, page_url: str) -> Dict[s
     )
     return _clean_paper(
         {
-            "id": _paper_id("osdi", year, title or page_url),
+            # 会后新增的 track 标注不应改变已有论文 ID。
+            "id": _paper_id("osdi", year, re.sub(r"\s*\(Operational Systems\)\s*$", "", title, flags=re.I) or page_url),
             "title": title,
             "abstract": abstract,
             "authors": authors,
@@ -218,6 +228,8 @@ def iter_osdi_presentation_urls(index_html: str, *, year: int, base_url: str) ->
         if pattern not in href:
             continue
         href = href.split("#", 1)[0]
+        if href.rstrip("/").rsplit("/", 1)[-1].startswith("keynote"):
+            continue
         if href in seen:
             continue
         seen.add(href)
@@ -789,35 +801,85 @@ def _fetch_ieee_sp_articles(proceeding_id: str) -> List[Dict[str, Any]]:
     return (((data.get("data") or {}).get("articlesByProceeding") or {}).get("articleResults") or [])
 
 
-def fetch_ieee_sp(years: Iterable[int], *, require_pdf: bool = True) -> List[Dict[str, Any]]:
+def merge_ieee_sp_metadata(accepted: List[Dict[str, Any]], articles: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """以录用列表 ID 为准补充正式元数据，避免改题论文重复入库。"""
+    remaining = list(articles)
     rows: List[Dict[str, Any]] = []
-    for year in years:
-        proceeding_id = IEEE_SP_PROCEEDINGS.get(int(year))
-        if not proceeding_id:
-            url = IEEE_SP_ACCEPTED_URL.format(year=int(year))
-            try:
-                accepted_rows = parse_ieee_sp_accepted_page(_request_text(url), year=int(year), page_url=url)
-                arxiv_entries = fetch_arxiv_title_matches(accepted_rows)
-                accepted_rows = apply_arxiv_pdf_candidates(accepted_rows, arxiv_entries)
-                rows.extend([row for row in accepted_rows if _norm(row.get("pdf_url"))] if require_pdf else accepted_rows)
-            except Exception as exc:
-                log(f"[WARN] IEEE S&P {year} accepted-page fallback failed: {exc}")
+    for paper in accepted:
+        matches = [row for row in remaining if _title_matches(paper["title"], row["title"])]
+        if not matches:
+            # 正式出版可能改题：仅接受双方作者高度重合且唯一的候选。
+            authors = {_title_key(a) for a in paper.get("authors", []) if _title_key(a)}
+            for row in remaining:
+                other = {_title_key(a) for a in row.get("authors", []) if _title_key(a)}
+                overlap = len(authors & other)
+                if overlap >= 2 and overlap / max(len(authors), len(other)) >= 0.8:
+                    matches.append(row)
+        merged = dict(paper)
+        if len(matches) == 1:
+            match = matches[0]
+            remaining.remove(match)
+            merged.update({k: v for k, v in match.items() if v and k != "id"})
+        rows.append(merged)
+    if remaining and accepted:
+        log(f"[WARN] IEEE S&P: {len(remaining)} CSDL articles unmatched to accepted list")
+    return rows + remaining
+
+
+def enrich_ieee_sp_author_versions(papers: List[Dict[str, Any]], *, year: int) -> None:
+    for paper in papers:
+        url = IEEE_SP_AUTHOR_VERSIONS.get(year, {}).get(paper["title"])
+        if not url or (paper.get("abstract") and paper.get("pdf_url")):
             continue
         try:
-            articles = _fetch_ieee_sp_articles(proceeding_id)
-            normalized = normalize_ieee_sp_articles(articles, year=int(year), require_public_pdf=False)
-            arxiv_entries = fetch_arxiv_title_matches([row for row in normalized if not _norm(row.get("pdf_url"))])
-            normalized = apply_arxiv_pdf_candidates(normalized, arxiv_entries)
-            rows.extend([row for row in normalized if _norm(row.get("pdf_url"))] if require_pdf else normalized)
+            soup = BeautifulSoup(_request_text(url), "html.parser")
+            title = soup.select_one("h3 a")
+            if not title or not _title_matches(title.get_text(" ", strip=True), paper["title"]):
+                raise ValueError("author version title mismatch")
+            heading = soup.find(lambda tag: tag.name in ("h4", "h5") and tag.get_text(strip=True) == "Abstract")
+            abstract = "\n\n".join(p.get_text(" ", strip=True) for p in heading.find_next_siblings("p")) if heading else ""
+            pdf_url = _absolute_url(title.get("href") or "", url)
+            if abstract and not paper.get("abstract"):
+                paper["abstract"] = abstract
+            if pdf_url.endswith(".pdf") and not paper.get("pdf_url"):
+                paper["pdf_url"] = pdf_url
         except Exception as exc:
-            log(f"[WARN] IEEE S&P {year} fetch failed: {exc}")
+            log(f"[WARN] IEEE S&P author version failed: {url}: {exc}")
+
+
+def fetch_ieee_sp(years: Iterable[int], *, require_pdf: bool = False) -> List[Dict[str, Any]]:
+    rows: List[Dict[str, Any]] = []
+    for year in years:
+        url = IEEE_SP_ACCEPTED_URL.format(year=int(year))
+        accepted_rows: List[Dict[str, Any]] = []
+        try:
+            accepted_rows = parse_ieee_sp_accepted_page(_request_text(url), year=int(year), page_url=url)
+        except Exception as exc:
+            log(f"[WARN] IEEE S&P {year} accepted-page fetch failed: {exc}")
+        proceeding_id = IEEE_SP_PROCEEDINGS.get(int(year))
+        normalized: List[Dict[str, Any]] = []
+        if proceeding_id:
+            try:
+                articles = _fetch_ieee_sp_articles(proceeding_id)
+                normalized = normalize_ieee_sp_articles(articles, year=int(year), require_public_pdf=False)
+            except Exception as exc:
+                log(f"[WARN] IEEE S&P {year} CSDL fetch failed: {exc}")
+        normalized = merge_ieee_sp_metadata(accepted_rows, normalized)
+        if not normalized:
+            raise RuntimeError(f"IEEE S&P {year}: no official papers fetched")
+        enrich_ieee_sp_author_versions(normalized, year=int(year))
+        arxiv_entries = fetch_arxiv_title_matches([row for row in normalized if not _norm(row.get("pdf_url"))])
+        normalized = apply_arxiv_pdf_candidates(normalized, arxiv_entries)
+        rows.extend([row for row in normalized if _norm(row.get("pdf_url"))] if require_pdf else normalized)
     return rows
 
 
-def fetch_conference(conference: str, years: Iterable[int], *, workers: int = 8, require_pdf: bool = True) -> List[Dict[str, Any]]:
+def fetch_conference(conference: str, years: Iterable[int], *, workers: int = 8, require_pdf: bool | None = None) -> List[Dict[str, Any]]:
     key = _norm(conference).lower().replace("-", "_").replace("&", "")
     if key in {"sp", "s_p", "ieeesp", "ieee_sp", "ieee_s_p"}:
         key = "ieee_sp"
+    if require_pdf is None:
+        require_pdf = key != "ieee_sp"
     if key == "osdi":
         return fetch_osdi(years, workers=workers, require_pdf=require_pdf)
     if key == "ndss":
@@ -849,7 +911,10 @@ def main() -> None:
     parser.add_argument("--years", required=True, help="Comma-separated years, e.g. 2024,2025,2026")
     parser.add_argument("--workers", type=int, default=8)
     parser.add_argument("--output", required=True)
-    parser.add_argument("--allow-missing-pdf", action="store_true")
+    pdf_options = parser.add_mutually_exclusive_group()
+    pdf_options.add_argument("--allow-missing-pdf", dest="require_pdf", action="store_false")
+    pdf_options.add_argument("--require-pdf", dest="require_pdf", action="store_true")
+    parser.set_defaults(require_pdf=None)
     args = parser.parse_args()
 
     years = parse_years(args.years)
@@ -859,7 +924,7 @@ def main() -> None:
         args.conference,
         years,
         workers=max(int(args.workers or 1), 1),
-        require_pdf=not bool(args.allow_missing_pdf),
+        require_pdf=args.require_pdf,
     )
     rows = sorted(rows, key=lambda row: (str(row.get("published") or ""), str(row.get("title") or "")), reverse=True)
     _write_json(args.output, rows)

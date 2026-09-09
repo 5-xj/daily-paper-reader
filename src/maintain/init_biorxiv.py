@@ -6,6 +6,8 @@ import argparse
 import os
 import subprocess
 import sys
+
+from common import count_raw_rows
 from datetime import datetime, timedelta, timezone
 
 try:
@@ -114,11 +116,23 @@ def main() -> None:
     else:
         print(f"[INFO] Step 1 已跳过，复用原始文件：{raw_path}", flush=True)
 
+    # 零结果前置检查：与 init_arxiv.py 保持一致。
+    # 抓取本身没报错、只是窗口内没有新论文时，属正常空跑，不应让 sync 因缺文件而崩。
+    fetch_count = count_raw_rows(raw_path)
+    print(f"[INFO] bioRxiv fetch 预检结果：count={fetch_count}，raw_path={raw_path}", flush=True)
+    if fetch_count <= 0:
+        print("[INFO] 本次 bioRxiv 抓取无新增论文，已跳过 Supabase 同步。", flush=True)
+        return
+
     sync_cmd = [
         python,
         os.path.join(SCRIPT_DIR, "sync.py"),
         "--backend-key",
         "biorxiv",
+        # 显式指定目标表，与 11 个会议 init 保持一致：
+        # 不依赖 SUPABASE_PAPERS_TABLE 环境变量，避免漏配时写错表。
+        "--papers-table",
+        "biorxiv_papers",
         "--date",
         date_str,
         "--schema",

@@ -24,5 +24,13 @@ function testConferenceChoiceCountsUseGreenOnly() {
   assert.equal(readColor('.dpr-choice-total'), green);
 }
 
+function testFeaturedConferenceChoiceHasStarBadge() {
+  readRule('.dpr-choice-pill.is-featured-conference-year');
+  const starRule = readRule('.dpr-choice-feature-star');
+  assert.ok(/position:\s*absolute;/.test(starRule), 'star badge should be anchored to the year button');
+  assert.ok(/(?:^|[;\s])content\s*:/.test(starRule) === false, 'star badge should be real markup, not a pseudo element');
+}
+
 testConferenceChoiceCountsUseGreenOnly();
+testFeaturedConferenceChoiceHasStarBadge();
 console.log('conference choice css tests passed');

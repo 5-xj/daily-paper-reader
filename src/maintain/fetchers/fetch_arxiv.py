@@ -536,23 +536,25 @@ def fetch_all_domains_metadata_robust(
     total_count = len(unique_papers)
     log(f"✅ All Done. Total unique papers fetched: {total_count}")
     
-    if total_count > 0:
-        # 若未显式指定输出文件，则按运行 token 命名到项目根目录下的 archive/<token>/raw 目录：
-        # <ROOT_DIR>/archive/<YYYYMMDD 或 YYYYMMDD-YYYYMMDD>/raw/arxiv_papers_<token>.json
-        if not output_file:
-            run_token = get_run_date_token(end_date)
-            archive_dir = os.path.join(ROOT_DIR, "archive", run_token)
-            raw_dir = os.path.join(archive_dir, "raw")
-            output_file = os.path.join(
-                raw_dir,
-                f"arxiv_papers_{run_token}.json",
-            )
+    # 抓取结果一律落盘（0 篇时写空数组），与三个 preprint fetcher 保持一致。
+    # 这样下游 count_raw_rows 才能区分「文件是 [] = 确实没有新论文」与
+    # 「文件不存在 = 抓取器本身崩了」，后者是必须暴露的异常。
+    # 若未显式指定输出文件，则按运行 token 命名到项目根目录下的 archive/<token>/raw 目录：
+    # <ROOT_DIR>/archive/<YYYYMMDD 或 YYYYMMDD-YYYYMMDD>/raw/arxiv_papers_<token>.json
+    if not output_file:
+        run_token = get_run_date_token(end_date)
+        archive_dir = os.path.join(ROOT_DIR, "archive", run_token)
+        raw_dir = os.path.join(archive_dir, "raw")
+        output_file = os.path.join(
+            raw_dir,
+            f"arxiv_papers_{run_token}.json",
+        )
 
-        os.makedirs(os.path.dirname(output_file) if os.path.dirname(output_file) else ".", exist_ok=True)
-        with open(output_file, 'w', encoding='utf-8') as f:
-            json.dump(list(unique_papers.values()), f, ensure_ascii=False, indent=2)
-        log(f"💾 File saved to: {output_file}")
-    else:
+    os.makedirs(os.path.dirname(output_file) if os.path.dirname(output_file) else ".", exist_ok=True)
+    with open(output_file, 'w', encoding='utf-8') as f:
+        json.dump(list(unique_papers.values()), f, ensure_ascii=False, indent=2)
+    log(f"💾 File saved to: {output_file}")
+    if total_count <= 0:
         log("⚠️ No papers found. Check your date range or network.")
     if max_published_new:
         save_seen_state(seen_ids, max_published_new)

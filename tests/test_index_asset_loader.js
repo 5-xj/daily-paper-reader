@@ -9,7 +9,7 @@ function extractAssetLoaderScript(html) {
   return script;
 }
 
-async function runAssetLoader(hostname, assets, windowOverrides = {}) {
+async function runAssetLoader(hostname, assets, windowOverrides = {}, appendElement) {
   const appended = [];
   const fetches = [];
   const timers = new Set();
@@ -45,6 +45,7 @@ async function runAssetLoader(hostname, assets, windowOverrides = {}) {
       head: {
         appendChild(el) {
           appended.push(el);
+          if (typeof appendElement === 'function' && appendElement(el, appended)) return;
           if (typeof el.onload === 'function') setImmediate(el.onload);
         },
       },
@@ -60,6 +61,40 @@ async function runAssetLoader(hostname, assets, windowOverrides = {}) {
   appended.fetches = fetches;
   appended.jsonPromises = sandbox.window.DPR_ASSET_JSON_PROMISES || {};
   return appended;
+}
+
+async function testLocalScriptRetriesAfterTransientFailure() {
+  let scriptAttempts = 0;
+  await runAssetLoader(
+    'localhost',
+    [{ type: 'script', path: 'app/zotero-chat-utils.js' }],
+    {},
+    (element) => {
+      if (element.tagName !== 'script') return false;
+      scriptAttempts += 1;
+      if (scriptAttempts === 1) {
+        setImmediate(element.onerror);
+      } else {
+        setImmediate(element.onload);
+      }
+      return true;
+    },
+  );
+
+  assert.equal(scriptAttempts, 2, 'local scripts should retry once after a transient failure');
+}
+
+function testInitialLoadFailureCannotLeavePendingBlankScreen() {
+  const html = fs.readFileSync('index.html', 'utf8');
+  assert.match(html, /window\.DPRShowInitialLoadError\s*=\s*function/);
+  assert.match(html, /app\.removeAttribute\(['"]data-dpr-pending['"]\)/);
+  assert.match(html, /secretGate\.classList\.add\(['"]secret-gate-hidden['"]\)/);
+  assert.match(html, /window\.DPRShowInitialLoadError\(err\)/);
+  assert.match(
+    html,
+    /if\s*\(app\s*&&\s*app\.hasAttribute\(['"]data-dpr-pending['"]\)\)\s*return/,
+    'window load fallback must not hide the splash while the app is still pending',
+  );
 }
 
 async function testProjectAssetsPreferLocalOnCdnHosts() {
@@ -125,12 +160,24 @@ async function testJsonAssetsArePrefetchedWithAssetBatch() {
   assert.ok(appended.jsonPromises['app/conference-stats.json']);
 }
 
+function testFeedbackModuleLoadsAfterGithubToken() {
+  const html = fs.readFileSync('index.html', 'utf8');
+  const tokenIndex = html.indexOf("path: 'app/subscriptions.github-token.js'");
+  const feedbackIndex = html.indexOf("path: 'app/feedback.issue.js'");
+
+  assert.ok(tokenIndex >= 0, 'GitHub token module should be loaded');
+  assert.ok(feedbackIndex > tokenIndex, 'feedback module should load after GitHub token module');
+}
+
 Promise.resolve()
+  .then(testLocalScriptRetriesAfterTransientFailure)
   .then(testProjectAssetsPreferLocalOnCdnHosts)
   .then(testExplicitCdnBaseStillUsesVendorCdnOnly)
   .then(testVersionedAppAssetsUseImmutableCdnPath)
   .then(testLatestIsRejectedAsAppAssetVersion)
   .then(testJsonAssetsArePrefetchedWithAssetBatch)
+  .then(testFeedbackModuleLoadsAfterGithubToken)
+  .then(testInitialLoadFailureCannotLeavePendingBlankScreen)
   .then(() => {
     console.log('index asset loader tests passed');
   })

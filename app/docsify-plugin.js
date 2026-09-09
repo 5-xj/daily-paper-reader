@@ -2791,6 +2791,7 @@ window.$docsify = {
       };
 
       const closePdfPreview = () => {
+        pdfPreviewRenderSeq += 1;
         document.body.classList.remove('dpr-pdf-preview-open');
         document.querySelectorAll('[data-pdf-preview-toggle]').forEach((btn) => {
           btn.setAttribute('aria-expanded', 'false');
@@ -2798,17 +2799,205 @@ window.$docsify = {
         });
       };
 
-      const buildEmbeddablePdfUrl = (url) => {
+      const PDFJS_VIEWER_URL = 'https://mozilla.github.io/pdf.js/web/viewer.html';
+      const PDFJS_SCRIPT_URL = 'app/vendor/pdfjs/3.11.174/pdf.min.js';
+      const PDFJS_WORKER_URL = 'app/vendor/pdfjs/3.11.174/pdf.worker.min.js';
+      const PDF_PREVIEW_MAX_VIEWPORT_SCALE = 1.55;
+      const PDF_PREVIEW_MIN_OUTPUT_SCALE = 2;
+      const PDF_PREVIEW_TARGET_TOTAL_PIXELS = 40000000;
+      let pdfJsLoadPromise = null;
+      let pdfPreviewRenderSeq = 0;
+
+      const resolvePdfCanvasMetrics = (
+        baseWidth,
+        baseHeight,
+        stageWidth,
+        devicePixelRatio,
+        pageCount,
+      ) => {
+        const parsedBaseWidth = Number(baseWidth);
+        const parsedBaseHeight = Number(baseHeight);
+        const parsedStageWidth = Number(stageWidth);
+        const parsedPageCount = Number(pageCount);
+        const safeBaseWidth =
+          Number.isFinite(parsedBaseWidth) && parsedBaseWidth > 0 ? parsedBaseWidth : 1;
+        const safeBaseHeight =
+          Number.isFinite(parsedBaseHeight) && parsedBaseHeight > 0 ? parsedBaseHeight : 1;
+        const safeStageWidth =
+          Number.isFinite(parsedStageWidth) && parsedStageWidth > 0 ? parsedStageWidth : 1;
+        const safePageCount =
+          Number.isFinite(parsedPageCount) && parsedPageCount > 0
+            ? Math.max(1, Math.floor(parsedPageCount))
+            : 1;
+        const availableWidth = Math.max(1, safeStageWidth - 18);
+        const nativeOutputScale = Number(devicePixelRatio);
+        const scale = Math.min(
+          PDF_PREVIEW_MAX_VIEWPORT_SCALE,
+          availableWidth / safeBaseWidth,
+        );
+        const desiredOutputScale = Math.max(
+          PDF_PREVIEW_MIN_OUTPUT_SCALE,
+          Number.isFinite(nativeOutputScale) && nativeOutputScale > 0 ? nativeOutputScale : 1,
+        );
+        const estimatedDocumentPixels =
+          safeBaseWidth * scale * safeBaseHeight * scale * safePageCount;
+        const budgetOutputScale = Math.sqrt(
+          PDF_PREVIEW_TARGET_TOTAL_PIXELS / estimatedDocumentPixels,
+        );
+        return {
+          scale,
+          outputScale: Math.max(1, Math.min(desiredOutputScale, budgetOutputScale)),
+        };
+      };
+
+      const normalizePdfUrl = (url) => {
         const raw = String(url || '').trim();
         if (!raw) return '';
         try {
           const parsed = new URL(raw, window.location.href);
-          if (/openreview\.net$/i.test(parsed.hostname)) {
-            return `https://docs.google.com/gview?embedded=1&url=${encodeURIComponent(parsed.href)}`;
+          const hostname = parsed.hostname.toLowerCase();
+          const isOpenReviewHost =
+            hostname === 'openreview.net' ||
+            parsed.hostname.toLowerCase().endsWith('.openreview.net');
+          const normalizedPath = parsed.pathname.replace(/\/+$/, '') || '/';
+          if (isOpenReviewHost && normalizedPath === '/forum') {
+            const forumId = parsed.searchParams.get('id');
+            if (forumId) {
+              parsed.pathname = '/pdf';
+              parsed.search = '';
+              parsed.searchParams.set('id', forumId);
+              parsed.hash = '';
+            }
           }
           return parsed.href;
         } catch (_err) {
           return raw;
+        }
+      };
+
+      const isOpenReviewPdfUrl = (url) => {
+        const normalized = normalizePdfUrl(url);
+        if (!normalized) return false;
+        try {
+          const parsed = new URL(normalized, window.location.href);
+          const hostname = parsed.hostname.toLowerCase();
+          return hostname === 'openreview.net' || hostname.endsWith('.openreview.net');
+        } catch (_err) {
+          return false;
+        }
+      };
+
+      const buildPdfPreviewUrl = (url) => {
+        const normalizedUrl = normalizePdfUrl(url);
+        if (!normalizedUrl) return '';
+        try {
+          const parsed = new URL(normalizedUrl, window.location.href);
+          if (/mozilla\.github\.io$/i.test(parsed.hostname) && /\/pdf\.js\/web\/viewer\.html$/i.test(parsed.pathname)) {
+            return parsed.href;
+          }
+          if (isOpenReviewPdfUrl(normalizedUrl)) {
+            return normalizedUrl;
+          }
+          return `${PDFJS_VIEWER_URL}?file=${encodeURIComponent(parsed.href)}`;
+        } catch (_err) {
+          return normalizedUrl;
+        }
+      };
+
+      const loadPdfJs = () => {
+        if (window.pdfjsLib) {
+          window.pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(PDFJS_WORKER_URL, window.location.href).href;
+          return Promise.resolve(window.pdfjsLib);
+        }
+        if (pdfJsLoadPromise) return pdfJsLoadPromise;
+        pdfJsLoadPromise = new Promise((resolve, reject) => {
+          const script = document.createElement('script');
+          script.src = new URL(PDFJS_SCRIPT_URL, window.location.href).href;
+          script.async = true;
+          script.onload = () => {
+            if (!window.pdfjsLib) {
+              reject(new Error('PDF.js 加载失败'));
+              return;
+            }
+            window.pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(PDFJS_WORKER_URL, window.location.href).href;
+            resolve(window.pdfjsLib);
+          };
+          script.onerror = () => reject(new Error('PDF.js 加载失败'));
+          document.head.appendChild(script);
+        });
+        return pdfJsLoadPromise;
+      };
+
+      const setPdfPreviewMessage = (panel, text, tone) => {
+        const message = panel && panel.querySelector('.dpr-pdf-preview-message');
+        if (!message) return;
+        message.textContent = text || '';
+        message.classList.toggle('is-error', tone === 'error');
+        message.hidden = !text;
+      };
+
+      const renderPdfIntoPanel = async (panel, url) => {
+        const rawUrl = String(url || '').trim();
+        const pagesEl = panel && panel.querySelector('.dpr-pdf-preview-pages');
+        if (!panel || !pagesEl || !rawUrl) return;
+        if (panel.dataset.renderedPdfUrl === rawUrl && pagesEl.children.length) return;
+
+        const renderSeq = ++pdfPreviewRenderSeq;
+        panel.dataset.renderedPdfUrl = '';
+        pagesEl.innerHTML = '';
+        setPdfPreviewMessage(panel, '正在加载 PDF 预览…', '');
+
+        try {
+          const pdfjsLib = await loadPdfJs();
+          if (renderSeq !== pdfPreviewRenderSeq) return;
+          const loadingTask = pdfjsLib.getDocument({ url: rawUrl });
+          const pdf = await loadingTask.promise;
+          if (renderSeq !== pdfPreviewRenderSeq) return;
+          setPdfPreviewMessage(panel, '', '');
+
+          for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
+            if (renderSeq !== pdfPreviewRenderSeq) return;
+            const page = await pdf.getPage(pageNumber);
+            if (renderSeq !== pdfPreviewRenderSeq) return;
+            const baseViewport = page.getViewport({ scale: 1 });
+            const stageWidth = Math.max(320, pagesEl.clientWidth || panel.clientWidth - 36 || 640);
+            const { scale, outputScale } = resolvePdfCanvasMetrics(
+              baseViewport.width,
+              baseViewport.height,
+              stageWidth,
+              window.devicePixelRatio,
+              pdf.numPages,
+            );
+            const viewport = page.getViewport({ scale });
+            const canvas = document.createElement('canvas');
+            const ctx = canvas.getContext('2d');
+            canvas.width = Math.ceil(viewport.width * outputScale);
+            canvas.height = Math.ceil(viewport.height * outputScale);
+            canvas.style.width = `${viewport.width}px`;
+            canvas.style.height = `${viewport.height}px`;
+
+            const pageWrap = document.createElement('div');
+            pageWrap.className = 'dpr-pdf-preview-page';
+            pageWrap.setAttribute('data-page', String(pageNumber));
+            const pageLabel = document.createElement('div');
+            pageLabel.className = 'dpr-pdf-preview-page-label';
+            pageLabel.textContent = `${pageNumber} / ${pdf.numPages}`;
+            pageWrap.appendChild(pageLabel);
+            pageWrap.appendChild(canvas);
+            pagesEl.appendChild(pageWrap);
+
+            await page.render({
+              canvasContext: ctx,
+              viewport,
+              transform: [outputScale, 0, 0, outputScale, 0, 0],
+            }).promise;
+          }
+          panel.dataset.renderedPdfUrl = rawUrl;
+        } catch (err) {
+          if (renderSeq !== pdfPreviewRenderSeq) return;
+          pagesEl.innerHTML = '';
+          setPdfPreviewMessage(panel, 'PDF 预览加载失败，可以尝试新窗口预览或下载 PDF。', 'error');
+          console.warn('[DPR] PDF preview failed:', err);
         }
       };
 
@@ -2823,11 +3012,14 @@ window.$docsify = {
           '<div class="dpr-pdf-preview-header">',
           '<div class="dpr-pdf-preview-title">PDF 预览</div>',
           '<div class="dpr-pdf-preview-actions">',
-          '<a class="dpr-pdf-preview-open-link" href="#" target="_blank" rel="noopener">新窗口打开</a>',
+          '<a class="dpr-pdf-preview-open-link" href="#" target="_blank" rel="noopener">新窗口预览</a>',
           '<button class="dpr-pdf-preview-close" type="button" aria-label="关闭 PDF 预览">×</button>',
           '</div>',
           '</div>',
-          '<iframe class="dpr-pdf-preview-frame" title="PDF 预览"></iframe>',
+          '<div class="dpr-pdf-preview-stage">',
+          '<div class="dpr-pdf-preview-message" hidden></div>',
+          '<div class="dpr-pdf-preview-pages" aria-live="polite"></div>',
+          '</div>',
         ].join('');
         document.body.appendChild(panel);
         panel.querySelector('.dpr-pdf-preview-close')?.addEventListener('click', closePdfPreview);
@@ -2839,22 +3031,34 @@ window.$docsify = {
           if (btn.dataset.bound === '1') return;
           btn.dataset.bound = '1';
           btn.addEventListener('click', () => {
-            const url = String(btn.getAttribute('data-pdf-url') || '').trim();
+            const url = normalizePdfUrl(btn.getAttribute('data-pdf-url'));
             if (!url) return;
+            const previewUrl = buildPdfPreviewUrl(url);
+            if (isOpenReviewPdfUrl(previewUrl)) {
+              closePdfPreview();
+              window.open(previewUrl, '_blank', 'noopener,noreferrer');
+              return;
+            }
             const panel = ensurePdfPreviewPanel();
-            const frame = panel.querySelector('.dpr-pdf-preview-frame');
             const openLink = panel.querySelector('.dpr-pdf-preview-open-link');
-            const previewUrl = buildEmbeddablePdfUrl(url);
-            if (frame && frame.getAttribute('src') !== previewUrl) {
-              frame.setAttribute('src', previewUrl);
-            }
             if (openLink) {
-              openLink.setAttribute('href', url);
+              openLink.setAttribute('href', previewUrl);
             }
-            const nextOpen = !document.body.classList.contains('dpr-pdf-preview-open');
-            document.body.classList.toggle('dpr-pdf-preview-open', nextOpen);
-            btn.setAttribute('aria-expanded', nextOpen ? 'true' : 'false');
-            btn.textContent = nextOpen ? '关闭预览' : '预览 PDF';
+            const isOpen = document.body.classList.contains('dpr-pdf-preview-open');
+            const isSamePdf = panel.dataset.currentPdfUrl === url;
+            const nextOpen = !(isOpen && isSamePdf);
+            if (!nextOpen) {
+              closePdfPreview();
+              return;
+            }
+            panel.dataset.currentPdfUrl = url;
+            document.body.classList.add('dpr-pdf-preview-open');
+            document.querySelectorAll('[data-pdf-preview-toggle]').forEach((item) => {
+              const active = item === btn;
+              item.setAttribute('aria-expanded', active ? 'true' : 'false');
+              item.textContent = active ? '关闭预览' : '预览 PDF';
+            });
+            renderPdfIntoPanel(panel, url);
           });
         });
       };
@@ -2931,8 +3135,11 @@ window.$docsify = {
         }
         lines.push(`<p><strong>Date</strong>: ${escapeHtml(meta.date || 'Unknown')}</p>`);
         if (meta.pdf) {
+          const safePdf = escapeHtml(meta.pdf);
           lines.push(
-            `<p class="paper-meta-link-row"><span class="paper-meta-link-label"><strong>PDF</strong>:</span> <a class="paper-meta-link" href="${escapeHtml(meta.pdf)}" target="_blank">${escapeHtml(meta.pdf)}</a></p>`
+            `<p class="paper-meta-link-row paper-meta-pdf-row"><span class="paper-meta-link-label"><strong>PDF</strong>:</span> ` +
+            `<button type="button" class="dpr-pdf-preview-toggle paper-meta-pdf-preview" data-pdf-preview-toggle data-pdf-url="${safePdf}" aria-expanded="false">预览 PDF</button>` +
+            `<a class="dpr-pdf-download-link" href="${safePdf}" target="_blank" rel="noopener" download>下载 PDF</a></p>`
           );
         }
         if (meta.tags && meta.tags.length) {

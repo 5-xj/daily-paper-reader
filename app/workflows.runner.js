@@ -349,15 +349,20 @@ window.DPRWorkflowRunner = (function () {
       }),
     });
     const run = data.run || {};
+    if (!run.id) throw new Error('本地后端未返回运行记录，无法确认任务已创建。');
     activeRun = { local: true, runId: run.id };
     selectedRun = activeRun;
     setStatus(`本地运行已创建：run_id=${run.id}`, '#080', { waiting: true });
-    await refreshLocalRun(run.id);
+    const firstRefresh = refreshLocalRun(run.id).catch((error) => {
+      setStatus(`任务已提交，但读取进度失败：${error.message || error}`, '#c00');
+    });
+    if (wf.key !== 'reset-content') await firstRefresh;
     refreshTimer = setInterval(() => {
       const r = selectedRun || activeRun;
       if (!r || !r.local) return;
       refreshLocalRun(r.runId);
     }, 5000);
+    return true;
   };
 
   const resolveWorkflowRunInputs = async (owner, repo, token, runId) => {
@@ -701,7 +706,7 @@ window.DPRWorkflowRunner = (function () {
     const workflowFile = String(wf.id || '');
     if (!workflowFile) {
       setStatus('工作流配置缺失，无法触发。', '#c00');
-      return;
+      return false;
     }
     const dynamicInputs = { ...(wf.dispatchInputs || {}) };
     const rerankerProfile = loadRerankerProfile();
@@ -721,26 +726,26 @@ window.DPRWorkflowRunner = (function () {
         const msg = e.message || String(e);
         setStatus(`本地触发失败：${msg}`, '#c00');
         runsEl.innerHTML = `<div style="color:#c00;">${escapeHtml(msg)}<br/>请确认本地后端已启动：<code>scripts/local_debug.sh</code> 或 <code>python src/local_debug_server.py --port 8567</code></div>`;
-        return;
+        return false;
       }
     }
     const token = loadGithubToken();
     if (!token) {
       setStatus('未检测到 GitHub Token：请在“密钥配置”或“GitHub Token”处完成配置。', '#c00');
-      return;
+      return false;
     }
     const repoContext = await resolveRepoContext(token);
     const { owner, repo } = repoContext;
     if (!owner || !repo) {
       setStatus('无法推断目标仓库：请确认 GitHub Token 有效，或使用 xxx.github.io/仓库名/ 访问。', '#c00');
-      return;
+      return false;
     }
     if (wf.key === 'sync' && repoContext.isFork === false) {
       setStatus('当前仓库不是 GitHub Fork，无法使用上游同步。', '#c00');
       runsEl.innerHTML =
         '<div style="color:#c00;">当前仓库不是 Fork 仓库，Upstream Sync 不会运行。</div>' +
         `<div style="margin-top:8px;"><a class="arxiv-tool-btn" style="padding:6px 10px; text-decoration:none;" target="_blank" href="https://github.com/${owner}/${repo}/fork">前往 Fork 当前仓库</a></div>`;
-      return;
+      return false;
     }
 
     setStatus(`正在检查工作流状态：${wf.name || workflowFile} ...`, '#666', { waiting: true });
@@ -771,7 +776,7 @@ window.DPRWorkflowRunner = (function () {
           runsEl.innerHTML =
             `<div style="color:#c00;">同一时间只允许运行一个该工作流实例，请等待当前运行结束。</div>` +
             `<div style="margin-top:8px;"><a class="arxiv-tool-btn" style="padding:6px 10px; text-decoration:none;" target="_blank" href="${runUrl}">查看当前运行</a></div>`;
-          return;
+          return false;
         }
       }
 
@@ -808,58 +813,68 @@ window.DPRWorkflowRunner = (function () {
 
       setStatus('已触发，正在等待运行记录创建...', '#666', { waiting: true });
 
-      // 轮询找到本次 dispatch 对应的 run
-      const lookup = async () => {
-        const runsUrl = `https://api.github.com/repos/${owner}/${repo}/actions/workflows/${encodeURIComponent(
-          workflowFile,
-        )}/runs?event=workflow_dispatch&per_page=10`;
-        const runsRes = await ghFetch(token, runsUrl);
-        if (!runsRes.ok) {
-          const txt = await runsRes.text().catch(() => '');
-          throw new Error(`读取 workflow runs 失败：HTTP ${runsRes.status} ${runsRes.statusText} - ${txt}`);
-        }
-        const data = await runsRes.json();
-        const list = Array.isArray(data.workflow_runs) ? data.workflow_runs : [];
-        const found = list.find((r) => {
-          try {
-            const t = new Date(r.created_at);
-            return t.getTime() >= createdAt.getTime() - 5000;
-          } catch {
-            return false;
+      // 派发确认与进度轮询分离，关闭页面不会把已提交的任务误报为提交失败。
+      const monitor = async () => {
+        // 轮询找到本次 dispatch 对应的 run
+        const lookup = async () => {
+          const runsUrl = `https://api.github.com/repos/${owner}/${repo}/actions/workflows/${encodeURIComponent(
+            workflowFile,
+          )}/runs?event=workflow_dispatch&per_page=10`;
+          const runsRes = await ghFetch(token, runsUrl);
+          if (!runsRes.ok) {
+            const txt = await runsRes.text().catch(() => '');
+            throw new Error(`读取 workflow runs 失败：HTTP ${runsRes.status} ${runsRes.statusText} - ${txt}`);
           }
-        });
-        return found || null;
+          const data = await runsRes.json();
+          const list = Array.isArray(data.workflow_runs) ? data.workflow_runs : [];
+          const found = list.find((r) => {
+            try {
+              const t = new Date(r.created_at);
+              return t.getTime() >= createdAt.getTime() - 5000;
+            } catch {
+              return false;
+            }
+          });
+          return found || null;
+        };
+
+        let run = null;
+        for (let i = 0; i < 18; i += 1) {
+          // 最多等 ~90 秒
+          // eslint-disable-next-line no-await-in-loop
+          run = await lookup();
+          if (run) break;
+          // eslint-disable-next-line no-await-in-loop
+          await new Promise((r) => setTimeout(r, 5000));
+        }
+
+        if (!run || !run.id) {
+          setStatus('已触发，但未能在短时间内找到对应的运行记录。建议打开 Actions 页面查看。', '#c00');
+          runsEl.innerHTML = `<div style="color:#666;">请在 GitHub Actions 查看：<a target="_blank" href="https://github.com/${owner}/${repo}/actions">打开 Actions</a></div>`;
+          return;
+        }
+
+        activeRun = { owner, repo, runId: run.id, token };
+        selectedRun = activeRun;
+        setStatus(`运行已创建：run_id=${run.id}，开始拉取进度...`, '#080', { waiting: true });
+        await refreshRun(owner, repo, run.id);
+
+        refreshTimer = setInterval(() => {
+          const r = selectedRun || activeRun;
+          if (!r) return;
+          refreshRun(r.owner, r.repo, r.runId);
+        }, 5000);
+
+        // 触发后刷新最近运行列表
+        loadRecentRuns();
       };
-
-      let run = null;
-      for (let i = 0; i < 18; i += 1) {
-        // 最多等 ~90 秒
-        // eslint-disable-next-line no-await-in-loop
-        run = await lookup();
-        if (run) break;
-        // eslint-disable-next-line no-await-in-loop
-        await new Promise((r) => setTimeout(r, 5000));
-      }
-
-      if (!run || !run.id) {
-        setStatus('已触发，但未能在短时间内找到对应的运行记录。建议打开 Actions 页面查看。', '#c00');
-        runsEl.innerHTML = `<div style="color:#666;">请在 GitHub Actions 查看：<a target="_blank" href="https://github.com/${owner}/${repo}/actions">打开 Actions</a></div>`;
-        return;
-      }
-
-      activeRun = { owner, repo, runId: run.id, token };
-      selectedRun = activeRun;
-      setStatus(`运行已创建：run_id=${run.id}，开始拉取进度...`, '#080', { waiting: true });
-      await refreshRun(owner, repo, run.id);
-
-      refreshTimer = setInterval(() => {
-        const r = selectedRun || activeRun;
-        if (!r) return;
-        refreshRun(r.owner, r.repo, r.runId);
-      }, 5000);
-
-      // 触发后刷新最近运行列表
-      loadRecentRuns();
+      const monitoring = monitor().catch((error) => {
+        setStatus(`任务已提交，但读取进度失败：${error.message || error}`, '#c00');
+        runsEl.innerHTML = `<div style="color:#666;">任务无需重复提交，请在 <a target="_blank" href="https://github.com/${owner}/${repo}/actions">GitHub Actions</a> 查看进度。</div>`;
+      });
+      // 其它入口保留原有等待运行记录的时序；重置按钮只等待派发确认。
+      if (wf.key !== 'reset-content') await monitoring;
+      return true;
     } catch (e) {
       console.error(e);
       const msg = e.message || String(e);
@@ -871,6 +886,7 @@ window.DPRWorkflowRunner = (function () {
       } else {
         runsEl.innerHTML = `<div style="color:#c00;">${escapeHtml(msg)}</div>`;
       }
+      return false;
     }
   };
 
@@ -994,7 +1010,7 @@ window.DPRWorkflowRunner = (function () {
     const wf = getWorkflowByKey(workflowKey);
     if (!wf) {
       setStatus('未找到对应的工作流配置。', '#c00');
-      return;
+      return false;
     }
     open();
     return dispatchAndMonitor(wf, extraInputs);

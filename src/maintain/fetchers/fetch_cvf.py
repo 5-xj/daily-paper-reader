@@ -9,6 +9,7 @@ List-page structure
     <dt class="ptitle">
       <a href="...html">Paper Title</a>
     </dt>
+    <dd>Authors</dd>
     <dd>
       <a href="...paper.pdf">pdf</a>   ← first <a> whose href ends with ".pdf"
       ...
@@ -39,6 +40,8 @@ from bs4 import BeautifulSoup
 SRC_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 if SRC_DIR not in sys.path:
     sys.path.insert(0, SRC_DIR)
+
+from maintain.conference_program import fetch_eccv_program, program_paper_id
 
 SCRIPT_DIR = os.path.dirname(__file__)
 ROOT_DIR = os.path.abspath(os.path.join(SCRIPT_DIR, "..", "..", ".."))
@@ -139,10 +142,14 @@ def _parse_cvpr_list(html: str, year: int) -> List[Dict[str, str]]:
         href = a_title.get("href", "")
         detail_url = href if href.startswith("http") else f"{CVF_BASE}/{href.lstrip('/')}"
 
-        # The next <dd> sibling contains the PDF link.
-        dd = dt.find_next_sibling("dd")
+        # 作者和资源链接分属多个 dd；只在当前论文分组内查找，不能串到下一篇。
         pdf_url = ""
-        if dd:
+        for dd in dt.next_siblings:
+            node_name = getattr(dd, "name", None)
+            if node_name == "dt":
+                break
+            if node_name != "dd":
+                continue
             pdf_a = dd.find("a", href=re.compile(r"\.pdf$", re.I))
             if pdf_a:
                 pdf_href = pdf_a["href"]
@@ -151,6 +158,7 @@ def _parse_cvpr_list(html: str, year: int) -> List[Dict[str, str]]:
                     if pdf_href.startswith("http")
                     else f"{CVF_BASE}/{pdf_href.lstrip('/')}"
                 )
+                break
 
         entries.append(
             {"title": title, "detail_url": detail_url, "pdf_url": pdf_url}
@@ -184,7 +192,7 @@ def _parse_eccv_list(html: str, year: int) -> List[Dict[str, str]]:
 
         href = a_title.get("href", "")
         # Filter for the requested year.
-        if year_str not in href:
+        if not re.search(rf"/eccv_{year_str}/", "/" + href.lstrip("/"), re.I):
             continue
 
         title = _norm(a_title.get_text())
@@ -289,7 +297,7 @@ def _build_paper(
     published = f"{year}-{month:02d}-01T00:00:00+00:00"
 
     return {
-        "id": f"{conf_lower}-{year}-{slug}",
+        "id": program_paper_id(conf_upper, year, title) if conf_upper == "ECCV" and year >= 2026 else f"{conf_lower}-{year}-{slug}",
         "source": f"{conf_upper}-{year}-Accepted",
         "title": title,
         "abstract": detail["abstract"],
@@ -361,6 +369,8 @@ def fetch_eccv(year: int, workers: int) -> List[Dict[str, Any]]:
     log(f"  Found {len(entries)} papers for ECCV {year}")
 
     if not entries:
+        if year >= 2026:
+            return fetch_eccv_program(year, workers=workers)
         return []
 
     papers: List[Dict[str, Any]] = []

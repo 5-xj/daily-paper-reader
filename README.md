@@ -35,6 +35,13 @@
 
 ## 📰 News
 
+- **2026-09-09** 🛠️ 修复配置读取与论文重置反馈（`778f6b8`）：DeepSeek 连接测试超时改为明确提示“DeepSeek 连接测试超时，请稍后重试”；密钥文件读取遇到网络异常时自动重试，并提供重新读取入口，避免误入初始化向导；论文重置在任务派发确认后才显示“已提交”，提交期间防止重复点击并提醒不要关闭页面，进度读取失败也不会再误报为提交失败。
+- **2026-09-05** 📚 更新会议论文库与摘要（`67daf2c` / `bff3506`）：CVPR 2026 已入库 4,042 篇官方 Open Access 论文，OSDI 2026 补至 136 篇，IEEE S&P 2026 补至 254 篇（其中 88 篇提供公开 PDF）；同步更新向量索引与会议年份统计。另从官方 PDF 补齐 EMNLP 2024/2025 共 61 篇缺失摘要，并增加 PDF 摘要提取兜底。CVPR 入库数与官方录用数 4,089 篇仍有差异，EMNLP 2026 尚未导入。
+- **2026-08-28** 🗓️ 修复区间日报无法从侧边栏日历点开（`2ea10ee5`）：长时间窗日报（如 `2026-07-29 ~ 2026-08-27`）在日历上挂到结束日格子，但选中逻辑仍按原始日期 key 查索引，导致格子显示有论文却点不动、列表不切换也不高亮；改为按锚定日反查还原原始 key，并连带修复重渲染后跳回最新单日、分组展开状态错位与翻月时列表错配。
+- **2026-07-19** 🧾 统一首页公告与社区面板（`7457ab10`）：移除波浪、渐变和紫色宣传卡，改为一致的简洁信息面板，并完善桌面与移动端布局。
+- **2026-07-07** 🎛️ 微调会议与侧边栏显示（`f202c703` / `a12d6d2b`）：ACL 2026 与 ICML 2026 年份按钮右上角增加星标提示，并将新版 sidebar 默认宽度从 373px 收窄到 298px，旧默认宽度会自动迁移到新宽度。
+- **2026-07-07** 🏛️ 接入 ICML 2026 会议论文（`69a55296`）：从 OpenReview 同步 accepted 与公开 reject 共 6,555 篇论文，其中官方录取 6,341 篇，并补齐 PDF 链接、向量索引、统一会议检索与前端年份统计。
+- **2026-07-07** 🏛️ 接入 ACL 2026 会议论文（`89351061`）：从 ACL Anthology 同步 Long / Short / Findings 共 4,459 篇公开论文，补齐 PDF 直链、向量索引与会议年份统计，并开放前端 ACL 2026 年份按钮。
 - **2026-07-01** 🧭 修复侧边栏 v2 收起与冻结层细节（`adaa0dab` / `9384abb4` / `5b9c807a`）：大屏收起后侧边栏真正归零，正文重新居中；论文页 AI 输入框、模型选择、底部工具区与问题面板随正文一起居中，并修复冻结标题遮罩压住首篇论文的问题。
 - **2026-07-01** 🔄 支持 Sync Fork 后再更新自有静态资源（`19ceb63a`）：项目自有 `app/*.js` / `app/*.css` 默认从当前站点本地加载，只有显式配置版本时才走不可变 CDN 路径，避免 CDN 自动部署后用户立即拿到未同步资源。
 - **2026-07-01** 🏛️ 打通统一会议年份检索（`801c1c1b` / `4de71724` / `13154da5`）：新增统一会议论文入口与 RPC 过滤能力，前端可把多个会议年份组合成一次检索，并按所选论文总数限制在 3 万篇以内，同时按论文数量线性估算费用与耗时。
@@ -277,4 +284,10 @@ QQ 群：583867967（欢迎交流，已有：1151 人）
 
 ## ⭐ Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=ziwenhahaha/daily-paper-reader&type=Date&showForks=true)](https://star-history.com/#ziwenhahaha/daily-paper-reader&Date)
+<a href="https://www.star-history.com/?type=date&repos=ziwenhahaha%2Fdaily-paper-reader">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=ziwenhahaha/daily-paper-reader&type=date&theme=dark&legend=top-left&sealed_token=HZNlFXt8xbwRv5OoiqbjkjDPJoOuXlfSMxuVmHWAdDqfd9IVMab3xcK4VxF3DlJAvaO71PL3smUpfEw-NjNT83w8NqNJ0UPIhoNcxbiPhTMQkoMhkawF1w" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=ziwenhahaha/daily-paper-reader&type=date&legend=top-left&sealed_token=HZNlFXt8xbwRv5OoiqbjkjDPJoOuXlfSMxuVmHWAdDqfd9IVMab3xcK4VxF3DlJAvaO71PL3smUpfEw-NjNT83w8NqNJ0UPIhoNcxbiPhTMQkoMhkawF1w" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=ziwenhahaha/daily-paper-reader&type=date&legend=top-left&sealed_token=HZNlFXt8xbwRv5OoiqbjkjDPJoOuXlfSMxuVmHWAdDqfd9IVMab3xcK4VxF3DlJAvaO71PL3smUpfEw-NjNT83w8NqNJ0UPIhoNcxbiPhTMQkoMhkawF1w" />
+ </picture>
+</a>

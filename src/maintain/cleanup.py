@@ -74,9 +74,21 @@ def resolve_supabase_config(
 ) -> Dict[str, str]:
     cfg = load_config()
     backend = get_source_backend(cfg, backend_key)
+    resolved_table = _norm(papers_table) or _norm(backend.get("papers_table"))
+    if not resolved_table:
+        # 只有 arXiv 允许沿用历史默认表名；其它源解析不出表名时必须报错，
+        # 否则会对 arxiv_papers 执行删除（本该删的是该源自己的表）。
+        if _norm(backend_key).lower() in ("", "arxiv"):
+            resolved_table = "arxiv_papers"
+        else:
+            raise SystemExit(
+                f"[FATAL] 无法为 backend={backend_key} 解析待清理的表名："
+                "请设置 SUPABASE_PAPERS_TABLE 或在 config.yaml 的 source_backends 中配置。"
+                "拒绝回退到 arxiv_papers，以免误删 arXiv 数据。"
+            )
     return {
         "url": _norm(url) or _norm(backend.get("url")),
-        "papers_table": _norm(papers_table) or _norm(backend.get("papers_table")) or "arxiv_papers",
+        "papers_table": resolved_table,
         "schema": _norm(schema) or _norm(backend.get("schema")) or "public",
     }
 

@@ -25,8 +25,6 @@ def main() -> None:
 
     run_date = str(args.run_date or TODAY_STR).strip() or TODAY_STR
     os.environ["DPR_RUN_DATE"] = run_date
-    cleanup_backend(backend_key="biorxiv", retention_days=args.retention_days, skip_cleanup=args.skip_cleanup)
-
     raw_path = str(args.raw_input or "").strip() or default_raw_path("biorxiv_papers", run_date)
     if not os.path.isabs(raw_path):
         raw_path = os.path.abspath(raw_path)
@@ -53,6 +51,9 @@ def main() -> None:
     if str(args.embed_model or "").strip():
         init_cmd += ["--embed-model", str(args.embed_model).strip()]
     run_step("Maintain bioRxiv", init_cmd)
+    # 清理必须在同步成功之后执行：run_step 失败会抛异常，
+    # 从而避免「抓取失败/零结果时只删不补」把表逐日削空。
+    cleanup_backend(backend_key="biorxiv", retention_days=args.retention_days, skip_cleanup=args.skip_cleanup)
 
 
 if __name__ == "__main__":

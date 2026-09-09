@@ -61,6 +61,44 @@
       display: none !important;
     }
 
+    .dpr-initial-error {
+      width: min(460px, calc(100vw - 40px));
+      margin: 15vh auto 0;
+      padding: 20px;
+      box-sizing: border-box;
+      border: 1px solid #fecaca;
+      border-radius: 8px;
+      background: #fff;
+      color: #334155;
+      box-shadow: 0 16px 42px rgba(15, 23, 42, 0.12);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    .dpr-initial-error-title {
+      margin-bottom: 8px;
+      color: #991b1b;
+      font-size: 17px;
+      font-weight: 700;
+    }
+
+    .dpr-initial-error-detail {
+      margin-bottom: 14px;
+      color: #64748b;
+      font-size: 13px;
+      line-height: 1.6;
+      overflow-wrap: anywhere;
+    }
+
+    .dpr-initial-error-retry {
+      border: 1px solid #cbd5e1;
+      border-radius: 6px;
+      padding: 7px 12px;
+      background: #f8fafc;
+      color: #1e293b;
+      cursor: pointer;
+      font-size: 13px;
+    }
+
     .dpr-initial-loading-card {
       width: min(420px, 92vw);
       box-sizing: border-box;
@@ -108,6 +146,46 @@
         splash.hidden = true;
       }
     };
+    window.DPRShowInitialLoadError = function (error) {
+      var app = document.getElementById('app');
+      var secretGate = document.getElementById('secret-gate-overlay');
+      window.DPRHideInitialSplash();
+      if (secretGate) {
+        secretGate.classList.add('secret-gate-hidden');
+        secretGate.style.display = 'none';
+      }
+      if (!app) return;
+
+      app.removeAttribute('data-dpr-pending');
+      app.textContent = '';
+
+      var panel = document.createElement('div');
+      panel.className = 'dpr-initial-error';
+      panel.setAttribute('role', 'alert');
+
+      var title = document.createElement('div');
+      title.className = 'dpr-initial-error-title';
+      title.textContent = '页面资源加载失败';
+
+      var detail = document.createElement('div');
+      detail.className = 'dpr-initial-error-detail';
+      detail.textContent = error && error.message
+        ? error.message
+        : '本地静态资源暂时无法读取，请重新加载。';
+
+      var retry = document.createElement('button');
+      retry.type = 'button';
+      retry.className = 'dpr-initial-error-retry';
+      retry.textContent = '重新加载';
+      retry.addEventListener('click', function () {
+        window.location.reload();
+      });
+
+      panel.appendChild(title);
+      panel.appendChild(detail);
+      panel.appendChild(retry);
+      app.appendChild(panel);
+    };
     window.DPRPrefetchDocsifyShell = function () {
       try {
         var hash = String((window.location && window.location.hash) || '');
@@ -141,7 +219,11 @@
     window.DPRPrefetchDocsifyShell();
     document.addEventListener('dpr-docsify-ready', window.DPRHideInitialSplash);
     window.addEventListener('load', function () {
-      window.setTimeout(window.DPRHideInitialSplash, 300);
+      window.setTimeout(function () {
+        var app = document.getElementById('app');
+        if (app && app.hasAttribute('data-dpr-pending')) return;
+        window.DPRHideInitialSplash();
+      }, 300);
     });
   </script>
 
@@ -326,9 +408,10 @@
         return window.DPR_ASSET_JSON_PROMISES[key];
       }
 
-      function appendScript(path, useCdn) {
+      function appendScript(path, useCdn, localRetryCount) {
         return new Promise(function (resolve, reject) {
           var useRemoteScript = shouldLoadScriptFromCdn(path, useCdn);
+          var retries = Number(localRetryCount) || 0;
           var finished = false;
           var script = document.createElement('script');
           var timer = window.setTimeout(function () {
@@ -337,7 +420,10 @@
             script.remove();
             if (useRemoteScript) {
               console.warn('[DPR] CDN JS 加载超时，回退本地：' + path);
-              appendScript(path, false).then(resolve, reject);
+              appendScript(path, false, 0).then(resolve, reject);
+            } else if (retries < 1) {
+              console.warn('[DPR] 本地 JS 加载超时，重试：' + path);
+              appendScript(path, false, retries + 1).then(resolve, reject);
             } else {
               reject(new Error('静态脚本加载超时：' + path));
             }
@@ -346,6 +432,9 @@
           script.src = useRemoteScript
             ? cdnUrl(path, shouldLoadAppAssetFromVersionedCdn(path, useCdn))
             : localUrl(path);
+          if (!useRemoteScript && retries > 0) {
+            script.src += (script.src.indexOf('?') === -1 ? '?' : '&') + 'dpr_retry=' + Date.now();
+          }
           script.onload = function () {
             if (finished) return;
             finished = true;
@@ -359,7 +448,10 @@
             script.remove();
             if (useRemoteScript) {
               console.warn('[DPR] CDN JS 加载失败，回退本地：' + path);
-              appendScript(path, false).then(resolve, reject);
+              appendScript(path, false, 0).then(resolve, reject);
+            } else if (retries < 1) {
+              console.warn('[DPR] 本地 JS 加载失败，重试：' + path);
+              appendScript(path, false, retries + 1).then(resolve, reject);
             } else {
               reject(new Error('静态脚本加载失败：' + path));
             }
@@ -495,6 +587,12 @@
     ]).then(function () {
       document.addEventListener('dpr-docsify-ready', function loadDeferredAssetsOnce() {
         document.removeEventListener('dpr-docsify-ready', loadDeferredAssetsOnce);
+        // 首页统计是非关键增强，加载失败不能阻断设置、反馈等主功能。
+        window.DPRLoadAssets([
+          { type: 'script', path: 'app/site-stats.js' },
+        ]).catch(function (err) {
+          console.warn('[DPR] 首页统计加载失败：', err);
+        });
         window.DPRLoadAssets([
           { type: 'json', path: 'app/conference-stats.json' },
           { type: 'style', path: 'app/vendor/katex/0.16.9/dist/katex.min.css' },
@@ -502,6 +600,7 @@
           { type: 'script', path: 'app/vendor/katex/0.16.9/dist/contrib/auto-render.min.js' },
           { type: 'script', path: 'app/chat.discussion.js' },
           { type: 'script', path: 'app/subscriptions.github-token.js' },
+          { type: 'script', path: 'app/feedback.issue.js' },
           { type: 'script', path: 'app/subscriptions.smart-query.js' },
           { type: 'script', path: 'app/subscriptions.keywords.js' },
           { type: 'script', path: 'app/subscriptions.zotero.js' },
@@ -520,10 +619,7 @@
       });
     }).catch(function (err) {
       console.error('[DPR] 静态资源加载失败：', err);
-      var app = document.getElementById('app');
-      if (app) {
-        app.innerHTML = '静态资源加载失败，请刷新页面或稍后重试。';
-      }
+      window.DPRShowInitialLoadError(err);
     });
   </script>
 </body>

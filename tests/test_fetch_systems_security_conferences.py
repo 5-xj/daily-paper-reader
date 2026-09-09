@@ -42,6 +42,36 @@ class FetchSystemsSecurityConferencesTest(unittest.TestCase):
         self.assertEqual(paper["published"], "2025-07-07T00:00:00Z")
         self.assertEqual(paper["pdf_url"], "https://www.usenix.org/system/files/osdi25-demo.pdf")
 
+    def test_osdi_does_not_treat_keynote_as_paper(self):
+        base = "https://www.usenix.org/conference/osdi26/technical-sessions"
+        html = '<a href="/conference/osdi26/presentation/keynote">Talk</a><a href="/conference/osdi26/presentation/paper">Paper</a>'
+        self.assertEqual(self.mod.iter_osdi_presentation_urls(html, year=2026, base_url=base),
+                         ["https://www.usenix.org/conference/osdi26/presentation/paper"])
+
+    def test_osdi_track_label_does_not_change_paper_id(self):
+        base = '<meta name="citation_title" content="Helmsman{}">'
+        before = self.mod.parse_osdi_paper_page(base.format(''), year=2026, page_url='https://example.org/paper')
+        after = self.mod.parse_osdi_paper_page(base.format(' (Operational Systems)'), year=2026, page_url='https://example.org/paper')
+        self.assertEqual(before['id'], after['id'])
+
+    def test_ieee_2026_merges_accepted_and_csdl_without_requiring_pdf(self):
+        articles = [{"id": "article", "title": "Official Paper", "authors": [{"fullName": "Ada"}],
+                     "hasPdf": True, "isOpenAccess": False, "abstract": "Official abstract.", "fno": "x"}]
+        accepted = [{"id": "ieee-sp-2026-official-paper", "title": "Official Paper", "authors": ["Ada"],
+                     "pdf_url": "", "abstract": "", "source": "IEEE-SP-2026-Accepted"},
+                    {"id": "ieee-sp-2026-missing", "title": "Missing", "authors": ["Bob"],
+                     "pdf_url": "", "abstract": "", "source": "IEEE-SP-2026-Accepted"}]
+        with mock.patch.object(self.mod, "_fetch_ieee_sp_articles", return_value=articles) as fetch, \
+             mock.patch.object(self.mod, "_request_text", return_value="accepted"), \
+             mock.patch.object(self.mod, "parse_ieee_sp_accepted_page", return_value=accepted), \
+             mock.patch.object(self.mod, "fetch_arxiv_title_matches", return_value=[]):
+            rows = self.mod.fetch_conference("IEEE_SP", [2026])
+        fetch.assert_called_once_with("2bojuokAJK8")
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(rows[0]["id"], "ieee-sp-2026-official-paper")
+        self.assertEqual(rows[0]["abstract"], "Official abstract.")
+        self.assertEqual(rows[0]["pdf_url"], "")
+
     def test_parse_ndss_paper_page_finds_official_paper_pdf(self):
         html = """
         <h1>NDSS Paper Title</h1>
@@ -249,6 +279,41 @@ class FetchSystemsSecurityConferencesTest(unittest.TestCase):
             "https://www.computer.org/csdl/pds/api/csdl/proceedings/download-article/open/pdf",
         )
         self.assertEqual(papers[0]["abstract"], "Readable abstract.")
+
+    def test_ieee_renamed_paper_keeps_accepted_id(self):
+        accepted = [{"id": "old-id", "title": "Old Title", "authors": ["Alice", "Bob"]}]
+        articles = [{"id": "new-id", "title": "Published Title", "authors": ["Bob", "Alice"],
+                     "abstract": "Official abstract"}]
+        rows = self.mod.merge_ieee_sp_metadata(accepted, articles)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["id"], "old-id")
+        self.assertEqual(rows[0]["title"], "Published Title")
+
+    def test_ieee_missing_csdl_paper_uses_verified_author_version(self):
+        title = 'Audience Injection Attacks: A New Class of Attacks on Web-Based Authorization and Authentication Standards'
+        rows = [{'id': 'stable-id', 'title': title, 'abstract': '', 'pdf_url': ''}]
+        page = f'<h3><a href="/2025/629.pdf">{title}</a></h3><h5>Abstract</h5><p>Author abstract.</p>'
+        with mock.patch.object(self.mod, '_request_text', return_value=page):
+            self.mod.enrich_ieee_sp_author_versions(rows, year=2026)
+        self.assertEqual(rows[0]['abstract'], 'Author abstract.')
+        self.assertEqual(rows[0]['pdf_url'], 'https://eprint.iacr.org/2025/629.pdf')
+        self.assertEqual(rows[0]['id'], 'stable-id')
+
+    def test_ieee_ambiguous_author_match_does_not_discard_articles(self):
+        accepted = [{"id": "old", "title": "Old Title", "authors": ["Alice", "Bob"]}]
+        articles = [{"id": "a", "title": "New A", "authors": ["Alice", "Bob"]},
+                    {"id": "b", "title": "New B", "authors": ["Alice", "Bob"]}]
+        rows = self.mod.merge_ieee_sp_metadata(accepted, articles)
+        self.assertEqual({r["id"] for r in rows}, {"old", "a", "b"})
+
+    def test_ieee_explicit_pdf_filter_and_csdl_outage(self):
+        accepted = [{"id": "a", "title": "Paper", "pdf_url": "", "authors": ["Ada"]}]
+        with mock.patch.object(self.mod, "_fetch_ieee_sp_articles", side_effect=RuntimeError("offline")), \
+             mock.patch.object(self.mod, "_request_text", return_value="accepted"), \
+             mock.patch.object(self.mod, "parse_ieee_sp_accepted_page", return_value=accepted), \
+             mock.patch.object(self.mod, "fetch_arxiv_title_matches", return_value=[]):
+            self.assertEqual(len(self.mod.fetch_conference("IEEE_SP", [2026])), 1)
+            self.assertEqual(self.mod.fetch_conference("IEEE_SP", [2026], require_pdf=True), [])
 
     def test_parse_ieee_sp_accepted_page_extracts_titles_and_authors(self):
         html = """

@@ -20,6 +20,9 @@ SRC_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 if SRC_DIR not in sys.path:
     sys.path.insert(0, SRC_DIR)
 
+from maintain.pdf_abstract import fetch_pdf_abstract
+from maintain.conference_program import fetch_emnlp_program, program_paper_id
+
 
 SCRIPT_DIR = os.path.dirname(__file__)
 ROOT_DIR = os.path.abspath(os.path.join(SCRIPT_DIR, "..", "..", ".."))
@@ -57,6 +60,8 @@ def _get(url: str, timeout: int = 60, retries: int = 3) -> str:
             return resp.text
         except Exception as exc:
             last_error = exc
+            if isinstance(exc, requests.HTTPError) and exc.response is not None and exc.response.status_code == 404:
+                raise
             if attempt >= max(int(retries or 1), 1):
                 break
             log(f"[Anthology] retry {attempt}/{retries} url={url} error={exc}")
@@ -156,10 +161,19 @@ def fetch_anthology_paper(paper_url: str, *, source_label: str, primary_category
     pdf_url = pdf_values[0] if pdf_values else ""
     abs_node = soup.select_one("#abstract") or soup.select_one(".acl-abstract") or soup.select_one("div.card-body.acl-abstract")
     abstract = _strip_abstract_prefix(abs_node.get_text(" ", strip=True) if abs_node else "")
+    if not abstract and pdf_url:
+        try:
+            abstract = fetch_pdf_abstract(pdf_url)
+        except Exception as exc:
+            log(f"[Anthology] PDF abstract unavailable: {paper_url}: {type(exc).__name__}")
 
     source_paper_id = paper_url.rstrip("/").split("/")[-1]
+    program_year = re.fullmatch(r"(\d{4})\.emnlp-main\.\d+", source_paper_id)
+    pid = f"anthology-{source_paper_id}"
+    if program_year and int(program_year.group(1)) >= 2026:
+        pid = program_paper_id("EMNLP", int(program_year.group(1)), title)
     return {
-        "id": f"anthology-{source_paper_id}",
+        "id": pid,
         "source": source_label,
         "source_paper_id": source_paper_id,
         "doi": "",
@@ -193,7 +207,19 @@ def fetch_anthology_conference(
         for volume_key, label in volume_specs:
             volume_url = _volume_url(volume_key, year)
             log(f"[Anthology] volume={volume_url}")
-            paper_urls = collect_volume_paper_urls(volume_key, year)
+            try:
+                paper_urls = collect_volume_paper_urls(volume_key, year)
+            except requests.HTTPError as exc:
+                if conference != "EMNLP" or year < 2026 or exc.response is None or exc.response.status_code != 404:
+                    raise
+                paper_urls = []
+            if not paper_urls and conference == "EMNLP" and year >= 2026:
+                if volume_key == "emnlp-main":
+                    # 备用名单必须先通过旧年份检测；发现复制页面时中止，不生成错误年份产物。
+                    all_papers.extend(fetch_emnlp_program(year))
+                else:
+                    log(f"[Anthology] {year} Findings not published; no program fallback for Findings")
+                continue
             log(f"[Anthology] volume papers={len(paper_urls)}")
             source_label = f"{conference}-{year}-{label}"
             primary_category = f"{conference}-{year}-{label}"
