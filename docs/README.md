@@ -1,57 +1,115 @@
-<div class="dpr-home-notice-card">
-  <h3 class="dpr-home-notice-title">🚀 Start Here</h3>
-  <ul class="dpr-home-notice-list">
-    <li><a href="#/tutorial/README">使用教程</a></li>
-  </ul>
+<div class="dpr-home-notice-card dpr-home-panel">
+  <div class="dpr-home-notice-header dpr-home-panel-header">
+    <h3 class="dpr-home-notice-title">公告与更新</h3>
+    <a class="dpr-home-notice-tutorial" href="#/tutorial/README">使用教程 <span aria-hidden="true">›</span></a>
+  </div>
+  <div class="dpr-home-notice-entry">
+    <time class="dpr-home-notice-date" datetime="2026-09-09">09.09</time>
+    <div>
+      <strong class="dpr-home-notice-entry-title">ECCV 2026 已更新</strong>
+      <span class="dpr-home-notice-entry-summary">已收录 2,834 篇论文，摘要与 PDF 链接齐全，可按会议年份检索。EMNLP 2026 暂待可信官方数据开放。</span>
+    </div>
+  </div>
+  <div class="dpr-home-notice-entry">
+    <time class="dpr-home-notice-date" datetime="2026-09-05">09.05</time>
+    <div>
+      <strong class="dpr-home-notice-entry-title">CVPR 2026 已更新</strong>
+      <span class="dpr-home-notice-entry-summary">已收录 CVPR 2026 官方 Open Access 论文 4,042 篇，可在会议检索中查看。EMNLP 2026 预计于 10 月中下旬更新，具体以官方论文集开放时间为准。</span>
+    </div>
+  </div>
+  <div class="dpr-home-notice-entry">
+    <time class="dpr-home-notice-date" datetime="2026-08-28">08.28</time>
+    <div>
+      <strong class="dpr-home-notice-entry-title">区间日报可正常点开</strong>
+      <span class="dpr-home-notice-entry-summary">长时间窗日报会挂在结束日那天的日历格上，此前点击没有反应，现在可以正常展开查看。</span>
+    </div>
+  </div>
+  <div class="dpr-home-site-stats" data-dpr-site-stats hidden aria-live="polite">
+    <span>今天有 <strong class="dpr-home-site-stat-value" data-dpr-daily-readers>--</strong> 人在看论文</span>
+    <span class="dpr-home-site-stat-separator" aria-hidden="true">·</span>
+    <span>昨天有 <strong class="dpr-home-site-stat-value" data-dpr-yesterday-readers>--</strong> 人在看论文</span>
+    <span class="dpr-home-site-stat-separator" aria-hidden="true">·</span>
+    <span>已有 <strong class="dpr-home-site-stat-value" data-dpr-fork-count>--</strong> 人加入 Daily Paper Reader</span>
+    <span class="dpr-home-history">
+      <button type="button" class="dpr-home-history-trigger" data-dpr-history-trigger aria-label="查看最近 14 天阅读趋势"><span aria-hidden="true">🔍</span></button>
+      <span class="dpr-home-history-popover" data-dpr-history-popover role="tooltip">
+        <span class="dpr-home-history-header">近 14 天阅读趋势</span>
+        <span class="dpr-home-history-meta">
+          <span data-dpr-history-range>--</span>
+          <span>峰值 <strong data-dpr-history-peak>--</strong></span>
+        </span>
+        <span class="dpr-home-history-chart" data-dpr-history-chart></span>
+      </span>
+    </span>
+  </div>
 </div>
 
-## 每次日报
-- 最新运行日期：2026-09-08
-- 运行时间：2026-09-08 23:06:01 UTC
-- 运行状态：成功
-- 本次总论文数：8
-- 精读区：3
-- 速读区：5
+<div class="dpr-home-dashboard-grid">
+<section class="dpr-home-dashboard-card dpr-home-report-card">
+  <div class="dpr-home-dashboard-header">
+    <div>
+      <span class="dpr-home-dashboard-kicker">2017-06-12</span>
+      <h3 class="dpr-home-dashboard-title">今日汇总</h3>
+    </div>
+    <strong class="dpr-home-dashboard-count">共 1 篇</strong>
+  </div>
+  <dl class="dpr-home-dashboard-stats">
+    <div class="dpr-home-dashboard-stat"><dt>累计更新</dt><dd>1 次</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>0</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>1</dd></div>
+  </dl>
+  <p class="dpr-home-dashboard-body">最近更新：历史补齐<br>状态：成功</p>
+</section>
+<section class="dpr-home-dashboard-card dpr-home-brief-card">
+  <div class="dpr-home-dashboard-header">
+    <div>
+      <span class="dpr-home-dashboard-kicker">合并后生成</span>
+      <h3 class="dpr-home-dashboard-title">今日简报</h3>
+    </div>
+    <strong class="dpr-home-dashboard-count">AI</strong>
+  </div>
+  <div class="dpr-home-dashboard-body">
+<p>今日共生成 1 篇推荐（精读 0 篇，速读 1 篇）</p>
+<p>速读：《attention is all you need》</p>
+<p>这些结果覆盖了当下较热的方向，建议先看精读区论文的关键问题与方法。</p>
+  </div>
+</section>
+<section class="dpr-home-dashboard-card dpr-home-deep-card">
+  <div class="dpr-home-dashboard-header">
+    <div>
+      <span class="dpr-home-dashboard-kicker">今日累计</span>
+      <h3 class="dpr-home-dashboard-title">精读推荐</h3>
+    </div>
+    <strong class="dpr-home-dashboard-count">0 篇</strong>
+  </div>
+  <div class="dpr-home-dashboard-body">
+<p class="dpr-home-dashboard-empty">今日暂无推荐。</p>
+  </div>
 
-### 今日简报（AI）
-今日精读聚焦深度学习与稀疏建模的神经符号回归，以及连续优化与离散符号恢复的SMILE方法，两者均获9分高评价。  
-最值得关注的方向是“神经符号回归”的强强组合，以及LLM多样化解空间探索与文本转SQL的内存替代训练思路。  
-建议优先精读那两篇9分论文，速读篇目可留作扩展视野。
-- 详情：[/202609/08/README](/202609/08/README)
+</section>
+<section class="dpr-home-dashboard-card dpr-home-skim-card">
+  <div class="dpr-home-dashboard-header">
+    <div>
+      <span class="dpr-home-dashboard-kicker">今日累计</span>
+      <h3 class="dpr-home-dashboard-title">速读推荐</h3>
+    </div>
+    <strong class="dpr-home-dashboard-count">1 篇</strong>
+  </div>
+  <div class="dpr-home-dashboard-body">
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="attention is all you need">attention is all you need</span></li></ul>
+  </div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">transformer <strong>1</strong></span></div>
+</section>
+</div>
 
-### 精读区论文标签
-1. [Neural Symbollic Regression Using Deep Learning and Sparse Modelling](/202609/08/2609.01102v1-neural-symbollic-regression-using-deep-learning-and-sparse-modelling)  
-   标签：评分：9.0/10、query:sr
-   evidence：提出神经符号回归方法，从数据中自动发现数学表达式
-2. [SMILE: Bridging Continuous Optimization and Discrete Symbolic Recovery](/202609/08/2609.04639v1-smile-bridging-continuous-optimization-and-discrete-symbolic-recovery)  
-   标签：评分：9.0/10、query:sr
-   evidence：提出从数据中发现闭式表达式的符号回归框架，是符号回归知识发现的核心研究。
-3. [When LLM Meets Tree Search: A Systematic View of Inference as Search in Large Language Models](/202609/08/2608.30395v1-when-llm-meets-tree-search-a-systematic-view-of-inference-as-search-in-large-language-models)  
-   标签：评分：8.0/10、query:ad
-   evidence：将大模型推理系统化综述为树搜索，是语言模型引导启发式搜索的重要基础
-
-### 速读区论文标签
-1. [Answer Probing-Guided Search for Diverse Solution Exploration of LLMs](/202609/08/2608.30345v1-answer-probing-guided-search-for-diverse-solution-exploration-of-llms)  
-   标签：评分：7.0/10、query:ad
-   evidence：面向LLM多样化解探索的答案探测引导搜索，与面向科学发现的启发式搜索相关
-2. [Local-to-Global Sentence-Level Graph Reranking for Scientific Synthesis](/202609/08/2608.30525v1-local-to-global-sentence-level-graph-reranking-for-scientific-synthesis)  
-   标签：评分：6.0/10、query:rerank-train
-   evidence：提出句子级图重排序，建模科学文献候选间关系，与列表式重排序方法密切相关
-3. [Replacing Training with Memory: Listwise Selection for Text-to-SQL](/202609/08/2609.00834v1-replacing-training-with-memory-listwise-selection-for-text-to-sql)  
-   标签：评分：6.0/10、query:rerank-train
-   evidence：Text-to-SQL列表式候选选择，与列表式重排序器及训练目标研究相关
-4. [From Language to Behavior: Scaling Sequence Transformers for Industrial Recommendation Ranking with Rec-Native Designs](/202609/08/2609.01240v1-from-language-to-behavior-scaling-sequence-transformers-for-industrial-recommendation-ranking-with-rec-native-designs)  
-   标签：评分：6.0/10、query:rerank-train
-   evidence：面向工业推荐排序的排序模型训练技术
-5. [Distill Globally, Adapt Locally: Reasoning Distillation and Product-Type Test-Time Training for Scalable Trade-Up Recommendation](/202609/08/2609.05363v1-distill-globally-adapt-locally-reasoning-distillation-and-product-type-test-time-training-for-scalable-trade-up-recommendation)  
-   标签：评分：6.0/10、query:rerank-train
-   evidence：将大模型推理蒸馏至紧凑成对分类器并用对齐与对比损失训练；可作为重排器训练方法迁移
-
-
-<div class="dpr-home-promo-card">
-  <h3 class="dpr-home-promo-title">💬 社区与支持</h3>
-  <ul class="dpr-home-promo-list">
-    <li>欢迎 Star / Fork / Issue / PR</li>
-    <li>QQ群：583867967（欢迎交流，已有：1151人）</li>
-  </ul>
+<div class="dpr-home-promo-card dpr-home-panel">
+  <div class="dpr-home-panel-header">
+    <h3 class="dpr-home-promo-title">社区与支持</h3>
+  </div>
+  <p class="dpr-home-promo-copy">欢迎通过 Star、Fork、Issue 或 PR 一起完善 Daily Paper Reader。</p>
+  <div class="dpr-home-promo-meta">
+    <span>QQ群 <strong>583867967</strong></span>
+    <span class="dpr-home-promo-separator" aria-hidden="true">·</span>
+    <span>已有 <strong>1,491</strong> 人参与交流</span>
+  </div>
 </div>
