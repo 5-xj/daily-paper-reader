@@ -33,6 +33,7 @@ window.SubscriptionsManager = (function () {
   const selectedConferenceYearPairs = new Set();
   let resetContentBtn = null;
   let resetContentMsgEl = null;
+  let resetContentPending = false;
   let adminDailyTabBtn = null;
   let adminConferenceTabBtn = null;
   let adminDailyPanel = null;
@@ -1140,7 +1141,8 @@ window.SubscriptionsManager = (function () {
     return true;
   };
 
-  const runResetContent = (msgEl) => {
+  const runResetContent = async (msgEl) => {
+    if (resetContentPending) return;
     if (String(window.DPR_ACCESS_MODE || '') !== 'full') {
       if (msgEl) {
         msgEl.textContent = '未检测到完整登录权限，危险操作未开启。';
@@ -1168,10 +1170,34 @@ window.SubscriptionsManager = (function () {
       return;
     }
 
-    window.DPRWorkflowRunner.runWorkflowByKey('reset-content');
+    resetContentPending = true;
+    if (resetContentBtn) resetContentBtn.disabled = true;
+    const warnBeforeDispatch = (event) => {
+      event.preventDefault();
+      event.returnValue = '';
+    };
+    window.addEventListener('beforeunload', warnBeforeDispatch);
     if (msgEl) {
-      msgEl.textContent = '已发起论文内容重置任务。';
-      msgEl.style.color = '#080';
+      msgEl.textContent = '正在提交论文内容重置任务，请勿关闭页面…';
+      msgEl.style.color = '#666';
+    }
+    try {
+      const accepted = await window.DPRWorkflowRunner.runWorkflowByKey('reset-content');
+      if (msgEl) {
+        msgEl.textContent = accepted === true
+          ? '论文内容重置任务已提交，请在工作流面板查看进度。'
+          : '重置任务提交未获确认，请在工作流面板检查状态。';
+        msgEl.style.color = accepted === true ? '#080' : '#c00';
+      }
+    } catch (error) {
+      if (msgEl) {
+        msgEl.textContent = `重置任务提交失败：${error.message || error}`;
+        msgEl.style.color = '#c00';
+      }
+    } finally {
+      resetContentPending = false;
+      if (resetContentBtn) resetContentBtn.disabled = false;
+      window.removeEventListener('beforeunload', warnBeforeDispatch);
     }
   };
 
