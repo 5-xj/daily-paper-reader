@@ -1,0 +1,290 @@
+Title: Efficient Constant Optimization for Symbolic Regression with GPU-Accelerated Tree-Based Genetic Programming
+
+URL Source: https://arxiv.org/pdf/2609.03352v1
+
+Published Time: Fri, 04 Sep 2026 00:36:28 GMT
+
+Number of Pages: 7
+
+Markdown Content:
+# Efficient Constant Optimization for Symbolic Regression with GPU-Accelerated Tree-Based Genetic Programming 
+
+Hao Mao ∗ Xu T. Liu †‡ Shuai Lu § Peng Zhao ¶ Wenzheng Jiang ∥ Yuntian Chen ∗∗ ∗The Hong Kong Polytechnic University, Hong Kong SAR, China †University of Washington, USA 
+
+‡Amazon Web Services, USA §Jiangxi University of Finance and Economics, China ¶EEO Education Technology, China 
+
+∥Chongqing Medical University, China ∗∗ Eastern Institute of Technology, Ningbo, China 
+
+Abstract —Constant optimization refines the numerical coeffi-cients of candidate expressions in tree-based genetic program-ming for symbolic regression. But its per-generation cost has led modern GPU-accelerated frameworks to omit it or restrict it to lightweight forms. We present a GPU-resident, batched Levenberg–Marquardt solver that optimizes constants across a structurally heterogeneous population of expression trees using a fixed number of population-wide CUDA launches per iteration. Reverse-mode automatic differentiation assembles the per-tree Jacobian in one backward sweep, making the dominant per-iteration cost independent of the number of constants per tree, and a double-precision delivery guard guarantees that returned constants are never worse than their initial values. On early-generation populations, the solver sustains up to 5.1×10 5 trees per second on an NVIDIA A100; at a GPU-saturated benchmark configuration it delivers roughly 9.9× the throughput of Operon running on a 64-core EPYC 7763, while matching fp64-reference quality. Integrated in-process into EvoGP, the solver enables end-to-end search to recover governing equations on 10 of 18 
+
+constructed problems versus 0 for stock EvoGP. Our code is at https://github.com/TensorConv/CuSR. 
+
+I. I NTRODUCTION 
+
+Symbolic regression (SR) discovers closed-form expressions from data by jointly searching over both the structure and the numerical parameters of candidate models. The dominant approach is tree-based genetic programming (TGP), which evolves a population of expression trees through fitness-based selection and genetic operators such as subtree crossover and mutation. However, genetic operators modify tree topol-ogy and are ineffective at fine-tuning real-valued constants; consequently, a structurally correct expression may receive poor fitness because its numerical coefficients are suboptimal. Constant optimization (CO) addresses this by solving, for each fixed tree, a continuous nonlinear least-squares subproblem via local optimization, typically Levenberg–Marquardt (LM). The tension between the benefit of CO and its computational cost is reflected in the design of modern SR systems. PySR, a Julia-based framework on CPU, applies BFGS optimization with a restricted iteration budget per generation to control overhead [1]. Operon, a high-performance C++ library, inte-grates LM constant optimization but operates within CPU-bound throughput constraints [2]. EvoGP, a GPU-based TGP framework, achieves population-level parallelism through ten-sorized tree representations and GPU-resident evolutionary op-erators, yielding substantial gains in evaluation throughput [3]. Critically, however, EvoGP does not natively support constant optimization, leaving a gap between its structural search and the precision needed to recover governing equations with inner constants: coefficients that sit inside a nonlinear function. Closing this gap is not a straightforward port of exist-ing CPU solvers. In a GPU-resident evolutionary loop, off-GPU constant optimization would incur repeated host–device data transfers that negate the throughput advantage of GPU acceleration. The workload is further complicated by struc-tural heterogeneity: different expression trees contain different numbers of constants and may require different numbers of optimization iterations, which is incompatible with the uniform batched execution model that GPU architectures demand. In this paper, we address these challenges by designing a GPU-resident, batched LM solver purpose-built for the hetero-geneous CO workload in TGP-based symbolic regression, and integrating it directly into EvoGP so that constant optimization runs entirely on the GPU within each generation. Our method co-designs the optimization kernels with the tree evaluation pipeline. A reverse-mode automatic differentiation pass builds the per-tree Jacobian in a single backward sweep. The LM loop executes as a fixed number of population-wide CUDA kernel launches per iteration, and a double-precision delivery guard certifies that the resulting constants are never worse than their initial values. In end-to-end searches on problems constructed to require nonlinear inner-constant fitting, EvoGP with in-loop constant optimization recovers the true governing equations that stock EvoGP does not. To the best of our knowledge, this is the first work to bring batched, second-order constant optimization fully onto the GPU for tree-based symbolic regression. Below are our main contributions. 1) We present a GPU-resident batched second-order LM primitive that optimizes the constants of a struc-turally heterogeneous population in a fixed number of population-wide CUDA launches per iteration; reverse-mode automatic differentiation keeps the dominant per-iteration cost independent of per-tree constant count, and a double-precision delivery guard certifies that constants are never worse than their initial values (Section III). 2) We integrate this primitive in-process into EvoGP, elim-inating per-generation subprocess launches and CUDA-arXiv:2609.03352v1 [cs.NE] 3 Sep 2026 context rebuilds so that constant optimization runs inside the search loop; applying it every fifth generation is statistically indistinguishable from applying it every generation (Sections III-E and IV-E). 3) We build a controlled benchmark for constant optimiza-tion (heterogeneous populations calibrated to real GP runs, with known near-optimal targets, solved identically on CPU and GPU), and on constructed inner-constant problems we show that the in-loop GPU solver recovers governing equations that structural evolution alone does not (Sections IV-B and IV-E). II. B ACKGROUND AND RELATED WORKS 
+
+We introduce the notation used throughout and review prior work on tree-based genetic programming, constant optimiza-tion, and computational methods for symbolic regression. 
+
+A. Tree-Based GP and Constant Optimization 
+
+The dataset for symbolic regression is denoted as D =
+
+{(xi, y i)}Ni=1 , where xi ∈ Rd is the input vector, yi ∈ R is the target value, N is the number of samples, and d is the number of input variables. An expression is represented by a tree T ,where internal nodes are functions or operators and leaf nodes are variables or constants. The function set is denoted as F,the terminal set is denoted as T , and the set of real-valued constants in T is denoted as cT ∈ RKT , where KT is the number of constants in the tree. For a given tree T , the expression evaluated on an input vector x is written as fT (x; cT ). The symbolic regression objective considered in this paper is to find both a tree structure and its constants by minimizing the prediction loss: 
+
+min 
+
+> T, cT
+
+L(T, cT ) = 1
+
+N
+
+> N
+
+X
+
+> i=1
+
+(fT (xi; cT ) − yi)2 . (1) The structure T is discrete and changes through genetic programming operators, while cT is continuous and can be refined by numerical optimization. In a population-based al-gorithm, the population at generation g is denoted as P(g) =
+
+{T (g)1 , T (g)2 , . . . , T (g) 
+
+> M
+
+}, where M is the population size. Tree-based genetic programming (TGP) is a common rep-resentation for symbolic regression. Each individual in the population is an expression tree [4], [5]. During evolution, individuals are selected according to fitness, and new indi-viduals are generated by genetic operators such as subtree crossover, subtree mutation, point mutation, and reproduction. Since a tree directly corresponds to a mathematical expression, TGP can search over flexible nonlinear structures and produce readable analytic forms. Compared with regression methods that assume a fixed model family, TGP searches over model structure and model size. This flexibility makes it suitable for scientific discovery and interpretable machine learning, where the expression is expected to be compact and meaningful rather than only accurate [4], [6]. Closely related is the data-driven discovery of governing differential equations, where symbolic and evolu-tionary methods search over equation structure while fitting its coefficients [7]–[9]. However, TGP also faces two computa-tional difficulties. First, fitness evaluation is expensive because each candidate expression must be evaluated on all training samples. Second, evolutionary operators mainly change tree structure and are not efficient local optimizers for real-valued constants. Therefore, a structurally promising tree may receive a poor fitness value if its constants are inaccurate [5], [10]. To address this issue, constant optimization is often intro-duced into GP-based symbolic regression. For a fixed tree structure T , constant optimization solves: 
+
+c∗ 
+
+> T
+
+= arg min 
+
+> cT
+
+1
+
+N
+
+> N
+
+X
+
+> i=1
+
+(fT (xi; cT ) − yi)2 . (2) Previous studies have shown that numerical optimization meth-ods, such as nonlinear least-squares optimization and evolu-tionary strategies, can improve fitted expressions and provide a more informative fitness signal for selection [10]–[12]. At the same time, constant optimization is not a trivial add-on. Applying local optimization to every individual can introduce overhead, especially when trees have different structures and constant counts [11]; it is also often ill-conditioned [13]. 
+
+B. Computational Approaches to Symbolic Regression 
+
+Traditional symbolic regression systems are implemented on CPUs. CPU-based implementations provide flexible control flow and can use mature numerical optimization libraries, making them suitable for evaluating expression trees and applying individual-specific constant optimization [1], [2]. However, evaluating a population over many training samples remains computationally expensive, even when multithreading or vectorized execution is used [14], [15]. The main cost of TGP-based symbolic regression comes from evaluating expression trees over many samples. This pattern provides parallelism, making GPU acceleration at-tractive. GPU-based GP and symbolic regression systems accelerate program evaluation and population-level fitness computation through CUDA-style parallel execution or GPU-resident workflows [3], [16]–[19]. These systems show that high performance depends not only on the GPU, but also on data layouts and evaluation kernels that reduce irregular memory access and avoid CPU–GPU synchronization [20]. Most GPU-accelerated TGP systems focus on structural evolution and fast fitness evaluation [3], [19]. Constant op-timization is a different workload: calling a local optimizer per expression, as CPU systems do, fits the GPU poorly, since trees carry different numbers of constants and repeated host–device transfer erodes the benefit of GPU acceleration. Constant optimization for GPU-based TGP therefore needs a batched, population-compatible design. The most related GPU-based symbolic regression system is Kozax [21], a JAX-based genetic-programming framework that supports numerical constant fitting. However, its constant optimization is an optional, first-order component. In contrast, this paper focuses on constant optimization itself. We design a GPU-compatible second-order constant-optimization kernel that refines constants for heterogeneous expression trees while preserving the throughput advantage of GPU-accelerated tree-based genetic programming. III. B ATCHED CONSTANT OPTIMIZATION FOR 
+
+HETEROGENEOUS TREES 
+
+This section develops a GPU-resident, batched LM primitive that fits constants for an entire population of trees at once. We motivate the design first, then build it up from its contract to its deployment inside EvoGP. 
+
+A. Motivation 
+
+EvoGP touches constants only through random initialization and mutation. A tree with the right structure can still lose: unfit constants keep its loss high, and selection discards it for a bloated approximation, not the true formula. Fitting constants is solved for one tree. It is not solved for a population, every generation. Our goal is to make constant optimization a batched GPU primitive, cheap enough to run for every tree in every generation of the search. 
+
+B. Proposed Constant-Optimization Workflow 
+
+Here is our proposed constant-optimization workflow, as illustrated in Fig. 1. We treat the population, not the single tree, as the unit of constant optimization input: one call to a GPU-resident primitive fits the constants of all M trees. In Fig. 1, the primitive takes a population of M expression trees 
+
+T1, . . . , T M , a per-tree vector of initial constants c0 
+
+> m
+
+∈ RKm ,where m ∈ { 1, . . . , M } and Km is the constant count of Tm,and a per-tree target ym over a shared set of N input points 
+
+X. The population shares only these input points X, not initial constants or target ym. Once the solve is underway, each tree also converges at its own pace. Each call to the primitive runs in three stages. It first encodes the trees into a structure-of-arrays batch layout: per-node and per-tree fields are kept in separate, contiguous arrays across the whole population. Second, a batched LM loop advances all trees together: each iteration builds the Jacobian of every tree, solves its damped normal equations, accepts or rejects its trial step. Third, before returning, a double-precision delivery guard re-evaluates the loss of every tree. The output is the fitted constants and a per-tree status: converged, failed, or capped at the iteration limit. It also has one guarantee: evaluated in double precision (fp64), every tree’s delivered constants are never worse than its initial ones. Any tree whose fit ends worse or non-finite is rolled back to its initial values. Trees without constants ( Km = 0 ) pass through untouched, and the tree structure itself is never modified, only its constants. 
+
+C. GPU-Batched Levenberg–Marquardt 
+
+We present the GPU-batched LM loop as Algorithm 1. The constant values live outside the tree structure: the whole population’s constants sit in one flat vector, addressed by a per-tree offset plus a within-tree index. The solver updates only this vector; the structure arrays are uploaded once and never rewritten. Each tree in the batch is a four-field record: node offset, node count, constant offset, and constant count Km.
+
+Algorithm 1: GPU-batched Levenberg–Marquardt                                                                                                                                                     
+
+> In :node/const. buffers; c0
+> m;X, {ym};λ0;tmax
+> Out: constants cmand status m,m∈ { 1, . . . , M }
+> 1cm←c0
+> m;λm←λ0; status m←active ( Km=0 : skip);
+> 2ℓ⋆m←loss( cm);// batched eval; fills rm
+> 3for t←1to tmax do // outer loop on host
+> 4if no tree is active then break ;
+> 5parallel for active tree m∈ { 1, . . . , M }do
+> 6parallel for data row i∈ { 1, . . . , N }do
+> 7Jm[i, 1: Km]←
+> BUILD JACOBIAN ROW (Tm,cm,xi);
+> 8parallel for active tree mdo
+> 9Am←J⊤
+> mJm;gm←J⊤
+> mrm;// reduce over rows
+> 10 parallel for active tree mdo
+> 11 solve  Am+λmdiag Am
+> δm=−gm;
+> // Cholesky; non-PD ⇒fail
+> 12 parallel for active tree mdo
+> 13 parallel for data row ido
+> 14 em,i ←fTm(xi;cm+δm)−yi
+> 15 ℓm←12
+> P
+> ie2
+> m,i ;// reduce
+> 16 foreach active tree mdo // host code
+> 17 if ℓm≤ℓ⋆mthen
+> 18 cm←cm+δm;ℓ⋆m←ℓm;λm←0.1λm;
+> 19 else
+> 20 λm←10 λm;
+> 21 status m←converged / failed / active;
+> 22 parallel for active tree mdo
+> 23 refresh rm;
+> 24 return cm, status m
+
+Trees of any shape are just different ranges inside the same arrays, and this is what lets a heterogeneous population share one batched launch. In the tree-walking stages (evaluation and Jacobian construction), one warp serves one tree and its 32 lanes split the N data rows; the small per-tree solve runs as one thread per tree. Each tree allows at most 32 constants, a 64-deep operand stack, and a 128-node tape for reverse-mode automatic differentiation (AD), all compile-time limits that a rebuild can raise. The solver reads only this buffer format and does not care which engine produced the trees; adding a new source needs only a thin host-side converter into this layout. Each LM iteration builds every tree’s Jacobian Jm ∈
+
+RN ×Km of the residual rm = fTm (X; cm) − ym at Line 7, one row per data point and one column per constant, then solves the damped normal equations at Line 11 and accepts or rejects the trial step at Line 17. How each row of Jm is built decides how the build cost scales with the tree’s constant count Km. We build it in three ways, compared in Table I: finite differences (FD), AD in forward mode (fwd AD) and reverse mode (rev AD). Rev AD is backpropagation over the expression tree and matches the shape of the problem: one scalar residual out, Km constants in. One taped forward walk plus one backward walk delivers the whole row at a cost independent of Km, the cheap-gradient property of reverse mode [22]. The tape records at most two local partials per node in per-lane scratch. The backward multiply uses a zero guard: the product is taken as zero when either factor is exactly 1. Input population of trees                                             
+
+> T1T2T3· · · TM
+> +
+> xc0
+> ∗
+> c0exp
+> ∗
+> c0x/
+> sin c0
+> +
+> c0∗
+> c0x
+> shared inputs X
+> per-tree targets ym
+> 2. Batched constant-optimization primitive (LM)
+> T1T2T3· · · TM
+> eval + rev-AD JJ⊤J, J⊤r
+> damped solve (Km×Km)trial loss accept / reject trial cm
+> state update; next LM iteration
+> per-tree state (kept across iterations):
+> λm,status m,accepted cm
+> fp64 delivery guard
+> 3. Guarded output population
+> T1T2T3· · · TM
+> +
+> xc∗
+> ∗
+> c∗exp
+> ∗
+> c∗x/
+> sin c∗
+> +
+> c∗∗
+> c∗x
+> per-tree status m
+> xvariable x
+> operator (+ ,−,×,÷,sin ,exp , . . . )
+> cconstant c(the only part the optimizer updates)
+
+Fig. 1. The batched constant-optimization primitive. Left: a population of M heterogeneous expression trees, each with its own initial constants c0 
+
+> m
+
+(red). Middle: a batched Levenberg–Marquardt loop advances all trees together. Right: a double-precision delivery guard runs before the fitted constants and per-tree status are returned. TABLE I JACOBIAN CONSTRUCTION MODES . W ALKS ARE PER DATA ROW ; BUILD COST IS PER TREE PER LM ITERATION .               
+
+> mode row construction walks/row build cost per-lane extra FD perturb one constant, re-walk KmO(KmN n m)128 B fwd AD 8 tangents/walk ⌈Km/8⌉O(⌈Km/8⌉N n m)2.0 KB rev AD taped fwd + bwd sweep 2O(N n m)1.25 KB
+
+zero, preventing a 0 × ∞ at a singular point from producing a NaN that poisons the whole column. This independence from Km applies only to the Jacobian construction. Under all three modes, forming J⊤
+
+> m
+
+Jm costs O(K2
+
+> m
+
+N ), and the per-tree Cholesky factorization costs O(K3
+
+> m
+
+). One LM iteration requires eight population-wide launches under all three modes, independent of M and of the trees’ Km. The Jacobian, residuals, and normal-equation matrices remain on the GPU; each iteration, the host exchanges only small per-tree state, and nothing that scales with N crosses the bus. 
+
+D. Double-Precision Delivery Guard 
+
+To retain the speed of the single-precision LM loop while protecting solution quality, we add a double-precision de-livery guard. The numerical hot path runs in single preci-sion (fp32), compiled under --use_fast_math ; trading numerical precision for throughput is common practice in high-performance GPU kernels [23]. Near singularities, the reciprocal and square-root approximations of the fast-math can yield a residual that is finite but wrong. This error can fool the accept/reject decision: a step that looks like an improvement in single precision but turns out worse in double precision. Classical treatments of optimization under inexact arithmetic adjust the evaluation precision across iterations [24], [25]. We only need to certify the final result, not every iteration. We therefore perform the check at the delivery boundary. After the loop ends, every tree’s loss is recomputed in double precision at both the delivered constants and the initial ones. Any tree whose delivered loss is non-finite or worse than its initial loss is rolled back to c0
+
+> m
+
+, its reported status and loss corrected to match. This check costs two double-precision evaluations per tree, done once after the loop, not every iteration. In double precision, delivered constants are never worse than initial ones, but the inner solve itself still runs in single precision. 
+
+E. EvoGP Integration 
+
+We integrate our CO implementation into EvoGP. Stock EvoGP samples constants from a fixed table or a bounded range but offers no mechanism for fitting them to the data; continuous inner constants — a frequency inside a sine, a decay rate inside an exponential — are therefore difficult to recover by sampling alone. Our integration closes this gap: before selection evaluates fitness, every candidate tree’s constants are fit to the data by our solver. The solver is loaded in-process by the EvoGP engine. Each generation, the constants from every tree are handed to the solver in one batched fit, and the returned values are written back; any tree whose fit does not improve keeps its inherited constants. The fit need not run every generation — invoking it every few generations preserves recovery quality at a fraction of the cost. Section IV-E quantifies the end-to-end improvement. IV. E XPERIMENTAL EVALUATION 
+
+A. Experimental Setup 
+
+Hardware Platform All GPU measurements use one NVIDIA A100-SXM4-80GB (compute capability 8.0, 80 GB HBM2e) hosted in a shared dual-socket AMD EPYC 7763 server ( 2×64 cores). The GPU is held exclusively during each run, with its SM clock locked at 1410 MHz via nvidia-smi -lgc and ECC enabled. CPU baselines run as 64 worker pro-cesses pinned to the 64 physical cores of one socket; spanning both sockets measured 38% lower Operon throughput under cross-NUMA memory-bandwidth contention. 
+
+Software Environment Kernels are built with CUDA 12.4. Library versions: Python 3.12, NumPy 2.1.3, SciPy 1.17.1 [26], [27], and pyoperon 0.6.1 (Operon rev. 5a1c937, single-precision release build) [28]; the end-to-end integration study additionally uses PyTorch 2.11 and EvoGP 0.1.0 [29]. All GPU kernels are compiled with --use_fast_math ;the fast-math safety implications are addressed by the double-precision delivery guard described in Section III-D. 
+
+Measurement Methodology Kernel time is measured on-device with CUDA events around the optimization loop itself, excluding the one-time ∼280 ms binary start-up (context creation and population load). Every configuration runs with three population seeds and three timed repetitions each, and we report medians. Headline throughput is quoted only from the occupancy-saturated regime (loop time ≥145 ms), where the median-of-repetitions throughput under locked clocks is reproducible within 0.5%. No quality number in this section relies on the solver’s own reporting: the constants delivered by every run are re-scored independently in fp64 on the host. 
+
+B. Workload and Compared Implementations 
+
+We evaluate the constant-optimization step under controlled conditions. Its workload is driven primarily by the population statistics, specifically its tree shapes, depths, and constant counts, rather than by the target equation alone. Standard benchmark equations often contain only a few outer coef-ficients and therefore do not represent the many inner con-stants that arise during evolutionary search. Each benchmark therefore uses a synthetic population whose distribution of tree shapes, depths, and constant counts is calibrated to snapshots from real EvoGP runs. We consider three workload regimes: early-generation pop-ulations of compact trees, late-generation populations dom-inated by bloat, and populations with many inner constants (per-tree constant counts average 1.2–6.9 and never exceed 
+
+14 ). Targets are also synthetic: each tree’s output at reference constants with 1% Gaussian noise added. This yields a known near-global optimum for every instance, enabling direct as-sessment of solution quality and identical problem setups on CPU and GPU for fair throughput comparisons. Populations range from 10 3 to 2.56 ×10 5 trees, with 100 to 10 ,000 data points per tree. All methods receive the same trees, data, and initial constants. We compare three implementations of the same second-order method: our solver (run with each of its three Jaco-bian modes), Operon as the throughput baseline, and SciPy’s 
+
+least_squares in lm mode as a double-precision quality reference and additional CPU baseline. All three implement LM updates from the same MINPACK family. Both Operon and our solver construct the Jacobian via reverse mode. The comparison therefore isolates execution strategy: CPU meth-ods optimize one tree per worker, whereas our solver advances the entire population with a fixed number of population-wide launches per iteration. We omit PySR for the same reason: it optimizes constants with BFGS, not LM, so including it would change the optimizer along with the execution strategy. 
+
+C. Overall Throughput and Scaling Results 
+
+Throughput is reported as optimized trees per second (trees/s), i.e., population size divided by optimization-loop 10 3 10 4 10 5                   
+
+> population size M(trees) 10 3
+> 10 4
+> 10 5
+> 10 6
+> throughput (trees/s)
+> 5.1×10 5
+> rev AD fwd AD FD Operon LM, CPU SciPy LM, CPU
+> Fig. 2. Constant-optimization throughput versus population size Mat
+> N=100 (early-generation workload): the three Jacobian modes and the Operon and SciPy CPU baselines. Axes are logarithmic.
+
+wall time. Fig. 2 shows the population-size scaling by sweep-ing M with a fixed N =100 on the early-generation workload; the same GPU scaling trend is observed across the remaining workload regimes. Throughput climbs from 39 ,717 trees/s at 
+
+M =10 3 to 511 ,308 trees/s at M =256 ,000 , a 12 .9× rise; growth slows with M , and the curve is still rising at the largest population measured. This scaling is the payoff of population-wide batching: the fixed cost of a launch does not depend on how many trees it covers, so a small population leaves the device undersubscribed and the fixed cost dominates, while a large population amortizes it. All three Jacobian modes exhibit the same scaling trend, and the early-generation workload is representative rather than easy: across the three structural regimes a population spans, peak throughput ranges from 2.8×10 5 trees/s on the constant-heavy regime to 6.1×10 5 on late-generation bloat. Beyond population size, throughput also depends on the number of data points per tree. As N grows from 100 to 10 4 at 
+
+M =16 ,000 , per-tree work rises 100 × while tree throughput falls only about 21 × (from 256 ,246 to 12 ,340 trees/s); the point rate meanwhile rises from 2.6×10 7 to 1.2×10 8 points/s and has not leveled off, so larger N keeps the device fuller even as fewer trees finish per second. Across the measured grid of three workloads, five popula-tion sizes, and three data-point counts, rev AD is the fastest overall: its median advantage is 1.51 × over FD and 1.11 ×
+
+over fwd AD. Cell by cell, the reverse-to-forward throughput ratio ranges from 0.95 to 1.43 : fwd AD wins narrowly where constants are few, and rev AD pulls ahead as Km grows, as the walk counts of Table I predict. So, rev AD is the default. 
+
+D. Bottleneck Explanation and In-Loop Cost 
+
+The optimization loop is neither compute-bound nor bandwidth-bound. Across the Jacobian and evaluation ker-nels, Nsight Compute speed-of-light profiles show FMA-pipe utilization at or below 15% (11% for the Jacobian kernel) and DRAM utilization below 23% and mostly under 10% .An instruction-roofline view places the kernels between 24% 
+
+and 55% of the device’s instruction-issue ceiling, and the dominant stall reasons are dependency waits and memory-latency scoreboard stalls. The loop is therefore bound by instruction issue and on-chip latency: its work consists of many short dependent walks over irregular trees, not dense arithmetic. Population-wide batching supplies the throughput here: it keeps enough independent trees in flight to hide the per-lane latency of these dependent walks. In stage-level timing, building the Jacobian is the largest stage under FD, 27 –60% of loop time (peaking at M =16 ,000 ,
+
+N =1 ,000 ); rev AD holds the same stage to 12 –28% , consis-tent with the walk counts of the two modes. Normal-equation assembly accounts for 6–15% of the loop time, and the per-tree Cholesky factorization only 2–5% . The per-iteration host round trip (constants up; step and status down) takes 5–11% 
+
+of the loop at N =1 ,000 and 11 –29% at N =100 , part of the fixed cost that dominates the small-N end. The compact, unpadded layout is the loop’s other lever, echoing how memory-efficient data layouts govern throughput in other GPU kernels [20]. Fixed-shape GPU frameworks pad every tree to a run-level node cap; padding to our 128 -node cap runs the solver 4.45 × slower on the early-generation workload at M =16 ,000 , N =1 ,000 , on identical inputs through the same binary, returning bit-identical results, so the difference is layout alone. EvoGP’s tighter configured length ( 64 nodes) pays less but cannot escape the tax: the gap between a worst-case cap and populations that here average 12 –28 nodes. Within our cap a growing tree is a longer range, while a fixed-length layout must re-pad the whole population and cannot represent trees that outgrow its cap at all. 
+
+E. Quality, Throughput, and In-Loop Integration 
+
+We measure quality on a fixed population of 1,000 EvoGP trees, solved independently by the three GPU Jacobian modes and by SciPy’s fp64 using the same data and initial constants. The GPU modes produce similar rankings: Spearman correla-tions are 0.959 between rev AD and FD and 0.995 between the two AD modes, with 95 .5% overlap in their top-10% 
+
+sets. Jacobian mode is therefore primarily a throughput choice. Compared with the SciPy reference, 86 .6–93 .8% of converged trees fall within 1.05 × of the reference loss (Table II). Since evolutionary selection depends mainly on fitness ranks, these small deviations are unlikely to materially affect which high-fitness trees survive. Table II also reports Operon’s results for reference. Operon converges in a median of five iterations and improves 45% of the trees. On this near-optimal synthetic fixture, the loss-down metric mainly reflects stopping behavior near the fp32 precision floor rather than solver quality. Having established comparable solution quality, we com-pare throughput at a representative saturated configuration. On the early-generation workload with M =16 ,000 and N =1 ,000 ,one A100 delivers 98 ,154 trees/s compared with 9,959 trees/s                          
+
+> TABLE II SHARE OF TREES WHOSE DELIVERED LOSS LANDS WITHIN THE STATED FACTOR OF THE SCI PY FP 64 REFERENCE ,AMONG TREES WHERE BOTH SOLVERS CONVERGE ;LOSS DOWN :SHARE OF TREES WITH CONSTANTS WHOSE DELIVERED LOSS IMPROVES ON THE INITIAL VALUE .
+> within factor of reference mode 1.05 ×2×10 ×loss down FD 93.8% 95.7% 99.7% 94.0% fwd AD 86.6% 90.0% 100.0% 93.3% rev AD 86.6% 90.0% 100.0% 93.3% Operon 73.9% 75.0% 75.9% 45.0%
+
+for Operon on one EPYC 7763 socket and 5,310 trees/s for the SciPy reference, corresponding to speedups of about 9.9×
+
+and 18 ×. The advantage over Operon depends on the number of data points per tree: at fixed M =16 ,000 , it narrows from 
+
+12 .8× at N =100 to 2.7× at N =10 4. This narrowing does not indicate reduced GPU efficiency: over the same range, our point-evaluation throughput rises from 25 .6 to 123 .4 million points/s. Instead, Operon benefits more from amortizing fixed per-tree overheads as N increases. The results so far establish standalone quality and through-put. We integrate the GPU LM solver directly into EvoGP without changing the search. We construct 18 test problems whose true equations each place a constant inside a nonlinear function. We judge recovery by symbolic equivalence to the true equation rather than R2, which reflects only numerical closeness of fit, not whether the structure is recovered. Stock EvoGP can reach R2 > 0.999 with bloated expressions that do not recover the real equation. With constant optimization, the same search recovers 10 of the 18 problems; without it, none (exact McNemar test over problems, p=2 .0×10 −3). The cost of this step can be amortized further: constant optimization need not run every generation, and applying it every fifth generation recovers almost as many equations as every genera-tion ( p=0 .73 ). This section implements the simplest in-process integration; jointly optimizing cadence with the evolutionary search remains future work. V. C ONCLUSION 
+
+We presented a GPU-resident, batched Levenberg– Marquardt solver that makes constant optimization practical inside GPU-accelerated tree-based genetic programming. On early-generation populations, the solver sustains up to 5.1 × 10 5 trees/s on an A100; at a saturated reference cell it delivers about 9.9× the throughput of Operon on a 64-core EPYC 7763, matching fp64-reference quality. Integrated in-process into EvoGP, the search recovers the governing equations on 10 of 18 inner-constant problems; stock EvoGP recovers none. These results remove a key CPU-side bottleneck in GPU-accelerated tree-based genetic programming, enabling structure search and nonlinear constant fitting to execute together on GPU. ACKNOWLEDGMENT 
+
+This work was partially supported by the National Natural Science Foundation of China under Grant No. 12572266. The authors gratefully acknowledge the support provided for this research. This work is not related to Xu T. Liu’s position at Amazon. REFERENCES [1] M. Cranmer, “Interpretable machine learning for science with PySR and SymbolicRegression.jl,” arXiv:2305.01582, 2023. [2] B. Burlacu, G. Kronberger, and M. Kommenda, “Operon C++: An efficient genetic programming framework for symbolic regression,” in Proceedings of the 2020 Genetic and Evolutionary Computation Conference Companion . ACM, 2020, pp. 1562–1570. [3] Z. Wu, L. Wang, K. Sun, Z. Li, and R. Cheng, “Enabling population-level parallelism in tree-based genetic programming for GPU accelera-tion,” IEEE Transactions on Evolutionary Computation , 2026. [4] N. Makke and S. Chawla, “Interpretable scientific discovery with sym-bolic regression: A review,” Artificial Intelligence Review , vol. 57, 2024, Art. no. 2. [5] P. Orzechowski, W. La Cava, and J. H. Moore, “Where are we now? A large benchmark study of recent symbolic regression methods,” in 
+
+Proceedings of the Genetic and Evolutionary Computation Conference .ACM, 2018, pp. 1183–1190. [6] S.-M. Udrescu and M. Tegmark, “AI Feynman: A physics-inspired method for symbolic regression,” Science Advances , vol. 6, no. 16, p. eaay2631, 2020. [7] Y. Chen, Y. Luo, Q. Liu, H. Xu, and D. Zhang, “Symbolic genetic algorithm for discovering open-form partial differential equations (SGA-PDE),” Physical Review Research , vol. 4, no. 2, p. 023174, 2022. [8] H. Xu, H. Chang, and D. Zhang, “DLGA-PDE: Discovery of PDEs with incomplete candidate library via combination of deep learning and genetic algorithm,” Journal of Computational Physics , vol. 418, p. 109584, 2020. [9] S. Lou, H. Xu, W. Wang, L. Lu, H. Sun, Y. Liu, L. Zhang, D. Zhang, and Y. Chen, “Data-driven discovery of governing differential equations across physical systems,” arXiv:2606.09638, 2026. [10] M. Kommenda, G. Kronberger, S. Winkler, M. Affenzeller, and S. Wag-ner, “Effects of constant optimization by nonlinear least squares min-imization in symbolic regression,” in Proceedings of the 15th Annual Conference Companion on Genetic and Evolutionary Computation .ACM, 2013, pp. 1121–1128. [11] M. Kommenda, B. Burlacu, G. Kronberger, and M. Affenzeller, “Param-eter identification for symbolic regression using nonlinear least squares,” 
+
+Genetic Programming and Evolvable Machines , vol. 21, pp. 471–501, 2020. [12] C. L. Alonso, J. L. Monta˜ na, and C. E. Borges, “Evolution strategies for constants optimization in genetic programming,” in 2009 21st IEEE International Conference on Tools with Artificial Intelligence . IEEE, 2009, pp. 703–707. [13] G. Kronberger, “Local optimization often is ill-conditioned in genetic programming for symbolic regression,” in 2022 24th International Sym-posium on Symbolic and Numeric Algorithms for Scientific Computing .IEEE, 2022, pp. 304–310. [14] D. M. Chitty, “Fast parallel genetic programming: Multi-core CPU versus many-core GPU,” Soft Computing , vol. 16, no. 10, pp. 1795– 1814, 2012. [15] F. Baeta, J. Correia, T. Martins, and P. Machado, “Speed benchmarking of genetic programming frameworks,” in Proceedings of the Genetic and Evolutionary Computation Conference . ACM, 2021, pp. 768–775. [16] W. B. Langdon, “A many threaded CUDA interpreter for genetic programming,” in Genetic Programming , ser. Lecture Notes in Computer Science, vol. 6021. Springer, 2010, pp. 146–158. [17] ——, “Graphics processing units and genetic programming: An overview,” Soft Computing , vol. 15, no. 8, pp. 1657–1669, 2011. [18] F. Baeta, J. Correia, T. Martins, and P. Machado, “TensorGP: Genetic programming engine in TensorFlow,” in Applications of Evolutionary Computation , ser. Lecture Notes in Computer Science, vol. 12694. Springer, 2021, pp. 763–778. [19] R. Zhang, A. Lensen, and Y. Sun, “Speeding up genetic programming based symbolic regression using GPUs,” in PRICAI 2022: Trends in Artificial Intelligence , ser. Lecture Notes in Computer Science, vol. 13629. Springer, 2022, pp. 519–533. [20] S. Lu, J. Chu, L. Guo, and X. T. Liu, “Im2win: An efficient convolution paradigm on GPU,” in Euro-Par 2023: Parallel Processing , ser. Lecture Notes in Computer Science, vol. 14100. Springer, 2023, pp. 592–607. [21] S. de Vries, S. W. Keemink, and M. A. J. van Gerven, “Kozax: Flexible and scalable genetic programming in JAX,” in Proceedings of the Genetic and Evolutionary Computation Conference Companion . ACM, 2025, pp. 603–606. [22] A. Griewank and A. Walther, Evaluating Derivatives , 2nd ed. Society for Industrial and Applied Mathematics, 2008. [23] X. Fu, J. Ma, X. Zhang, P. Zhao, S. Lu, and X. T. Liu, “Enabling memory-efficient Im2win convolution with multi-precision support on GPU CUDA and tensor cores,” arXiv:2608.20725, 2026. [24] R. J. Clancy, M. Menickelly, J. H¨ uckelheim, P. Hovland, P. Nalluri, and R. Gjini, “TROPHY: Trust region optimization using a precision hierarchy,” in Computational Science – ICCS 2022 , ser. Lecture Notes in Computer Science, vol. 13350. Springer, 2022, pp. 445–459. [25] S. Gratton and P. L. Toint, “A note on solving nonlinear optimization problems in variable precision,” Computational Optimization and Appli-cations , vol. 76, pp. 917–933, 2020. [26] P. Virtanen, R. Gommers, T. E. Oliphant, M. Haberland, T. Reddy et al. ,“SciPy 1.0: Fundamental algorithms for scientific computing in Python,” 
+
+Nature Methods , vol. 17, pp. 261–272, 2020. [27] SciPy Developers, “SciPy,” 2026, GitHub repository, accessed Jul. 12, 2026. [Online]. Available: https://github.com/scipy/scipy [28] HEAL Research, “Operon,” 2026, GitHub repository, accessed Jul. 12, 2026. [Online]. Available: https://github.com/heal-research/operon [29] EMI Group, “EvoGP,” 2026, GitHub repository, accessed Jul. 12, 2026. [Online]. Available: https://github.com/EMI-Group/evogp
