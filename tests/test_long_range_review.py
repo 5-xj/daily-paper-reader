@@ -182,6 +182,11 @@ class LongRangeReviewTests(unittest.TestCase):
             )
             self.assertEqual(len(manifest["groups"][0]["buckets"]["core"]["pages"]), 2)
             self.assertEqual(manifest["groups"][1]["total"], 0)
+            catalog = json.loads(
+                (Path(root) / "docs/long-range/index.json").read_text()
+            )
+            self.assertEqual(catalog["version"], 1)
+            self.assertEqual(catalog["reports"][0]["token"], "safe-token")
             html = (Path(root) / "docs/long-range/safe-token/index.html").read_text()
             self.assertNotIn("<script>unsafe", html)
 
@@ -215,8 +220,45 @@ class LongRangeReviewTests(unittest.TestCase):
             steps["Save long-range review progress"]["with"]["path"],
             ".local-runs/long-range-cache",
         )
-        self.assertNotIn('Prepare PaperCropper (optional)', steps)
-        self.assertIn('--require-lightweight', steps['Check cloud embedding and reranker']['run'])
+        commit_step = steps["Commit results"]["run"]
+        self.assertLess(
+            commit_step.index("git rebase"), commit_step.index("--rebuild-index")
+        )
+        self.assertNotIn("Prepare PaperCropper (optional)", steps)
+        self.assertIn(
+            "--require-lightweight", steps["Check cloud embedding and reranker"]["run"]
+        )
+
+    def test_rebuild_index_includes_merged_reports_without_running_models(self):
+        with tempfile.TemporaryDirectory() as directory, patch.object(
+            review, "run_review", side_effect=AssertionError("不得运行模型")
+        ):
+            root = Path(directory)
+            tokens = [
+                "20250910-20260909-aaaaaaaaaaaa",
+                "20260612-20260909-bbbbbbbbbbbb",
+            ]
+            for token in tokens:
+                folder = root / "docs/long-range" / token
+                folder.mkdir(parents=True)
+                (folder / "manifest.json").write_text(
+                    json.dumps(
+                        {
+                            "start": "2025-09-10",
+                            "end_exclusive": "2026-09-10",
+                            "generated_at": token,
+                            "groups": [],
+                        }
+                    )
+                )
+            review.rebuild_report_index(root)
+            index = root / "docs/long-range/index.json"
+            before = index.read_text()
+            self.assertEqual(
+                {r["token"] for r in json.loads(before)["reports"]}, set(tokens)
+            )
+            review.rebuild_report_index(root)
+            self.assertEqual(index.read_text(), before)
 
 
 if __name__ == "__main__":

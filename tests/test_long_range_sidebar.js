@@ -1,0 +1,13 @@
+const assert = require('node:assert/strict');
+global.window = {};
+global.document = {readyState: 'loading', addEventListener() {}};
+const api = require('../app/dpr-sidebar.js').__test;
+const token = '20250910-20260909-fec5ea27b92a';
+assert.deepEqual(api.longRangeTokens(`- [report](docs/long-range/${token}/index.html ":ignore")`), [token]);
+assert.deepEqual(api.longRangeTokens([{token}, {token}, {token:'../../secret.private'}, {token:'https://evil.invalid'}]), [token]);
+assert.equal(api.longRangePaperHref('../../evil',0,'core',0,'x'), '');
+assert.equal(api.longRangePaperHref(token,0,'../secret',0,'x'), '');
+assert.equal(api.longRangePaperHref(token,-1,'core',0,'x'), '');
+const href = api.longRangePaperHref(token,1,'related',2,'paper?x=1&y=2');
+assert.ok(href.includes('topic=1&bucket=related&page=2&paper=paper%3Fx%3D1%26y%3D2'));
+console.log('long-range sidebar tests passed');

@@ -260,6 +260,7 @@ Zotero       ←── 浏览器 Connector 抓取 citation meta
 
 ### arXiv 长周期专题回溯
 
+- 回溯验收必须覆盖Sidebar导航，不能只验证独立报告能打开。新报告自动生成 `docs/long-range/index.json`；前端须兼容旧README报告目录，已有报告不得为了显示导航而重跑抓取/DeepSeek。Sidebar按区间、专题、核心/补充/待复核懒加载，单篇链接应定位到已有分页报告，不影响日报与会议分组的滚动或未读状态。
 - GitHub Pages 的检索入口由 GitHub Actions 执行，embedding/reranker 必须走云端；不要在新链路直接导入或下载本地SentenceTransformer/Qwen。Actions设置 `DPR_MODELS_REMOTE_ONLY=1`，云端失败必须报错而不是静默回退。发布前必须在不含torch/transformers/sentence-transformers的Python 3.11环境验证，并实际跑GitHub工作流；本机预装依赖的成功不能代表CI成功。
 - 公告和News中的回溯入口统一使用数字文案“90天/365天”，不要替换成“九十天/一年”；数字应放在公告标题开头，便于识别。
 - `src/main.py --fetch-days` 限制为1–365；31天以上交给 `src/long_range_review.py`，不走短周期RRF/重排星级和日报名额截断，不生成逐篇精读长文。十天/三十天保持原流程。

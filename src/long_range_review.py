@@ -278,9 +278,27 @@ def publish_report(root, token, groups, metadata):
     (folder / "index.html").write_text(
         template.read_text(encoding="utf-8"), encoding="utf-8"
     )
+    rebuild_report_index(root)
+    return manifest
+
+
+def rebuild_report_index(root):
+    """只汇总已完成报告；可在git合并后执行，不调用任何抓取或模型。"""
+    root = Path(root)
+    (root / "docs" / "long-range").mkdir(parents=True, exist_ok=True)
     entries = []
+    catalog = []
     for path in (root / "docs" / "long-range").glob("*/manifest.json"):
         item = json.loads(path.read_text(encoding="utf-8"))
+        catalog.append(
+            {
+                "token": path.parent.name,
+                "start": item["start"],
+                "end_exclusive": item["end_exclusive"],
+                "days": item.get("days"),
+                "generated_at": item["generated_at"],
+            }
+        )
         label = f'{item["start"][:10]} 至 {item["end_exclusive"][:10]}（结束日不含）'
         entries.append(
             (
@@ -291,7 +309,16 @@ def publish_report(root, token, groups, metadata):
     index = "# arXiv 专题回溯\n\n按关键词和语义候选评审，不保证覆盖所有相关论文。\n\n"
     index += "\n".join(line for _, line in sorted(entries, reverse=True)) + "\n"
     (root / "docs" / "long-range" / "README.md").write_text(index, encoding="utf-8")
-    return manifest
+    write_json(
+        root / "docs" / "long-range" / "index.json",
+        {
+            "version": 1,
+            "reports": sorted(
+                catalog, key=lambda item: item["generated_at"], reverse=True
+            ),
+        },
+    )
+    return catalog
 
 
 def run_review(config, days, root, run_token):
@@ -384,16 +411,25 @@ def run_review(config, days, root, run_token):
             collect_window(call, start, end, exhaustive=True, limit=500)
         )
         print(f'[回溯] {q["tag"]} 关键词候选 {len(grouped[q["tag"]])}', flush=True)
-    print('[回溯] 使用云端 BGE embedding，不下载本地模型', flush=True)
-    encoder = load_sentence_transformer('BAAI/bge-small-en-v1.5', device='cpu')
-    if not getattr(encoder, 'is_remote', False):
-        raise RuntimeError('专题回溯需要云端 embedding 服务')
+    print("[回溯] 使用云端 BGE embedding，不下载本地模型", flush=True)
+    encoder = load_sentence_transformer("BAAI/bge-small-en-v1.5", device="cpu")
+    if not getattr(encoder, "is_remote", False):
+        raise RuntimeError("专题回溯需要云端 embedding 服务")
     encoder.allow_local_fallback = False
     for q in plan["embedding_queries"]:
-        vectors = encoder.encode(['query: '+q['query_text']], normalize_embeddings=True)
+        vectors = encoder.encode(
+            ["query: " + q["query_text"]], normalize_embeddings=True
+        )
         import numpy as np
-        if vectors.shape != (1, 384) or not np.isfinite(vectors).all() or np.linalg.norm(vectors[0]) < 1e-8:
-            raise RuntimeError('云端 embedding 必须返回有效的384维向量，与现有论文库一致')
+
+        if (
+            vectors.shape != (1, 384)
+            or not np.isfinite(vectors).all()
+            or np.linalg.norm(vectors[0]) < 1e-8
+        ):
+            raise RuntimeError(
+                "云端 embedding 必须返回有效的384维向量，与现有论文库一致"
+            )
         vector = vectors[0].tolist()
 
         def call(a, b, n):
@@ -486,3 +522,12 @@ def run_review(config, days, root, run_token):
         flush=True,
     )
     return manifest
+
+
+if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(description="仅从已有报告重建导航索引，不调用模型")
+    parser.add_argument("--rebuild-index", action="store_true", required=True)
+    parser.parse_args()
+    rebuild_report_index(Path(__file__).resolve().parents[1])
