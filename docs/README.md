@@ -48,7 +48,7 @@
 <section class="dpr-home-dashboard-card dpr-home-report-card">
   <div class="dpr-home-dashboard-header">
     <div>
-      <span class="dpr-home-dashboard-kicker">2026-09-09</span>
+      <span class="dpr-home-dashboard-kicker">2026-09-10</span>
       <h3 class="dpr-home-dashboard-title">今日汇总</h3>
     </div>
     <strong class="dpr-home-dashboard-count">共 2 篇</strong>
@@ -58,7 +58,7 @@
     <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>1</dd></div>
     <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>1</dd></div>
   </dl>
-  <p class="dpr-home-dashboard-body">最近更新：2026-09-09 21:17:02 UTC<br>状态：成功</p>
+  <p class="dpr-home-dashboard-body">最近更新：2026-09-10 21:45:50 UTC<br>状态：成功</p>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-brief-card">
   <div class="dpr-home-dashboard-header">
@@ -69,9 +69,9 @@
     <strong class="dpr-home-dashboard-count">AI</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<p>今日精读1篇、速读1篇，聚焦大模型驱动的路由优化与智能算法工程。</p>
-<p>最值得关注的是精读论文《LLM-Driven Joint Evolution of Coupled Heuristics Components for Routing Optimization》（9.0/10），提出用大模型联合进化耦合启发式组件，在路由优化上显示出高潜力；速读论文则探讨智能体改进共享内存精确最小割算法，得分为7.0。</p>
-<p>建议普通读者优先深入理解大模型如何协同进化启发式组件，这可能是提升组合优化效率的关键方向。</p>
+<p>2026-09-10 日报精选 2 篇：1 篇精读、1 篇速读，聚焦 LLM 驱动的算法优化与智能体算法工程。</p>
+<p>最值得看的是精读 9.0 分的《LLM-Driven Joint Evolution of Coupled Heuristics Components for Routing Optimization》，用 LLM 联合演化耦合启发式组件做路径优化；速读 6.0 分的《Agentic Algorithm Engineering》则探索智能体改进共享内存精确最小割。</p>
+<p>普通读者可先读精读那篇了解 LLM 如何参与启发式组件协同演化，再按兴趣扫速读的最小割工程实践。</p>
   </div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-deep-card">
