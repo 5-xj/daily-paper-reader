@@ -60,6 +60,9 @@ OFFICIAL_ACCEPTED_COUNTS: Dict[Tuple[str, int], int] = {
     ("osdi", 2026): 136,
     ("sosp", 2024): 43,
     ("sosp", 2025): 66,
+    # 官方 Accepted Papers 逐篇计数；最终发表仍需 shepherd approval（2026-09-11）。
+    # https://sigops.org/s/conferences/sosp/2026/accepted.html
+    ("sosp", 2026): 62,
     ("ieee_sp", 2024): 261,
     ("ieee_sp", 2025): 255,
     ("ieee_sp", 2026): 254,

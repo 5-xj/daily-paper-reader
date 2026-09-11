@@ -591,8 +591,11 @@ function testDailyCalendarInPlaceRefreshUsesActiveDailyTag() {
   assert.ok(start > 0 && end > start, 'updateDailyCalendarUnreadMarks should be present');
   const block = js.slice(start, end);
 
-  assert.ok(block.includes('buildDailyCalendarTagView'));
-  assert.ok(block.includes('state.activeDailyTag'));
+  assert.ok(block.includes('buildDailyPanelView'));
+  assert.ok(block.includes("['daily', 'backtrack']"));
+  const helper = js.slice(js.indexOf('function buildDailyPanelView'), js.indexOf('function isDailySingleDateKey'));
+  assert.ok(helper.includes('buildDailyCalendarTagView'));
+  assert.ok(helper.includes("dailyPanelField(group, 'Tag')"));
   assert.ok(block.includes('view.activeDateKey'));
   assert.ok(!block.includes('buildDailyDateView'));
 }
@@ -629,7 +632,7 @@ function testDailyDateAndTagClicksExpandCurrentSectionOnlyForDaily() {
   const calendarBlock = js.slice(calendarStart, calendarEnd);
   assert.ok(calendarBlock.includes('expandCurrentDailyAxisSection('));
 
-  const tabStart = js.indexOf("if (tabGroup === 'daily') {");
+  const tabStart = js.indexOf("if (tabGroup === 'daily' || tabGroup === 'backtrack') {");
   const tabEnd = js.indexOf('rerenderSidebarBody(rerenderOptionsForAxisControlClick());', tabStart);
   assert.ok(tabStart > 0 && tabEnd > tabStart, 'axis tab handler should be present');
   const dailyTabBlock = js.slice(tabStart, tabEnd);
@@ -1294,9 +1297,10 @@ function testActivePaperCanForceOpenTopLevelPanel() {
   assert.ok(start > 0 && end > start, 'syncAxisStateToHref should be present');
   const block = js.slice(start, end);
 
-  assert.ok(block.includes('state.expandedGroups.daily = true'));
+  assert.ok(block.includes('state.expandedGroups[panel] = true'));
+  assert.ok(block.includes("isBacktrackDateKey(daily.dateKey) ? 'backtrack' : 'daily'"));
   assert.ok(block.includes('state.expandedGroups.conference = true'));
-  assert.ok(block.includes("state.activeDailyTag = '__all__';"));
+  assert.ok(block.includes("state[dailyPanelField(panel, 'Tag')] = '__all__';"));
 }
 
 function testPanelHeaderClickOnlyChangesSidebarViewState() {
@@ -1720,6 +1724,9 @@ function testAnnualReviewReusesNativeSidebarReadingAndStatus() {
     readMap: {[route]: 'good'},
   });
   assert.ok(html.includes(`href="#/${route}"`));
+  assert.ok(html.includes('data-panel="backtrack"'), '年度回溯独立分栏但复用原论文条目');
+  assert.ok(html.includes('专题回溯'));
+  assert.ok(!html.includes('data-panel="daily"'), '回溯不得重复计入日报');
   assert.ok(html.includes('data-paper-status="good"'));
   assert.ok(html.includes('data-read="1"'));
   assert.ok(!html.includes('target="_blank"'));
@@ -1734,6 +1741,47 @@ function testAnnualReviewReusesNativeSidebarReadingAndStatus() {
   assert.ok(!source.includes('独立报告，不计入日报未读数'));
 }
 
+function testBacktrackPanelKeepsIndependentNativeViews() {
+  const tools = loadSidebarForTest('#/').__test;
+  assert.equal(tools.isBacktrackDateKey('20260811-20260909'), false, '30天仍归日报');
+  assert.equal(tools.isBacktrackDateKey('20260810-20260909'), true, '31天归专题回溯');
+  assert.equal(tools.isBacktrackDateKey('20260612-20260909'), true, '90天归专题回溯');
+  assert.equal(tools.isBacktrackDateKey('20250910-20260909'), true, '365天归专题回溯');
+  const paper = (id, tag) => ({id, href: '#/' + id, title: id, tags: [{kind: 'query', label: tag}]});
+  const model = {daily: [
+    {dateKey: '20260909', papers: [paper('20260909/daily', 'RL')]},
+    {dateKey: '20260811-20260909', papers: [paper('20260811-20260909/month', 'SR')]},
+    {dateKey: '20250910-20260909', papers: [paper('20250910-20260909/annual', 'ATSP')]},
+    {dateKey: '20260612-20260909', papers: [paper('20260612-20260909/quarter', 'SR')]},
+  ], conferences: []};
+  const readMap = {'20250910-20260909/annual': 'good'};
+  const vs = {activeDailyDate: '20260909', activeDailyTag: 'RL',
+    activeBacktrackDate: '20260909', activeBacktrackTag: 'ATSP', readMap};
+  const daily = tools.buildAxisViewForMode(model, 'daily', 'tag', vs, readMap);
+  const backtrack = tools.buildAxisViewForMode(model, 'backtrack', 'tag', vs, readMap);
+  assert.deepEqual(daily.groups.flatMap(g => g.papers.map(p => p.title)), ['20260909/daily']);
+  assert.deepEqual(backtrack.groups.flatMap(g => g.papers.map(p => p.title)), ['20250910-20260909/annual']);
+  assert.equal(backtrack.calendar.days.find(d => d.dateKey === '20260909').totalCount, 1);
+  assert.equal(backtrack.calendar.days.find(d => d.dateKey === '20260909').unreadCount, 0);
+  const summary = tools.computeModelReadSummary(model, readMap);
+  assert.deepEqual(summary.daily, {papers: 2, unread: 2});
+  assert.deepEqual(summary.backtrack, {papers: 2, unread: 1});
+  assert.deepEqual(summary.total, {papers: 4, unread: 3});
+  const html = tools.renderBodyHtml(model, {...vs, expandedGroups: {daily: false, backtrack: true},
+    backtrackCalendarPlacement: 'bottom', expandedAxisSections: new Set(['daily:tag:20260909:RL'])});
+  assert.ok(html.includes('data-panel="backtrack"'));
+  assert.ok(html.includes('data-panel="daily"'));
+  assert.equal((html.match(/data-axis-toggle="backtrack"/g) || []).length, 1);
+  assert.equal((html.match(/data-axis-toggle="daily"/g) || []).length, 1);
+  assert.equal((html.match(/ href="#\/20250910-20260909\/annual"/g) || []).length, 1);
+  assert.ok(!html.includes('target="_blank"'));
+  const results = tools.buildAxisViewForMode(model, 'backtrack', 'results', {...vs, search: 'annual'}, readMap);
+  assert.deepEqual(results.groups.flatMap(g => g.papers.map(p => p.title)), ['20250910-20260909/annual']);
+  assert.equal(tools.resolveDailyAxisSectionStateKey(model, vs, readMap, 'backtrack'),
+    'backtrack:tag:20250910-20260909:ATSP');
+}
+
+testBacktrackPanelKeepsIndependentNativeViews();
 testAnnualReviewReusesNativeSidebarReadingAndStatus();
 testSidebarNavigationContract();
 testAxisViewsForDailyAndConference();

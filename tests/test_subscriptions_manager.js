@@ -192,6 +192,29 @@ function testConferenceDefaultYearOnlySelects2025() {
   assert.deepEqual(pairs, []);
 }
 
+function testSosp2026MetadataChoiceAndVisibleWarning() {
+  __setConferenceStatsSnapshot({ items: [{ conference_key: 'sosp', year: 2026, stored_total_count: 62 }] });
+  __setRunSelectionState({ conferencePairs: ['SOSP:2026'] });
+  assert.equal(isConferenceYearSelectable('SOSP', '2026'), true);
+  const button = __buildConferenceChoiceRowsHtml().match(/<button\b[^>]*data-conference="SOSP"[^>]*data-conference-year="2026"[^>]*>[\s\S]*?<\/button>/)[0];
+  assert.equal(/\bdisabled\b/.test(button), false);
+  assert.ok(button.includes('aria-pressed="true"'));
+  assert.ok(button.includes('dpr-choice-total">62</span>'));
+  assert.ok(button.includes('标题和作者'));
+  assert.ok(button.includes('摘要/PDF'));
+  const hint = { textContent: '', style: {} };
+  __setConferenceHintEl(hint);
+  refreshQuickRunButtons();
+  assert.ok(hint.textContent.includes('SOSP 2026'));
+  assert.ok(hint.textContent.includes('标题和作者'));
+  assert.ok(hint.textContent.includes('摘要/PDF'));
+  __setRunSelectionState({ conferencePairs: ['SOSP:2025'] });
+  refreshQuickRunButtons();
+  assert.equal(hint.textContent.includes('标题和作者'), false);
+  __setConferenceHintEl(null);
+  __setRunSelectionState({ conferencePairs: [] });
+}
+
 function testAvailable2026ConferenceChoicesAndEmnlpEstimate() {
   __setConferenceStatsSnapshot(require('../app/conference-stats.json'));
   __setRunSelectionState({ conferencePairs: ['CVPR:2026'] });
@@ -533,6 +556,7 @@ async function testLongRangeSelectionDispatchesAndCanCancel() {
   await testRunProfileQuickFetchPassesProfileTagToWorkflow();
   testConferenceCurrentYearDisabledForPendingSources();
   testConferenceDefaultYearOnlySelects2025();
+  testSosp2026MetadataChoiceAndVisibleWarning();
   testAvailable2026ConferenceChoicesAndEmnlpEstimate();
   testConferenceYearChoicesShowTwoDigitYearAndStoredTotalOnly();
   await testConferenceStatsLoadReusesBootstrappedJsonPromise();

@@ -113,7 +113,10 @@ window.SubscriptionsManager = (function () {
   ];
   const CONFERENCE_STATS_SNAPSHOT_URL = 'app/conference-stats.json';
   // 2026 年已入库并验证检索的会议（截至 2026-09，含 CVPR、ECCV）。
-  const CONFERENCE_2026_AVAILABLE = new Set(['ICLR', 'ICML', 'AAAI', 'ACL', 'CVPR', 'ECCV', 'OSDI', 'IEEE S&P', 'NDSS']);
+  const CONFERENCE_2026_AVAILABLE = new Set(['ICLR', 'ICML', 'AAAI', 'ACL', 'CVPR', 'ECCV', 'OSDI', 'SOSP', 'IEEE S&P', 'NDSS']);
+  const CONFERENCE_DATA_NOTICES = {
+    'SOSP:2026': 'SOSP 2026 当前仅收录官方录用论文的标题和作者，摘要/PDF 尚待公开；检索基于标题，不代表全文可读。',
+  };
   const FEATURED_CONFERENCE_YEAR_PAIRS = new Set(['acl:2026', 'icml:2026']);
   // ECCV 是双年会议（偶数年）
   const BIENNIAL_EVEN_CONFERENCES = new Set(['ECCV']);
@@ -262,6 +265,7 @@ window.SubscriptionsManager = (function () {
         .map((year) => {
           const active = selectedConferenceYearPairs.has(`${name}:${year}`);
           const reason = getConferenceYearDisabledReason(name, year);
+          const dataNotice = CONFERENCE_DATA_NOTICES[`${name}:${year}`] || '';
           const disabled = !!reason;
           const stats = getConferenceYearStats(name, year);
           const classes = [
@@ -285,8 +289,9 @@ window.SubscriptionsManager = (function () {
             data-conference="${escapeHtml(name)}"
             data-conference-year="${escapeHtml(year)}"
             aria-pressed="${active ? 'true' : 'false'}"
-            aria-label="${escapeHtml(`${name} ${visibleLabel}`)}"
-            ${disabled ? `disabled title="${escapeHtml(reason)}"` : ''}
+            aria-label="${escapeHtml(`${name} ${visibleLabel}${dataNotice ? `；${dataNotice}` : ''}`)}"
+            ${disabled ? 'disabled' : ''}
+            ${reason || dataNotice ? `title="${escapeHtml(reason || dataNotice)}"` : ''}
           ><span class="dpr-choice-pill-main">${labelHtml}</span>${featureStar}</button>`;
         })
         .join('');
@@ -698,7 +703,6 @@ window.SubscriptionsManager = (function () {
         NEURIPS: '2026 年 12 月会后',
         NIPS:    '2026 年 12 月会后',
         OSDI:    '2026 年会后论文 PDF 公开后',
-        SOSP:    '2026 年会后论文 PDF 公开后',
         'IEEE S&P': '2026 年 CSDL 论文 PDF 公开后',
       };
       const est = ESTIMATED_DATES[conf];
@@ -910,6 +914,10 @@ window.SubscriptionsManager = (function () {
         conferenceHintEl.textContent = `先勾选词条（最多 2 个），再勾选会议年份（库内总数 < ${formatCount(MAX_CONFERENCE_STORED_TOTAL)} 篇）。每组约 5 分钟 / ¥0.2`;
         conferenceHintEl.style.color = '';
       }
+      // 元数据可检索不代表全文可读；复用现有说明区，移动端选择后也能看到。
+      const dataNotices = Array.from(selectedConferenceYearPairs)
+        .map((pair) => CONFERENCE_DATA_NOTICES[pair]).filter(Boolean);
+      if (dataNotices.length) conferenceHintEl.textContent += ` ${dataNotices.join(' ')}`;
     }
     if (hasUnsavedChanges && quickRunMsgEl) {
       quickRunMsgEl.textContent = '有未保存修改，请先保存。';

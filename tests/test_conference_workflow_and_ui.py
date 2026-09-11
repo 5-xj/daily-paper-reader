@@ -121,6 +121,11 @@ class ConferenceWorkflowAndUiTest(unittest.TestCase):
             self.assertIn(f"DPR_ENABLE_{source_key.upper()}_BACKEND", text)
             self.assertIn(f"DPR_{source_key.upper()}_PAPERS_TABLE", text)
 
+    def test_sosp_maintenance_allows_official_metadata_without_pdf(self):
+        root = pathlib.Path(__file__).resolve().parents[1]
+        text = (root / ".github/workflows/maintain-supabase.yml").read_text(encoding="utf-8")
+        self.assertIn('python src/maintain/sosp.py --years "$YEARS" --allow-missing-pdf --skip-cleanup', text)
+
     def test_local_debug_uses_browser_config_override(self):
         root = pathlib.Path(__file__).resolve().parents[1]
         server = (root / "src" / "local_debug_server.py").read_text(encoding="utf-8")
