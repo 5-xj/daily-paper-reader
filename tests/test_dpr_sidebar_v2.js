@@ -1771,7 +1771,8 @@ function testBacktrackPanelKeepsIndependentNativeViews() {
     backtrackCalendarPlacement: 'bottom', expandedAxisSections: new Set(['daily:tag:20260909:RL'])});
   assert.ok(html.includes('data-panel="backtrack"'));
   assert.ok(html.includes('data-panel="daily"'));
-  assert.equal((html.match(/data-axis-toggle="backtrack"/g) || []).length, 1);
+  assert.equal((html.match(/data-axis-toggle="backtrack"/g) || []).length, 0);
+  assert.equal((html.match(/data-daily-calendar/g) || []).length, 1, '仅日报保留日历');
   assert.equal((html.match(/data-axis-toggle="daily"/g) || []).length, 1);
   assert.equal((html.match(/ href="#\/20250910-20260909\/annual"/g) || []).length, 1);
   assert.ok(!html.includes('target="_blank"'));
@@ -1779,6 +1780,11 @@ function testBacktrackPanelKeepsIndependentNativeViews() {
   assert.deepEqual(results.groups.flatMap(g => g.papers.map(p => p.title)), ['20250910-20260909/annual']);
   assert.equal(tools.resolveDailyAxisSectionStateKey(model, vs, readMap, 'backtrack'),
     'backtrack:tag:20250910-20260909:ATSP');
+  const differentEnds = {daily: [model.daily[2], {
+    dateKey: '20250101-20250401', papers: [paper('20250101-20250401/older', 'ATSP')],
+  }], conferences: []};
+  const allRanges = tools.buildAxisViewForMode(differentEnds, 'backtrack', 'tag', vs, readMap);
+  assert.equal(allRanges.groups.length, 2, '无日历时不同结束日期的旧区间仍可访问');
 }
 
 testBacktrackPanelKeepsIndependentNativeViews();

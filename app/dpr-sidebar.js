@@ -139,7 +139,7 @@
     var vs = viewState || state;
     return buildDailyCalendarTagView(modelForDailyPanel(model, group),
       vs[dailyPanelField(group, 'Date')], vs[dailyPanelField(group, 'Tag')], readMap,
-      vs[dailyPanelField(group, 'Month')]);
+      vs[dailyPanelField(group, 'Month')], group === 'backtrack');
   }
   function isDailySingleDateKey(dateKey) {
     return /^\d{8}$/.test(String(dateKey || ''));
@@ -1244,14 +1244,14 @@
     return filtered;
   }
 
-  function buildDailyCalendarTagView(model, activeDateKey, activeTagKey, readMap, activeMonthKey) {
+  function buildDailyCalendarTagView(model, activeDateKey, activeTagKey, readMap, activeMonthKey, allDates) {
     var map = readMap || {};
     var allKey = '__all__';
     var dateView = buildDailyDateView(model, activeDateKey, map, activeMonthKey);
     var activeDate = dailyCalendarAnchorDateKey(dateView.activeKey) || dateView.activeKey || '';
     var activeRecords = [];
     (model && model.daily || []).forEach(function (day) {
-      if (day && dailyCalendarAnchorDateKey(day.dateKey) === activeDate) {
+      if (day && (allDates || dailyCalendarAnchorDateKey(day.dateKey) === activeDate)) {
         activeRecords.push(day);
       }
     });
@@ -1409,7 +1409,6 @@
     expandedAxisSections: new Set(),
     dailyViewMode: 'date',
     dailyCalendarPlacement: 'top',
-    backtrackCalendarPlacement: 'top',
     activeBacktrackDate: '',
     activeBacktrackMonth: '',
     activeBacktrackTag: '',
@@ -1634,7 +1633,6 @@
       expandedGroups: normalizeExpandedGroups(vs.expandedGroups),
       dailyViewMode: vs.dailyViewMode === 'tag' ? 'tag' : 'date',
       dailyCalendarPlacement: vs.dailyCalendarPlacement === 'bottom' ? 'bottom' : 'top',
-      backtrackCalendarPlacement: vs.backtrackCalendarPlacement === 'bottom' ? 'bottom' : 'top',
       activeBacktrackDate: vs.activeBacktrackDate || '',
       activeBacktrackMonth: normalizeMonthKey(vs.activeBacktrackMonth) || '',
       activeBacktrackTag: vs.activeBacktrackTag || '',
@@ -1725,7 +1723,7 @@
     ['backtrack', 'daily'].forEach(function (panel) {
       var panelModel = modelForDailyPanel(viewModel, panel);
       if (!panelModel.daily.length) return;
-      var placement = panel === 'backtrack' ? vs.backtrackCalendarPlacement : vs.dailyCalendarPlacement;
+      var placement = vs.dailyCalendarPlacement;
       var dailyView = resultMode
         ? buildDailyResultView(modelForDailyPanel(model, panel), resultOptions)
         : buildDailyPanelView(viewModel, panel, vs, vs.readMap);
@@ -1762,7 +1760,6 @@
       expandedGroups: state.expandedGroups,
       dailyViewMode: state.dailyViewMode,
       dailyCalendarPlacement: state.dailyCalendarPlacement,
-      backtrackCalendarPlacement: state.backtrackCalendarPlacement,
       activeBacktrackDate: state.activeBacktrackDate,
       activeBacktrackMonth: state.activeBacktrackMonth,
       activeBacktrackTag: state.activeBacktrackTag,
@@ -1913,7 +1910,7 @@
     var expandedClass = opts.expanded ? ' is-expanded' : '';
     var resultClass = opts.view && opts.view.resultMode ? ' is-result-mode' : '';
     var axisMode = opts.view && opts.view.resultMode ? 'results' : opts.mode;
-    var isDailyNormal = (opts.group === 'daily' || opts.group === 'backtrack') && !(opts.view && opts.view.resultMode);
+    var isDailyNormal = opts.group === 'daily' && !(opts.view && opts.view.resultMode);
     var hasHeaderAxisToggle = !(opts.view && opts.view.resultMode) && (isDailyNormal || opts.group === 'conference');
     var calendarPlacement = opts.dailyCalendarPlacement === 'bottom' ? 'bottom' : 'top';
     var totalCount = typeof opts.totalCount === 'number' ? opts.totalCount : countPapersInView(opts.view);
@@ -1944,6 +1941,9 @@
         html.push(renderAxisTabs(opts.group, 'tag', opts.view, opts.toggleLabel, { hideToggle: true, rowClass: 'dpr-sidebar-daily-tabs-row' }));
         html.push(renderDailyCalendar(opts.view && opts.view.calendar, calendarPlacement));
       }
+    } else if (opts.group === 'backtrack') {
+      // 回溯按标签展示所有区间分组，不使用日历，也不保留无用途的日历换位按钮。
+      html.push(renderAxisTabs(opts.group, opts.mode, opts.view, '', { hideToggle: true, rowClass: 'dpr-sidebar-daily-tabs-row' }));
     } else if (hasHeaderAxisToggle) {
       html.push(renderAxisTabs(opts.group, opts.mode, opts.view, opts.toggleLabel, { hideToggle: true }));
     } else {
@@ -2380,8 +2380,6 @@
         if (axisGroup === 'daily') {
           state.dailyViewMode = 'date';
           state.dailyCalendarPlacement = state.dailyCalendarPlacement === 'bottom' ? 'top' : 'bottom';
-        } else if (axisGroup === 'backtrack') {
-          state.backtrackCalendarPlacement = state.backtrackCalendarPlacement === 'bottom' ? 'top' : 'bottom';
         } else if (axisGroup === 'conference') {
           state.conferenceViewMode = state.conferenceViewMode === 'tag' ? 'conf' : 'tag';
         }
