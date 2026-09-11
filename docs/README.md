@@ -48,7 +48,7 @@
 <section class="dpr-home-dashboard-card dpr-home-report-card">
   <div class="dpr-home-dashboard-header">
     <div>
-      <span class="dpr-home-dashboard-kicker">2026-09-10</span>
+      <span class="dpr-home-dashboard-kicker">2026-09-11</span>
       <h3 class="dpr-home-dashboard-title">今日汇总</h3>
     </div>
     <strong class="dpr-home-dashboard-count">共 2 篇</strong>
@@ -58,7 +58,7 @@
     <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>1</dd></div>
     <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>1</dd></div>
   </dl>
-  <p class="dpr-home-dashboard-body">最近更新：2026-09-10 21:45:50 UTC<br>状态：成功</p>
+  <p class="dpr-home-dashboard-body">最近更新：2026-09-11 21:44:36 UTC<br>状态：成功</p>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-brief-card">
   <div class="dpr-home-dashboard-header">
@@ -69,9 +69,7 @@
     <strong class="dpr-home-dashboard-count">AI</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<p>2026-09-10 日报精选 2 篇：1 篇精读、1 篇速读，聚焦 LLM 驱动的算法优化与智能体算法工程。</p>
-<p>最值得看的是精读 9.0 分的《LLM-Driven Joint Evolution of Coupled Heuristics Components for Routing Optimization》，用 LLM 联合演化耦合启发式组件做路径优化；速读 6.0 分的《Agentic Algorithm Engineering》则探索智能体改进共享内存精确最小割。</p>
-<p>普通读者可先读精读那篇了解 LLM 如何参与启发式组件协同演化，再按兴趣扫速读的最小割工程实践。</p>
+<p>2026-09-11 日报精选2篇：1篇精读、1篇速读，聚焦LLM自动启发式设计与双目标TSP优化。最值得看的是精读8.0分的RouteRepair——针对路由优化中LLM自动启发式设计的实例级失败诊断与定向修复；速读6.0分则用节点移位编码遗传算法配合模糊增强参考路径求解双目标服务型TSP。若关注LLM+组合优化，建议先读RouteRepair的失败诊断思路，再看速读篇的编码策略作补充。</p>
   </div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-deep-card">
@@ -83,7 +81,7 @@
     <strong class="dpr-home-dashboard-count">1 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="LLM-Driven Joint Evolution of Coupled Heuristics Components for Routing Optimization">LLM-Driven Joint Evolution of Coupled Heuristics Components for Routing Optimization</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="RouteRepair: Instance-Level Failure Diagnosis and Targeted Repair in LLM-Based Automated Heuristic Design for Routing Optimization">RouteRepair: Instance-Level Failure Diagnosis and Targeted Repair in LLM-Based Automated Heuristic Design for Routing Optimization</span></li></ul>
   </div>
   <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">ad <strong>1</strong></span></div>
 </section>
@@ -96,9 +94,9 @@
     <strong class="dpr-home-dashboard-count">1 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Agentic Algorithm Engineering: Improving Shared-Memory Exact Minimum Cuts">Agentic Algorithm Engineering: Improving Shared-Memory Exact Minimum Cuts</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Node-Shift-Encoding Genetic Algorithm with fuzzy-enhanced reference tour to solve the bi-objective service-oriented TSP">Node-Shift-Encoding Genetic Algorithm with fuzzy-enhanced reference tour to solve the bi-objective service-oriented TSP</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">ad <strong>1</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">atsp <strong>1</strong></span></div>
 </section>
 </div>
 
