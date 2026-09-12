@@ -48,7 +48,7 @@
 <section class="dpr-home-dashboard-card dpr-home-report-card">
   <div class="dpr-home-dashboard-header">
     <div>
-      <span class="dpr-home-dashboard-kicker">2026-09-11</span>
+      <span class="dpr-home-dashboard-kicker">2026-09-12</span>
       <h3 class="dpr-home-dashboard-title">今日汇总</h3>
     </div>
     <strong class="dpr-home-dashboard-count">共 2 篇</strong>
@@ -58,7 +58,7 @@
     <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>1</dd></div>
     <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>1</dd></div>
   </dl>
-  <p class="dpr-home-dashboard-body">最近更新：2026-09-11 21:44:36 UTC<br>状态：成功</p>
+  <p class="dpr-home-dashboard-body">最近更新：2026-09-12 21:16:41 UTC<br>状态：成功</p>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-brief-card">
   <div class="dpr-home-dashboard-header">
@@ -69,7 +69,7 @@
     <strong class="dpr-home-dashboard-count">AI</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<p>2026-09-11 日报精选2篇：1篇精读、1篇速读，聚焦LLM自动启发式设计与双目标TSP优化。最值得看的是精读8.0分的RouteRepair——针对路由优化中LLM自动启发式设计的实例级失败诊断与定向修复；速读6.0分则用节点移位编码遗传算法配合模糊增强参考路径求解双目标服务型TSP。若关注LLM+组合优化，建议先读RouteRepair的失败诊断思路，再看速读篇的编码策略作补充。</p>
+<p>今日精选2篇AI算法工程论文，精读1篇聚焦LLM自动启发式设计的故障修复。最值得看RouteRepair如何实现路由优化中实例级失败诊断与定向修复（8.0分），速读篇则探索共享内存精确最小割的智能体算法工程。普通读者可优先读精读篇，了解LLM设计启发式时&quot;诊断+修复&quot;的闭环思路。</p>
   </div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-deep-card">
@@ -94,9 +94,9 @@
     <strong class="dpr-home-dashboard-count">1 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Node-Shift-Encoding Genetic Algorithm with fuzzy-enhanced reference tour to solve the bi-objective service-oriented TSP">Node-Shift-Encoding Genetic Algorithm with fuzzy-enhanced reference tour to solve the bi-objective service-oriented TSP</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Agentic Algorithm Engineering: Improving Shared-Memory Exact Minimum Cuts">Agentic Algorithm Engineering: Improving Shared-Memory Exact Minimum Cuts</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">atsp <strong>1</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">ad <strong>1</strong></span></div>
 </section>
 </div>
 
