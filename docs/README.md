@@ -48,7 +48,7 @@
 <section class="dpr-home-dashboard-card dpr-home-report-card">
   <div class="dpr-home-dashboard-header">
     <div>
-      <span class="dpr-home-dashboard-kicker">2026-09-14</span>
+      <span class="dpr-home-dashboard-kicker">2026-09-15</span>
       <h3 class="dpr-home-dashboard-title">今日汇总</h3>
     </div>
     <strong class="dpr-home-dashboard-count">共 2 篇</strong>
@@ -58,7 +58,7 @@
     <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>1</dd></div>
     <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>1</dd></div>
   </dl>
-  <p class="dpr-home-dashboard-body">最近更新：2026-09-14 22:58:45 UTC<br>状态：成功</p>
+  <p class="dpr-home-dashboard-body">最近更新：2026-09-15 22:24:09 UTC<br>状态：成功</p>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-brief-card">
   <div class="dpr-home-dashboard-header">
@@ -69,7 +69,9 @@
     <strong class="dpr-home-dashboard-count">AI</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<p>今日精读1篇、速读1篇，聚焦LLM自动启发式设计与算法工程。最值得看的是《RouteRepair》（8.0/10）提出的实例级故障诊断与定向修复思路，速读的共享内存精确最小割（6.0/10）可作补充。普通读者可先读RouteRepair，理解“先诊断再修复”如何提升路径优化中的LLM启发式设计。</p>
+<p>今日精读1篇、速读1篇，聚焦大模型自动启发式设计与智能体算法工程两条线。</p>
+<p>最值得看的是8.0分的《RouteRepair》，它把&quot;实例级失败诊断+定向修复&quot;引入LLM驱动的路径优化启发式设计，比笼统重训更有针对性；7.0分的《Agentic Algorithm Engineering》则展示了智能体如何改进共享内存精确最小割算法。</p>
+<p>普通读者可先读RouteRepair了解&quot;诊断式修复&quot;思路，再顺带浏览智能体算法工程那篇，观察这套方法能否迁移到自己关心的优化问题上。</p>
   </div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-deep-card">
