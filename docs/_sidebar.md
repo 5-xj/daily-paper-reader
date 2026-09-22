@@ -1,6 +1,9 @@
 * <a class="dpr-sidebar-root-link" href="#/">首页</a>
 * <a class="dpr-sidebar-root-link dpr-sidebar-noactive-link" href="javascript:void(0)" data-dpr-hash="#/tutorial/README">教程</a>
 * Daily Papers
+  * 2026-09-22 <!--dpr-date:20260922-->
+    * 速读区
+      * <a class="dpr-sidebar-item-link dpr-sidebar-item-structured" href="#/202609/22/2609.24944v1-approximating-prize-collecting-tsp-below-1556" data-sidebar-item="{&quot;title&quot;: &quot;Approximating Prize-Collecting TSP below 1.556&quot;, &quot;link&quot;: &quot;https://arxiv.org/abs/2609.24944v1-approximating-prize-collecting-tsp-below-1556&quot;, &quot;score&quot;: &quot;7.0&quot;, &quot;tags&quot;: [{&quot;kind&quot;: &quot;query&quot;, &quot;label&quot;: &quot;atsp&quot;}], &quot;evidence&quot;: &quot;将奖品收集TSP近似比改进到1.555761&quot;}">Approximating Prize-Collecting TSP below 1.556</a>
   * 2026-09-20 <!--dpr-date:20260920-->
     * 速读区
       * <a class="dpr-sidebar-item-link dpr-sidebar-item-structured" href="#/202609/20/2609.16910v1-improved-approximation-for-unsplittable-cvrp-via-a-greedy-approach" data-sidebar-item="{&quot;title&quot;: &quot;Improved Approximation for Unsplittable CVRP via a Greedy Approach&quot;, &quot;link&quot;: &quot;https://arxiv.org/abs/2609.16910v1-improved-approximation-for-unsplittable-cvrp-via-a-greedy-approach&quot;, &quot;score&quot;: &quot;6.0&quot;, &quot;tags&quot;: [{&quot;kind&quot;: &quot;query&quot;, &quot;label&quot;: &quot;atsp&quot;}], &quot;evidence&quot;: &quot;车辆路径问题的3.159近似，与TSP类路径问题紧密相关&quot;}">Improved Approximation for Unsplittable CVRP via a Greedy Approach</a>
