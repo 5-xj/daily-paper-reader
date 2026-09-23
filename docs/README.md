@@ -48,17 +48,17 @@
 <section class="dpr-home-dashboard-card dpr-home-report-card">
   <div class="dpr-home-dashboard-header">
     <div>
-      <span class="dpr-home-dashboard-kicker">2026-09-22</span>
+      <span class="dpr-home-dashboard-kicker">2026-09-23</span>
       <h3 class="dpr-home-dashboard-title">今日汇总</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">共 1 篇</strong>
+    <strong class="dpr-home-dashboard-count">共 3 篇</strong>
   </div>
   <dl class="dpr-home-dashboard-stats">
     <div class="dpr-home-dashboard-stat"><dt>累计更新</dt><dd>1 次</dd></div>
-    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>0</dd></div>
-    <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>1</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>1</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>2</dd></div>
   </dl>
-  <p class="dpr-home-dashboard-body">最近更新：2026-09-22 22:03:18 UTC<br>状态：成功</p>
+  <p class="dpr-home-dashboard-body">最近更新：2026-09-23 21:57:16 UTC<br>状态：成功</p>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-brief-card">
   <div class="dpr-home-dashboard-header">
@@ -69,7 +69,9 @@
     <strong class="dpr-home-dashboard-count">AI</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<p>今日精选速读 1 篇，聚焦旅行商问题的近似算法新进展。唯一入选的《Approximating Prize-Collecting TSP below 1.556》拿到 7.0 分，看点在于把奖赏收集型 TSP 的近似比压到 1.556 以下，刷新了该问题的理论边界。普通读者若对组合优化感兴趣，可从这篇入手了解近似比为何是衡量算法优劣的关键指标。</p>
+<p>今天共筛出 3 篇论文，精读 1 篇、速读 2 篇，主线聚焦在&quot;用大模型自动设计算法&quot;。</p>
+<p>最值得看的是 9.0 分的《Online Automated Algorithm Design with Large Language Models》，另两篇 6.0 分速读分别覆盖遗传编程行为分簇的车辆路径局部搜索与 Dual-GNN 多层级粗化求最大独立集。</p>
+<p>普通读者建议先读那篇精读了解 LLM 自动算法设计的思路，再按自己关心的组合优化场景挑一篇速读对照。</p>
   </div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-deep-card">
@@ -78,12 +80,12 @@
       <span class="dpr-home-dashboard-kicker">今日累计</span>
       <h3 class="dpr-home-dashboard-title">精读推荐</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">0 篇</strong>
+    <strong class="dpr-home-dashboard-count">1 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<p class="dpr-home-dashboard-empty">今日暂无推荐。</p>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Online Automated Algorithm Design with Large Language Models">Online Automated Algorithm Design with Large Language Models</span></li></ul>
   </div>
-
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">ad <strong>1</strong></span></div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-skim-card">
   <div class="dpr-home-dashboard-header">
@@ -91,12 +93,12 @@
       <span class="dpr-home-dashboard-kicker">今日累计</span>
       <h3 class="dpr-home-dashboard-title">速读推荐</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">1 篇</strong>
+    <strong class="dpr-home-dashboard-count">2 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Approximating Prize-Collecting TSP below 1.556">Approximating Prize-Collecting TSP below 1.556</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Genetic Programming with Behaviour-based Niching for Learning Guided Local Search in Vehicle Routing Problems">Genetic Programming with Behaviour-based Niching for Learning Guided Local Search in Vehicle Routing Problems</span></li><li><span class="dpr-home-dashboard-paper-title" title="Dual-GNN Multilevel Coarsening for Maximum Independent Set">Dual-GNN Multilevel Coarsening for Maximum Independent Set</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">atsp <strong>1</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">atsp <strong>1</strong></span><span class="dpr-home-dashboard-tag">sr <strong>1</strong></span></div>
 </section>
 </div>
 
