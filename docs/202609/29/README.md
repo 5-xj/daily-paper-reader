@@ -1,16 +1,13 @@
 # 日报 · 2026-09-29
 
-- 最近生成时间：2026-09-29 00:15:39 UTC
-- 今日累计更新：1 次
+- 最近生成时间：2026-09-29 23:05:33 UTC
+- 今日累计更新：2 次
 - 今日累计推荐总数：3
 - 精读区：1
 - 速读区：2
 
 ## 今日简报（AI）
-- 今日共生成 3 篇推荐（精读 1 篇，速读 2 篇）
-- 精读：《SPO: Discovering Adaptive Large Neighborhood Search Operators via Stackelberg Program Optimization》（9.0/10）
-- 速读：《Mixed-integer flow formulations for motion planning and decision-making of networked multi-agent systems》（6.0/10）, 《Self-Supervised Combinatorial Optimization with Constraints via Frank-Wolfe》（6.0/10）
-- 这些结果覆盖了当下较热的方向，建议先看精读区论文的关键问题与方法。
+今日精读1篇、速读2篇，重点聚焦组合优化与多智能体规划。最值得看的是9.0分的SPO，用Stackelberg规划自动发现自适应大邻域搜索算子，另有Frank-Wolfe自监督约束组合优化、混合整数流多智能体运动规划两篇速读。普通读者可先读SPO了解“让算法自己设计算子”的思路，再按需跟进多智能体规划方向。
 
 ## 精读区
 1. [SPO: Discovering Adaptive Large Neighborhood Search Operators via Stackelberg Program Optimization](/202609/29/2609.31179v1-spo-discovering-adaptive-large-neighborhood-search-operators-via-stackelberg-program-optimization) （9.0/10）

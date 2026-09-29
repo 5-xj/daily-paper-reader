@@ -54,11 +54,11 @@
     <strong class="dpr-home-dashboard-count">共 3 篇</strong>
   </div>
   <dl class="dpr-home-dashboard-stats">
-    <div class="dpr-home-dashboard-stat"><dt>累计更新</dt><dd>1 次</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>累计更新</dt><dd>2 次</dd></div>
     <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>1</dd></div>
     <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>2</dd></div>
   </dl>
-  <p class="dpr-home-dashboard-body">最近更新：2026-09-29 00:15:39 UTC<br>状态：成功</p>
+  <p class="dpr-home-dashboard-body">最近更新：2026-09-29 23:05:33 UTC<br>状态：成功</p>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-brief-card">
   <div class="dpr-home-dashboard-header">
@@ -69,10 +69,7 @@
     <strong class="dpr-home-dashboard-count">AI</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<p>今日共生成 3 篇推荐（精读 1 篇，速读 2 篇）</p>
-<p>精读：《SPO: Discovering Adaptive Large Neighborhood Search Operators via Stackelberg Program Optimization》（9.0/10）</p>
-<p>速读：《Mixed-integer flow formulations for motion planning and decision-making of networked multi-agent systems》（6.0/10）, 《Self-Supervised Combinatorial Optimization with Constraints via Frank-Wolfe》（6.0/10）</p>
-<p>这些结果覆盖了当下较热的方向，建议先看精读区论文的关键问题与方法。</p>
+<p>今日精读1篇、速读2篇，重点聚焦组合优化与多智能体规划。最值得看的是9.0分的SPO，用Stackelberg规划自动发现自适应大邻域搜索算子，另有Frank-Wolfe自监督约束组合优化、混合整数流多智能体运动规划两篇速读。普通读者可先读SPO了解“让算法自己设计算子”的思路，再按需跟进多智能体规划方向。</p>
   </div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-deep-card">
