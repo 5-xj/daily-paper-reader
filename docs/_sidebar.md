@@ -1,6 +1,9 @@
 * <a class="dpr-sidebar-root-link" href="#/">首页</a>
 * <a class="dpr-sidebar-root-link dpr-sidebar-noactive-link" href="javascript:void(0)" data-dpr-hash="#/tutorial/README">教程</a>
 * Daily Papers
+  * 2026-09-30 <!--dpr-date:20260930-->
+    * 精读区
+      * <a class="dpr-sidebar-item-link dpr-sidebar-item-structured" href="#/202609/30/2609.31179v1-spo-discovering-adaptive-large-neighborhood-search-operators-via-stackelberg-program-optimization" data-sidebar-item="{&quot;title&quot;: &quot;SPO: Discovering Adaptive Large Neighborhood Search Operators via Stackelberg Program Optimization&quot;, &quot;link&quot;: &quot;https://arxiv.org/abs/2609.31179v1-spo-discovering-adaptive-large-neighborhood-search-operators-via-stackelberg-program-optimization&quot;, &quot;score&quot;: &quot;8.0&quot;, &quot;tags&quot;: [{&quot;kind&quot;: &quot;query&quot;, &quot;label&quot;: &quot;ad&quot;}], &quot;evidence&quot;: &quot;基于大语言模型自动发现自适应可执行搜索算子的程序优化框架&quot;}">SPO: Discovering Adaptive Large Neighborhood Search Operators via Stackelberg Program Optimization</a>
   * 2026-09-29 <!--dpr-date:20260929-->
     * 精读区
       * <a class="dpr-sidebar-item-link dpr-sidebar-item-structured" href="#/202609/29/2609.31179v1-spo-discovering-adaptive-large-neighborhood-search-operators-via-stackelberg-program-optimization" data-sidebar-item="{&quot;title&quot;: &quot;SPO: Discovering Adaptive Large Neighborhood Search Operators via Stackelberg Program Optimization&quot;, &quot;link&quot;: &quot;https://arxiv.org/abs/2609.31179v1-spo-discovering-adaptive-large-neighborhood-search-operators-via-stackelberg-program-optimization&quot;, &quot;score&quot;: &quot;9.0&quot;, &quot;tags&quot;: [{&quot;kind&quot;: &quot;query&quot;, &quot;label&quot;: &quot;ad&quot;}], &quot;evidence&quot;: &quot;基于LLM的Stackelberg程序优化发现自适应LNS算子&quot;}">SPO: Discovering Adaptive Large Neighborhood Search Operators via Stackelberg Program Optimization</a>
