@@ -256,9 +256,27 @@ def build_user_requirements(
             }
         )
 
-    profiles = (((config or {}).get("subscriptions") or {}).get("intent_profiles") or [])
+    # composite 必须复用 subscription_plan 的运行时选择结果：默认排除暂停词条，
+    # 但 DPR_FILTER_PROFILE_TAG 明确点选暂停词条时仍允许本次运行使用它。
+    selected_tags = {
+        _norm_text(tag).lower()
+        for tag in (pipeline_inputs.get("tags") or [])
+        if _norm_text(tag)
+    }
+    has_runtime_profile_filter = bool(
+        _norm_text(os.getenv("DPR_FILTER_PROFILE_TAG"))
+        or _norm_text(os.getenv("DPR_PROFILE_TAG"))
+    )
+    profiles = pipeline_inputs.get("profiles") or []
     if isinstance(profiles, list):
         for idx, profile in enumerate(profiles):
+            profile_tag = _norm_text((profile or {}).get("tag")).lower()
+            if not profile_tag or profile_tag not in selected_tags:
+                continue
+            if not has_runtime_profile_filter and _as_bool(
+                (profile or {}).get("paused"), False
+            ):
+                continue
             composite_req = _build_profile_composite_requirement(profile, idx, seen)
             if composite_req:
                 requirements.append(composite_req)

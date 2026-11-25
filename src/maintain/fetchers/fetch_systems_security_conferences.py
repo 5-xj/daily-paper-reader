@@ -26,6 +26,7 @@ DEFAULT_TIMEOUT = 30
 OSDI_LIST_URL = "https://www.usenix.org/conference/osdi{short_year}/technical-sessions"
 NDSS_LIST_URL = "https://www.ndss-symposium.org/ndss{year}/accepted-papers/"
 SOSP_ACCEPTED_URL = "https://sigops.org/s/conferences/sosp/{year}/accepted.html"
+SOSP_SCHEDULE_URL = "https://sigops.org/s/conferences/sosp/{year}/schedule.html"
 IEEE_SP_ACCEPTED_URL = "https://sp{year}.ieee-security.org/accepted-papers.html"
 IEEE_SP_PROCEEDINGS = {
     2024: "1RjE8VKKk1y",
@@ -397,12 +398,60 @@ def parse_sosp_accepted_page(html_text: str, *, year: int) -> List[Dict[str, Any
     return out
 
 
+def parse_sosp_schedule_page(html_text: str) -> List[Dict[str, str]]:
+    soup = BeautifulSoup(html_text, "html.parser")
+    out: List[Dict[str, str]] = []
+    for li in soup.select("ul.papers li"):
+        paper_link = li.select_one('a[href*="dl.acm.org/doi/"]')
+        if not paper_link:
+            continue
+        href = _norm(paper_link.get("href"))
+        doi_match = re.search(r"/doi/(10\.[^?#/]+/[^?#]+)", href, flags=re.IGNORECASE)
+        if not doi_match:
+            continue
+        text = _norm(li.get_text(" ", strip=True))
+        title = _norm(re.sub(r"\s*\[\s*paper\s*\].*$", "", text, flags=re.IGNORECASE))
+        doi = _norm(doi_match.group(1)).rstrip("/")
+        if not title or not doi:
+            continue
+        out.append(
+            {
+                "title": title,
+                "doi": doi,
+                "link": f"https://dl.acm.org/doi/{doi}",
+                "pdf_url": build_acm_pdf_url(doi),
+                "source_paper_id": doi,
+            }
+        )
+    return out
+
+
+def apply_sosp_schedule_metadata(
+    papers: List[Dict[str, Any]],
+    schedule_items: Iterable[Dict[str, str]],
+) -> List[Dict[str, Any]]:
+    metadata_by_title = {
+        _title_key(item.get("title")): item
+        for item in schedule_items
+        if _title_key(item.get("title"))
+    }
+    for paper in papers:
+        item = metadata_by_title.get(_title_key(paper.get("title")))
+        if not item:
+            continue
+        for key in ("doi", "link", "pdf_url", "source_paper_id"):
+            value = _norm(item.get(key))
+            if value:
+                paper[key] = value
+    return papers
+
+
 def build_acm_pdf_url(doi: str) -> str:
     return f"https://dl.acm.org/doi/pdf/{_norm(doi)}"
 
 
 def _sosp_container_title(year: int) -> str:
-    ordinal = {2024: "30th", 2025: "31st"}.get(int(year), "")
+    ordinal = {2024: "30th", 2025: "31st", 2026: "32nd"}.get(int(year), "")
     if ordinal:
         return f"Proceedings of the ACM SIGOPS {ordinal} Symposium on Operating Systems Principles"
     return "Proceedings of the ACM SIGOPS Symposium on Operating Systems Principles"
@@ -439,6 +488,20 @@ def _crossref_query_by_title(title: str, *, year: int) -> Dict[str, Any] | None:
     return None
 
 
+def _crossref_query_by_doi(doi: str) -> Dict[str, Any] | None:
+    normalized_doi = _norm(doi)
+    if not normalized_doi:
+        return None
+    res = requests.get(
+        f"https://api.crossref.org/works/{quote(normalized_doi, safe='')}",
+        headers={"User-Agent": USER_AGENT},
+        timeout=DEFAULT_TIMEOUT,
+    )
+    res.raise_for_status()
+    item = (res.json() or {}).get("message") or {}
+    return item if isinstance(item, dict) else None
+
+
 def enrich_sosp_with_crossref(papers: List[Dict[str, Any]], *, year: int, workers: int = 4) -> List[Dict[str, Any]]:
     try:
         crossref_items = _crossref_sosp_items(year=year)
@@ -470,6 +533,8 @@ def enrich_sosp_with_crossref(papers: List[Dict[str, Any]], *, year: int, worker
             suffix_items = item_by_suffix.get(_title_key(paper.get("title"))) or []
             if len(suffix_items) == 1:
                 item = suffix_items[0]
+        if not item and _norm(paper.get("doi")):
+            item = _crossref_query_by_doi(_norm(paper.get("doi")))
         if not item:
             try:
                 item = _crossref_query_by_title(str(paper.get("title") or ""), year=year)
@@ -660,8 +725,11 @@ def fetch_sosp(years: Iterable[int], *, workers: int = 4, require_pdf: bool = Tr
     rows: List[Dict[str, Any]] = []
     for year in years:
         url = SOSP_ACCEPTED_URL.format(year=int(year))
+        schedule_url = SOSP_SCHEDULE_URL.format(year=int(year))
         try:
             papers = parse_sosp_accepted_page(_request_text(url), year=int(year))
+            schedule_items = parse_sosp_schedule_page(_request_text(schedule_url))
+            papers = apply_sosp_schedule_metadata(papers, schedule_items)
             papers = enrich_sosp_with_crossref(papers, year=int(year), workers=workers)
             papers = enrich_sosp_with_semantic_scholar(papers)
         except Exception as exc:

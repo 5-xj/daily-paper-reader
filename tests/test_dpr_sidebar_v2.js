@@ -43,7 +43,7 @@ function setupBrowserStub(hash) {
           text = decodeEntities(value).replace(/<[^>]*>/g, '');
         },
         get innerHTML() {
-          return text;
+          return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
         },
         get textContent() {
           return text;
@@ -67,6 +67,178 @@ function loadSidebarForTest(hash) {
   setupBrowserStub(hash);
   delete require.cache[require.resolve('../app/dpr-sidebar.js')];
   return require('../app/dpr-sidebar.js');
+}
+
+// 公布日期必须有明确精度和出处；旧入库/更新时间不能冒充发表时间。
+{
+  const api = loadSidebarForTest().__test;
+  const model = { daily: [], conferences: [
+    { name: 'ICML', years: '2025', label: 'ICML 2025', topics: [{ label: 'ATSP', papers: [
+      { id: 'b', title: 'Beta', score: 8, published: '2025-01-01', updated: '2099-12-31' },
+      { id: 'a', title: 'Alpha', score: 9 },
+    ] }] },
+    { name: 'ACL', years: '2025', label: 'ACL 2025', topics: [] },
+  ] };
+  api.applyConferencePublicationDates(model, { items: [
+    { conference: 'ICML', year: 2025, publication_date: '2025-07-21', publication_date_precision: 'day', publication_date_source: 'https://official.test/icml', publication_date_kind: 'proceedings' },
+    { conference: 'ACL', year: 2025, publication_date: '2025-08', publication_date_precision: 'month', publication_date_source: 'https://official.test/acl', publication_date_kind: 'proceedings' },
+  ] });
+  assert.deepEqual(model.conferences.map(c => c.name), ['ACL', 'ICML']);
+  assert.deepEqual(model.conferences[1].topics[0].papers.map(p => p.id), ['a', 'b']);
+  assert.equal(api.publicationDateLabel(model.conferences[1].topics[0].papers[0]), '2025-07-21 · 论文集公布');
+  const old = { conferences: [{ name: 'SOSP', years: '2026', topics: [{ papers: [{ id: 'x', published: '2026-01-01', updated: '2099-01-01' }] }] }] };
+  api.applyConferencePublicationDates(old, {});
+  assert.equal(api.publicationDateLabel(old.conferences[0].topics[0].papers[0]), '2026 · 具体日期待确认');
+  const rows = [
+    { id: 'z', title: 'Zeta', score: 10, published: '2099-12-31', updated: '2099-12-31' },
+    { id: 'a', title: 'Alpha', score: 6, publication_date: '2025-11-03', publication_date_precision: 'day', publication_date_source: 'Official proceedings', publication_date_kind: 'proceedings' },
+    { id: 'c', title: 'Charlie', score: 9, publication_date: '2025-11-03', publication_date_precision: 'day', publication_date_source: 'Official proceedings', publication_date_kind: 'proceedings' },
+    { id: 'b', title: 'Beta', score: 9, publication_date: '2025-11-03', publication_date_precision: 'day', publication_date_source: 'Official proceedings', publication_date_kind: 'proceedings' },
+    { id: 'invalid', title: 'Invalid', score: 1, publication_date: '2025-02-30', publication_date_precision: 'day', publication_date_source: 'Official proceedings', publication_date_kind: 'proceedings' },
+  ];
+  const papers = { daily: [], conferences: [{ name: 'TEST', years: '2025', label: 'TEST 2025', topics: [{ label: 'ATSP', papers: rows }] }] };
+  rows.forEach(row => { row.section = 'conference'; row.href = '#/conference/test-2025/' + row.id; });
+  api.applyConferencePublicationDates(papers, {});
+  assert.deepEqual(papers.conferences[0].topics[0].papers.map(p => p.id), ['b', 'c', 'a', 'z', 'invalid']);
+  assert.equal(rows[4].publication_date_precision, 'year');
+  const html = api.renderBodyHtml(papers, { conferenceViewMode: 'conf', readMap: {} });
+  assert.ok(html.includes('2025-11-03 · 论文集公布'));
+  assert.ok(html.includes('2025 · 具体日期待确认'));
+  assert.ok(html.includes('aria-label="论文标记"'));
+  const mixed = { conferences: [{ name: 'ICML', years: '2024-2025', topics: [{ papers: [
+    { id: 'old', href: '#/conference/icml-2024/old' },
+    { id: 'new', href: '#/conference/icml-2025/new' },
+  ] }] }] };
+  api.applyConferencePublicationDates(mixed, { items: [
+    { conference: 'ICML', year: 2025, publication_date: '2025-10-06', publication_date_precision: 'day', publication_date_source: 'https://official.test', publication_date_kind: 'proceedings' },
+  ] });
+  assert.deepEqual(mixed.conferences[0].topics[0].papers.map(p => p.publication_date), ['2025-10-06', '2024']);
+  const mergedRoutes = { conferences: [{ name: 'ICML', years: '2024-2025', topics: [{ papers: [
+    { id: 'explicit', href: '#/conference/icml-2024-2025/explicit', publication_date: '2025', publication_date_precision: 'year' },
+    { id: 'unknown', href: '#/conference/icml-2024-2025/unknown' },
+    { id: 'no-route', href: '#/conference/icml/no-route' },
+  ] }] }] };
+  api.applyConferencePublicationDates(mergedRoutes, {});
+  const mergedPapers = Object.fromEntries(mergedRoutes.conferences[0].topics[0].papers.map(p => [p.id, p]));
+  assert.equal(mergedPapers.explicit.publication_date, '2025');
+  assert.equal(mergedPapers.unknown.publication_date_precision, 'unknown');
+  assert.equal(mergedPapers['no-route'].publication_date_precision, 'unknown');
+  api.applyConferencePublicationDates(mergedRoutes, { items: [
+    { conference: 'ICML', year: 2025, publication_date: '2025-10-06', publication_date_precision: 'day', publication_date_source: 'https://official.test', publication_date_kind: 'proceedings' },
+  ] });
+  assert.equal(mergedPapers.explicit.publication_date, '2025-10-06');
+  assert.equal(mergedPapers.unknown.publication_date_precision, 'unknown');
+  assert.equal(api.publicationDateLabel({ publication_date: '2026-09', publication_date_precision: 'month', publication_date_kind: 'accepted_notice' }), '2026-09 · 录用预告');
+}
+
+{
+  const api = loadSidebarForTest().__test;
+  const guides = api.parseStarterPackIndex({ version: 1, packs: [
+    { run_id: '20260911-abcdef123456', tag: 'ATSP', status: 'complete', paper_count: 12, href: 'https://evil.test' },
+    { run_id: '../unsafe', tag: 'bad', status: 'complete' },
+    { run_id: '20260911-abcdef123456', tag: 'duplicate' },
+    { run_id: '20260910-111111111111', tag: '<SR>', status: 'needs_resume' },
+  ] });
+  assert.equal(guides.length, 2);
+  assert.equal(guides[0].href, '#/starter-pack/20260911-abcdef123456/README');
+  const model = { daily: [], conferences: [], starterPacks: guides };
+  for (const state of [{}, { filter: 'unread' }]) {
+    const html = api.renderBodyHtml(model, state);
+    assert.ok(html.includes('专题回溯'));
+    assert.ok(html.includes('大礼包'));
+    assert.ok(html.includes('待续跑'));
+    assert.ok(html.includes('&lt;SR&gt;'));
+    assert.ok(html.includes(guides[0].href));
+    assert.ok(!html.includes('evil.test'));
+    assert.ok(!html.includes('target="_blank"'));
+    assert.ok(!html.includes('data-paper-id='));
+  }
+  assert.equal(api.collectPaperHrefsFromModel(model).length, 0);
+  assert.ok(api.collectReportHrefsFromModel(model).includes(guides[0].href));
+  assert.deepEqual(api.parseStarterPackIndex({}), []);
+  assert.ok(!api.renderBodyHtml({ daily: [], conferences: [] }, {}).includes('入门导读'));
+  const legacyHtml = api.renderBodyHtml(model, {});
+  assert.ok(!legacyHtml.includes('/papers.md'), '旧包不得编造新版导出文件');
+  assert.ok(!legacyHtml.includes('/catalog'), '旧包不得编造未知列表页');
+  const run = '20260912-111111111111';
+  const modern = api.parseStarterPackIndex({version: 1, packs: [{run_id: run, mode: '90',
+    export_path: `docs/starter-pack/${run}/papers.md`, selected_records: [
+      {route: 'saved/z', title: 'first selected', score: 8},
+      {route: 'saved/a', title: 'second selected', score: 8},
+    ]}]});
+  const modernHtml = api.renderBodyHtml({daily: [], conferences: [], starterPacks: modern}, {});
+  assert.ok(modernHtml.includes(`href="#/starter-pack/${run}/README">结果总览／导出清单</a>`));
+  assert.ok(modernHtml.includes(`href="#/starter-pack/${run}/catalog">论文列表</a>`));
+  assert.ok(modernHtml.indexOf('first selected') < modernHtml.indexOf('second selected'), '同分保持后端最终名单顺序');
+  const badExport = api.parseStarterPackIndex({version: 1, packs: [{run_id: run, export_path: 'https://evil.test/papers.md'}]});
+  assert.ok(!api.renderBodyHtml({daily: [], conferences: [], starterPacks: badExport}, {}).includes(' download '));
+  const scoped = api.parseStarterPackIndex({version: 1, packs: [{run_id: run, mode: '365', tag: 'RL',
+    scope: {description: '强化学习', refinement: '限定策略优化与离线学习<img src=x onerror=alert(1)>', as_of: '2026-09-12'}}]});
+  const scopedHtml = api.renderBodyHtml({daily: [], conferences: [], starterPacks: scoped}, {});
+  assert.ok(scopedHtml.includes('RL · 365天 · 限定策略优化'));
+  assert.ok(scopedHtml.includes('截止日期（不含当天）：2026-09-12'));
+  assert.ok(scopedHtml.includes('本次细化：'));
+  assert.ok(scopedHtml.includes('&lt;img'));
+  assert.ok(!scopedHtml.includes('<img'));
+}
+
+{
+  const api = loadSidebarForTest().__test;
+  const run = '20260912-abcdef123456';
+  const records = [
+    {route: `starter-pack/${run}/papers/older`, title: 'Older original', score: 9, published: '2025-09-01', summary: '原样短说明'},
+    {route: `starter-pack/${run}/papers/newer`, title: 'Newer original', score: 7, published: '2026-09-01'},
+    {route: 'javascript:alert(1)', title: 'unsafe'},
+    {route: '../unsafe', title: 'unsafe'},
+  ];
+  const packs = api.parseStarterPackIndex({version: 1, packs: [{run_id: run, tag: 'ATSP', mode: '365', export_path: `docs/starter-pack/${run}/papers.md`, selected_records: records, content_done: 1, content_pending: 1}]});
+  const model = {daily: [], conferences: [], starterPacks: packs};
+  const paperId = `starter-pack/${run}/papers/older`;
+  assert.equal(packs[0].papers.length, 2);
+  assert.equal(api.collectPaperHrefsFromModel(model).length, 2);
+  assert.ok(api.collectUnreadPaperIdsForSnapshot(model, {}).has(paperId));
+  const html = api.renderBodyHtml(model, {readMap: {[paperId]: 'good'}});
+  assert.ok(html.includes('ATSP · 365天'));
+  assert.ok(html.includes('结果总览'));
+  assert.ok(html.includes('导出'));
+  assert.ok(html.includes('data-paper-status="good"'));
+  assert.ok(html.includes('原样短说明'));
+  assert.ok(!html.includes('data-daily-calendar'));
+  assert.ok(html.indexOf('Older original') < html.indexOf('Newer original'));
+  const dateHtml = api.renderBodyHtml(model, {taskSort: 'date'});
+  assert.ok(dateHtml.indexOf('Newer original') < dateHtml.indexOf('Older original'));
+  assert.equal(api.computeModelReadSummary(model, {}).daily.unread, 0);
+  const unread = api.renderBodyHtml(model, {filter: 'unread', readMap: {[paperId]: 'good'}});
+  assert.ok(!unread.includes('Older original'));
+  assert.ok(unread.includes('Newer original'));
+  const kept = api.renderBodyHtml(model, {filter: 'unread', currentPaperHref: '#/' + paperId, readMap: {[paperId]: 'good'}, unreadResultPaperIds: []});
+  assert.ok(kept.includes('Older original'));
+}
+
+{
+  const api = loadSidebarForTest().__test;
+  const run = '20260912-abcdef123456';
+  const route = '20250910-20260909/marked';
+  const data = {title: 'Marked new result', research_run_id: run};
+  const line = (id, payload) => `      * <a href="#/${id}" data-sidebar-item="${JSON.stringify(payload).replace(/"/g, '&quot;')}">${payload.title}</a>\n`;
+  const model = api.parseSidebar('* Daily Papers\n  * 2025-09-10 ～ 2026-09-09 <!--dpr-date:20250910-20260909-->\n    * 速读区\n' + line(route, data) + line('20250910-20260909/old', {title: 'Unmarked historical'}));
+  assert.equal(model.daily[0].papers.find(p => p.title === data.title).research_run_id, run);
+  assert.ok(api.renderBodyHtml(model, {}).includes('Marked new result'), '索引未加载时旧投影可用');
+  model.starterPacks = api.parseStarterPackIndex({version: 1, packs: [{run_id: run, mode: '365', selected_records: [{route, title: data.title, score: 8, reading_status: 'pending', publication_date: '2025', publication_date_precision: 'year', publication_date_kind: 'proceedings', publication_date_source: 'official'}]}]});
+  const html = api.renderBodyHtml(model, {});
+  assert.equal((html.match(/Marked new result/gi) || []).length, 2, '只保留任务行的data-search和标题，不重复legacy行');
+  assert.ok(html.includes('Unmarked historical'));
+  assert.ok(html.includes('2025 · 具体日期待确认'));
+  assert.ok(!html.includes('2025-01-01'));
+  assert.ok(html.includes('阅读内容待生成'));
+  assert.deepEqual(api.computeModelReadSummary(model, {}).total, {papers: 2, unread: 2});
+  const unread = api.renderBodyHtml(model, {filter: 'unread'});
+  assert.equal((unread.match(/Marked new result/gi) || []).length, 2, '未读过滤也必须保留任务索引以去重');
+  delete model.daily[0].papers.find(p => p.title === data.title).research_run_id;
+  const legacyKept = api.renderBodyHtml(model, {});
+  assert.equal((legacyKept.match(/Marked new result/gi) || []).length, 4, '无标记历史条目不能因新任务同route而隐藏');
+  assert.deepEqual(api.computeModelReadSummary(model, {}).total, {papers: 2, unread: 2}, '总计按route唯一计数');
+  assert.deepEqual(api.computeModelReadSummary(model, {}).backtrack, {papers: 2, unread: 2});
 }
 
 function cssRule(css, selector) {
@@ -743,12 +915,12 @@ function testQuickLinksCenterTextAndDetachIcon() {
   assert.ok(/transform:\s*translateY\(-50%\)/i.test(iconRule));
 
   const feedbackRule = cssRule(css, '.dpr-sidebar-feedback-btn');
-  assert.ok(/background:\s*#f0fdf4/i.test(feedbackRule));
-  assert.ok(/border-color:\s*#86efac/i.test(feedbackRule));
-  assert.ok(/color:\s*#166534/i.test(feedbackRule));
-  assert.ok(/box-shadow:\s*inset 0 0 0 1px rgba\(34,\s*197,\s*94,\s*0\.1\)/i.test(feedbackRule));
+  assert.ok(/background:\s*#eff5fc/i.test(feedbackRule));
+  assert.ok(/border-color:\s*#c9ddf5/i.test(feedbackRule));
+  assert.ok(/color:\s*#2c588c/i.test(feedbackRule));
+  assert.ok(/box-shadow:\s*inset 0 0 0 1px rgba\(76,\s*125,\s*181,\s*0\.08\)/i.test(feedbackRule));
   assert.ok(/@media \(max-width:\s*420px\)[\s\S]*\.dpr-sidebar-header\s*{[^}]*gap:\s*6px/i.test(css));
-  assert.ok(/body\.dpr-dark \.dpr-sidebar-feedback-btn\s*{[^}]*background:\s*#123522/i.test(css));
+  assert.ok(/body\.dpr-dark \.dpr-sidebar-feedback-btn\s*{[^}]*background:\s*#15263d/i.test(css));
 }
 
 function testFeedbackEntryClickContractAndFallbacks() {
@@ -1196,34 +1368,29 @@ function testSidebarStickyHierarchyCssContract() {
   assert.ok(!/margin-top:\s*-/i.test(axisTabsRule));
 
   const calendarRule = cssRule(css, '.dpr-sidebar-calendar');
-  assert.ok(/background:\s*var\(--dpr-sidebar-surface\)/i.test(calendarRule));
-  assert.ok(/border-radius:\s*8px/i.test(calendarRule));
-  assert.ok(/--dpr-sidebar-calendar-notch:\s*10px/i.test(calendarRule));
-  assert.ok(/clip-path:\s*polygon\(/i.test(calendarRule));
+  assert.ok(/background:\s*#f7f9fc/i.test(calendarRule));
+  assert.ok(/border-radius:\s*12px/i.test(calendarRule));
+  assert.ok(!/clip-path:\s*polygon\(/i.test(calendarRule));
   const calendarHeaderRule = cssRule(css, '.dpr-sidebar-calendar-header');
-  assert.ok(/padding:\s*0 8px/i.test(calendarHeaderRule));
+  assert.ok(/padding:\s*0 4px/i.test(calendarHeaderRule));
   const calendarGridRule = cssRule(css, '.dpr-sidebar-calendar-grid');
   assert.ok(/display:\s*grid/i.test(calendarGridRule));
   assert.ok(/grid-template-columns:\s*repeat\(7,\s*minmax\(0,\s*1fr\)\)/i.test(calendarGridRule));
   const calendarDayRule = cssRule(css, '.dpr-sidebar-calendar-day');
-  assert.ok(/min-height:\s*42px/i.test(calendarDayRule));
+  assert.ok(/min-height:\s*34px/i.test(calendarDayRule));
   assert.ok(/position:\s*relative/i.test(calendarDayRule));
   assert.ok(/\.dpr-sidebar-calendar-day\s*{[\s\S]*flex-direction:\s*column/i.test(css));
+  assert.ok(/\.dpr-sidebar-calendar-day\.is-empty \.dpr-sidebar-calendar-day-counts\s*{[^}]*display:\s*none/i.test(css));
   const calendarDayCountsRule = cssRule(css, '.dpr-sidebar-calendar-day-counts');
-  assert.ok(/position:\s*absolute/i.test(calendarDayCountsRule));
-  assert.ok(/left:\s*4px/i.test(calendarDayCountsRule));
-  assert.ok(/right:\s*4px/i.test(calendarDayCountsRule));
-  assert.ok(/bottom:\s*5px/i.test(calendarDayCountsRule));
-  assert.ok(/display:\s*grid/i.test(calendarDayCountsRule));
-  assert.ok(/grid-template-columns:\s*minmax\(0,\s*1fr\)\s+minmax\(0,\s*1fr\)/i.test(calendarDayCountsRule));
-  assert.ok(/column-gap:\s*4px/i.test(calendarDayCountsRule));
+  assert.ok(/display:\s*inline-flex/i.test(calendarDayCountsRule));
+  assert.ok(/flex-direction:\s*row-reverse/i.test(calendarDayCountsRule));
+  assert.ok(/justify-content:\s*center/i.test(calendarDayCountsRule));
   const calendarDayTotalRule = cssRule(css, '.dpr-sidebar-calendar-day-total');
   assert.ok(/min-width:\s*0/i.test(calendarDayTotalRule));
-  assert.ok(/text-align:\s*right/i.test(calendarDayTotalRule));
-  assert.ok(/color:\s*#94a3b8/i.test(calendarDayTotalRule));
   const calendarDayUnreadRule = cssRule(css, '.dpr-sidebar-calendar-day-unread');
   assert.ok(/min-width:\s*0/i.test(calendarDayUnreadRule));
-  assert.ok(/text-align:\s*left/i.test(calendarDayUnreadRule));
+  assert.ok(/body\.dpr-dark \.dpr-sidebar-calendar\s*{[^}]*background:\s*#141f33/i.test(css));
+  assert.ok(/body\.dpr-dark \.dpr-sidebar-paper\s*{[^}]*background:\s*#162235/i.test(css));
 
   const sectionHeaderRule = cssRule(css, '.dpr-sidebar-panel.is-expanded .dpr-sidebar-axis-section-header');
   assert.ok(/position:\s*sticky/i.test(sectionHeaderRule));

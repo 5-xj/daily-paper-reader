@@ -19,6 +19,7 @@ MODELSCOPE_ENDPOINT = "https://modelscope.cn/hf"
 _DEFAULT_RETRIES = 3
 _DEFAULT_HF_BACKOFF_RETRIES = 1
 _DEFAULT_REMOTE_TIMEOUT_SECONDS = 60
+_DEFAULT_REMOTE_MAX_TEXT_CHARS = 8000
 _DEFAULT_REMOTE_EMBED_ENDPOINT = os.getenv("DPR_EMBED_API_URL") or "https://zwwen.online/embed"
 # 当前服务使用固定 API key 接入。
 _DEFAULT_REMOTE_EMBED_API_KEY = os.getenv("DPR_EMBED_API_KEY") or "26932a86d772001af60cbd9d2c162bfda3a90e094f797f3d6806f6077478b27a"
@@ -55,6 +56,7 @@ class RemoteSentenceTransformer:
     api_key: str = "",
     timeout: int = _DEFAULT_REMOTE_TIMEOUT_SECONDS,
     default_batch_size: int = 8,
+    max_text_chars: int = _DEFAULT_REMOTE_MAX_TEXT_CHARS,
     local_device: str = "cpu",
     local_retries: int | None = None,
     local_providers: tuple[tuple[str, str], ...] = (
@@ -69,6 +71,7 @@ class RemoteSentenceTransformer:
     self.api_key = str(api_key or "").strip()
     self.timeout = max(int(timeout or _DEFAULT_REMOTE_TIMEOUT_SECONDS), 1)
     self.default_batch_size = max(int(default_batch_size or 1), 1)
+    self.max_text_chars = max(int(max_text_chars or 1), 1)
     self.max_seq_length = None
     self.local_device = str(local_device or "cpu")
     self.local_retries = local_retries
@@ -95,6 +98,26 @@ class RemoteSentenceTransformer:
     if self.api_key:
       headers["Authorization"] = f"Bearer {self.api_key}"
     return headers
+
+  def prepare_texts(self, texts: list[str]) -> list[str]:
+    prepared: list[str] = []
+    truncated_count = 0
+    for index, text in enumerate(texts):
+      if not isinstance(text, str):
+        raise TypeError(f"embedding 文本索引 {index} 必须是字符串")
+      normalized = " ".join(text.strip().split())
+      if not normalized:
+        raise ValueError(f"embedding 文本索引 {index} 不能为空")
+      if len(normalized) > self.max_text_chars:
+        normalized = normalized[: self.max_text_chars]
+        truncated_count += 1
+      prepared.append(normalized)
+    if truncated_count:
+      self._log(
+        f"[WARN] 远程 embedding 输入超过 {self.max_text_chars} 字符，"
+        f"已截断 {truncated_count} 条"
+      )
+    return prepared
 
   def _get_local_model(self):
     if remote_models_required():
@@ -172,6 +195,8 @@ class RemoteSentenceTransformer:
       empty = np.zeros((0, 0), dtype=np.float32)
       return empty if convert_to_numpy else empty.tolist()
 
+    texts = self.prepare_texts(texts)
+
     safe_batch_size = max(int(batch_size or self.default_batch_size), 1)
     if not self._remote_available:
       return self._encode_via_local(
@@ -210,7 +235,13 @@ class RemoteSentenceTransformer:
             json={"texts": chunk},
             timeout=self.timeout,
           )
-        response.raise_for_status()
+        try:
+          response.raise_for_status()
+        except requests.HTTPError as exc:
+          detail = response.text.strip()[:500]
+          raise RuntimeError(
+            f"远程 embedding HTTP {response.status_code}: {detail or '响应正文为空'}"
+          ) from exc
         data = response.json()
         embeddings = data.get("embeddings")
         if not isinstance(embeddings, list):
@@ -370,6 +401,11 @@ def load_sentence_transformer(
         f"回退默认 {_DEFAULT_REMOTE_TIMEOUT_SECONDS}"
       )
       remote_timeout = _DEFAULT_REMOTE_TIMEOUT_SECONDS
+    remote_max_text_chars = int(
+      os.getenv("DPR_EMBED_MAX_TEXT_CHARS", str(_DEFAULT_REMOTE_MAX_TEXT_CHARS))
+    )
+    if remote_max_text_chars <= 0:
+      raise ValueError("DPR_EMBED_MAX_TEXT_CHARS 必须大于 0")
     log(
       f"[INFO] 使用远程 embedding 服务：model={model_name} "
       f"endpoint={str(remote_endpoint).strip()} timeout={remote_timeout}s device={device}"
@@ -379,6 +415,7 @@ def load_sentence_transformer(
       endpoint=str(remote_endpoint).strip(),
       api_key=remote_api_key,
       timeout=remote_timeout,
+      max_text_chars=remote_max_text_chars,
       local_device=device,
       local_retries=retries,
       local_providers=providers,

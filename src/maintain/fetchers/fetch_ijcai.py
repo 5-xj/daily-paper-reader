@@ -6,7 +6,7 @@ Detail page: https://www.ijcai.org/proceedings/{year}/{paper_num}
 PDF URL    : https://www.ijcai.org/proceedings/{year}/{paper_num:04d}.pdf
 
 Each paper on the list page lives inside a `.paper_wrapper` element that
-contains a `.title`, `.details` (authors), and an anchor whose href ends
+contains a `.title`, `.authors`, and an anchor whose href ends
 with ".pdf".  An optional `.abstract` element may carry the abstract text
 directly; when it is absent we fall back to scraping the individual detail
 page.
@@ -100,17 +100,31 @@ def _extract_paper_num(pdf_url: str, detail_url: Optional[str] = None) -> Option
 # Abstract fetching (detail page fallback)
 # ---------------------------------------------------------------------------
 
-def _fetch_abstract_from_detail(detail_url: str) -> str:
-    """Scrape the abstract from an individual paper's detail page."""
+def _fetch_detail_metadata(detail_url: str) -> Dict[str, str]:
+    """从官方详情页读取摘要与有证据的正式发表日期。"""
     try:
         html = _get(detail_url)
         soup = BeautifulSoup(html, "html.parser")
-        abstract_el = soup.select_one(".abstract")
-        if abstract_el:
-            return _norm(abstract_el.get_text(separator=" "))
+        abstract_el = soup.select_one(".abstract") or soup.select_one(
+            ".proceedings-detail .row .col-md-12"
+        )
+        abstract = _norm(abstract_el.get_text(separator=" ")) if abstract_el else ""
+        if abstract.lower().startswith("keywords:"):
+            abstract = ""
+
+        publication_meta = soup.select_one('meta[name="citation_publication_date"]')
+        raw_date = _norm(publication_meta.get("content")) if publication_meta else ""
+        publication_date = ""
+        for date_format in ("%Y/%m/%d", "%Y-%m-%d"):
+            try:
+                publication_date = datetime.strptime(raw_date, date_format).date().isoformat()
+                break
+            except ValueError:
+                continue
+        return {"abstract": abstract, "publication_date": publication_date}
     except Exception as exc:
-        log(f"failed to fetch abstract from {detail_url}: {exc}")
-    return ""
+        log(f"failed to fetch detail metadata from {detail_url}: {exc}")
+    return {"abstract": "", "publication_date": ""}
 
 
 # ---------------------------------------------------------------------------
@@ -131,8 +145,8 @@ def _parse_paper(
         return None
 
     # --- authors -------------------------------------------------------------
-    details_el = wrapper.select_one(".details")
-    raw_authors = _norm(details_el.get_text()) if details_el else ""
+    authors_el = wrapper.select_one(".authors")
+    raw_authors = _norm(authors_el.get_text()) if authors_el else ""
     # Authors are typically comma‑separated; some years use " and " as well.
     authors: List[str] = []
     if raw_authors:
@@ -171,9 +185,11 @@ def _parse_paper(
     if abstract_el:
         abstract = _norm(abstract_el.get_text(separator=" "))
 
-    if not abstract and fetch_abstracts:
-        target = detail_url or f"{BASE_URL}/{year}/{paper_num}"
-        abstract = _fetch_abstract_from_detail(target)
+    target = detail_url or f"{BASE_URL}/{year}/{paper_num}"
+    detail_metadata = _fetch_detail_metadata(target) if fetch_abstracts else {}
+    if not abstract:
+        abstract = detail_metadata.get("abstract", "")
+    publication_date = detail_metadata.get("publication_date", "")
 
     # --- build record --------------------------------------------------------
     return {
@@ -184,7 +200,11 @@ def _parse_paper(
         "authors": authors,
         "primary_category": f"IJCAI-{year}",
         "categories": [f"IJCAI-{year}"],
-        "published": f"{year}-08-01T00:00:00+00:00",
+        "published": f"{publication_date}T00:00:00+00:00" if publication_date else None,
+        "publication_date": publication_date or str(year),
+        "publication_date_precision": "day" if publication_date else "year",
+        "publication_date_source": target if publication_date else "",
+        "publication_date_kind": "proceedings" if publication_date else "unknown",
         "link": f"{BASE_URL}/{year}/{paper_num}",
         "pdf_url": f"{BASE_URL}/{year}/{paper_num:04d}.pdf",
     }
@@ -242,6 +262,17 @@ def fetch_year(
 
     # Deterministic ordering by paper number.
     papers.sort(key=lambda p: p["id"])
+    if year == 2026 and fetch_abstracts:
+        incomplete = [
+            paper["id"] for paper in papers
+            if not all(paper.get(field) for field in ("title", "authors", "abstract", "published", "pdf_url"))
+        ]
+        if len(papers) != len(wrappers) or incomplete:
+            raise RuntimeError(
+                "incomplete official proceedings for IJCAI 2026: "
+                f"wrappers={len(wrappers)} parsed={len(papers)} "
+                f"missing_metadata={incomplete[:10]}"
+            )
     log(f"year={year}: collected {len(papers)} papers")
     return papers
 

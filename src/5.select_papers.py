@@ -372,13 +372,22 @@ def normalize_carryover_tag(tag: Any) -> str:
         return ""
     if ":" in text:
         prefix, suffix = text.split(":", 1)
-        if prefix in {"query", "keyword"} and suffix.strip():
+        if prefix.lower() in {"query", "keyword"} and suffix.strip():
             text = suffix.strip()
+    if text.lower().endswith(":composite"):
+        text = text[: -len(":composite")].strip()
     return text
 
 
 def resolve_carryover_tags(item: Dict[str, Any], fallback_tags: List[str] | None = None) -> List[str]:
     collected: List[str] = []
+
+    # 原始召回标签记录论文真正由哪些订阅词条命中。LLM 归属可能因组合需求
+    # 偏移，因此历史去重必须同时参考原始标签，不能只依赖模型输出。
+    for raw_tag in normalize_tags(item.get("tags")):
+        normalized = normalize_carryover_tag(raw_tag)
+        if normalized:
+            collected.append(normalized)
 
     matched_query_tag = normalize_carryover_tag(item.get("matched_query_tag"))
     if matched_query_tag:

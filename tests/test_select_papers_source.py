@@ -194,6 +194,90 @@ class SelectPapersSourceTagTest(unittest.TestCase):
         self.assertEqual(seen_ahd, {"paper-ahd"})
         self.assertEqual(seen_all, {"paper-ahd", "paper-gene"})
 
+    def test_normalize_carryover_tag_strips_composite_suffix(self):
+        for raw_tag in (
+            "query:ATSP",
+            "query:ATSP:composite",
+            "keyword:ATSP:composite",
+        ):
+            with self.subTest(raw_tag=raw_tag):
+                self.assertEqual(self.mod.normalize_carryover_tag(raw_tag), "ATSP")
+
+    def test_resolve_carryover_tags_accepts_original_tags_without_llm_metadata(self):
+        self.assertEqual(
+            self.mod.resolve_carryover_tags({"tags": ["keyword:ATSP"]}),
+            ["ATSP"],
+        )
+
+    def test_collect_seen_ids_uses_original_retrieval_tags_when_llm_tag_is_wrong(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = pathlib.Path(tmpdir)
+            recommend_dir = root / "20260915" / "recommend"
+            recommend_dir.mkdir(parents=True, exist_ok=True)
+            payload = {
+                "deep_dive": [
+                    {
+                        "id": "2609.11452v1",
+                        "tags": ["keyword:ATSP", "query:ATSP"],
+                        "matched_query_tag": "query:ad:composite",
+                        "llm_tags": ["query:ad:composite"],
+                    }
+                ],
+                "quick_skim": [],
+            }
+            (recommend_dir / "arxiv_papers_20260915.standard.json").write_text(
+                json.dumps(payload, ensure_ascii=False),
+                encoding="utf-8",
+            )
+
+            seen_atsp = self.mod.collect_seen_ids(
+                str(root), "20260916", active_tags=["ATSP"]
+            )
+            seen_other = self.mod.collect_seen_ids(
+                str(root), "20260916", active_tags=["symbolic-regression"]
+            )
+
+        self.assertEqual(seen_atsp, {"2609.11452"})
+        self.assertEqual(seen_other, set())
+
+    def test_second_day_candidate_filters_same_canonical_arxiv_paper(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = pathlib.Path(tmpdir)
+            recommend_dir = root / "20260915" / "recommend"
+            recommend_dir.mkdir(parents=True, exist_ok=True)
+            payload = {
+                "deep_dive": [
+                    {
+                        "id": "2609.11452v1",
+                        "tags": ["keyword:ATSP", "query:ATSP"],
+                        "matched_query_tag": "query:ad:composite",
+                    }
+                ],
+                "quick_skim": [],
+            }
+            (recommend_dir / "arxiv_papers_20260915.standard.json").write_text(
+                json.dumps(payload, ensure_ascii=False),
+                encoding="utf-8",
+            )
+
+            seen_atsp = self.mod.collect_seen_ids(
+                str(root), "20260916", active_tags=["ATSP"]
+            )
+            candidates = self.mod.build_candidates(
+                [
+                    {
+                        "id": "2609.11452v2",
+                        "title": "Already recommended yesterday",
+                        "llm_score": 9.4,
+                    },
+                    {"id": "2609.99999v1", "title": "Fresh", "llm_score": 8.1},
+                ],
+                [],
+                seen_atsp,
+            )
+
+        self.assertEqual([item.get("id") for item in candidates], ["2609.99999v1"])
+
     def test_collect_seen_ids_canonicalizes_arxiv_versions(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             root = pathlib.Path(tmpdir)

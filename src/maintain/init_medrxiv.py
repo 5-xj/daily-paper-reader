@@ -20,7 +20,7 @@ SCRIPT_DIR = os.path.dirname(__file__)
 TODAY_STR = datetime.now(timezone.utc).strftime("%Y%m%d")
 LONG_RANGE_DAYS_THRESHOLD = 7
 DEFAULT_EMBED_BATCH_SIZE = 8
-DEFAULT_EMBED_CHUNK_SIZE = 512
+DEFAULT_EMBED_CHUNK_SIZE = 128
 LOCAL_MAINTAIN_EMBED_BATCH_SIZE = 64
 LOCAL_MAINTAIN_EMBED_CHUNK_SIZE = 1024
 
@@ -160,6 +160,7 @@ def main() -> None:
         "--raw-input",
         raw_path,
     ]
+    sync_cmd.append("--stream-upsert")
     if args.local_maintain:
         sync_cmd.append("--local-maintain-mode")
     if args.embed_model:

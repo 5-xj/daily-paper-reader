@@ -434,6 +434,10 @@ def normalize_paper(x: Dict[str, Any]) -> Dict[str, Any] | None:
     pdf_url = _norm(x.get("pdf_url"))
     if pdf_url:
         row["pdf_url"] = pdf_url
+    for key in ("source_paper_id", "doi", "version"):
+        value = _norm(x.get(key))
+        if value:
+            row[key] = value
     return row
 
 

@@ -184,20 +184,17 @@ def classify_review(review, paper, topic=None):
     }
 
 
+def review_cache_path(paper, topic, cache, model_key):
+    return Path(cache) / (fingerprint([
+        PROMPT_VERSION, SYSTEM_PROMPT, SCHEMA, model_key, topic,
+        {k: paper[k] for k in ("id", "title", "abstract")},
+    ]) + '.json')
+
+
 def review_batch(papers, topic, cache, client_factory, model_key):
     cached, missing = [], []
     for paper in papers:
-        key = fingerprint(
-            [
-                PROMPT_VERSION,
-                SYSTEM_PROMPT,
-                SCHEMA,
-                model_key,
-                topic,
-                {k: paper[k] for k in ("id", "title", "abstract")},
-            ]
-        )
-        path = Path(cache) / (key + ".json")
+        path = review_cache_path(paper, topic, cache, model_key)
         if path.exists():
             value = json.loads(path.read_text(encoding="utf-8"))
             if value.get("id") != paper["id"]:
@@ -207,6 +204,8 @@ def review_batch(papers, topic, cache, client_factory, model_key):
             missing.append((paper, path))
     if not missing:
         return cached
+    # 使用批内短编号，避免模型将v2“纠正”为v1；落盘仍保留原始版本ID。
+    aliases = {f'p{i}': p['id'] for i, (p, _) in enumerate(missing)}
     client = client_factory()
     response = client.chat_structured(
         [
@@ -217,8 +216,8 @@ def review_batch(papers, topic, cache, client_factory, model_key):
                     {
                         "topic": topic,
                         "papers": [
-                            {k: p[k] for k in ("id", "title", "abstract")}
-                            for p, _ in missing
+                            {'id': f'p{i}', 'title':p['title'], 'abstract':p['abstract']}
+                            for i, (p, _) in enumerate(missing)
                         ],
                     },
                     ensure_ascii=False,
@@ -231,9 +230,14 @@ def review_batch(papers, topic, cache, client_factory, model_key):
     if response.get("parse_error") or not isinstance(response.get("parsed"), dict):
         raise ValueError("DeepSeek评审结果不完整，可重跑复用已完成进度")
     reviews = response["parsed"].get("papers") or []
+    # 兼容已有客户端返回原ID，但不允许混用编号/ID或猜测、修正版本号。
+    if len(reviews) == len(missing) and {r.get('id') for r in reviews} == set(aliases):
+        reviews = [{**r, 'id':aliases[r['id']]} for r in reviews]
     if len(reviews) != len(missing) or {r.get("id") for r in reviews} != {
         p["id"] for p, _ in missing
     }:
+        write_json(Path(cache) / 'failures' / (fingerprint([p['id'] for p, _ in missing]) + '.json'),
+                   {'expected_ids':[p['id'] for p, _ in missing], 'received_ids':[r.get('id') for r in reviews]})
         raise ValueError("DeepSeek返回ID缺失或重复，未把本批次标为完成")
     by_id = {r["id"]: r for r in reviews}
     validated = [
@@ -322,6 +326,19 @@ def rebuild_report_index(root, *, with_fulltext=False, with_reading=False):
 
 def run_review(config, days, root, run_token):
     days = validate_days(days)
+    if days in (90, 365):
+        # 所有90/365入口复用同一预算，旧workflow也不能绕开最终100篇上限。
+        from topic_research import run_research
+        current_plan = build_pipeline_inputs(config)
+        if not current_plan.get("bm25_queries") and not current_plan.get("embedding_queries"):
+            raise RuntimeError("所选专题没有启用的关键词或语义查询")
+        profiles = current_plan.get("profiles") or []
+        if len(profiles) != 1:
+            raise ValueError("90天/365天专题研究请明确选择一个已保存词条")
+        end = datetime.strptime(run_token[-8:], "%Y%m%d").date() + timedelta(days=1)
+        code_root = Path(__file__).resolve().parents[1]
+        publish = Path(root).resolve() != code_root or os.getenv("GITHUB_REPOSITORY", "").lower() not in ("", "ziwenhahaha/daily-paper-reader")
+        return run_research(config, profiles[0]["tag"], str(days), end.isoformat(), root, publish=publish)
     backend = get_source_backend(config, "arxiv")
     if (
         not backend.get("enabled")
