@@ -48,17 +48,17 @@
 <section class="dpr-home-dashboard-card dpr-home-report-card">
   <div class="dpr-home-dashboard-header">
     <div>
-      <span class="dpr-home-dashboard-kicker">2026-11-16 ~ 2026-11-25</span>
+      <span class="dpr-home-dashboard-kicker">2026-11-26</span>
       <h3 class="dpr-home-dashboard-title">今日汇总</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">共 3 篇</strong>
+    <strong class="dpr-home-dashboard-count">共 1 篇</strong>
   </div>
   <dl class="dpr-home-dashboard-stats">
     <div class="dpr-home-dashboard-stat"><dt>累计更新</dt><dd>1 次</dd></div>
-    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>2</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>0</dd></div>
     <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>1</dd></div>
   </dl>
-  <p class="dpr-home-dashboard-body">最近更新：2026-11-25 15:13:13 UTC<br>状态：成功</p>
+  <p class="dpr-home-dashboard-body">最近更新：2026-11-26 02:35:39 UTC<br>状态：成功</p>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-brief-card">
   <div class="dpr-home-dashboard-header">
@@ -69,7 +69,9 @@
     <strong class="dpr-home-dashboard-count">AI</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<p>2026-11-16至11-25共梳理3篇TSP近似算法论文，其中2篇精读、1篇速读，精读均获9.0分。最值得关注的是两篇9分精读：一篇把非对称路径TSP归约到非对称TSP，另一篇给出非对称多路径TSP的近似算法。普通读者可先读这两篇9分精读，把6分速读作为扩展参考。</p>
+<p>今天只速读1篇：量子设备解旅行商问题的QUBO/HOBO方案。</p>
+<p>最值得看的是它把TSP写成QUBO与HOBO两类公式，关注量子设备落地求解的建模路径。</p>
+<p>普通读者可先扫摘要和实验部分，确认可复现性后再决定是否精读。</p>
   </div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-deep-card">
@@ -78,12 +80,12 @@
       <span class="dpr-home-dashboard-kicker">今日累计</span>
       <h3 class="dpr-home-dashboard-title">精读推荐</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">2 篇</strong>
+    <strong class="dpr-home-dashboard-count">0 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Reducing Asymmetric Path TSP to Asymmetric TSP">Reducing Asymmetric Path TSP to Asymmetric TSP</span></li><li><span class="dpr-home-dashboard-paper-title" title="Approximation Algorithms for Asymmetric Multi-Path TSP">Approximation Algorithms for Asymmetric Multi-Path TSP</span></li></ul>
+<p class="dpr-home-dashboard-empty">今日暂无推荐。</p>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">atsp <strong>2</strong></span></div>
+
 </section>
 <section class="dpr-home-dashboard-card dpr-home-skim-card">
   <div class="dpr-home-dashboard-header">
@@ -94,7 +96,7 @@
     <strong class="dpr-home-dashboard-count">1 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Improved Approximation Algorithms for Multi-Path TSP and Ordered TSP">Improved Approximation Algorithms for Multi-Path TSP and Ordered TSP</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Solving the Traveling Salesman Problem Using Quantum Devices: QUBO and HOBO Formulations">Solving the Traveling Salesman Problem Using Quantum Devices: QUBO and HOBO Formulations</span></li></ul>
   </div>
   <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">atsp <strong>1</strong></span></div>
 </section>

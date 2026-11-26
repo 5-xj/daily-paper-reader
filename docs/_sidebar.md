@@ -1,6 +1,9 @@
 * <a class="dpr-sidebar-root-link" href="#/">首页</a>
 * <a class="dpr-sidebar-root-link dpr-sidebar-noactive-link" href="javascript:void(0)" data-dpr-hash="#/tutorial/README">教程</a>
 * Daily Papers
+  * 2026-11-26 <!--dpr-date:20261126-->
+    * 速读区
+      * <a class="dpr-sidebar-item-link dpr-sidebar-item-structured" href="#/202611/26/2611.30972v1-solving-the-traveling-salesman-problem-using-quantum-devices-qubo-and-hobo-formulations" data-sidebar-item="{&quot;title&quot;: &quot;Solving the Traveling Salesman Problem Using Quantum Devices: QUBO and HOBO Formulations&quot;, &quot;link&quot;: &quot;https://arxiv.org/abs/2611.30972v1-solving-the-traveling-salesman-problem-using-quantum-devices-qubo-and-hobo-formulations&quot;, &quot;score&quot;: &quot;6.0&quot;, &quot;tags&quot;: [{&quot;kind&quot;: &quot;query&quot;, &quot;label&quot;: &quot;atsp&quot;}], &quot;evidence&quot;: &quot;以QUBO与HOBO建模TSP并用量子设备求解&quot;}">Solving the Traveling Salesman Problem Using Quantum Devices: QUBO and HOBO Formulations</a>
   * 2026-11-16 ~ 2026-11-25 <!--dpr-date:20261116-20261125-->
     * 精读区
       * <a class="dpr-sidebar-item-link dpr-sidebar-item-structured" href="#/20261116-20261125/2611.21453v1-reducing-asymmetric-path-tsp-to-asymmetric-tsp" data-sidebar-item="{&quot;title&quot;: &quot;Reducing Asymmetric Path TSP to Asymmetric TSP&quot;, &quot;link&quot;: &quot;https://arxiv.org/abs/2611.21453v1-reducing-asymmetric-path-tsp-to-asymmetric-tsp&quot;, &quot;score&quot;: &quot;9.0&quot;, &quot;tags&quot;: [{&quot;kind&quot;: &quot;query&quot;, &quot;label&quot;: &quot;atsp&quot;}], &quot;evidence&quot;: &quot;非对称路径TSP到非对称TSP的近似保持归约&quot;}">Reducing Asymmetric Path TSP to Asymmetric TSP</a>
