@@ -83,6 +83,129 @@
     }
     return '<span class="dpr-sidebar-paper-stars" data-score="' + safeAttr(s.toFixed(1)) + '">' + stars + '</span>';
   }
+  var CONFERENCE_TAG_NAMES = {
+    neurips: 'NeurIPS',
+    nips: 'NeurIPS',
+    iclr: 'ICLR',
+    icml: 'ICML',
+    aaai: 'AAAI',
+    cvpr: 'CVPR',
+    eccv: 'ECCV',
+    ijcai: 'IJCAI',
+    acl: 'ACL',
+    emnlp: 'EMNLP',
+    osdi: 'OSDI',
+    sosp: 'SOSP',
+    ndss: 'NDSS',
+    ieee_sp: 'S&P',
+    ieeesp: 'S&P',
+    ieee_s_p: 'S&P',
+    sp: 'S&P',
+    s_p: 'S&P',
+    iccv: 'ICCV',
+    naacl: 'NAACL',
+    coling: 'COLING',
+    kdd: 'KDD',
+    www: 'WWW',
+    sigir: 'SIGIR',
+    ccs: 'CCS',
+    usenix: 'USENIX',
+  };
+  function canonicalConferenceBadgeName(raw) {
+    var text = String(raw || '').trim();
+    if (!text) return '';
+    var key = text.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+    if (CONFERENCE_TAG_NAMES[key]) return CONFERENCE_TAG_NAMES[key];
+    return text.toUpperCase();
+  }
+  function extractYearMonthCode(value) {
+    var s = String(value || '').trim();
+    if (!s) return '';
+    var m = s.match(/^(?:19|20)(\d{2})[-/.]?(0[1-9]|1[0-2])(?:\b|[-/.T\s]|$)/);
+    return m ? (m[1] + m[2]) : '';
+  }
+  function extractArxivYearMonthCode(paper) {
+    var p = paper || {};
+    var sources = [p.id, p.href, p.link];
+    for (var i = 0; i < sources.length; i += 1) {
+      var text = String(sources[i] || '');
+      if (!text) continue;
+      // 新版 arXiv ID：YYMM.NNNNN(vN)，天然编码首次提交的年份后两位+月份
+      var newId = text.match(/(?:^|[\/_-])(\d{2})(0[1-9]|1[0-2])\.\d{4,5}(?:v\d+)?(?=$|[^0-9])/);
+      if (newId) return newId[1] + newId[2];
+      // 旧版 arXiv ID：arxiv.org/pdf/hep-th/9901001
+      var oldId = text.match(/arxiv\.org\/(?:pdf|abs)\/[a-z-]+(?:\.[a-z-]+)?\/(\d{2})(0[1-9]|1[0-2])\d{3}/i);
+      if (oldId) return oldId[1] + oldId[2];
+    }
+    return extractYearMonthCode(p.publication_date) || extractYearMonthCode(p.published);
+  }
+  function paperVenueTimeBadge(paper) {
+    var p = paper || {};
+    var href = String(p.href || '');
+    var id = String(p.id || '');
+    var link = String(p.link || '');
+
+    // 1. 会议论文：优先识别 conference/<conf>-<year>、paper.conference_name 或 openreview-<conf>-<year>
+    var confSlug = '';
+    var routeYears = [];
+    var routeMatch = href.match(/\/conference\/([^/]+)\//i);
+    if (routeMatch && routeMatch[1]) {
+      var seg = routeMatch[1];
+      routeYears = seg.match(/\b(?:19|20)\d{2}\b/g) || [];
+      confSlug = seg.replace(/[-_]*(?:19|20)\d{2}(?:[-_]+(?:19|20)\d{2})*$/g, '').replace(/[-_]+$/, '');
+    }
+    if (!confSlug && p.conference_name) {
+      confSlug = String(p.conference_name).trim();
+    }
+    var idConfMatch = id.match(/^(?:openreview-)?([a-z][a-z0-9_-]*?)-(19\d{2}|20\d{2})-/i);
+    if (!confSlug && idConfMatch) {
+      var candidateKey = idConfMatch[1].toLowerCase().replace(/[^a-z0-9]+/g, '_');
+      if (CONFERENCE_TAG_NAMES[candidateKey]) {
+        confSlug = idConfMatch[1];
+      }
+    }
+    if (confSlug) {
+      var confName = canonicalConferenceBadgeName(confSlug);
+      var singleYear = '';
+      if (/^(?:19|20)\d{2}$/.test(String(p.conference_year || '').trim())) {
+        singleYear = String(p.conference_year).trim();
+      } else if (/^(?:19|20)\d{2}/.test(String(p.publication_date || '').trim())) {
+        singleYear = String(p.publication_date).trim().slice(0, 4);
+      } else if (idConfMatch && idConfMatch[2]) {
+        singleYear = idConfMatch[2];
+      } else if (routeYears.length === 1) {
+        singleYear = routeYears[0];
+      }
+      return {
+        kind: 'venue-conf',
+        label: confName + (singleYear ? singleYear.slice(2) : ''),
+      };
+    }
+
+    // 2. bioRxiv / medRxiv / ChemRxiv 预印本
+    var lowerAll = (href + ' ' + id + ' ' + link).toLowerCase();
+    var preprintMatch = lowerAll.match(/\b(biorxiv|medrxiv|chemrxiv)\b/);
+    if (preprintMatch) {
+      var preNames = { biorxiv: 'bioRxiv', medrxiv: 'medRxiv', chemrxiv: 'ChemRxiv' };
+      var preYm = extractYearMonthCode(p.publication_date) || extractYearMonthCode(p.published);
+      return {
+        kind: 'venue-preprint',
+        label: preNames[preprintMatch[1]] + preYm,
+      };
+    }
+
+    // 3. arXiv 论文：ArxivYYMM（如 Arxiv2601 代表 26 年 1 月）
+    var hasArxivId = /(?:^|[\/_-])\d{2}(?:0[1-9]|1[0-2])\.\d{4,5}(?:v\d+)?(?=$|[^0-9])/.test(id + ' ' + href + ' ' + link);
+    var isArxiv = hasArxivId || /arxiv\.org/i.test(link) || p.publication_date_kind === 'arxiv_first_submission';
+    if (isArxiv) {
+      var ym = extractArxivYearMonthCode(p);
+      return {
+        kind: 'venue-arxiv',
+        label: 'Arxiv' + ym,
+      };
+    }
+    return null;
+  }
   function dedupePaperTags(tags) {
     if (!Array.isArray(tags) || !tags.length) return [];
     var out = [];
@@ -98,12 +221,14 @@
     });
     return out;
   }
-  function tagsHtml(tags) {
-    var clean = dedupePaperTags(tags);
+  function tagsHtml(tags, venueBadge) {
+    var combined = venueBadge && venueBadge.label ? [venueBadge].concat(tags || []) : (tags || []);
+    var clean = dedupePaperTags(combined);
     if (!clean.length) return '';
     return clean
       .map(function (t) {
-        return '<span class="dpr-sidebar-paper-tag dpr-sidebar-paper-tag-' + safeAttr(t.kind) + '">' + safeText(t.label) + '</span>';
+        var extraVenueClass = t.kind && t.kind.indexOf('venue-') === 0 ? ' dpr-sidebar-paper-tag-venue' : '';
+        return '<span class="dpr-sidebar-paper-tag' + extraVenueClass + ' dpr-sidebar-paper-tag-' + safeAttr(t.kind) + '">' + safeText(t.label) + '</span>';
       })
       .join('');
   }
@@ -342,10 +467,61 @@
   function taskPapers(model) {
     return (model && model.starterPacks || []).reduce(function (papers, pack) { return papers.concat(pack.papers || []); }, []);
   }
+  function taskScoreValue(paper) {
+    var n = parseScore(paper && paper.score);
+    return n == null ? 0 : n;
+  }
+  function taskStarRank(paper) {
+    var s = parseScore(paper && paper.score);
+    if (s == null) return 0;
+    return Math.max(0, Math.min(5, Math.round(s / 2)));
+  }
+  function isTaskConferencePaper(paper) {
+    if (!paper) return false;
+    var badge = paperVenueTimeBadge(paper);
+    if (badge && badge.kind === 'venue-conf') return true;
+    if (paper.section === 'conference' || paper.publication_date_kind === 'proceedings') return true;
+    return /^#?\/?conference\//i.test(String(paper.href || paper.id || ''));
+  }
+  function taskArxivIdSortKey(paper) {
+    if (!paper) return '';
+    var joined = [paper.id, paper.href, paper.link].map(function (v) { return String(v || ''); }).join(' ');
+    var m = joined.match(/(?:^|[/:_-])(\d{2})(0[1-9]|1[0-2])\.(\d{4,5})(?:v\d+)?(?=$|[^0-9])/);
+    if (!m) return '';
+    var num = m[3].length < 5 ? ('00000' + m[3]).slice(-5) : m[3];
+    return '20' + m[1] + '-' + m[2] + '-' + num;
+  }
+  function taskRecencySortKey(paper) {
+    var pub = taskPublicationSortKey(paper);
+    if (pub) return pub;
+    var arxivKey = taskArxivIdSortKey(paper);
+    if (arxivKey) return arxivKey.slice(0, 7);
+    var year = String((paper && paper.conference_year) || '').trim();
+    return /^\d{4}$/.test(year) ? year : '';
+  }
   function sortedTaskPapers(papers, order) {
     return (papers || []).slice().sort(function (a, b) {
-      var delta = order === 'date' ? taskPublicationSortKey(b).localeCompare(taskPublicationSortKey(a)) : b.score - a.score;
-      return delta || b.score - a.score || (a.selection_rank || 0) - (b.selection_rank || 0);
+      if (order === 'date') {
+        var dateDelta = taskRecencySortKey(b).localeCompare(taskRecencySortKey(a));
+        if (dateDelta) return dateDelta;
+        var arxivDateDelta = taskArxivIdSortKey(b).localeCompare(taskArxivIdSortKey(a));
+        if (arxivDateDelta) return arxivDateDelta;
+        var scoreFallback = taskScoreValue(b) - taskScoreValue(a);
+        if (scoreFallback) return scoreFallback;
+        return (a.selection_rank || 0) - (b.selection_rank || 0);
+      }
+      // 相关性降序（按侧边栏展示的星级归组）：同一星级内先全部展示会议（先新后旧），再降序展示 arXiv（先新后旧）
+      var starDelta = taskStarRank(b) - taskStarRank(a);
+      if (starDelta) return starDelta;
+      var confDelta = (isTaskConferencePaper(a) ? 0 : 1) - (isTaskConferencePaper(b) ? 0 : 1);
+      if (confDelta) return confDelta;
+      var recencyDelta = taskRecencySortKey(b).localeCompare(taskRecencySortKey(a));
+      if (recencyDelta) return recencyDelta;
+      var arxivDelta = taskArxivIdSortKey(b).localeCompare(taskArxivIdSortKey(a));
+      if (arxivDelta) return arxivDelta;
+      var exactScoreDelta = taskScoreValue(b) - taskScoreValue(a);
+      if (exactScoreDelta) return exactScoreDelta;
+      return (a.selection_rank || 0) - (b.selection_rank || 0);
     });
   }
   function taskPublicationSortKey(paper) {
@@ -377,8 +553,9 @@
       var primaryLabel = pack.export_path
         ? (pack.mode === 'starter-pack' ? '方向导读／导出清单' : '结果总览／导出清单')
         : '原有导读';
-      var navigation = '<a class="dpr-sidebar-axis-tab dpr-sidebar-starter-guide" href="' + safeAttr(pack.href) + '">' + primaryLabel + '</a>';
-      if (pack.export_path) navigation += ' <a class="dpr-sidebar-axis-tab" href="#/starter-pack/' + pack.run_id + '/catalog">论文列表</a> <a class="dpr-sidebar-axis-tab" href="' + safeAttr(pack.export_path) + '" download data-no-router>下载 Markdown</a>';
+      var navigation = '<div class="dpr-sidebar-topic-actions"><a class="dpr-sidebar-topic-action dpr-sidebar-starter-guide" href="' + safeAttr(pack.href) + '">' + primaryLabel + '</a>';
+      if (pack.export_path) navigation += ' <a class="dpr-sidebar-topic-action" href="#/starter-pack/' + pack.run_id + '/catalog">论文列表</a> <a class="dpr-sidebar-topic-action dpr-sidebar-topic-export" href="' + safeAttr(pack.export_path) + '" download data-no-router>下载 Markdown</a>';
+      navigation += '</div>';
       if (scope.description) navigation += '<div class="dpr-sidebar-paper-evidence">研究方向：' + safeText(scope.description) + '</div>';
       if (refinement) navigation += '<div class="dpr-sidebar-paper-evidence">本次细化：' + safeText(refinement) + '</div>';
       if (scope.as_of) navigation += '<div class="dpr-sidebar-paper-meta">截止日期（不含当天）：' + safeText(scope.as_of) + '</div>';
@@ -576,6 +753,7 @@
     return {
       syncActive: false,
       scrollPanel: panelKey || '',
+      animatePanel: panelKey || '',
       dispatchUpdated: false,
     };
   }
@@ -806,6 +984,7 @@
                     report: safeReport,
                     export: safeExport,
                     as_of: /^\d{4}-\d{2}-\d{2}$/.test(String(parsedTopic.as_of || '')) ? String(parsedTopic.as_of) : '',
+                    window: typeof parsedTopic.window === 'string' ? parsedTopic.window.trim() : '',
                     description: typeof parsedTopic.description === 'string' ? parsedTopic.description : '',
                     refinement: typeof parsedTopic.refinement === 'string' ? parsedTopic.refinement : '',
                   };
@@ -905,6 +1084,7 @@
                 var p = parsePaperLine(tLine);
                 if (p) {
                   p.section = 'conference';
+                  p.conference_name = confBlock.name || '';
                   topic.papers.push(p);
                 }
                 i += 1;
@@ -919,6 +1099,7 @@
                 var pp = parsePaperLine(tLine);
                 if (pp) {
                   pp.section = 'conference';
+                  pp.conference_name = confBlock.name || '';
                   topic.papers.push(pp);
                 }
                 i += 1;
@@ -1045,9 +1226,11 @@
   }
 
   function paperSearchText(paper) {
+    var venue = paperVenueTimeBadge(paper);
     return [
       paper && paper.title || '',
       paper && paper.evidence || '',
+      venue && venue.label || '',
       (paper && paper.tags || []).map(function (t) { return (t && t.label) || ''; }).join(' '),
     ].join(' ').toLowerCase();
   }
@@ -1503,28 +1686,98 @@
     return filtered;
   }
 
+  function parseTopicDateSpan(day) {
+    var key = String((day && day.dateKey) || '').trim();
+    var m = key.match(/^(\d{4})(\d{2})(\d{2})-(\d{4})(\d{2})(\d{2})(?:-|$)/);
+    if (m) {
+      return {
+        start: m[1] + '-' + m[2] + '-' + m[3],
+        end: m[4] + '-' + m[5] + '-' + m[6],
+      };
+    }
+    var asOf = day && day.topicMeta && day.topicMeta.as_of || '';
+    if (/^\d{4}-\d{2}-\d{2}$/.test(asOf)) {
+      var dt = new Date(asOf + 'T00:00:00Z');
+      if (!isNaN(dt.getTime())) {
+        dt.setUTCDate(dt.getUTCDate() - 1);
+        return { start: '', end: dt.toISOString().slice(0, 10) };
+      }
+    }
+    return { start: '', end: '' };
+  }
+
+  function formatTopicCoverageWindow(day) {
+    var meta = day && day.topicMeta;
+    if (!meta) return '';
+    if (meta.window) return meta.window;
+    var span = parseTopicDateSpan(day);
+    if (meta.mode === 'starter') {
+      if (span.start && span.end) {
+        return 'arXiv ' + span.start + ' ~ ' + span.end + '；顶会近 24 个月（截至 ' + span.end + '）';
+      }
+      if (span.end) return 'arXiv 近 1 年 + 顶会近 24 个月（截至 ' + span.end + '）';
+      return 'arXiv 近 1 年 + 顶会近 24 个月';
+    }
+    if (span.start && span.end) return 'arXiv ' + span.start + ' ~ ' + span.end;
+    return '';
+  }
+
+  function formatTopicGroupHeader(day, activeTag, allKey, activeDate) {
+    var meta = day && day.topicMeta;
+    var fallbackLabel = day && (day.dateLabel || formatDateLabel(day.dateKey)) || formatDateLabel(activeDate);
+    if (!meta) {
+      var plain = fallbackLabel;
+      if (activeTag && activeTag !== allKey) plain += ' / ' + activeTag;
+      return { label: plain, labelDesc: '', labelTitle: '' };
+    }
+    var span = parseTopicDateSpan(day);
+    var modeLabel = meta.mode === 'starter'
+      ? '大礼包'
+      : (meta.mode === '90' ? '90天' : (meta.mode === '365' ? '365天' : '专题'));
+    var baseLabel = fallbackLabel;
+    if (meta.tag) {
+      if (meta.mode === 'starter') {
+        baseLabel = meta.tag + ' · ' + modeLabel + (span.end ? '（截至 ' + span.end + '）' : '');
+      } else if (span.start && span.end) {
+        baseLabel = meta.tag + ' · ' + modeLabel + '（' + span.start + ' ~ ' + span.end + '）';
+      } else {
+        baseLabel = meta.tag + ' · ' + modeLabel;
+      }
+    } else if (meta.mode === 'starter') {
+      baseLabel = fallbackLabel.replace(/\s*\(\d{4}-\d{2}-\d{2}\s*[~～]\s*\d{4}-\d{2}-\d{2}\)\s*$/, span.end ? '（截至 ' + span.end + '）' : '');
+    }
+    if (activeTag && activeTag !== allKey && (!meta.tag || activeTag.toLowerCase() !== meta.tag.toLowerCase())) {
+      baseLabel += ' / ' + activeTag;
+    }
+    var descParts = [];
+    if (meta.description) descParts.push(meta.description.trim());
+    if (meta.refinement) descParts.push('细化：' + meta.refinement.trim());
+    var labelDesc = descParts.join(' · ');
+    var titleParts = [baseLabel];
+    if (labelDesc) titleParts.push('研究方向：' + labelDesc);
+    var coverage = formatTopicCoverageWindow(day);
+    if (coverage) titleParts.push('覆盖范围：' + coverage);
+    return {
+      label: baseLabel,
+      labelDesc: labelDesc,
+      labelTitle: titleParts.join('\n'),
+    };
+  }
+
   function renderTopicDayNavigation(day) {
     var meta = day && day.topicMeta;
     if (!meta) return '';
     var reportHref = meta.report || day.reportHref || '';
-    var primaryLabel = meta.mode === 'starter' ? '方向导读／导出清单' : '结果总览／导出清单';
-    var nav = '';
+    var primaryLabel = meta.mode === 'starter' ? '📖 方向导读' : '📋 结果总览';
+    var parts = [];
     if (reportHref) {
-      nav += '<a class="dpr-sidebar-axis-tab dpr-sidebar-starter-guide" href="' + safeAttr(reportHref) + '">' + primaryLabel + '</a>';
+      parts.push('<a class="dpr-sidebar-topic-action dpr-sidebar-starter-guide" href="' + safeAttr(reportHref) + '">' + primaryLabel + '</a>');
     }
     if (meta.export) {
-      nav += ' <a class="dpr-sidebar-axis-tab" href="' + safeAttr(meta.export) + '" download data-no-router>下载 Markdown</a>';
+      parts.push('<a class="dpr-sidebar-topic-action dpr-sidebar-topic-export" href="' + safeAttr(meta.export) + '" download data-no-router>⬇ 导出清单</a>');
     }
-    if (meta.description) {
-      nav += '<div class="dpr-sidebar-paper-evidence">研究方向：' + safeText(meta.description) + '</div>';
-    }
-    if (meta.refinement) {
-      nav += '<div class="dpr-sidebar-paper-evidence">本次细化：' + safeText(meta.refinement) + '</div>';
-    }
-    if (meta.as_of) {
-      nav += '<div class="dpr-sidebar-paper-meta">截止日期（不含当天）：' + safeText(meta.as_of) + '</div>';
-    }
-    return nav;
+    if (!parts.length) return '';
+    return '<div class="dpr-sidebar-topic-actions">' + parts.join('') + '</div>';
   }
 
   function buildDailyCalendarTagView(model, activeDateKey, activeTagKey, readMap, activeMonthKey, allDates, taskSort) {
@@ -1569,11 +1822,12 @@
       if (allDates && day && day.topicMeta) {
         filtered = sortedTaskPapers(filtered, taskSort);
       }
-      var label = day && (day.dateLabel || formatDateLabel(day.dateKey)) || formatDateLabel(activeDate);
-      if (activeTag && activeTag !== allKey) label += ' / ' + activeTag;
+      var headerInfo = formatTopicGroupHeader(day, activeTag, allKey, activeDate);
       var groupItem = {
         key: day.dateKey + ':' + (activeTag || 'all'),
-        label: label,
+        label: headerInfo.label,
+        labelDesc: headerInfo.labelDesc,
+        labelTitle: headerInfo.labelTitle,
         papers: filtered,
         unreadCount: countUnreadPapers(filtered, map),
       };
@@ -2290,7 +2544,7 @@
     var unreadCount = typeof opts.unreadCount === 'number' ? opts.unreadCount : 0;
     html.push('<section class="dpr-sidebar-group dpr-sidebar-panel ' + groupClass + expandedClass + resultClass + '" data-panel="' + safeAttr(opts.group) + '">');
     if (hasHeaderAxisToggle) {
-      html.push('  <div class="dpr-sidebar-panel-header dpr-sidebar-panel-header-has-axis dpr-sidebar-panel-header-' + safeAttr(opts.group) + '">');
+      html.push('  <div class="dpr-sidebar-panel-header dpr-sidebar-panel-header-has-axis dpr-sidebar-panel-header-' + safeAttr(opts.group) + '" data-panel-toggle="' + safeAttr(opts.group) + '">');
       html.push('    <button type="button" class="dpr-sidebar-panel-toggle" data-panel-toggle="' + safeAttr(opts.group) + '" aria-expanded="' + (opts.expanded ? 'true' : 'false') + '">');
       html.push('      <span class="dpr-sidebar-day-arrow" aria-hidden="true">▸</span>');
       html.push('      <span class="dpr-sidebar-panel-title">' + safeText(opts.icon + ' ' + opts.title) + '</span>');
@@ -2311,7 +2565,7 @@
       ((opts.view && opts.view.groups) || []).some(function (g) { return !!(g && g.taskNavigation); })
     );
     if (hasTopicGroups) {
-      html.push('<div class="dpr-sidebar-axis-row"><label>排序 <select data-topic-task-sort><option value="score"' + (opts.taskSort !== 'date' ? ' selected' : '') + '>相关性降序</option><option value="date"' + (opts.taskSort === 'date' ? ' selected' : '') + '>公布日期降序</option></select></label></div>');
+      html.push('<div class="dpr-sidebar-axis-row dpr-sidebar-daily-tabs-row dpr-sidebar-sort-row"><label>排序 <select data-topic-task-sort><option value="score"' + (opts.taskSort !== 'date' ? ' selected' : '') + '>相关性降序</option><option value="date"' + (opts.taskSort === 'date' ? ' selected' : '') + '>公布日期降序</option></select></label></div>');
     }
     if (opts.group === 'backtrack' && opts.starterPacks && opts.starterPacks.length) {
       html.push(renderStarterPackGuides(opts.starterPacks, opts));
@@ -2416,10 +2670,16 @@
       })) ? ' has-active-paper' : '';
       var unread = typeof item.unreadCount === 'number' ? item.unreadCount : (item.papers || []).length;
       var unreadFlag = unread > 0 ? '1' : '0';
+      var headerClass = 'dpr-sidebar-axis-section-header' + (item.labelDesc ? ' has-topic-desc' : '');
+      var titleAttr = item.labelTitle ? ' title="' + safeAttr(item.labelTitle) + '"' : '';
       html.push('<section class="dpr-sidebar-axis-section' + sectionClass + expandedClass + activeSectionClass + '" data-axis-section="' + safeAttr(item.key) + '" data-axis-section-key="' + safeAttr(stateKey) + '">');
-      html.push('  <button type="button" class="dpr-sidebar-axis-section-header" data-axis-section-toggle="' + safeAttr(stateKey) + '" aria-expanded="' + (isExpanded ? 'true' : 'false') + '" data-unread="' + unreadFlag + '">');
+      html.push('  <button type="button" class="' + headerClass + '" data-axis-section-toggle="' + safeAttr(stateKey) + '" aria-expanded="' + (isExpanded ? 'true' : 'false') + '" data-unread="' + unreadFlag + '"' + (item.labelDesc ? titleAttr : '') + '>');
       html.push('    <span class="dpr-sidebar-day-arrow" aria-hidden="true">▸</span>');
-      html.push('    <span class="dpr-sidebar-axis-section-label"' + (item.labelTitle ? ' title="' + safeAttr(item.labelTitle) + '"' : '') + '>' + safeText(item.label) + ' <span class="dpr-sidebar-day-counts"><span class="dpr-sidebar-day-unread">' + safeText(unread) + '</span>/<span class="dpr-sidebar-day-total">' + safeText((item.papers || []).length) + '</span></span></span>');
+      if (item.labelDesc) {
+        html.push('    <span class="dpr-sidebar-axis-section-label"><span class="dpr-sidebar-axis-section-title">' + safeText(item.label) + '</span> <span class="dpr-sidebar-day-counts"><span class="dpr-sidebar-day-unread">' + safeText(unread) + '</span>/<span class="dpr-sidebar-day-total">' + safeText((item.papers || []).length) + '</span></span><span class="dpr-sidebar-topic-dir-desc">' + safeText(item.labelDesc) + '</span></span>');
+      } else {
+        html.push('    <span class="dpr-sidebar-axis-section-label"' + titleAttr + '>' + safeText(item.label) + ' <span class="dpr-sidebar-day-counts"><span class="dpr-sidebar-day-unread">' + safeText(unread) + '</span>/<span class="dpr-sidebar-day-total">' + safeText((item.papers || []).length) + '</span></span></span>');
+      }
       html.push('  </button>');
       html.push('  <ul class="dpr-sidebar-axis-papers">');
       if (item.taskNavigation) html.push('<li class="dpr-topic-task-navigation">' + item.taskNavigation + '</li>');
@@ -2447,7 +2707,8 @@
       'data-read-status="' + safeAttr(status) + '"',
     ].join(' ');
     var stars = starHtmlFromScore(p.score);
-    var tagBits = tagsHtml(p.tags);
+    var venueBadge = paperVenueTimeBadge(p);
+    var tagBits = tagsHtml(p.tags, venueBadge);
     var publication = p.section === 'conference' || p.section === 'backtrack'
       ? '<span class="dpr-sidebar-paper-publication" title="' + safeAttr(p.publication_date_source || '无可靠的具体公布日期') + '">' + safeText(publicationDateLabel(p)) + '</span>' : '';
     var evidence = p.evidence
@@ -2601,18 +2862,190 @@
     state.bodyEl.scrollTo({ top: Math.max(0, targetTop), behavior: 'smooth' });
   }
 
-  function scrollPanelIntoView(panelKey) {
-    if (!state.bodyEl || !panelKey) return;
+  function getPanelNaturalTopInBody(panel) {
+    if (!state.bodyEl || !panel) return null;
+    var bodyRect = state.bodyEl.getBoundingClientRect();
+    var rect = panel.getBoundingClientRect();
+    if (rect.height > 0 || rect.width > 0) {
+      return state.bodyEl.scrollTop + (rect.top - bodyRect.top);
+    }
+    // display: contents 的面板本身不生成布局盒，通过前一个兄弟面板底边或自身内容盒定位真实位置
+    var prev = panel.previousElementSibling;
+    if (prev && prev.getBoundingClientRect) {
+      var prevRect = prev.getBoundingClientRect();
+      if (prevRect.height > 0 || prevRect.width > 0) {
+        return state.bodyEl.scrollTop + (prevRect.bottom - bodyRect.top);
+      }
+    }
+    var header = $('.dpr-sidebar-panel-header', panel);
+    if (header && header.getBoundingClientRect) {
+      return state.bodyEl.scrollTop + (header.getBoundingClientRect().top - bodyRect.top);
+    }
+    return null;
+  }
+
+  function isPanelDockedOffscreenBelow(panelKey) {
+    if (!state.bodyEl || !panelKey) return false;
     var panel = state.bodyEl.querySelector(
       '.dpr-sidebar-panel[data-panel="' + cssEscape(panelKey) + '"]'
     );
-    if (!panel || !panel.getBoundingClientRect) return;
-    var bodyRect = state.bodyEl.getBoundingClientRect();
-    var panelRect = panel.getBoundingClientRect();
-    if (panelRect.top < bodyRect.top || panelRect.top > bodyRect.bottom - 40) {
-      var target = state.bodyEl.scrollTop + (panelRect.top - bodyRect.top) - 6;
-      state.bodyEl.scrollTop = Math.max(0, target);
+    if (!panel) return false;
+    var header = $('.dpr-sidebar-panel-header', panel);
+    var headerHeight = header && header.getBoundingClientRect ? (header.getBoundingClientRect().height || 36) : 36;
+    var naturalTop = getPanelNaturalTopInBody(panel);
+    if (naturalTop == null) return false;
+    var visibleBottom = (state.bodyEl.scrollTop || 0) + (state.bodyEl.clientHeight || 0);
+    return naturalTop > visibleBottom - headerHeight - 8;
+  }
+
+  function scrollPanelIntoView(panelKey, options) {
+    if (!state.bodyEl || !panelKey) return;
+    var opts = options || {};
+    var panel = state.bodyEl.querySelector(
+      '.dpr-sidebar-panel[data-panel="' + cssEscape(panelKey) + '"]'
+    );
+    if (!panel) return;
+    var naturalTop = getPanelNaturalTopInBody(panel);
+    if (naturalTop == null) return;
+    var scrollTop = state.bodyEl.scrollTop || 0;
+    var viewHeight = state.bodyEl.clientHeight || 0;
+    if (opts.forceTop || naturalTop < scrollTop || naturalTop > scrollTop + viewHeight - 40) {
+      var target = Math.max(0, naturalTop - 6);
+      if (opts.smooth && typeof state.bodyEl.scrollTo === 'function') {
+        state.bodyEl.scrollTo({ top: target, behavior: 'smooth' });
+      } else {
+        state.bodyEl.scrollTop = target;
+      }
     }
+  }
+
+  function animateCollapsible(container, contentEl, open, onDone) {
+    if (!container) {
+      if (typeof onDone === 'function') onDone();
+      return;
+    }
+    var reduced = !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+    if (!contentEl || !contentEl.style || reduced || typeof window.requestAnimationFrame !== 'function') {
+      container.classList.toggle('is-expanded', !!open);
+      if (typeof onDone === 'function') onDone();
+      return;
+    }
+    if (typeof contentEl._dprAnimCancel === 'function') {
+      contentEl._dprAnimCancel();
+    }
+    var viewCap = (state.bodyEl && state.bodyEl.clientHeight ? state.bodyEl.clientHeight : 640) + 48;
+    var durationMs = open ? 240 : 210;
+    var finished = false;
+    var timer = null;
+
+    function cleanup() {
+      if (finished) return;
+      finished = true;
+      if (timer) clearTimeout(timer);
+      contentEl.removeEventListener('transitionend', onTransitionEnd);
+      contentEl._dprAnimCancel = null;
+      container.classList.remove('is-animating');
+      contentEl.style.height = '';
+      contentEl.style.overflow = '';
+      contentEl.style.opacity = '';
+      contentEl.style.transition = '';
+      if (!open) {
+        container.classList.remove('is-expanded');
+      }
+      if (typeof onDone === 'function') onDone();
+    }
+
+    function onTransitionEnd(ev) {
+      if (ev && ev.target !== contentEl) return;
+      if (ev && ev.propertyName && ev.propertyName !== 'height') return;
+      cleanup();
+    }
+
+    contentEl._dprAnimCancel = function () {
+      if (timer) clearTimeout(timer);
+      contentEl.removeEventListener('transitionend', onTransitionEnd);
+      contentEl._dprAnimCancel = null;
+      container.classList.remove('is-animating');
+      contentEl.style.height = '';
+      contentEl.style.overflow = '';
+      contentEl.style.opacity = '';
+      contentEl.style.transition = '';
+      finished = true;
+    };
+
+    if (open) {
+      container.classList.add('is-expanded', 'is-animating');
+      contentEl.style.transition = 'none';
+      contentEl.style.overflow = 'hidden';
+      contentEl.style.height = 'auto';
+      var fullHeight = contentEl.scrollHeight || 0;
+      if (fullHeight <= 0) {
+        cleanup();
+        return;
+      }
+      var targetHeight = Math.min(fullHeight, viewCap);
+      contentEl.style.height = '0px';
+      contentEl.style.opacity = '0';
+      // 强制 reflow 以触发过渡
+      void contentEl.offsetHeight;
+      contentEl.addEventListener('transitionend', onTransitionEnd);
+      contentEl.style.transition = 'height ' + durationMs + 'ms cubic-bezier(0.22, 1, 0.36, 1), opacity 180ms ease';
+      window.requestAnimationFrame(function () {
+        if (finished) return;
+        contentEl.style.height = targetHeight + 'px';
+        contentEl.style.opacity = '1';
+      });
+      timer = setTimeout(cleanup, durationMs + 90);
+    } else {
+      var currentFull = contentEl.scrollHeight || 0;
+      if (currentFull <= 0) {
+        container.classList.remove('is-expanded');
+        if (typeof onDone === 'function') onDone();
+        return;
+      }
+      var startHeight = Math.min(currentFull, viewCap);
+      container.classList.add('is-animating');
+      container.classList.remove('is-expanded');
+      contentEl.style.transition = 'none';
+      contentEl.style.overflow = 'hidden';
+      contentEl.style.height = startHeight + 'px';
+      contentEl.style.opacity = '1';
+      void contentEl.offsetHeight;
+      contentEl.addEventListener('transitionend', onTransitionEnd);
+      contentEl.style.transition = 'height ' + durationMs + 'ms cubic-bezier(0.4, 0, 0.2, 1), opacity 160ms ease';
+      window.requestAnimationFrame(function () {
+        if (finished) return;
+        contentEl.style.height = '0px';
+        contentEl.style.opacity = '0';
+      });
+      timer = setTimeout(cleanup, durationMs + 90);
+    }
+  }
+
+  function togglePanelInPlaceAnimated(panelKey, shouldScroll) {
+    if (!state.bodyEl || !panelKey) return false;
+    var panelEl = state.bodyEl.querySelector(
+      '.dpr-sidebar-panel[data-panel="' + cssEscape(panelKey) + '"]'
+    );
+    var contentEl = panelEl && $('.dpr-sidebar-panel-content', panelEl);
+    if (!panelEl || !contentEl) return false;
+    var isOpen = state.expandedGroups[panelKey] !== false;
+    $$('[data-panel-toggle="' + cssEscape(panelKey) + '"]', panelEl).forEach(function (el) {
+      if (el.tagName === 'BUTTON' || el.hasAttribute('aria-expanded')) {
+        el.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
+      }
+    });
+    var wasDocked = isOpen && isPanelDockedOffscreenBelow(panelKey);
+    animateCollapsible(panelEl, contentEl, isOpen, function () {
+      if (isOpen && shouldScroll) {
+        scrollPanelIntoView(panelKey, { smooth: true, forceTop: wasDocked });
+      }
+      schedulePaperTitleOverflowMarks(panelEl);
+    });
+    if (wasDocked) {
+      scrollPanelIntoView(panelKey, { smooth: true, forceTop: true });
+    }
+    return true;
   }
 
   function dispatchSidebarUpdated() {
@@ -2637,6 +3070,12 @@
   function rerenderSidebarBody(options) {
     if (!state.bodyEl) return;
     var opts = options || {};
+    if (opts.animatePanel && togglePanelInPlaceAnimated(opts.animatePanel, !!opts.scrollPanel)) {
+      if (opts.dispatchUpdated !== false) {
+        dispatchSidebarUpdated();
+      }
+      return;
+    }
     var previousScrollTop = state.bodyEl.scrollTop || 0;
     renderBody();
     updateReadStateMarks();
@@ -2826,6 +3265,10 @@
       if (panelHeader) {
         var panel = panelHeader.getAttribute('data-panel-toggle');
         if (!state.expandedGroups) state.expandedGroups = defaultExpandedGroups();
+        if (isPanelDockedOffscreenBelow(panel) && state.expandedGroups[panel] !== false) {
+          scrollPanelIntoView(panel, { smooth: true, forceTop: true });
+          return;
+        }
         state.expandedGroups[panel] = !state.expandedGroups[panel];
         persistCollapse();
         rerenderSidebarBody(rerenderOptionsForPanelToggle(panel));
@@ -2910,15 +3353,25 @@
           state.expandedAxisSections.add(sectionKey);
           openSection = true;
         }
-        if (section) section.classList.toggle('is-expanded', openSection);
+        if (section) {
+          animateCollapsible(section, $('.dpr-sidebar-axis-papers', section), openSection, function () {
+            if (openSection) schedulePaperTitleOverflowMarks(section);
+          });
+        }
         sectionToggle.setAttribute('aria-expanded', openSection ? 'true' : 'false');
         persistCollapse();
         return;
       }
-      // 论文点击：移动端自动关闭抽屉
+      // 论文或专题导读点击：移动端自动关闭抽屉
       var paperLink = e.target.closest('.dpr-sidebar-paper-link');
       if (paperLink) {
         rememberPendingPaperHref(paperLink.getAttribute('href') || '');
+        if (window.matchMedia && window.matchMedia('(max-width: 768px)').matches) {
+          root.classList.remove('is-open');
+        }
+      }
+      var guideLink = e.target.closest('.dpr-sidebar-starter-guide');
+      if (guideLink) {
         if (window.matchMedia && window.matchMedia('(max-width: 768px)').matches) {
           root.classList.remove('is-open');
         }
@@ -3107,6 +3560,7 @@
         sortedTaskPapers: sortedTaskPapers,
         applyConferencePublicationDates: applyConferencePublicationDates,
         publicationDateLabel: publicationDateLabel,
+        paperVenueTimeBadge: paperVenueTimeBadge,
         isBacktrackDateKey: isBacktrackDateKey,
         collectPaperHrefsFromModel: collectPaperHrefsFromModel,
         collectReportHrefsFromModel: collectReportHrefsFromModel,
