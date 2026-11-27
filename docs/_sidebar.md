@@ -1,6 +1,9 @@
 * <a class="dpr-sidebar-root-link" href="#/">首页</a>
 * <a class="dpr-sidebar-root-link dpr-sidebar-noactive-link" href="javascript:void(0)" data-dpr-hash="#/tutorial/README">教程</a>
 * Daily Papers
+  * 2026-11-27 <!--dpr-date:20261127-->
+    * 速读区
+      * <a class="dpr-sidebar-item-link dpr-sidebar-item-structured" href="#/202611/27/2611.32576v1-accelerating-dynamic-route-re-solving-via-robust-solver-evolution-in-automatic-heuristic-design" data-sidebar-item="{&quot;title&quot;: &quot;Accelerating Dynamic Route Re-solving via Robust Solver Evolution in Automatic Heuristic Design&quot;, &quot;link&quot;: &quot;https://arxiv.org/abs/2611.32576v1-accelerating-dynamic-route-re-solving-via-robust-solver-evolution-in-automatic-heuristic-design&quot;, &quot;score&quot;: &quot;6.0&quot;, &quot;tags&quot;: [{&quot;kind&quot;: &quot;query&quot;, &quot;label&quot;: &quot;atsp&quot;}], &quot;evidence&quot;: &quot;基于大模型的TSP求解器自动启发式设计，提升动态重求解效率&quot;}">Accelerating Dynamic Route Re-solving via Robust Solver Evolution in Automatic Heuristic Design</a>
   * 2026-11-26 <!--dpr-date:20261126-->
     * 速读区
       * <a class="dpr-sidebar-item-link dpr-sidebar-item-structured" href="#/202611/26/2611.30972v1-solving-the-traveling-salesman-problem-using-quantum-devices-qubo-and-hobo-formulations" data-sidebar-item="{&quot;title&quot;: &quot;Solving the Traveling Salesman Problem Using Quantum Devices: QUBO and HOBO Formulations&quot;, &quot;link&quot;: &quot;https://arxiv.org/abs/2611.30972v1-solving-the-traveling-salesman-problem-using-quantum-devices-qubo-and-hobo-formulations&quot;, &quot;score&quot;: &quot;6.0&quot;, &quot;tags&quot;: [{&quot;kind&quot;: &quot;query&quot;, &quot;label&quot;: &quot;atsp&quot;}], &quot;evidence&quot;: &quot;以QUBO与HOBO建模TSP并用量子设备求解&quot;}">Solving the Traveling Salesman Problem Using Quantum Devices: QUBO and HOBO Formulations</a>
